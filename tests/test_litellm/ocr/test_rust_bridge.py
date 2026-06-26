@@ -53,8 +53,6 @@ class RecordingBridge:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
-        callbacks: list[object] | None = None,
-        guardrails: list[object] | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -66,8 +64,6 @@ class RecordingBridge:
                 "extra_headers": extra_headers,
                 "optional_params": optional_params,
                 "timeout_seconds": timeout_seconds,
-                "callbacks": callbacks or [],
-                "guardrails": guardrails or [],
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -89,8 +85,6 @@ class RecordingAsyncBridge:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
-        callbacks: list[object] | None = None,
-        guardrails: list[object] | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -102,8 +96,6 @@ class RecordingAsyncBridge:
                 "extra_headers": extra_headers,
                 "optional_params": optional_params,
                 "timeout_seconds": timeout_seconds,
-                "callbacks": callbacks or [],
-                "guardrails": guardrails or [],
             }
         )
         return dict(FAKE_OCR_RESPONSE)
@@ -120,8 +112,6 @@ class RaisingBridge:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
-        callbacks: list[object] | None = None,
-        guardrails: list[object] | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -137,8 +127,6 @@ class RaisingAsyncBridge:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
-        callbacks: list[object] | None = None,
-        guardrails: list[object] | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -226,11 +214,9 @@ def build_prepared_request(
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
-    litellm.logging_callback_manager._reset_all_callbacks()
     rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     yield
-    litellm.logging_callback_manager._reset_all_callbacks()
     rust_bridge.use_litellm_rust(False, ocr=None, aocr=None)
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
@@ -414,8 +400,6 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
         },
         "optional_params": {"include_image_base64": True, "pages": [0]},
         "timeout_seconds": 12.5,
-        "callbacks": [],
-        "guardrails": [],
     }
 
 
@@ -445,8 +429,6 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
         "extra_headers": None,
         "optional_params": {"vertex_project": "project-1"},
         "timeout_seconds": 42.0,
-        "callbacks": [],
-        "guardrails": [],
     }
 
 
@@ -480,8 +462,6 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
         },
         "optional_params": {"include_image_base64": True},
         "timeout_seconds": 12.5,
-        "callbacks": [],
-        "guardrails": [],
     }
 
 
