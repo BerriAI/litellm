@@ -22,7 +22,7 @@ services:
       - /app/cache:rw,noexec,nosuid,nodev,size=128m,uid=101,gid=101,mode=1777
       - /app/migrations:rw,noexec,nosuid,nodev,size=64m,uid=101,gid=101,mode=1777
     volumes:
-      - ./proxy_server_config.yaml:/app/config.yaml:ro
+      - ./docker/proxy_server_config.yaml:/app/config.yaml:ro
     environment:
       LITELLM_NON_ROOT: "true"
       PRISMA_BINARY_CACHE_DIR: "/app/cache/prisma-python/binaries"
