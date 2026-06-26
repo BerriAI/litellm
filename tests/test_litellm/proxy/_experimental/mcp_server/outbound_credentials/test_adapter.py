@@ -191,7 +191,7 @@ def test_raise_user_oauth_challenge_points_at_per_server_prm():
     exc = exc_info.value
     assert exc.status_code == 401
     assert (
-        exc.headers["www-authenticate"]
+        exc.headers["WWW-Authenticate"]
         == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/my-srv"'
     )
 
@@ -203,7 +203,7 @@ def test_raise_user_oauth_challenge_includes_server_root_path():
     ):
         raise_user_oauth_challenge(_server(alias="my-srv"))
     assert (
-        exc_info.value.headers["www-authenticate"]
+        exc_info.value.headers["WWW-Authenticate"]
         == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"'
     )
 
@@ -219,4 +219,4 @@ def test_raise_user_oauth_challenge_includes_server_root_path():
 def test_raise_user_oauth_challenge_name_fallback(kwargs, expected_name):
     with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
         raise_user_oauth_challenge(_server(**kwargs))
-    assert f'/mcp/{expected_name}"' in exc_info.value.headers["www-authenticate"]
+    assert f'/mcp/{expected_name}"' in exc_info.value.headers["WWW-Authenticate"]

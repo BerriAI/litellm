@@ -178,5 +178,5 @@ def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
     raise HTTPException(
         status_code=401,
         detail="Unauthorized",
-        headers={"www-authenticate": f'Bearer resource_metadata="{resource_metadata}"'},
+        headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata}"'},
     )
