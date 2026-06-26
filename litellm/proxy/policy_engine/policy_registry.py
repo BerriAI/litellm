@@ -9,7 +9,7 @@ by policy_attachments (see AttachmentRegistry).
 
 import json
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 from litellm._logging import verbose_proxy_logger
 from litellm.repositories.table_repositories import PolicyRepository
@@ -74,6 +74,7 @@ class PolicyRegistry:
         self._policies: Dict[str, Policy] = {}
         self._policies_by_id: Dict[str, Tuple[str, Policy]] = {}
         self._initialized: bool = False
+        self._config_policy_names: Set[str] = set()
 
     def load_policies(self, policies_config: Dict[str, Any]) -> None:
         """
@@ -85,11 +86,13 @@ class PolicyRegistry:
         """
         self._policies = {}
         self._policies_by_id = {}
+        self._config_policy_names = set()
 
         for policy_name, policy_data in policies_config.items():
             try:
                 policy = self._parse_policy(policy_name, policy_data)
                 self._policies[policy_name] = policy
+                self._config_policy_names.add(policy_name)
                 verbose_proxy_logger.debug(f"Loaded policy: {policy_name}")
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -534,7 +537,13 @@ class PolicyRegistry:
           policy_<uuid> overrides can be resolved without DB access in the hot path.
         """
         try:
-            self._policies = {}
+            # Preserve config-loaded policies so a DB sync with no results does not wipe them.
+            # DB entries for the same name will override the config version below.
+            self._policies = {
+                name: policy
+                for name, policy in self._policies.items()
+                if name in self._config_policy_names
+            }
             production = await self.get_all_policies_from_db(
                 prisma_client, version_status="production"
             )
