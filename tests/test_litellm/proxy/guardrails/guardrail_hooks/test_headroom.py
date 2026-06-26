@@ -10,15 +10,14 @@ Tests cover:
 - /v1/compress returning malformed JSON raises HTTPException
 """
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
 from litellm.types.utils import GenericGuardrailAPIInputs
-
 
 FAKE_API_BASE = "https://headroom.example.com"
 FAKE_API_KEY = "test-key"
@@ -177,6 +176,32 @@ async def test_apply_guardrail_http_error_raises():
             )
 
     assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_transport_error_raises():
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ConnectError("Connection refused"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert "unreachable" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

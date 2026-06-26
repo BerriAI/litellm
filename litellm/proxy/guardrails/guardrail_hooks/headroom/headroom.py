@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+import httpx
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
 from typing_extensions import TypeGuard
@@ -89,11 +90,20 @@ class HeadroomGuardrail(CustomGuardrail):
         if self.headroom_api_key:
             request_headers["Authorization"] = f"Bearer {self.headroom_api_key}"
 
-        raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
-            url=f"{self.headroom_api_base}/v1/compress",
-            json=payload,
-            headers=request_headers,
-        )
+        try:
+            raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+                url=f"{self.headroom_api_base}/v1/compress",
+                json=payload,
+                headers=request_headers,
+            )
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Headroom compression service unreachable",
+                    "detail": str(e),
+                },
+            ) from e
         if raw_response is None:
             raise HTTPException(
                 status_code=502,

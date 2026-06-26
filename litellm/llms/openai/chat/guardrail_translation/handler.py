@@ -164,7 +164,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     )
 
         verbose_proxy_logger.debug(
-            "OpenAI Chat Completions: Processed input messages: %s", messages
+            "OpenAI Chat Completions: Processed input messages: %s",
+            data.get("messages"),
         )
 
         return data
