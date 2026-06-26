@@ -2022,6 +2022,52 @@ class TestOverrideOpenAIResponseModel:
 
         assert response_obj.model == requested_model
 
+    def test_skips_model_override_when_response_has_no_model_attribute(self):
+        from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
+
+        response_obj = SearchResponse(
+            results=[SearchResult(title="t", url="http://x.com", snippet="s")],
+            object="search",
+        )
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="my-search-tool",
+            log_context="test_context",
+        )
+
+        assert not hasattr(response_obj, "model")
+
+    def test_skips_model_override_for_dict_without_model_key(self):
+        response_obj = {
+            "object": "search",
+            "results": [{"title": "t", "url": "http://x.com", "snippet": "s"}],
+        }
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="my-search-tool",
+            log_context="test_context",
+        )
+
+        assert "model" not in response_obj
+
+    def test_override_model_swallows_setattr_failure(self):
+        class ReadOnlyModelResponse:
+            @property
+            def model(self) -> str:
+                return "downstream-model"
+
+        response_obj = ReadOnlyModelResponse()
+
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="my-model",
+            log_context="test_context",
+        )
+
+        assert response_obj.model == "downstream-model"
+
 
 class TestIsAzureModelRouterRequest:
     """Tests for _is_azure_model_router_request helper"""
