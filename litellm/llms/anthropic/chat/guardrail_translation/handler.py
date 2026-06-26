@@ -163,6 +163,25 @@ class AnthropicMessagesHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
+            if litellm_logging_obj is not None:
+                slg_info = (data.get("metadata") or {}).get(
+                    "standard_logging_guardrail_information"
+                )
+                if slg_info is not None and litellm_logging_obj.metadata is not None:
+                    existing = litellm_logging_obj.metadata.get(
+                        "standard_logging_guardrail_information"
+                    )
+                    if existing is None:
+                        litellm_logging_obj.metadata[
+                            "standard_logging_guardrail_information"
+                        ] = slg_info
+                    elif isinstance(existing, list):
+                        for entry in (
+                            slg_info if isinstance(slg_info, list) else [slg_info]
+                        ):
+                            if entry not in existing:
+                                existing.append(entry)
+
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
