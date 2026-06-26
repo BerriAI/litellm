@@ -1105,11 +1105,15 @@ class ModelManagementAuthChecks:
                 premium_user=premium_user,
             )
         ## Check non-team model auth
-        elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        elif user_api_key_dict.user_role not in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.ORG_ADMIN,
+        ):
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "User does not have permission to make this model call. Your role={}. You can only make model calls if you are a PROXY_ADMIN or if you are a team admin, by specifying a team_id in the model_info.".format(
+                    "error": "User does not have permission to test this model connection. Your role={}. You must be a PROXY_ADMIN, INTERNAL_USER, or ORG_ADMIN, or a team admin with a team_id specified in model_info.".format(
                         user_api_key_dict.user_role
                     )
                 },
