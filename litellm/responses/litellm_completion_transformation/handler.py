@@ -59,6 +59,7 @@ class LiteLLMCompletionTransformationHandler:
         completion_args = {}
         completion_args.update(kwargs)
         completion_args.update(litellm_completion_request)
+        completion_args["_skip_responses_api_bridge"] = True
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -107,6 +108,7 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args = {}
         acompletion_args.update(kwargs)
         acompletion_args.update(litellm_completion_request)
+        acompletion_args["_skip_responses_api_bridge"] = True
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper

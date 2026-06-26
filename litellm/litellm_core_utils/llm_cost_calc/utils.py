@@ -485,6 +485,7 @@ class PromptTokensDetailsResult(TypedDict):
     character_count: int
     image_count: int
     video_length_seconds: float
+    audio_length_seconds: float
 
 
 def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
@@ -535,6 +536,13 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         )
         or 0.0
     )
+    audio_length_seconds = (
+        cast(
+            Optional[float],
+            getattr(usage.prompt_tokens_details, "audio_length_seconds", 0),
+        )
+        or 0.0
+    )
 
     return PromptTokensDetailsResult(
         cache_hit_tokens=cache_hit_tokens,
@@ -546,6 +554,7 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         character_count=character_count,
         image_count=image_count,
         video_length_seconds=float(video_length_seconds),
+        audio_length_seconds=float(audio_length_seconds),
     )
 
 
@@ -667,6 +676,14 @@ def _calculate_input_cost(
             prompt_tokens_details["video_length_seconds"],
         )
 
+    ### AUDIO LENGTH COST
+    if prompt_tokens_details["audio_length_seconds"]:
+        prompt_cost += calculate_cost_component(
+            model_info,
+            "input_cost_per_audio_per_second",
+            prompt_tokens_details["audio_length_seconds"],
+        )
+
     return prompt_cost
 
 
@@ -743,6 +760,7 @@ def generic_cost_per_token(
         character_count=0,
         image_count=0,
         video_length_seconds=0.0,
+        audio_length_seconds=0.0,
     )
     if usage.prompt_tokens_details:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)
