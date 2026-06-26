@@ -404,6 +404,25 @@ def test_apply_lar1_routing_strategy_wires_custom_selector():
         router.get_available_deployment(model="agent-router")
 
 
+def test_apply_lar1_invalid_thresholds_leaves_router_unchanged():
+    router = Router(model_list=_model_list(), routing_strategy="simple-shuffle")
+
+    with pytest.raises(ValueError, match="LAR-1 thresholds must satisfy"):
+        apply_lar1_routing_strategy(
+            router,
+            {
+                "confidence_threshold_low": 0.9,
+                "confidence_threshold_medium": 0.5,
+                "confidence_threshold_high": 0.7,
+            },
+        )
+
+    assert router.routing_strategy == "simple-shuffle"
+    assert "async_get_available_deployment" not in router.__dict__
+    result = router.get_available_deployment(model="agent-router")
+    assert result["model_name"] == "agent-router"
+
+
 def test_invalid_threshold_order_raises():
     with pytest.raises(ValueError, match="LAR-1 thresholds must satisfy"):
         _normalize_thresholds({"low": 0.5, "medium": 0.3, "high": 0.7})

@@ -51,13 +51,12 @@ def apply_lar1_routing_strategy(
     router: Router,
     routing_strategy_args: Optional[Mapping[str, object]] = None,
 ) -> None:
-    router.routing_strategy = "lar1"
-    router.set_custom_routing_strategy(
-        LAR1RoutingStrategy(
-            router_instance=router,
-            thresholds=lar1_thresholds_from_args(routing_strategy_args),
-        )
+    strategy = LAR1RoutingStrategy(
+        router_instance=router,
+        thresholds=lar1_thresholds_from_args(routing_strategy_args),
     )
+    router.routing_strategy = "lar1"
+    router.set_custom_routing_strategy(strategy)
 
 
 def _normalize_thresholds(thresholds: Optional[dict[str, float]]) -> dict[str, float]:
