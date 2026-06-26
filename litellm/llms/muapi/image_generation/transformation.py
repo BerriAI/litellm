@@ -13,6 +13,7 @@ Auth: x-api-key header (set MUAPI_API_KEY env var or pass api_key).
 
 import time
 from typing import TYPE_CHECKING, Any, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -100,6 +101,8 @@ MUAPI_IMAGE_ENDPOINTS: dict = {
 
 # Poll interval in seconds between status checks
 _POLL_INTERVAL = 2.0
+# Maximum time to wait for a generation to complete (5 minutes)
+_POLL_TIMEOUT = 300.0
 
 
 class MuAPIImageConfig(BaseImageGenerationConfig):
@@ -127,6 +130,21 @@ class MuAPIImageConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        # Prevent the server-configured key from being forwarded to an arbitrary
+        # caller-controlled host.  If api_base is set to a non-MuAPI host, the
+        # caller must supply their own api_key; otherwise we'd leak the server key.
+        # Use exact hostname comparison — startswith is bypassable via subdomain
+        # (api.muapi.ai.evil.com) or userinfo (api.muapi.ai@evil.com).
+        is_official = not api_base or (
+            urlparse(api_base).hostname == "api.muapi.ai"
+            and urlparse(api_base).scheme == "https"
+        )
+        if not is_official and not api_key:
+            raise ValueError(
+                "A custom api_base was provided that does not match the MuAPI host "
+                "(https://api.muapi.ai). Supply an explicit api_key when using a "
+                "custom api_base to avoid leaking the server-configured MUAPI_API_KEY."
+            )
         final_key = api_key or get_secret_str("MUAPI_API_KEY")
         if not final_key:
             raise ValueError(
@@ -240,7 +258,9 @@ class MuAPIImageConfig(BaseImageGenerationConfig):
             )
 
         api_key = api_key or get_secret_str("MUAPI_API_KEY") or ""
-        outputs = self._poll_result(request_id, api_key)
+        # Extract api_base from the submit response URL if available
+        api_base = str(raw_response.url).rsplit("/", 2)[0] if raw_response.url else BASE_URL
+        outputs = self._poll_result(request_id, api_key, api_base=api_base)
 
         if not model_response.data:
             model_response.data = []
@@ -267,12 +287,27 @@ class MuAPIImageConfig(BaseImageGenerationConfig):
         return endpoint
 
     @staticmethod
-    def _poll_result(request_id: str, api_key: str) -> List[str]:
+    def _poll_result(
+        request_id: str,
+        api_key: str,
+        api_base: Optional[str] = None,
+        timeout: float = _POLL_TIMEOUT,
+    ) -> List[str]:
         """Poll /predictions/{id}/result until the job is completed or failed."""
-        poll_url = f"{BASE_URL}/predictions/{request_id}/result"
+        base = (api_base or BASE_URL).rstrip("/")
+        # Normalise: if api_base already ends at /api/v1 use it, otherwise append
+        if not base.endswith("/api/v1"):
+            base = BASE_URL
+        poll_url = f"{base}/predictions/{request_id}/result"
         headers = {"x-api-key": api_key}
+        deadline = time.monotonic() + timeout
 
         while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"MuAPI image generation timed out after {timeout:.0f}s "
+                    f"(request_id={request_id})"
+                )
             resp = httpx.get(poll_url, headers=headers, timeout=30)
             if not resp.is_success:
                 raise Exception(

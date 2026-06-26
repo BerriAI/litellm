@@ -16,6 +16,7 @@ LiteLLM model IDs:  muapi/<model-id>
 
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 import httpx
 from httpx._types import RequestFiles
@@ -147,6 +148,19 @@ class MuAPIVideoConfig(BaseVideoConfig):
         api_key: Optional[str] = None,
         litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
+        # Use exact hostname comparison — startswith is bypassable via subdomain
+        # (api.muapi.ai.evil.com) or userinfo (api.muapi.ai@evil.com).
+        api_base = (litellm_params or {}).get("api_base") if litellm_params else None
+        is_official = not api_base or (
+            urlparse(str(api_base)).hostname == "api.muapi.ai"
+            and urlparse(str(api_base)).scheme == "https"
+        )
+        if not is_official and not api_key:
+            raise ValueError(
+                "A custom api_base was provided that does not match the MuAPI host "
+                "(https://api.muapi.ai). Supply an explicit api_key when using a "
+                "custom api_base to avoid leaking the server-configured MUAPI_API_KEY."
+            )
         final_key = api_key or get_secret_str("MUAPI_API_KEY")
         if not final_key:
             raise ValueError(
@@ -295,7 +309,8 @@ class MuAPIVideoConfig(BaseVideoConfig):
         headers: dict,
     ) -> Tuple[str, Dict]:
         original_id = extract_original_video_id(video_id)
-        url = f"{BASE_URL}/predictions/{original_id}/result"
+        base = (api_base or BASE_URL).rstrip("/")
+        url = f"{base}/predictions/{original_id}/result"
         return url, {}
 
     def transform_video_status_retrieve_response(
@@ -345,7 +360,8 @@ class MuAPIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         """Return the polling URL; actual video URL comes from the status response."""
         original_id = extract_original_video_id(video_id)
-        url = f"{BASE_URL}/predictions/{original_id}/result"
+        base = (api_base or BASE_URL).rstrip("/")
+        url = f"{base}/predictions/{original_id}/result"
         return url, {}
 
     def transform_video_content_response(
