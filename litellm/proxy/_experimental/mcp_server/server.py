@@ -3797,9 +3797,7 @@ if MCP_AVAILABLE:
                         invalid_token=True,
                     )
                 else:
-                    www_authenticate = _get_gateway_oauth2_challenge(
-                        scope, server.name
-                    )
+                    www_authenticate = _get_gateway_oauth2_challenge(scope, server.name)
                 raise HTTPException(
                     status_code=401,
                     detail="Unauthorized",

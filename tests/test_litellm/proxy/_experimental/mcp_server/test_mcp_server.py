@@ -5790,6 +5790,91 @@ class TestCheckOauth2UpstreamAuth:
             == 'Bearer authorization_uri="http://testserver/.well-known/oauth-authorization-server/mcp/oauth_test"'
         )
 
+    @pytest.mark.asyncio
+    async def test_upstream_403_raises_forbidden(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _check_oauth2_upstream_auth,
+        )
+
+        allowed, db, probe = self._patches([self._oauth2_server()], None, (403, None))
+        with allowed, db, probe:
+            with pytest.raises(HTTPException) as exc_info:
+                await _check_oauth2_upstream_auth(
+                    scope=self._scope(),
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+                    mcp_servers=["oauth_test"],
+                    oauth2_headers={"Authorization": "Bearer valid-but-forbidden"},
+                    client_ip=None,
+                )
+
+        assert exc_info.value.status_code == 403
+        assert "www-authenticate" not in (exc_info.value.headers or {})
+
+    @pytest.mark.asyncio
+    async def test_delegate_auth_401_falls_back_to_passthrough_challenge(self):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _check_oauth2_upstream_auth,
+        )
+
+        allowed, db, probe = self._patches(
+            [self._oauth2_server(delegate_auth_to_upstream=True)], None, (401, None)
+        )
+        with allowed, db, probe:
+            with pytest.raises(HTTPException) as exc_info:
+                await _check_oauth2_upstream_auth(
+                    scope=self._scope(),
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+                    mcp_servers=["oauth_test"],
+                    oauth2_headers={"Authorization": "Bearer stale-token"},
+                    client_ip=None,
+                )
+
+        assert exc_info.value.status_code == 401
+        assert (
+            exc_info.value.headers["www-authenticate"]
+            == 'Bearer error="invalid_token", resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp/oauth_test"'
+        )
+
+    @pytest.mark.asyncio
+    async def test_sse_handler_propagates_stale_token_401(self):
+        from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
+
+        upstream_www = 'Bearer error="invalid_token"'
+        allowed, db, probe = self._patches(
+            [self._oauth2_server()], None, (401, upstream_www)
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new=AsyncMock(
+                    return_value=(
+                        UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+                        None,
+                        ["oauth_test"],
+                        None,
+                        {"Authorization": "Bearer stale-token"},
+                        None,
+                    )
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+                new=AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+                new=AsyncMock(),
+            ),
+            allowed,
+            db,
+            probe,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handle_sse_mcp(self._scope(), AsyncMock(), AsyncMock())
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers["www-authenticate"] == upstream_www
+
 
 def test_get_forwarded_auth_from_scope_extracts_header():
     """Returns Authorization value when x-litellm-api-key is also present."""
