@@ -93,7 +93,7 @@ class CachedOAuthTokenStore:
         inner: OAuthTokenStore,
         *,
         default_ttl_seconds: float,
-        expiry_skew_seconds: float = 30.0,
+        expiry_skew_seconds: float = 60.0,
         max_size: int = 4096,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -156,7 +156,7 @@ class RefreshingTokenStore:
         inner: OAuthTokenStore,
         refresher: TokenRefresher,
         *,
-        expiry_skew_seconds: float = 30.0,
+        expiry_skew_seconds: float = 60.0,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._inner = inner

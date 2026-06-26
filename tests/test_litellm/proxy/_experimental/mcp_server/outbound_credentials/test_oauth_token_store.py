@@ -260,6 +260,42 @@ async def test_refresh_failure_is_shared_by_joiners_not_re_run():
     assert all(isinstance(r, RuntimeError) for r in results)
 
 
+async def test_cache_default_skew_is_60_seconds():
+    # The default expiry skew is the industry-standard 60s (Spring Security's clock-skew and
+    # refresh-buffer default; within RFC 7519's "a few minutes" leeway), so a cached token stops
+    # being served 60s before its real expiry. The boundary sits at expires_at - 60 = 1040.
+    token = OAuthToken(access_token="at", expires_at=1100.0)
+    inner = _FakeStore({("u", "s"): token})
+    clock = _Clock(1000.0)
+    store = CachedOAuthTokenStore(inner, default_ttl_seconds=600, clock=clock)
+
+    await store.fetch("u", "s")
+    clock.t = 1039.0  # just inside expires_at - 60 -> still served from cache
+    await store.fetch("u", "s")
+    assert len(inner.calls) == 1
+    clock.t = 1041.0  # just past expires_at - 60 -> re-read (a 30s skew would still cache here)
+    await store.fetch("u", "s")
+    assert len(inner.calls) == 2
+
+
+async def test_refreshing_default_skew_is_60_seconds():
+    # Same 60s default for the proactive refresh threshold: a token within 60s of expiry refreshes,
+    # one further out does not. At clock 1000 the boundary expires_at - 60 = 1000 lands on expires_at
+    # 1060 (refresh) vs 1061 (no refresh), pinning the default to exactly 60 (a 30s skew would not
+    # refresh either case).
+    not_near = _RefreshablePair(OAuthToken(access_token="ok", expires_at=1061.0))
+    not_near_store = RefreshingTokenStore(not_near, not_near, clock=_Clock(1000.0))
+    not_near_token = await not_near_store.fetch("u", "s")
+    assert not_near_token is not None and not_near_token.access_token == "ok"
+    assert not_near.refresh_calls == 0
+
+    near = _RefreshablePair(OAuthToken(access_token="old", expires_at=1060.0))
+    near_store = RefreshingTokenStore(near, near, clock=_Clock(1000.0))
+    near_token = await near_store.fetch("u", "s")
+    assert near_token is not None and near_token.access_token == "refreshed"
+    assert near.refresh_calls == 1
+
+
 def test_oauth_token_repr_masks_the_secrets():
     token = OAuthToken(
         access_token="super-secret", expires_at=123.0, refresh_token="rt-secret"
