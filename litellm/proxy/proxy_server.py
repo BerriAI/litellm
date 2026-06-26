@@ -8873,6 +8873,8 @@ async def model_list(
         if hidden_names:
             all_models = [m for m in all_models if m not in hidden_names]
 
+        all_models = _apply_budget_exceeded_models_policy(user_api_key_dict, all_models)
+
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
@@ -12638,11 +12640,12 @@ async def model_info_v2(
     # Update total count to include agents
     search_total_count = len(all_models)
 
+    # Budget-exceeded models policy runs before name translation so free_only
+    # filtering matches on internal model names rather than public aliases.
+    all_models = _apply_budget_exceeded_models_policy(user_api_key_dict, all_models)
+
     # Translate `model_name` to the public name for team-scoped rows.
     all_models = [_translate_model_name_for_response(m) for m in all_models]
-
-    # Budget-exceeded models policy
-    all_models = _apply_budget_exceeded_models_policy(user_api_key_dict, all_models)
     search_total_count = len(all_models)
 
     return _paginate_models_response(
