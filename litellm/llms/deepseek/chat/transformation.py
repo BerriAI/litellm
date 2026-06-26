@@ -264,7 +264,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("DEEPSEEK_API_BASE") or "https://api.deepseek.com/beta"  # type: ignore
+        api_base = (
+            api_base
+            or get_secret_str("DEEPSEEK_API_BASE")
+            or "https://api.deepseek.com"
+        )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
         return api_base, dynamic_api_key
 
@@ -281,7 +285,7 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
         """
         if not api_base:
-            api_base = "https://api.deepseek.com/beta"
+            api_base = "https://api.deepseek.com"
 
         if not api_base.endswith("/chat/completions"):
             api_base = f"{api_base}/chat/completions"

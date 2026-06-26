@@ -99,7 +99,7 @@ async def test_deepseek_provider_async_completion(stream):
 
     # Check request body
     request_body = json.loads(call_args.kwargs["data"])
-    assert call_args.kwargs["url"] == "https://api.deepseek.com/beta/chat/completions"
+    assert call_args.kwargs["url"] == "https://api.deepseek.com/chat/completions"
     assert (
         request_body["model"] == "deepseek-reasoner"
     )  # Model name should be stripped of provider prefix
@@ -191,7 +191,11 @@ def test_deepseek_fill_reasoning_content_multiturn():
     # Case 1: assistant message already has reasoning_content — should be left as-is
     messages_with_rc = [
         {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi", "reasoning_content": "I thought about it"},
+        {
+            "role": "assistant",
+            "content": "Hi",
+            "reasoning_content": "I thought about it",
+        },
         {"role": "user", "content": "Follow up"},
     ]
     result = config._fill_reasoning_content(messages_with_rc)
