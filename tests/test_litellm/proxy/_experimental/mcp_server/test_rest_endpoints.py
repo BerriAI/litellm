@@ -444,6 +444,17 @@ class TestTestToolsList:
 class TestListToolsRestAPI:
     pytestmark = pytest.mark.asyncio
 
+    @pytest.fixture(autouse=True)
+    def _clear_byok_cache(self):
+        """The REST BYOK helper now delegates to the shared, cached
+        ``_get_byok_credential``; clear that cache around each test so a stored
+        entry from one test cannot leak into another."""
+        from litellm.proxy._experimental.mcp_server.server import _byok_cred_cache
+
+        _byok_cred_cache.clear()
+        yield
+        _byok_cred_cache.clear()
+
     async def test_rejects_disallowed_server(self, monkeypatch):
         async def fake_contexts(user_api_key_auth):
             return [user_api_key_auth]
@@ -545,6 +556,432 @@ class TestListToolsRestAPI:
         assert result["tools"] == ["tool-1"]
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
+
+    async def test_injects_stored_byok_credential_for_byok_server(self, monkeypatch):
+        """A BYOK server with no incoming auth header must have the user's stored
+        per-user key resolved and forwarded as the server auth header, so the UI
+        tools playground lists tools the same way the protocol tool-call path works."""
+        import litellm.proxy._experimental.mcp_server.db as mcp_db
+        import litellm.proxy.utils as proxy_utils
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            auth_type = MCPAuth.bearer_token
+            is_byok = True
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["auth_header"] = server_auth_header
+            return ["tool-1"]
+
+        cred_calls = {}
+
+        async def fake_get_user_credential(prisma_client, user_id, server_id):
+            cred_calls["args"] = (user_id, server_id)
+            return "user-byok-key"
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_utils,
+            "get_prisma_client_or_throw",
+            lambda msg: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            mcp_db, "get_user_credential", fake_get_user_credential, raising=False
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client", object(), raising=False
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+
+        assert captured["auth_header"] == "user-byok-key"
+        assert cred_calls["args"] == ("user-1", "server-1")
+        assert result["tools"] == ["tool-1"]
+
+    async def test_does_not_resolve_byok_for_non_byok_server(self, monkeypatch):
+        """A non-BYOK server must not trigger a per-user credential lookup."""
+        import litellm.proxy._experimental.mcp_server.db as mcp_db
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            auth_type = MCPAuth.bearer_token
+            is_byok = False
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["auth_header"] = server_auth_header
+            return []
+
+        cred_calls = {"count": 0}
+
+        async def fake_get_user_credential(prisma_client, user_id, server_id):
+            cred_calls["count"] += 1
+            return "should-not-be-used"
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            mcp_db, "get_user_credential", fake_get_user_credential, raising=False
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+
+        assert cred_calls["count"] == 0
+        assert captured["auth_header"] is None
+
+    async def test_byok_skips_lookup_when_user_id_missing(self, monkeypatch):
+        """A BYOK server still must not query a credential when the caller has no
+        resolvable user_id; the helper short-circuits before touching the DB."""
+        import litellm.proxy._experimental.mcp_server.db as mcp_db
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            auth_type = MCPAuth.bearer_token
+            is_byok = True
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["auth_header"] = server_auth_header
+            return []
+
+        cred_calls = {"count": 0}
+
+        async def fake_get_user_credential(prisma_client, user_id, server_id):
+            cred_calls["count"] += 1
+            return "should-not-be-used"
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            mcp_db, "get_user_credential", fake_get_user_credential, raising=False
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id=None),
+        )
+
+        assert cred_calls["count"] == 0
+        assert captured["auth_header"] is None
+
+    async def test_byok_credential_lookup_failure_is_swallowed(self, monkeypatch):
+        """If the per-user credential lookup raises, the helper logs and returns
+        None rather than failing the whole tools-list request."""
+        import litellm.proxy._experimental.mcp_server.db as mcp_db
+        import litellm.proxy.utils as proxy_utils
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            auth_type = MCPAuth.bearer_token
+            is_byok = True
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["auth_header"] = server_auth_header
+            return ["tool-1"]
+
+        async def fake_get_user_credential(prisma_client, user_id, server_id):
+            raise RuntimeError("db unavailable")
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_utils,
+            "get_prisma_client_or_throw",
+            lambda msg: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            mcp_db, "get_user_credential", fake_get_user_credential, raising=False
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client", object(), raising=False
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+
+        # Lookup failure must not inject a header nor break the request.
+        assert captured["auth_header"] is None
+        assert result["tools"] == ["tool-1"]
+
+    async def test_injects_stored_byok_credential_in_aggregator_path(self, monkeypatch):
+        """The multi-server aggregator path (no server_id) injects the stored
+        per-user BYOK credential the same way the single-server path does."""
+        import litellm.proxy._experimental.mcp_server.db as mcp_db
+        import litellm.proxy.utils as proxy_utils
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            auth_type = MCPAuth.bearer_token
+            is_byok = True
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+            apply_tool_filters=True,
+        ):
+            captured["auth_header"] = server_auth_header
+            return ["tool-1"]
+
+        async def fake_get_user_credential(prisma_client, user_id, server_id):
+            return "user-byok-key"
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            proxy_utils,
+            "get_prisma_client_or_throw",
+            lambda msg: object(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            mcp_db, "get_user_credential", fake_get_user_credential, raising=False
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client", object(), raising=False
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+
+        assert captured["auth_header"] == "user-byok-key"
+        assert result["tools"] == ["tool-1"]
 
     async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
         """include_disabled_tools skips the allowlist filter only for PROXY_ADMIN;

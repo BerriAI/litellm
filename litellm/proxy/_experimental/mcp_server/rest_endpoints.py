@@ -81,6 +81,7 @@ if MCP_AVAILABLE:
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
+        _get_byok_credential,
         _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
@@ -176,6 +177,25 @@ if MCP_AVAILABLE:
                 f"user={user_id} server={server_id}: {e}"
             )
         return None
+
+    async def _get_user_byok_auth_header(
+        server,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Optional[str]:
+        """Resolve the caller's stored per-user BYOK key via the shared cached
+        ``_get_byok_credential`` so all three BYOK paths (REST tools-list,
+        protocol tools-list, tool-call) use one resolver. Swallows lookup errors
+        so a credential failure degrades to listing without the key instead of
+        aborting the request. Returns None for non-BYOK servers or when no
+        credential is stored."""
+        try:
+            return await _get_byok_credential(server, user_api_key_dict)
+        except Exception as e:
+            verbose_logger.warning(
+                f"_get_user_byok_auth_header: BYOK credential lookup failed for "
+                f"server={getattr(server, 'server_id', None)}: {e}"
+            )
+            return None
 
     async def _prefetch_user_oauth_creds(
         user_api_key_dict: UserAPIKeyAuth,
@@ -538,6 +558,10 @@ if MCP_AVAILABLE:
         server_auth_header = _get_server_auth_header(
             server, mcp_server_auth_headers, mcp_auth_header
         )
+        if not server_auth_header:
+            server_auth_header = await _get_user_byok_auth_header(
+                server, user_api_key_dict
+            )
         user_oauth_extra_headers = await _get_user_oauth_extra_headers(
             server, user_api_key_dict
         )
@@ -705,6 +729,10 @@ if MCP_AVAILABLE:
                     server_auth_header = _get_server_auth_header(
                         server, mcp_server_auth_headers, mcp_auth_header
                     )
+                    if not server_auth_header:
+                        server_auth_header = await _get_user_byok_auth_header(
+                            server, user_api_key_dict
+                        )
                     user_oauth_extra_headers = await _get_user_oauth_extra_headers(
                         server,
                         user_api_key_dict,

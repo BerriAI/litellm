@@ -944,6 +944,311 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
 
 
 @pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_injects_byok_credential():
+    """The protocol tools-list path must inject the caller's stored per-user
+    BYOK credential as the upstream auth header, mirroring execute_mcp_tool.
+    Without the injection the BYOK server lists with the shared token (None)."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="byok_user")
+    set_auth_context(user_api_key_auth)
+
+    byok_server = MagicMock()
+    byok_server.name = "byok_server"
+    byok_server.alias = "byok"
+    byok_server.allowed_tools = None
+    byok_server.disallowed_tools = None
+    byok_server.server_id = "byok_server"
+    byok_server.server_name = "byok_server"
+    byok_server.auth_type = "authorization"
+    byok_server.extra_headers = None
+    byok_server.is_byok = True
+
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["byok_server"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: byok_server
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
+
+    captured = {}
+
+    async def mock_get_tools_from_server(
+        server,
+        mcp_auth_header=None,
+        extra_headers=None,
+        add_prefix=True,
+        raw_headers=None,
+        **kwargs,
+    ):
+        captured["mcp_auth_header"] = mcp_auth_header
+        tool = MagicMock()
+        tool.name = "byok_tool"
+        tool.description = "BYOK tool"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with (
+        patch.object(
+            mcp_server_module,
+            "_get_byok_credential",
+            AsyncMock(return_value="user-stored-byok-key"),
+        ) as mock_byok,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        result = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=["byok_server"],
+        )
+
+    assert len(result) == 1
+    assert result[0].name == "byok_tool"
+    # The per-user BYOK key was looked up for this user+server...
+    mock_byok.assert_awaited_once_with(byok_server, user_api_key_auth)
+    # ...and injected as the upstream auth header for the listing call.
+    assert captured["mcp_auth_header"] == "user-stored-byok-key"
+
+
+@pytest.mark.asyncio
+async def test_get_tools_from_mcp_servers_byok_lookup_error_does_not_abort_listing():
+    """A DB error during the BYOK credential lookup must degrade to listing
+    without the key, not propagate out of the gather and abort the whole list."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="byok_user")
+    set_auth_context(user_api_key_auth)
+
+    byok_server = MagicMock()
+    byok_server.name = "byok_server"
+    byok_server.alias = "byok"
+    byok_server.allowed_tools = None
+    byok_server.disallowed_tools = None
+    byok_server.server_id = "byok_server"
+    byok_server.server_name = "byok_server"
+    byok_server.auth_type = "authorization"
+    byok_server.extra_headers = None
+    byok_server.is_byok = True
+
+    mock_manager = MagicMock()
+    mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["byok_server"])
+    mock_manager.get_mcp_server_by_id = lambda server_id: byok_server
+    mock_manager.filter_server_ids_by_ip_with_info = lambda server_ids, client_ip: (
+        server_ids,
+        0,
+    )
+
+    captured = {}
+
+    async def mock_get_tools_from_server(
+        server,
+        mcp_auth_header=None,
+        extra_headers=None,
+        add_prefix=True,
+        raw_headers=None,
+        **kwargs,
+    ):
+        captured["mcp_auth_header"] = mcp_auth_header
+        tool = MagicMock()
+        tool.name = "byok_tool"
+        tool.description = "BYOK tool"
+        tool.inputSchema = {}
+        return [tool]
+
+    mock_manager._get_tools_from_server = mock_get_tools_from_server
+
+    with (
+        patch.object(
+            mcp_server_module,
+            "_get_byok_credential",
+            AsyncMock(side_effect=Exception("transient DB error")),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        # Must not raise even though the credential lookup blew up.
+        result = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=["byok_server"],
+        )
+
+    # The listing still completed; the server was listed without the BYOK key.
+    assert len(result) == 1
+    assert result[0].name == "byok_tool"
+    assert captured["mcp_auth_header"] is None
+
+
+def _byok_preemptive_scope(path: str) -> dict:
+    return {
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "path": path,
+        "headers": [(b"host", b"testserver")],
+        "client": ("1.2.3.4", 12345),
+    }
+
+
+def _byok_preemptive_server() -> MagicMock:
+    server = MagicMock()
+    server.name = "byok_server"
+    server.alias = "byok"
+    server.server_id = "byok_server_id"
+    server.server_name = "byok_server"
+    server.auth_type = MCPAuth.none
+    server.is_byok = True
+    server.is_oauth_passthrough = False
+    server.needs_user_oauth_token = False
+    return server
+
+
+@pytest.mark.asyncio
+async def test_preemptive_401_byok_single_server_no_credential_raises():
+    """On a single-server-scoped route, a BYOK server with no stored credential
+    and no inline key must fail fast with 401 + WWW-Authenticate so OAuth-capable
+    MCP clients run the key-entry flow instead of seeing an empty tool list."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+
+    server = _byok_preemptive_server()
+    manager = MagicMock()
+    manager.get_mcp_server_by_name = MagicMock(return_value=server)
+
+    with (
+        patch.object(mcp_server_module, "global_mcp_server_manager", manager),
+        patch.object(
+            mcp_server_module, "_get_byok_credential", AsyncMock(return_value=None)
+        ) as mock_cred,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await mcp_server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=_byok_preemptive_scope("/mcp/byok_server"),
+                mcp_servers=["byok_server"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="k", user_id="u"),
+                client_ip=None,
+            )
+
+    assert exc_info.value.status_code == 401
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert challenge.startswith("Bearer ")
+    # Absolute RFC 9728 resource_metadata URI (not the relative form strict
+    # clients reject), pointing at the gateway's BYOK protected-resource doc.
+    assert 'resource_metadata="http' in challenge
+    assert "/.well-known/oauth-protected-resource" in challenge
+    mock_cred.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_preemptive_401_byok_single_server_with_credential_no_raise():
+    """A stored credential satisfies BYOK auth, so the preemptive challenge must
+    not fire (otherwise an already-authenticated user is blocked from listing)."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+
+    server = _byok_preemptive_server()
+    manager = MagicMock()
+    manager.get_mcp_server_by_name = MagicMock(return_value=server)
+
+    with (
+        patch.object(mcp_server_module, "global_mcp_server_manager", manager),
+        patch.object(
+            mcp_server_module,
+            "_get_byok_credential",
+            AsyncMock(return_value="stored-key"),
+        ),
+    ):
+        await mcp_server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope=_byok_preemptive_scope("/mcp/byok_server"),
+            mcp_servers=["byok_server"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="k", user_id="u"),
+            client_ip=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_preemptive_401_byok_multi_server_route_does_not_raise():
+    """A credential-less BYOK server reached through a multi-server (aggregated)
+    route must not abort the listing; the challenge is single-server only, so the
+    aggregator keeps degrading per-server."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+
+    server = _byok_preemptive_server()
+    manager = MagicMock()
+    manager.get_mcp_server_by_name = MagicMock(return_value=server)
+
+    with (
+        patch.object(mcp_server_module, "global_mcp_server_manager", manager),
+        patch.object(
+            mcp_server_module, "_get_byok_credential", AsyncMock(return_value=None)
+        ) as mock_cred,
+    ):
+        await mcp_server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope=_byok_preemptive_scope("/mcp/byok_server,other_server"),
+            mcp_servers=["byok_server"],
+            oauth2_headers=None,
+            mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="k", user_id="u"),
+            client_ip=None,
+        )
+
+    mock_cred.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_preemptive_401_byok_inline_credential_does_not_raise():
+    """When the caller supplies the BYOK key inline via a per-server auth header,
+    the preemptive challenge must be skipped."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_server_module
+
+    server = _byok_preemptive_server()
+    manager = MagicMock()
+    manager.get_mcp_server_by_name = MagicMock(return_value=server)
+
+    with (
+        patch.object(mcp_server_module, "global_mcp_server_manager", manager),
+        patch.object(
+            mcp_server_module, "_get_byok_credential", AsyncMock(return_value=None)
+        ) as mock_cred,
+    ):
+        await mcp_server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope=_byok_preemptive_scope("/mcp/byok_server"),
+            mcp_servers=["byok_server"],
+            oauth2_headers=None,
+            mcp_server_auth_headers={"byok": "user-supplied-key"},
+            user_api_key_auth=UserAPIKeyAuth(api_key="k", user_id="u"),
+            client_ip=None,
+        )
+
+    mock_cred.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
     """Test that _get_tools_from_mcp_servers handles all servers failing gracefully"""
     try:

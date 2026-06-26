@@ -1775,6 +1775,24 @@ if MCP_AVAILABLE:
                     user_api_key_auth=user_api_key_auth,
                 )
 
+                # BYOK: inject the caller's stored per-user key so the protocol
+                # tools-list path authenticates the same way execute_mcp_tool
+                # does. Without this a BYOK server lists with the shared token,
+                # which is None, so the upstream rejects the listing.
+                if server.is_byok and not server_auth_header:
+                    # Don't let a credential-lookup error abort the whole
+                    # multi-server listing; degrade to listing without the key,
+                    # matching the REST path's behavior.
+                    try:
+                        server_auth_header = await _get_byok_credential(
+                            server, user_api_key_auth
+                        )
+                    except Exception as e:
+                        verbose_logger.warning(
+                            f"BYOK credential lookup failed for {server.server_id}; "
+                            f"listing without it: {e}"
+                        )
+
                 # Prefer server-stored per-user OAuth when configured, so a stale
                 # Authorization header from the MCP client cannot override Redis/DB
                 # (same issue as call_tool in mcp_server_manager: VS Code caches tokens).
@@ -3482,6 +3500,8 @@ if MCP_AVAILABLE:
         excludes a passthrough server is not pushed into an OAuth flow for
         a server it will be 403'd on immediately after authentication.
         """
+        _req_path = scope.get("_original_path") or scope.get("path", "") or ""
+        is_single_server_scoped = len(_get_mcp_servers_in_path(_req_path) or []) == 1
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(
                 server_name, client_ip=client_ip
@@ -3561,6 +3581,41 @@ if MCP_AVAILABLE:
                     status_code=401,
                     detail="Unauthorized",
                     headers={"www-authenticate": www_authenticate},
+                )
+
+            # BYOK: on a single-server-scoped route, when the caller supplied no
+            # key inline and has none stored, fail fast with 401 + challenge so
+            # OAuth-capable MCP clients run the key-entry flow instead of seeing
+            # a silently empty tool list. Gated to single-server routes so one
+            # credential-less BYOK server cannot abort a multi-server aggregated
+            # listing, which keeps degrading per-server.
+            if (
+                server
+                and server.is_byok
+                and is_single_server_scoped
+                and not _client_has_passthrough_authorization(
+                    server, oauth2_headers, mcp_server_auth_headers
+                )
+                and await _get_byok_credential(server, user_api_key_auth) is None
+            ):
+                base_url = get_request_base_url(StarletteRequest(scope))
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "byok_auth_required",
+                        "server_id": server.server_id,
+                        "server_name": server.server_name or server.name,
+                        "message": (
+                            "No stored credential found for this BYOK server. "
+                            "Complete the OAuth authorization flow to provide your API key."
+                        ),
+                    },
+                    headers={
+                        "www-authenticate": (
+                            "Bearer resource_metadata="
+                            f'"{base_url}/.well-known/oauth-protected-resource"'
+                        )
+                    },
                 )
 
     def _get_forwarded_auth_from_scope(scope: Scope) -> Optional[str]:
