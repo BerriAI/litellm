@@ -128,6 +128,44 @@ def test_v1_model_info_no_model_list_error(client, auth_as, null_router, path):
     assert "LLM Model List not loaded" in response.text
 
 
+def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monkeypatch):
+    from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+    from litellm.proxy.auth import model_checks
+
+    def fake_get_provider_models(provider, litellm_params=None):
+        if provider == "openai":
+            return ["gpt-4o"]
+        return []
+
+    deployment = {
+        "model_name": "*",
+        "litellm_params": {"model": "openai/*"},
+    }
+    router = MagicMock()
+    router.get_model_access_groups = MagicMock(return_value={})
+    router.get_model_names = MagicMock(return_value=["*"])
+    router.get_model_list = MagicMock(return_value=[deployment])
+    monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
+
+    expanded_deployments = proxy_server.expand_wildcard_deployments_for_model_info(
+        [deployment]
+    )
+    allowed_model_names = proxy_server._get_v1_model_info_allowed_model_names(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test",
+            models=[SpecialModelNames.all_proxy_models.value],
+        ),
+        llm_router=router,
+    )
+
+    result = proxy_server._filter_v1_model_info_deployments(
+        all_models=expanded_deployments,
+        allowed_model_names=allowed_model_names,
+    )
+
+    assert [model["model_name"] for model in result] == ["openai/gpt-4o"]
+
+
 # ---------------------------------------------------------------------------
 # GET /model/info — team BYOK scoping (issue #30983)
 # ---------------------------------------------------------------------------

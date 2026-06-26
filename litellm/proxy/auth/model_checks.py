@@ -282,8 +282,18 @@ def _hydrate_litellm_credential_name(
 def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
+    wildcard_model_to_expand = (
+        litellm_params.model
+        if wildcard_model == "*"
+        and litellm_params is not None
+        and _check_wildcard_routing(litellm_params.model)
+        and "/" in litellm_params.model
+        else wildcard_model
+    )
     try:
-        wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
+        wildcard_provider_prefix, wildcard_suffix = wildcard_model_to_expand.split(
+            "/", 1
+        )
     except ValueError:  # safely fail
         return []
 
