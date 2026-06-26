@@ -4281,6 +4281,91 @@ async def test_multi_issuer_jwt_strips_unmapped_internal_claims(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_multi_issuer_jwt_drops_unmapped_scope_claims(
+    monkeypatch,
+):
+    """A token from a configured-but-low-trust issuer that carries a raw
+    ``scope`` claim must NOT escalate to proxy admin. The issuer config below
+    maps only an identity field, so ``scope`` is unmapped and dropped during
+    normalization; ``get_scopes``/``is_admin`` then see nothing.
+    """
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://low-trust-issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_id_jwt_field": "sub",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+        extra_claims={
+            "scope": "litellm_proxy_admin",
+            "roles": ["litellm_proxy_admin"],
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert "scope" not in claims
+    assert "roles" not in claims
+    assert jwt_handler.get_scopes(token=claims) == []
+    assert jwt_handler.is_admin(scopes=jwt_handler.get_scopes(token=claims)) is False
+
+
+@pytest.mark.asyncio
+async def test_global_jwt_path_still_trusts_scope_for_admin(monkeypatch):
+    """The legacy single-issuer / global path (no ``issuers`` configured) must
+    keep honoring the ``scope`` claim as the admin field. The cross-issuer
+    allowlist only applies to issuer-scoped normalization, so this path is
+    unchanged and a token carrying the configured admin scope still maps to
+    proxy admin.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    jwks_url = "https://global-issuer.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid="global-key")
+    cache = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=cache,
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://global-issuer.example.com",
+        audience="any-audience",
+        kid="global-key",
+        extra_claims={"scope": "litellm_proxy_admin"},
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert jwt_handler.get_scopes(token=claims) == ["litellm_proxy_admin"]
+    assert jwt_handler.is_admin(scopes=jwt_handler.get_scopes(token=claims)) is True
+
+
+@pytest.mark.asyncio
 async def test_multi_issuer_jwt_does_not_emit_unscoped_global_warning(
     monkeypatch, caplog
 ):
@@ -4339,3 +4424,174 @@ def test_build_decode_kwargs_warns_for_unscoped_global_fallback_in_mixed_deploym
         if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
     ]
     assert len(matching) == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_drops_unmapped_list_scope(monkeypatch):
+    """A low-trust issuer that maps only an identity field must have its raw
+    ``scope`` dropped even when ``scope`` arrives as a list rather than a
+    space-separated string. The list shape must not slip past normalization
+    into authorization."""
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://list-scope-issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_id_jwt_field": "sub",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+        extra_claims={"scope": ["litellm_proxy_admin", "openid"]},
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert "scope" not in claims
+    assert jwt_handler.get_scopes(token=claims) == []
+    assert jwt_handler.is_admin(scopes=jwt_handler.get_scopes(token=claims)) is False
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_drops_nested_unmapped_claim(monkeypatch):
+    """A nested claim object the issuer does not map (e.g. a Keycloak-style
+    ``resource_access`` carrying roles) must be dropped during normalization,
+    not carried through where downstream role resolution could read it."""
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://nested-claim-issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_id_jwt_field": "sub",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+        extra_claims={
+            "resource_access": {
+                "litellm-proxy": {"roles": ["litellm_proxy_admin"]}
+            }
+        },
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert "resource_access" not in claims
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_normalizes_token_without_optional_standard_claims(
+    monkeypatch,
+):
+    """Normalization must not depend on the presence of optional registered
+    claims. A valid token that omits ``exp``/``nbf``/``iat``/``jti`` must
+    normalize without error and still carry the issuer's explicitly mapped
+    identity field."""
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives import serialization
+
+    issuer = "https://minimal-claims-issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "user_email_jwt_field": "email",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    token = pyjwt.encode(
+        {
+            "sub": "test-subject",
+            "iss": issuer,
+            "aud": "expected-audience",
+            "email": "real-user@example.com",
+        },
+        private_key_pem,
+        algorithm="RS256",
+        headers={"kid": "issuer-key"},
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert "exp" not in claims
+    assert "iat" not in claims
+    assert jwt_handler.get_user_email(token=claims, default_value=None) == (
+        "real-user@example.com"
+    )
+
+
+@pytest.mark.asyncio
+async def test_multi_issuer_preserves_explicitly_mapped_role_field(monkeypatch):
+    """The allowlist is permissive for fields the issuer explicitly maps: when
+    an issuer config maps a scope/role-bearing field to a team claim, that
+    mapped value must survive normalization and resolve to the team."""
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://mapped-role-issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    private_key, jwk = _get_rsa_key_and_jwk(kid="issuer-key")
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[
+            {
+                "issuer": issuer,
+                "jwks_url": jwks_url,
+                "audience": "expected-audience",
+                "team_ids_jwt_field": "groups",
+            }
+        ],
+        keys_by_url={jwks_url: [jwk]},
+    )
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="expected-audience",
+        kid="issuer-key",
+        extra_claims={"groups": ["team-alpha", "team-beta"]},
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert claims[JWTHandler.LITELLM_TEAM_IDS_CLAIM] == ["team-alpha", "team-beta"]
+    assert jwt_handler.get_team_ids_from_jwt(token=claims) == [
+        "team-alpha",
+        "team-beta",
+    ]
