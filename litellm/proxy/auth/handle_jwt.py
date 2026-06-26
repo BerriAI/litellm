@@ -1835,11 +1835,16 @@ class JWTAuthManager:
                     ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
 
-        # Sync team memberships; include both plural and singular claim shapes so
-        # IdPs that populate only the singular field (e.g. Okta/Auth0) are not
-        # treated as claimless, which would otherwise leave stale DB memberships
-        # eligible for selection by _resolve_db_team_fallback on later requests.
-        jwt_team_ids = set(jwt_handler.get_all_jwt_team_ids(jwt_valid_token))
+        # Sync team memberships. With fallback_to_db_teams on, read both plural and
+        # singular claim shapes so a singular-only IdP token (e.g. Okta/Auth0) is
+        # not mistaken for claimless and left with stale DB memberships the fallback
+        # could later attribute. With the flag off, keep the upstream plural-only
+        # reconciliation so existing deployments are unchanged.
+        jwt_team_ids = set(
+            jwt_handler.get_all_jwt_team_ids(jwt_valid_token)
+            if jwt_handler.litellm_jwtauth.fallback_to_db_teams
+            else jwt_handler.get_team_ids_from_jwt(jwt_valid_token)
+        )
         existing_teams = set(user_object.teams or [])
         teams_to_add = jwt_team_ids - existing_teams
         preserve_db_teams_without_claims = (

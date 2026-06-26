@@ -5392,3 +5392,44 @@ async def test_auth_builder_header_cannot_override_rbac_team_under_db_fallback()
             )
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_sync_user_role_and_teams_singular_claim_only_recognized_under_flag():
+    """Reading the singular team claim during sync is scoped to fallback_to_db_teams.
+    With the flag off, sync keeps the upstream plural-only reconciliation, so a
+    singular-only token is treated as claimless and existing DB teams are removed
+    exactly as before this PR; the new dual-claim behavior must not silently change
+    membership reconciliation for deployments that never opted in."""
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=AsyncMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="primary_team",
+            sync_user_role_and_teams=True,
+            fallback_to_db_teams=False,
+        ),
+    )
+
+    token = {"sub": "u_flag_off", "primary_team": "team_primary"}
+    user = LiteLLM_UserTable(
+        user_id="u_flag_off",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        teams=["team_existing"],
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+        new_callable=AsyncMock,
+    ) as mock_patch:
+        await JWTAuthManager.sync_user_role_and_teams(
+            jwt_handler, token, user, AsyncMock()
+        )
+
+    mock_patch.assert_awaited_once()
+    assert set(mock_patch.call_args.kwargs["teams_ids_to_remove_user_from"]) == {
+        "team_existing"
+    }
+    assert mock_patch.call_args.kwargs["teams_ids_to_add_user_to"] == []
+    assert user.teams == []
