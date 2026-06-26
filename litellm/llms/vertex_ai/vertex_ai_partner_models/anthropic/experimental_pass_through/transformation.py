@@ -35,27 +35,21 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         Validate the environment for the request
         """
+        # Work on a local copy — router shallow-copies litellm_params so the caller's
+        # headers dict may be the shared deployment extra_headers object.
+        headers = dict(headers)
         vertex_ai_project = VertexBase.safe_get_vertex_ai_project(litellm_params)
         vertex_ai_location = VertexBase.safe_get_vertex_ai_location(litellm_params)
 
-        project_id: Optional[str] = None
-        if "Authorization" not in headers:
-            vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
-                litellm_params
-            )
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params)
+        access_token, project_id = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_ai_project,
+            custom_llm_provider="vertex_ai",
+        )
+        headers["Authorization"] = f"Bearer {access_token}"
 
-            access_token, project_id = self._ensure_access_token(
-                credentials=vertex_credentials,
-                project_id=vertex_ai_project,
-                custom_llm_provider="vertex_ai",
-            )
-
-            headers["Authorization"] = f"Bearer {access_token}"
-        else:
-            # Authorization already in headers, but we still need project_id
-            project_id = vertex_ai_project
-
-        # Always calculate api_base if not provided, regardless of Authorization header
+        # Calculate api_base if not provided
         if api_base is None:
             api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
