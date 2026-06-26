@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import os
@@ -19,7 +20,7 @@ from typing import (
 )
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
@@ -54,6 +55,11 @@ class Boto3CredentialsInfo(BaseModel):
     credentials: Credentials
     aws_region_name: str
     aws_bedrock_runtime_endpoint: Optional[str]
+
+
+class _WebIdentityTokenClaims(BaseModel):
+    aud: Optional[Union[str, list[str]]] = None
+    iss: Optional[str] = None
 
 
 class AwsAuthError(Exception):
@@ -817,6 +823,25 @@ class BaseAWSLLM:
 
         return False
 
+    @staticmethod
+    def _unverified_web_identity_audience(oidc_token: str) -> Optional[str]:
+        """Return the public ``aud``/``iss`` claims of a web identity JWT
+        without verifying its signature, so a rejected-token error can name
+        the audience LiteLLM actually sent. The signature is never read, so no
+        secret is exposed."""
+        segments = oidc_token.split(".")
+        if len(segments) != 3:
+            return None
+        payload = segments[1]
+        try:
+            decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+            claims = _WebIdentityTokenClaims.model_validate_json(decoded)
+        except (ValueError, ValidationError):
+            return None
+        if claims.aud is None and claims.iss is None:
+            return None
+        return f"aud={claims.aud!r}, iss={claims.iss!r}"
+
     @tracer.wrap()
     def _auth_with_web_identity_token(
         self,
@@ -925,7 +950,21 @@ class BaseAWSLLM:
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
 
-        sts_response = sts_client.assume_role_with_web_identity(**assume_role_params)
+        try:
+            sts_response = sts_client.assume_role_with_web_identity(
+                **assume_role_params
+            )
+        except sts_client.exceptions.InvalidIdentityTokenException as e:
+            audience = (
+                self._unverified_web_identity_audience(oidc_token)
+                if isinstance(oidc_token, str)
+                else None
+            )
+            detail = f" Token {audience}" if audience else ""
+            raise AwsAuthError(
+                status_code=401,
+                message=f"AWS STS rejected the web identity token: {e}.{detail}",
+            ) from e
 
         iam_creds_dict = {
             "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],
