@@ -29,7 +29,7 @@ If you ever make public-facing PR descriptions, comments, issues, commit message
 - don't use "—". Instead, reach for ";", ".", etc.
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
-- don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: unless you're adding new line(s) before the next sentence, don't add a "."
+- don't add a trailing "." at the end of paragraphs (just like this file). That means every paragraph, not just the last one (of the markdown file, PR description, GitHub comment, etc.). Rule of thumb: if you're adding new line(s) before the next sentence, don't add a "."
 - don't use →. Instead, prefer not to use arrows, and if need be, use -> instead
 
 Don't hesitate to use values in .env to get needed API keys and other secrets, as long as you never add them to conversation history, commit them, or include them in GitHub issues / PRs
