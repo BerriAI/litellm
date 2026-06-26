@@ -301,6 +301,37 @@ def _canonical_tool_name(name: str) -> str:
     return name.strip().lower()
 
 
+_INPUT_POLICY_RESTRICTIVENESS: dict[str, int] = {
+    "untrusted": 0,
+    "trusted": 1,
+    "blocked": 2,
+}
+_OUTPUT_POLICY_RESTRICTIVENESS: dict[str, int] = {"trusted": 0, "untrusted": 1}
+
+
+def _policies_by_canonical_name(
+    rows: list[Any], attr: str, restrictiveness: dict[str, int]
+) -> dict[str, str]:
+    """Map canonical tool name -> policy from DB rows.
+
+    Rows are sorted least- to most-restrictive so that when several rows
+    collapse to one canonical name (e.g. "exec_shell" and "Exec_Shell"), the
+    dict's last write keeps the strictest policy. Otherwise a looser variant
+    could silently override a block.
+    """
+    return {
+        _canonical_tool_name(cast(str, getattr(row, "tool_name", ""))): cast(
+            str, getattr(row, attr, "untrusted") or "untrusted"
+        )
+        for row in sorted(
+            rows,
+            key=lambda r: restrictiveness.get(
+                cast(str, getattr(r, attr, "untrusted") or "untrusted"), 0
+            ),
+        )
+    }
+
+
 class ToolPolicyRegistry:
     """
     In-memory registry of tool policies synced from DB.
@@ -324,20 +355,12 @@ class ToolPolicyRegistry:
                 lambda: ToolRepository(prisma_client).table.find_many(),
                 reason="sync_tool_policy_from_db_tools_lookup_failure",
             )
-            self._tool_input_policies = {
-                _canonical_tool_name(cast(str, row.tool_name)): getattr(
-                    row, "input_policy", "untrusted"
-                )
-                or "untrusted"
-                for row in tools
-            }
-            self._tool_output_policies = {
-                _canonical_tool_name(cast(str, row.tool_name)): getattr(
-                    row, "output_policy", "untrusted"
-                )
-                or "untrusted"
-                for row in tools
-            }
+            self._tool_input_policies = _policies_by_canonical_name(
+                tools, "input_policy", _INPUT_POLICY_RESTRICTIVENESS
+            )
+            self._tool_output_policies = _policies_by_canonical_name(
+                tools, "output_policy", _OUTPUT_POLICY_RESTRICTIVENESS
+            )
 
             perms = await call_with_db_reconnect_retry(
                 prisma_client,
@@ -347,7 +370,7 @@ class ToolPolicyRegistry:
             self._blocked_tools_by_op_id = {
                 op_id: [
                     _canonical_tool_name(t)
-                    for t in cast(List[str], getattr(row, "blocked_tools", None) or [])
+                    for t in cast(list[str], getattr(row, "blocked_tools", None) or [])
                 ]
                 for row in perms
                 if (op_id := getattr(row, "object_permission_id", None))

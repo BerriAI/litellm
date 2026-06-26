@@ -322,6 +322,29 @@ async def test_tool_policy_registry_blocklist_matches_name_variants():
     assert result_key["Fetch_URL"] == "blocked"
     assert result_key["fetch_url "] == "blocked"
 
+
+@pytest.mark.asyncio
+async def test_tool_policy_registry_canonical_collision_keeps_most_restrictive():
+    """Follow-up to #30732: when two rows collapse to the same canonical name
+    (exec_shell blocked, Exec_Shell untrusted), the looser policy must not
+    override the block via last-write-wins in the synced dict."""
+    prisma = MagicMock()
+    prisma.db.litellm_tooltable.find_many = AsyncMock(
+        return_value=[
+            _mock_tool_row("exec_shell", input_policy="blocked"),
+            _mock_tool_row("Exec_Shell", input_policy="untrusted"),
+        ]
+    )
+    prisma.db.litellm_objectpermissiontable.find_many = AsyncMock(return_value=[])
+    registry = ToolPolicyRegistry()
+    await registry.sync_tool_policy_from_db(prisma)
+
+    assert registry.get_input_policy("exec_shell") == "blocked"
+    assert registry.get_input_policy("EXEC_SHELL") == "blocked"
+    result = registry.get_effective_policies(["exec_shell", "Exec_Shell"])
+    assert result["exec_shell"] == "blocked"
+    assert result["Exec_Shell"] == "blocked"
+
     # Direct policy lookups normalize too.
     assert registry.get_input_policy("Exec_Shell") == "blocked"
 
