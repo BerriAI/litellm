@@ -41,6 +41,7 @@ from .common_utils import (
     BaseAzureLLM,
     get_azure_ad_token_from_oidc,
     process_azure_headers,
+    resolve_azure_image_auth_headers,
     select_azure_base_url_or_endpoint,
 )
 from .image_generation import (
@@ -1287,20 +1288,32 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     status_code=422, message="max retries must be an int"
                 )
 
-            if api_key is None and azure_ad_token_provider is not None:
-                azure_ad_token = azure_ad_token_provider()
-                if azure_ad_token:
-                    headers.pop("api-key", None)
-                    headers["Authorization"] = f"Bearer {azure_ad_token}"
+            auth_litellm_params = {
+                **(litellm_params or {}),
+                **(
+                    {"azure_ad_token_provider": azure_ad_token_provider}
+                    if azure_ad_token_provider is not None
+                    else {}
+                ),
+                **({"azure_ad_token": azure_ad_token} if azure_ad_token else {}),
+            }
 
-            # init AzureOpenAI Client
             azure_client_params: Dict[str, Any] = self.initialize_azure_sdk_client(
-                litellm_params=litellm_params or {},
+                litellm_params=auth_litellm_params,
                 api_key=api_key,
                 model_name=model or "",
                 api_version=api_version,
                 api_base=api_base,
                 is_async=False,
+            )
+
+            headers = resolve_azure_image_auth_headers(
+                headers=headers,
+                api_key=api_key,
+                azure_ad_token_provider=azure_client_params.get(
+                    "azure_ad_token_provider"
+                ),
+                azure_ad_token=azure_client_params.get("azure_ad_token"),
             )
             if aimg_generation is True:
                 return self.aimage_generation(

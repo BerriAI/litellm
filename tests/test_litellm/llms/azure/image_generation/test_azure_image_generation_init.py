@@ -507,3 +507,75 @@ def test_resolve_headers_does_not_mutate_input():
         azure_ad_token=None,
     )
     assert headers == {"api-key": "stale"}
+
+
+def test_azure_image_generation_keyless_env_wif_sets_bearer_header():
+    azure_chat = AzureChatCompletion()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "created": 1,
+        "data": [{"url": "https://example.com/cat.png"}],
+    }
+
+    prev = litellm.enable_azure_ad_token_refresh
+    with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post, patch(
+        "litellm.llms.azure.common_utils.get_azure_ad_token_provider",
+        return_value=lambda: "wif-token",
+    ):
+        litellm.enable_azure_ad_token_refresh = True
+        try:
+            azure_chat.image_generation(
+                prompt="a cat",
+                timeout=60.0,
+                optional_params={"n": 1, "size": "1024x1024"},
+                logging_obj=MagicMock(),
+                headers={},
+                model="gpt-image-1-mini",
+                api_key=None,
+                api_base="https://res.openai.azure.com/",
+                api_version="2025-04-01-preview",
+                litellm_params={
+                    "api_base": "https://res.openai.azure.com/",
+                    "api_version": "2025-04-01-preview",
+                },
+            )
+        finally:
+            litellm.enable_azure_ad_token_refresh = prev
+
+    sent_headers = mock_post.call_args.kwargs["headers"]
+    assert sent_headers.get("Authorization") == "Bearer wif-token"
+    assert "api-key" not in sent_headers
+
+
+def test_azure_image_generation_with_api_key_sets_api_key_header():
+    azure_chat = AzureChatCompletion()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "created": 1,
+        "data": [{"url": "https://example.com/cat.png"}],
+    }
+
+    with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+        azure_chat.image_generation(
+            prompt="a cat",
+            timeout=60.0,
+            optional_params={"n": 1, "size": "1024x1024"},
+            logging_obj=MagicMock(),
+            headers={"api-key": "sk-test"},
+            model="gpt-image-1-mini",
+            api_key="sk-test",
+            api_base="https://res.openai.azure.com/",
+            api_version="2025-04-01-preview",
+            litellm_params={
+                "api_base": "https://res.openai.azure.com/",
+                "api_version": "2025-04-01-preview",
+            },
+        )
+
+    sent_headers = mock_post.call_args.kwargs["headers"]
+    assert sent_headers.get("api-key") == "sk-test"
+    assert "Authorization" not in sent_headers
