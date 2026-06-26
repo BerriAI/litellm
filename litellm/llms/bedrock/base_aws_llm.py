@@ -1554,6 +1554,7 @@ class BaseAWSLLM:
         self,
         service_name: Literal[
             "bedrock",
+            "bedrock-mantle",
             "sagemaker",
             "bedrock-agentcore",
             "s3vectors",
@@ -1572,7 +1573,7 @@ class BaseAWSLLM:
         Sign a request for Bedrock or Sagemaker
 
         Returns:
-            Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
+            Tuple[dict, Optional[bytes]]: A tuple containing the headers and the json str body of the request
         """
         if api_key is not None:
             aws_bearer_token: Optional[str] = api_key

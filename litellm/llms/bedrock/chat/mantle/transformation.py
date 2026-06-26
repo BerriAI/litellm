@@ -33,6 +33,29 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
     Usage: model="bedrock/mantle/anthropic.claude-mythos-preview"
     """
 
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> tuple[dict, Optional[bytes]]:
+        return self._sign_request(
+            service_name="bedrock-mantle",
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+
     def get_complete_url(
         self,
         api_base: Optional[str],

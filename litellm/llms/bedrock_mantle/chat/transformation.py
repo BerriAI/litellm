@@ -6,7 +6,7 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 Base URL: https://bedrock-mantle.{region}.api.aws/v1
 Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
       standard AWS_BEARER_TOKEN_BEDROCK) when present; otherwise AWS SigV4
-      (service "bedrock") over the standard credential chain. See
+      (service "bedrock-mantle") over the standard credential chain. See
       BedrockMantleAuthMixin in common_utils.
 """
 
