@@ -114,6 +114,10 @@ fn ocr(
             extra_headers,
             optional_params,
             timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
         }))
     });
 
@@ -155,6 +159,10 @@ fn aocr(
             extra_headers,
             optional_params,
             timeout,
+            callbacks: Vec::new(),
+            guardrails: Vec::new(),
+            request_metadata: Default::default(),
+            litellm_call_id: None,
         })
         .await
         .map_err(core_error_to_pyerr)?;
