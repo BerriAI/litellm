@@ -1,6 +1,7 @@
 import os
 import sys
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -505,3 +506,79 @@ def test_bedrock_passthrough_model_id_without_arn():
             f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
         )
         assert url_str == expected_url
+
+
+def test_handle_logging_collected_chunks_inference_profile_arn_falls_back_gracefully():
+    """
+    Application Inference Profile ARNs don't embed provider info, so
+    get_bedrock_invoke_provider returns None. The logging path must not raise;
+    it should fall back to the original litellm model name stored in
+    model_call_details, and if that also yields nothing it must return None
+    silently rather than crashing the background logging task.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/28105
+    """
+    config = BedrockPassthroughConfig()
+
+    profile_arn = "arn:aws:bedrock:ap-northeast-2:123456789012:application-inference-profile/czu0ezc2tq2l"
+
+    # Simulate the litellm logging object that carries model_call_details.
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {
+        "litellm_params": {"model": "global.anthropic.claude-opus-4-7"},
+    }
+
+    # Intercept the decoder so we don't need real botocore event-stream bytes.
+    # The import is done inside handle_logging_collected_chunks, so patch the source module.
+    with patch(
+        "litellm.llms.bedrock.chat.get_bedrock_event_stream_decoder"
+    ) as mock_decoder:
+        mock_chunk_obj = MagicMock()
+        mock_chunk_obj._chunk_parser.return_value = (
+            {}
+        )  # not a valid GenericStreamingChunk
+        mock_decoder.return_value = mock_chunk_obj
+
+        # Must not raise ValueError.
+        result = config.handle_logging_collected_chunks(
+            all_chunks=[],
+            litellm_logging_obj=mock_logging_obj,
+            model=profile_arn,
+            custom_llm_provider="bedrock",
+            endpoint="/model/some-model/invoke-with-response-stream",
+        )
+
+        # The decoder must have been called — this proves the fallback resolved
+        # "global.anthropic.claude-opus-4-7" to "anthropic" and did not hit the
+        # early-exit None return that fires when provider resolution fails entirely.
+        mock_decoder.assert_called_once()
+        call_kwargs = mock_decoder.call_args.kwargs
+        assert call_kwargs["invoke_provider"] == "anthropic"
+
+    # With no chunks the assembled response is None, but no exception was raised.
+    assert result is None
+
+
+def test_handle_logging_collected_chunks_inference_profile_arn_no_fallback_returns_none():
+    """
+    When neither the ARN nor the original model name yields a known provider,
+    handle_logging_collected_chunks must return None instead of raising.
+    """
+    config = BedrockPassthroughConfig()
+
+    profile_arn = "arn:aws:bedrock:ap-northeast-2:123456789012:application-inference-profile/czu0ezc2tq2l"
+
+    mock_logging_obj = MagicMock()
+    # Empty litellm_params — no usable fallback model name.
+    mock_logging_obj.model_call_details = {"litellm_params": {}}
+
+    # Must not raise ValueError.
+    result = config.handle_logging_collected_chunks(
+        all_chunks=[],
+        litellm_logging_obj=mock_logging_obj,
+        model=profile_arn,
+        custom_llm_provider="bedrock",
+        endpoint="/model/some-model/invoke-with-response-stream",
+    )
+
+    assert result is None

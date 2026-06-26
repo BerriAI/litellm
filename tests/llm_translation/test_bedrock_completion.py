@@ -2787,6 +2787,13 @@ def test_bedrock_invoke_provider():
         )
         == "nova"
     )
+    # Application Inference Profile ARNs have no provider info in the ARN
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "arn:aws:bedrock:ap-northeast-2:123456789012:application-inference-profile/czu0ezc2tq2l"
+        )
+        is None
+    )
 
 
 def test_bedrock_description_param():
