@@ -274,7 +274,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
     web_search_billing_unit: Optional[
-        str
+        Literal["per_query", "per_prompt"]
     ]  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
     tiered_pricing: Optional[
