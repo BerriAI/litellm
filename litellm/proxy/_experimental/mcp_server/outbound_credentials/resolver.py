@@ -83,18 +83,7 @@ class UpstreamCredentialProvider:
             case TokenExchangeConfig():
                 return _not_implemented(AuthSpecKind.token_exchange)
             case AuthorizationCodeConfig():
-                token = await self._authz_token(subject, server)
-                if token is None:
-                    return Error(
-                        CredError.of_unauthorized(
-                            "Authorization required: complete the OAuth flow for this server."
-                        )
-                    )
-                return Ok(
-                    StaticHeaderAuth(
-                        f"Bearer {token.access_token}", header_name="Authorization"
-                    )
-                )
+                return await self._authorization_code(subject, server)
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
@@ -124,6 +113,22 @@ class UpstreamCredentialProvider:
                     )
                 )
         assert_never(config.key_source)
+
+    async def _authorization_code(
+        self, subject: Subject, server: ServerSpec
+    ) -> Result[StaticHeaderAuth, CredError]:
+        token = await self._authz_token(subject, server)
+        if token is None:
+            return Error(
+                CredError.of_unauthorized(
+                    "Authorization required: complete the OAuth flow for this server."
+                )
+            )
+        return Ok(
+            StaticHeaderAuth(
+                f"Bearer {token.access_token}", header_name="Authorization"
+            )
+        )
 
     async def _authz_token(
         self, subject: Subject, server: ServerSpec
