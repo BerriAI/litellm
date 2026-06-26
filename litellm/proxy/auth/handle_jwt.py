@@ -2195,13 +2195,15 @@ class JWTAuthManager:
             token=jwt_valid_token, default_value=None
         )
 
-        # `get_team_id` can return `team_id_default` when no JWT field is present,
-        # which would otherwise hide claimless tokens from the DB-fallback path.
-        # `get_all_jwt_team_ids` deliberately ignores that default, so use it to
-        # detect whether the token actually carries any IdP team claim.
+        # The DB fallback only applies when the token carries no team identity at
+        # all. `get_all_jwt_team_ids` ignores `team_id_default` so a configured
+        # default does not hide a claimless token, and `team_id is None` excludes
+        # the RBAC team-role path (which already set `team_id`); otherwise a
+        # provisional x-litellm-team-id header could override an RBAC-asserted team.
         db_team_fallback = (
             jwt_handler.litellm_jwtauth.fallback_to_db_teams
             and not jwt_handler.get_all_jwt_team_ids(token=jwt_valid_token)
+            and team_id is None
         )
         if specific_team_id and not db_team_fallback:
             all_team_ids.add(specific_team_id)
@@ -2209,7 +2211,7 @@ class JWTAuthManager:
         header_team_id = JWTAuthManager.get_team_id_from_header(
             request_headers=request_headers,
             allowed_team_ids=all_team_ids,
-            fallback_to_db_teams=jwt_handler.litellm_jwtauth.fallback_to_db_teams,
+            fallback_to_db_teams=db_team_fallback,
         )
         if header_team_id:
             team_id = header_team_id
