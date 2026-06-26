@@ -25610,6 +25610,16 @@
         ],
         "source": "https://mistral.ai/pricing#api-pricing"
     },
+    "mistral/mistral-ocr-2512": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 0.002,
+        "annotation_cost_per_page": 0.003,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
+    },
     "mistral/magistral-medium-latest": {
         "input_cost_per_token": 2e-06,
         "litellm_provider": "mistral",
