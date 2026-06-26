@@ -134,6 +134,33 @@ describe("RouterSettings", () => {
     );
   });
 
+  it("should send routing_groups as a parsed list, not a stringified one", async () => {
+    vi.mocked(getCallbacksCall).mockResolvedValue({
+      router_settings: {
+        routing_strategy: "simple-shuffle",
+        routing_groups: [],
+      },
+    });
+
+    const user = userEvent.setup();
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("strategy-select")).toBeInTheDocument();
+    });
+
+    const input = document.querySelector('input[name="routing_groups"]') as HTMLInputElement | null;
+    expect(input?.value).toBe("[]");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    const payload = vi.mocked(setCallbacksCall).mock.calls[0][1] as {
+      router_settings: { routing_groups: unknown };
+    };
+    expect(payload.router_settings.routing_groups).toEqual([]);
+    expect(typeof payload.router_settings.routing_groups).not.toBe("string");
+  });
+
   it("should show a success notification after saving", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);
