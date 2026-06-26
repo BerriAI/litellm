@@ -66,7 +66,9 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.utils import (
+    add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
+    has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
     supports_reasoning,
     token_counter,
@@ -246,6 +248,30 @@ class AmazonConverseConfig(BaseConfig):
             "payloads are dropped. Pass `tools=` to preserve structured tool calling."
         )
         return [_rewrite(message) for message in messages]
+
+    @staticmethod
+    def _handle_orphaned_tool_blocks(
+        messages: list[AllMessageValues], optional_params: dict
+    ) -> list[AllMessageValues]:
+        if litellm.bedrock_neutralize_orphaned_tool_blocks:
+            return AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+                messages, optional_params
+            )
+
+        if "tools" in optional_params or not has_tool_call_blocks(messages):
+            return messages
+
+        if litellm.modify_params:
+            optional_params["tools"] = add_dummy_tool(
+                custom_llm_provider="bedrock_converse"
+            )
+            return messages
+
+        raise litellm.utils.UnsupportedParamsError(
+            message="Bedrock doesn't support tool calling without `tools=` param specified. Pass `tools=` param OR set `litellm.modify_params = True` // `litellm_settings::modify_params: True` to add dummy tool to the request.",
+            model="",
+            llm_provider="bedrock",
+        )
 
     @classmethod
     def get_config(cls):
@@ -1742,7 +1768,7 @@ class AmazonConverseConfig(BaseConfig):
             messages, model=model
         )
 
-        messages = self._neutralize_orphaned_tool_blocks(messages, optional_params)
+        messages = self._handle_orphaned_tool_blocks(messages, optional_params)
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
@@ -1803,7 +1829,7 @@ class AmazonConverseConfig(BaseConfig):
             messages, model=model
         )
 
-        messages = self._neutralize_orphaned_tool_blocks(messages, optional_params)
+        messages = self._handle_orphaned_tool_blocks(messages, optional_params)
 
         # Convert last user message to guarded_text if guardrailConfig is present
         messages = self._convert_consecutive_user_messages_to_guarded_text(
