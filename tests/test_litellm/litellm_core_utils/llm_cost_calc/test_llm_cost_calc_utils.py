@@ -951,6 +951,7 @@ def test_cache_writing_cost_with_zero_creation_tokens_and_ephemeral_details():
         "character_count": 0,
         "image_count": 0,
         "video_length_seconds": 0.0,
+        "audio_length_seconds": 0.0,
     }
 
     model_info: ModelInfo = {}

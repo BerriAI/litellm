@@ -456,3 +456,48 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens_details.image_count == 0
         assert result.usage.prompt_tokens_details.audio_tokens == 64
+        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
+            2.0
+        )
+
+        prompt_cost, _ = generic_cost_per_token(
+            model=self.MODEL,
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        assert prompt_cost == pytest.approx(2.0 * 0.00016)
+
+    def test_video_plus_audio_does_not_double_bill_text(self):
+        """Video+audio responses must not get video tokens reassigned to text."""
+        response_json = {
+            "embedding": {"values": [0.1]},
+            "usageMetadata": {
+                "promptTokenCount": 580,
+                "totalTokenCount": 580,
+                "promptTokensDetails": [
+                    {"modality": "VIDEO", "tokenCount": 516},
+                    {"modality": "AUDIO", "tokenCount": 64},
+                ],
+            },
+        }
+        result = process_embed_content_response(
+            input=["gs://bucket/clip.mp4"],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json=response_json,
+        )
+        assert result.usage.prompt_tokens_details.text_tokens == 1
+        assert result.usage.prompt_tokens_details.video_length_seconds == pytest.approx(
+            2.0
+        )
+        assert result.usage.prompt_tokens_details.audio_length_seconds == pytest.approx(
+            2.0
+        )
+
+        prompt_cost, _ = generic_cost_per_token(
+            model=self.MODEL,
+            usage=result.usage,
+            custom_llm_provider="vertex_ai",
+        )
+        # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
+        assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)

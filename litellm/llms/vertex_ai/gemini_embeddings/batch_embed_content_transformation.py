@@ -306,6 +306,7 @@ def transform_openai_input_gemini_embed_content(
 
 _IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg"})
 _VIDEO_TOKENS_PER_SECOND = 258.0
+_AUDIO_TOKENS_PER_SECOND = 32.0
 _usage_metadata_adapter = TypeAdapter(UsageMetadata)
 
 
@@ -398,13 +399,18 @@ def _usage_from_embed_content_response(
     video_length_seconds = (
         video_tokens / _VIDEO_TOKENS_PER_SECOND if video_tokens > 0 else 0.0
     )
-
-    has_billable_non_video = text_tokens > 0 or audio_tokens > 0 or image_count > 0
-    # generic_cost_per_token rewrites text_tokens to the full prompt when text and
-    # image_count are both zero; a 1-token floor keeps video billed per-second.
-    resolved_text_tokens = (
-        1 if video_length_seconds > 0 and not has_billable_non_video else text_tokens
+    audio_length_seconds = (
+        audio_tokens / _AUDIO_TOKENS_PER_SECOND if audio_tokens > 0 else 0.0
     )
+
+    # generic_cost_per_token rewrites text_tokens to the full prompt minus
+    # other modalities when both text_tokens and image_count are zero. For
+    # video, that misallocates video tokens to text; a 1-token floor sidesteps
+    # the rewrite and keeps billing on input_cost_per_video_per_second.
+    needs_video_text_floor = (
+        video_length_seconds > 0 and text_tokens == 0 and image_count == 0
+    )
+    resolved_text_tokens = 1 if needs_video_text_floor else text_tokens
 
     return Usage(
         prompt_tokens=prompt_tokens,
@@ -414,6 +420,7 @@ def _usage_from_embed_content_response(
             audio_tokens=audio_tokens,
             image_count=image_count,
             video_length_seconds=video_length_seconds,
+            audio_length_seconds=audio_length_seconds,
         ),
     )
 
