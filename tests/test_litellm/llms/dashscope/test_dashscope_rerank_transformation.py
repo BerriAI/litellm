@@ -12,12 +12,14 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+import litellm
+from litellm.cost_calculator import rerank_cost
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.rerank.transformation import (
     DEFAULT_RERANK_URL,
     DashScopeRerankConfig,
 )
-from litellm.types.rerank import RerankResponse
+from litellm.types.rerank import RerankBilledUnits, RerankResponse
 
 
 class TestDashScopeRerankURL:
@@ -312,6 +314,80 @@ class TestDashScopeRerankResponse:
         )
         assert isinstance(err, DashScopeError)
         assert err.status_code == 500
+
+
+class TestDashScopeRerankCost:
+    def setup_method(self):
+        self.config = DashScopeRerankConfig()
+
+    def test_cost_is_token_based(self):
+        # qwen3-rerank bills per token: total_tokens * input_cost_per_token.
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=RerankBilledUnits(total_tokens=1000),
+            model_info={"input_cost_per_token": 0.00000005},  # $0.05 / 1M tokens
+        )
+        assert abs(prompt_cost - 0.00005) < 1e-10  # 1000 * 0.00000005
+        assert completion_cost == 0.0
+
+    def test_cost_zero_when_total_tokens_missing(self):
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=RerankBilledUnits(),
+            model_info={"input_cost_per_token": 0.00000005},
+        )
+        assert (prompt_cost, completion_cost) == (0.0, 0.0)
+
+    def test_cost_zero_when_model_info_missing(self):
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=RerankBilledUnits(total_tokens=1000),
+            model_info=None,
+        )
+        assert (prompt_cost, completion_cost) == (0.0, 0.0)
+
+    def test_cost_zero_when_price_unset(self):
+        # Model registered without input_cost_per_token -> no billing.
+        prompt_cost, completion_cost = self.config.calculate_rerank_cost(
+            model="qwen3-rerank",
+            billed_units=RerankBilledUnits(total_tokens=1000),
+            model_info={},
+        )
+        assert (prompt_cost, completion_cost) == (0.0, 0.0)
+
+
+class TestDashScopeRerankPriceMap:
+    def _load_local_cost_map(self, monkeypatch):
+        # setattr auto-restores litellm.model_cost after the test, so mutating
+        # the global map here can't leak into other tests.
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    def test_qwen3_rerank_price_registered(self, monkeypatch):
+        # Pin the built-in price entry so cost tracking works without per-model
+        # config: $0.1 / 1M tokens == 1e-07 per token.
+        self._load_local_cost_map(monkeypatch)
+
+        info = litellm.get_model_info(
+            model="qwen3-rerank", custom_llm_provider="dashscope"
+        )
+        assert info["input_cost_per_token"] == 1e-07
+        assert info["mode"] == "rerank"
+        assert info["litellm_provider"] == "dashscope"
+
+    def test_qwen3_rerank_billed_end_to_end(self, monkeypatch):
+        # Full production cost path: rerank_cost -> get_model_info ->
+        # DashScopeRerankConfig.calculate_rerank_cost. Guards the seam the
+        # direct unit tests skip.
+        self._load_local_cost_map(monkeypatch)
+
+        prompt_cost, completion_cost = rerank_cost(
+            model="qwen3-rerank",
+            custom_llm_provider="dashscope",
+            billed_units=RerankBilledUnits(total_tokens=1000),
+        )
+        assert abs(prompt_cost - 1e-04) < 1e-12  # 1000 * 1e-07
+        assert completion_cost == 0.0
 
 
 class TestProviderConfigManagerDispatch:
