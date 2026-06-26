@@ -207,10 +207,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        usage_dict: UsageDelta = (
-            LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
-                chunk.usage
-            )
+        usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+            chunk.usage
         )
         merged_chunk["usage"] = usage_dict
         if self.applied_edits and "context_management" not in merged_chunk:
