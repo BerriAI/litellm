@@ -2323,6 +2323,14 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
+                    # No fallback handled the mid-stream error, so surface the
+                    # real provider exception (e.g. RateLimitError) instead of
+                    # leaking the internal MidStreamFallbackError to the client
+                    if (
+                        isinstance(fallback_error, MidStreamFallbackError)
+                        and fallback_error.original_exception is not None
+                    ):
+                        raise fallback_error.original_exception from fallback_error
                     raise fallback_error
             finally:
                 # Close the underlying streams to release HTTP connections
@@ -2754,6 +2762,11 @@ class Router:
                     verbose_router_logger.error(
                         f"Responses streaming fallback also failed: {fallback_error}"
                     )
+                    if (
+                        isinstance(fallback_error, MidStreamFallbackError)
+                        and fallback_error.original_exception is not None
+                    ):
+                        raise fallback_error.original_exception from fallback_error
                     raise fallback_error
             finally:
                 with anyio.CancelScope(shield=True):
@@ -2890,6 +2903,11 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
+                    if (
+                        isinstance(fallback_error, MidStreamFallbackError)
+                        and fallback_error.original_exception is not None
+                    ):
+                        raise fallback_error.original_exception from fallback_error
                     raise fallback_error
             finally:
                 if hasattr(model_response, "close"):
