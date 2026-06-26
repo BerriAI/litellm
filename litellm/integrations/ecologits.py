@@ -28,8 +28,10 @@ Failures (timeout, non-200, bad payload) NEVER propagate — at worst the call
 is logged without ecologits enrichment.
 """
 
+from __future__ import annotations
+
 import os
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING
 
 import litellm
 from litellm._logging import verbose_logger
@@ -40,6 +42,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from prometheus_client import Counter
 
 ECOLOGITS_DEFAULT_API_BASE = "https://api.ecologits.ai"
@@ -75,7 +79,7 @@ ECOLOGITS_IMPACTS = (
 )
 
 
-def _build_ecologits_counters() -> Optional[Dict[str, "Counter"]]:
+def _build_ecologits_counters() -> dict[str, Counter] | None:
     """Build one Prometheus Counter per impact, or ``None`` if prometheus_client
     is not installed.
 
@@ -94,7 +98,7 @@ def _build_ecologits_counters() -> Optional[Dict[str, "Counter"]]:
         )
         return None
 
-    counters: Dict[str, "Counter"] = {}
+    counters: dict[str, Counter] = {}
     for json_key, suffix, unit, description in ECOLOGITS_IMPACTS:
         counters[json_key] = Counter(
             name=f"litellm_ecologits_{suffix}_total",
@@ -110,9 +114,9 @@ _ECOLOGITS_COUNTERS = _build_ecologits_counters()
 class EcoLogitsLogger(CustomLogger):
     def __init__(
         self,
-        api_base: Optional[str] = None,
-        default_electricity_mix_zone: Optional[str] = None,
-        timeout: Optional[float] = None,
+        api_base: str | None = None,
+        default_electricity_mix_zone: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         super().__init__()
         self.api_base = (
@@ -127,8 +131,8 @@ class EcoLogitsLogger(CustomLogger):
         )
 
     async def async_logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
+        self, kwargs: dict, result: object, call_type: str
+    ) -> tuple[dict, object]:
         try:
             # Respect the `no-log` gate. This hook runs in the FIRST loop of
             # async_log_success_event, BEFORE should_run_callback() applies the
@@ -181,7 +185,7 @@ class EcoLogitsLogger(CustomLogger):
         return kwargs, result
 
     @staticmethod
-    def _attach_to_metadata(kwargs: dict, ecologits_data: Any) -> None:
+    def _attach_to_metadata(kwargs: dict, ecologits_data: object) -> None:
         """Place the impacts payload where downstream loggers actually look.
 
         Langfuse reads from ``kwargs["litellm_params"]["metadata"]`` and
@@ -202,9 +206,9 @@ class EcoLogitsLogger(CustomLogger):
 
     @staticmethod
     def _emit_prometheus_counters(
-        ecologits_data: Any,
-        model: Optional[str],
-        custom_llm_provider: Optional[str],
+        ecologits_data: object,
+        model: str | None,
+        custom_llm_provider: str | None,
         zone: str,
     ) -> None:
         if _ECOLOGITS_COUNTERS is None:
@@ -231,7 +235,7 @@ class EcoLogitsLogger(CustomLogger):
                 counter.labels(**base_labels, bound=bound).inc(float(bound_value))
 
     @staticmethod
-    def _iter_impact_bounds(entry: Dict[str, Any]):
+    def _iter_impact_bounds(entry: dict) -> Iterator[tuple[str, object]]:
         """Yield ``(bound, numeric_value)`` pairs from one impact entry.
 
         EcoLogits returns two shapes depending on whether the model has
@@ -249,7 +253,7 @@ class EcoLogitsLogger(CustomLogger):
                 if bound in raw_value:
                     yield bound, raw_value[bound]
 
-    def _build_payload(self, kwargs: dict, result: Any) -> Optional[Dict[str, Any]]:
+    def _build_payload(self, kwargs: dict, result: object) -> dict | None:
         provider = kwargs.get("custom_llm_provider") or kwargs.get(
             "litellm_params", {}
         ).get("custom_llm_provider")
@@ -269,7 +273,7 @@ class EcoLogitsLogger(CustomLogger):
 
         ecologits_provider = ECOLOGITS_CONVERSION_MODEL_NAME.get(provider, provider)
 
-        payload: Dict[str, Any] = {
+        payload: dict = {
             "provider": ecologits_provider,
             "model_name": model,
             "output_token_count": int(output_token_count),
@@ -282,7 +286,7 @@ class EcoLogitsLogger(CustomLogger):
 
         return payload
 
-    def _resolve_zone(self, kwargs: dict) -> Optional[str]:
+    def _resolve_zone(self, kwargs: dict) -> str | None:
         """Resolve the electricity-mix zone for this call.
 
         The zone reflects where the model physically runs, so it's a
@@ -307,7 +311,7 @@ class EcoLogitsLogger(CustomLogger):
         return self.default_electricity_mix_zone
 
     @staticmethod
-    def _extract_model_info(kwargs: dict) -> Dict[str, Any]:
+    def _extract_model_info(kwargs: dict) -> dict:
         """Find the deployment ``model_info`` block.
 
         Checked in order: top-level ``kwargs["model_info"]`` (some call
@@ -327,7 +331,7 @@ class EcoLogitsLogger(CustomLogger):
         return {}
 
     @staticmethod
-    def _extract_completion_tokens(result: Any) -> Optional[int]:
+    def _extract_completion_tokens(result: object) -> int | None:
         if result is None:
             return None
         usage = None
@@ -348,7 +352,7 @@ class EcoLogitsLogger(CustomLogger):
         return getattr(usage, "completion_tokens", None)
 
     @staticmethod
-    def _extract_request_latency_seconds(kwargs: dict) -> Optional[float]:
+    def _extract_request_latency_seconds(kwargs: dict) -> float | None:
         start = kwargs.get("start_time")
         end = kwargs.get("end_time") or kwargs.get("completion_start_time")
         if start is None or end is None:
