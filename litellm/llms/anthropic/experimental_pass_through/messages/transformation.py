@@ -87,6 +87,74 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     if isinstance(content, list):
                         _process_content_list(content)
 
+    def should_normalize_system_role_messages(self) -> bool:
+        """
+        Whether to normalize ``role: "system"`` entries from the messages array
+        into the top-level ``system`` field.
+
+        Anthropic's native Messages API accepts ``role: "system"`` inside messages,
+        but some partner endpoints (Vertex AI, Bedrock) reject it. Providers that
+        need this normalization override this to True.
+        """
+        return False
+
+    @staticmethod
+    def _as_system_content_blocks(value: Any) -> list:
+        """Convert system content to a list of content blocks."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return list(value)
+        if isinstance(value, str):
+            return [{"type": "text", "text": value}]
+        return [value]
+
+    def _normalize_system_role_messages(
+        self,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
+    ) -> Tuple[List[Dict], Dict]:
+        """Move ``role: "system"`` entries from the messages array into the
+        top-level ``system`` field.
+
+        Some Anthropic partner endpoints (Vertex AI, Bedrock) reject
+        ``role: "system"`` inside messages — they only accept ``system`` as a
+        top-level parameter.
+        """
+        system_role_messages = [
+            m for m in messages if isinstance(m, dict) and m.get("role") == "system"
+        ]
+        if not system_role_messages:
+            return messages, anthropic_messages_optional_request_params
+
+        # Remove system-role entries from messages
+        filtered_messages = [
+            m
+            for m in messages
+            if not (isinstance(m, dict) and m.get("role") == "system")
+        ]
+
+        # Merge into top-level system
+        existing_system = anthropic_messages_optional_request_params.get("system")
+        system_blocks: list = []
+
+        if existing_system is not None:
+            system_blocks.extend(
+                AnthropicMessagesConfig._as_system_content_blocks(existing_system)
+            )
+
+        for msg in system_role_messages:
+            system_blocks.extend(
+                AnthropicMessagesConfig._as_system_content_blocks(msg.get("content"))
+            )
+
+        if system_blocks:
+            anthropic_messages_optional_request_params["system"] = system_blocks
+        else:
+            anthropic_messages_optional_request_params.pop("system", None)
+
+        return filtered_messages, anthropic_messages_optional_request_params
+
     def should_strip_billing_metadata(self) -> bool:
         """
         Whether to drop x-anthropic-billing-header system blocks before sending upstream.
@@ -283,6 +351,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             model=model,
             optional_params=anthropic_messages_optional_request_params,
         )
+
+        # Normalize role: "system" entries from messages array into top-level system.
+        # Some partner endpoints (Vertex AI, Bedrock) reject role: "system" in messages.
+        if self.should_normalize_system_role_messages():
+            messages, anthropic_messages_optional_request_params = (
+                self._normalize_system_role_messages(
+                    messages, anthropic_messages_optional_request_params
+                )
+            )
 
         system_param = anthropic_messages_optional_request_params.get("system")
         if self.should_strip_billing_metadata() and system_param is not None:
