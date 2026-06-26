@@ -20,6 +20,7 @@ from litellm.llms.azure.image_generation import (
     AzureDallE3ImageGenerationConfig,
     get_azure_image_generation_config,
 )
+from litellm.llms.azure.common_utils import resolve_azure_image_auth_headers
 from litellm.utils import get_optional_params_image_gen
 
 
@@ -440,3 +441,69 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
         wire_json = post_kwargs.get("json") or {}
         assert "model" not in wire_json
         assert data.get("model") == base_model
+
+
+def test_resolve_headers_api_key_takes_precedence():
+    headers = {"Content-Type": "application/json", "api-key": "sk-123"}
+    out = resolve_azure_image_auth_headers(
+        headers=headers,
+        api_key="sk-123",
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert out["api-key"] == "sk-123"
+    assert "Authorization" not in out
+
+
+def test_resolve_headers_uses_token_provider_when_keyless():
+    out = resolve_azure_image_auth_headers(
+        headers={"Content-Type": "application/json"},
+        api_key=None,
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert out["Authorization"] == "Bearer ad-token"
+    assert "api-key" not in out
+
+
+def test_resolve_headers_drops_stale_api_key_for_token():
+    out = resolve_azure_image_auth_headers(
+        headers={"api-key": "stale"},
+        api_key=None,
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert "api-key" not in out
+    assert out["Authorization"] == "Bearer ad-token"
+
+
+def test_resolve_headers_falls_back_to_static_ad_token():
+    out = resolve_azure_image_auth_headers(
+        headers={"Content-Type": "application/json"},
+        api_key=None,
+        azure_ad_token_provider=None,
+        azure_ad_token="static-token",
+    )
+    assert out["Authorization"] == "Bearer static-token"
+
+
+def test_resolve_headers_unchanged_when_no_credentials():
+    out = resolve_azure_image_auth_headers(
+        headers={"Content-Type": "application/json"},
+        api_key=None,
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+    )
+    assert out == {"Content-Type": "application/json"}
+    assert "Authorization" not in out
+
+
+def test_resolve_headers_does_not_mutate_input():
+    headers = {"api-key": "stale"}
+    resolve_azure_image_auth_headers(
+        headers=headers,
+        api_key=None,
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert headers == {"api-key": "stale"}
