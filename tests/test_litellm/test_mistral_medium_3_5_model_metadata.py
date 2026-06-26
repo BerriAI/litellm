@@ -27,6 +27,17 @@ def _load(path):
         return json.load(f)
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force get_model_info to resolve against the in-repo cost map instead of the
+    remote one fetched at import time, which still carries the pre-merge pricing."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
 @pytest.mark.parametrize("model", MEDIUM_3_5_MODELS)
 def test_medium_3_5_specs(model):
     info = _load(MAIN_PATH).get(model)
@@ -54,7 +65,7 @@ def test_medium_3_5_specs(model):
     assert provider == "mistral"
 
 
-def test_mistral_medium_latest_resolves_to_medium_3_5():
+def test_mistral_medium_latest_resolves_to_medium_3_5(local_model_cost_map):
     """LIT-3883: the -latest alias was retargeted to Medium 3.5; get_model_info must
     return the 3.5 pricing/context/reasoning, not the stale Medium 3.1 values."""
     info = litellm.get_model_info(model="mistral/mistral-medium-latest")
