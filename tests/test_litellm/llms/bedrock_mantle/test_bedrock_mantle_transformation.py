@@ -715,6 +715,9 @@ class TestBedrockMantleWireFormatDispatch:
         Anthropic Mantle call appended the messages path to the OpenAI base and
         signed https://.../openai/v1/anthropic/v1/messages. The Anthropic surface
         must instead derive its own regional messages endpoint."""
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0")
+        monkeypatch.setenv("AWS_REGION", "us-east-2")
         monkeypatch.setenv(
             "BEDROCK_MANTLE_API_BASE",
             "https://bedrock-mantle.us-east-2.api.aws/openai/v1",
@@ -744,9 +747,6 @@ class TestBedrockMantleWireFormatDispatch:
                 model="bedrock_mantle/anthropic.claude-mythos-preview",
                 messages=[{"role": "user", "content": "hello"}],
                 max_tokens=10,
-                aws_access_key_id="fake-key",
-                aws_secret_access_key="fake-secret",
-                aws_region_name="us-east-1",
             )
 
         assert response.choices[0].message.content == "ok"
