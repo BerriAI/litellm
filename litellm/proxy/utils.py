@@ -6459,7 +6459,7 @@ async def _apply_user_models_filter(
     model_access_groups: dict[str, list[str]],
     prisma_client: Optional["PrismaClient"],
     proxy_logging_obj: Optional["ProxyLogging"],
-    user_api_key_cache: Optional["DualCache"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
     user_models_override: list[str] | None = None,
 ) -> list[str]:
     """
@@ -6554,7 +6554,7 @@ async def apply_user_models_filter_to_deployments(
     llm_router: Optional["Router"],
     prisma_client: Optional["PrismaClient"],
     proxy_logging_obj: Optional["ProxyLogging"],
-    user_api_key_cache: Optional["DualCache"],
+    user_api_key_cache: Optional["UserApiKeyCache"],
     user_models_override: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """

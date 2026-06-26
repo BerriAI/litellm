@@ -11483,11 +11483,11 @@ async def non_admin_all_models(
             # correctly downstream.
             user_models = list(user_row.models or [])
 
-        # Get all models that are team models, when model team_id == user_row.teams
-        all_models += _check_if_model_is_team_model(
-            models=llm_router.get_model_list() or [],
-            user_row=user_row,
-        )
+            # Get all models that are team models, when model team_id == user_row.teams
+            all_models += _check_if_model_is_team_model(
+                models=llm_router.get_model_list() or [],
+                user_row=user_row,
+            )
 
     # de-duplicate models. Only return unique model ids
     unique_models = _deduplicate_litellm_router_models(models=all_models)
