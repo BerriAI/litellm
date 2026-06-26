@@ -20,6 +20,7 @@ from litellm.llms.azure.image_generation import (
     AzureDallE3ImageGenerationConfig,
     get_azure_image_generation_config,
 )
+from litellm.llms.azure.common_utils import resolve_azure_image_auth_headers
 from litellm.utils import get_optional_params_image_gen
 
 
@@ -440,3 +441,181 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
         wire_json = post_kwargs.get("json") or {}
         assert "model" not in wire_json
         assert data.get("model") == base_model
+
+
+def test_resolve_headers_api_key_takes_precedence():
+    headers = {"Content-Type": "application/json", "api-key": "sk-123"}
+    out = resolve_azure_image_auth_headers(
+        headers=headers,
+        api_key="sk-123",
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert out["api-key"] == "sk-123"
+    assert "Authorization" not in out
+
+
+def test_resolve_headers_uses_token_provider_when_keyless():
+    out = resolve_azure_image_auth_headers(
+        headers={"Content-Type": "application/json"},
+        api_key=None,
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert out["Authorization"] == "Bearer ad-token"
+    assert "api-key" not in out
+
+
+def test_resolve_headers_drops_stale_api_key_for_token():
+    out = resolve_azure_image_auth_headers(
+        headers={"api-key": "stale"},
+        api_key=None,
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert "api-key" not in out
+    assert out["Authorization"] == "Bearer ad-token"
+
+
+def test_resolve_headers_falls_back_to_static_ad_token():
+    out = resolve_azure_image_auth_headers(
+        headers={"Content-Type": "application/json"},
+        api_key=None,
+        azure_ad_token_provider=None,
+        azure_ad_token="static-token",
+    )
+    assert out["Authorization"] == "Bearer static-token"
+
+
+def test_resolve_headers_unchanged_when_no_credentials():
+    out = resolve_azure_image_auth_headers(
+        headers={"Content-Type": "application/json"},
+        api_key=None,
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+    )
+    assert out == {"Content-Type": "application/json"}
+    assert "Authorization" not in out
+
+
+def test_resolve_headers_does_not_mutate_input():
+    headers = {"api-key": "stale"}
+    resolve_azure_image_auth_headers(
+        headers=headers,
+        api_key=None,
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+    assert headers == {"api-key": "stale"}
+
+
+def test_azure_image_generation_keyless_env_wif_sets_bearer_header():
+    azure_chat = AzureChatCompletion()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "created": 1,
+        "data": [{"url": "https://example.com/cat.png"}],
+    }
+
+    prev = litellm.enable_azure_ad_token_refresh
+    with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post, patch(
+        "litellm.llms.azure.common_utils.get_azure_ad_token_provider",
+        return_value=lambda: "wif-token",
+    ):
+        litellm.enable_azure_ad_token_refresh = True
+        try:
+            azure_chat.image_generation(
+                prompt="a cat",
+                timeout=60.0,
+                optional_params={"n": 1, "size": "1024x1024"},
+                logging_obj=MagicMock(),
+                headers={},
+                model="gpt-image-1-mini",
+                api_key=None,
+                api_base="https://res.openai.azure.com/",
+                api_version="2025-04-01-preview",
+                litellm_params={
+                    "api_base": "https://res.openai.azure.com/",
+                    "api_version": "2025-04-01-preview",
+                },
+            )
+        finally:
+            litellm.enable_azure_ad_token_refresh = prev
+
+    sent_headers = mock_post.call_args.kwargs["headers"]
+    assert sent_headers.get("Authorization") == "Bearer wif-token"
+    assert "api-key" not in sent_headers
+
+
+def test_azure_image_generation_with_api_key_sets_api_key_header():
+    azure_chat = AzureChatCompletion()
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "created": 1,
+        "data": [{"url": "https://example.com/cat.png"}],
+    }
+
+    with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+        azure_chat.image_generation(
+            prompt="a cat",
+            timeout=60.0,
+            optional_params={"n": 1, "size": "1024x1024"},
+            logging_obj=MagicMock(),
+            headers={"api-key": "sk-test"},
+            model="gpt-image-1-mini",
+            api_key="sk-test",
+            api_base="https://res.openai.azure.com/",
+            api_version="2025-04-01-preview",
+            litellm_params={
+                "api_base": "https://res.openai.azure.com/",
+                "api_version": "2025-04-01-preview",
+            },
+        )
+
+    sent_headers = mock_post.call_args.kwargs["headers"]
+    assert sent_headers.get("api-key") == "sk-test"
+    assert "Authorization" not in sent_headers
+
+
+@pytest.mark.asyncio
+async def test_azure_aimage_generation_keyless_sets_bearer_header():
+    azure_chat = AzureChatCompletion()
+
+    data = {"model": "gpt-image-1-mini", "prompt": "a cat", "n": 1, "size": "1024x1024"}
+    azure_client_params = {
+        "api_base": "https://res.openai.azure.com/",
+        "api_version": "2025-04-01-preview",
+        "azure_ad_token_provider": (lambda: "wif-token"),
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "created": 1,
+        "data": [{"url": "https://example.com/cat.png"}],
+    }
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+
+    with patch(
+        "litellm.llms.azure.azure.get_async_httpx_client", return_value=mock_client
+    ):
+        await azure_chat.aimage_generation(
+            data=data,
+            model_response=None,
+            azure_client_params=azure_client_params,
+            api_key=None,
+            input=[],
+            logging_obj=MagicMock(),
+            headers={},
+            model="gpt-image-1-mini",
+            timeout=60.0,
+        )
+
+    sent_headers = mock_client.post.call_args.kwargs["headers"]
+    assert sent_headers.get("Authorization") == "Bearer wif-token"
+    assert "api-key" not in sent_headers
