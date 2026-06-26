@@ -188,8 +188,13 @@ class AnthropicMessagesHandler(BaseTranslation):
                 )
 
                 model = str(data.get("model") or "")
+                non_system = [
+                    m
+                    for m in guardrailed_structured_messages
+                    if m.get("role") != "system"
+                ]
                 data["messages"] = anthropic_messages_pt(
-                    messages=guardrailed_structured_messages,
+                    messages=non_system,
                     model=model,
                     llm_provider="anthropic",
                 )
