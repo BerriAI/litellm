@@ -1125,7 +1125,16 @@ class PrometheusLogger(CustomLogger):
         for info in standard_logging_payload.get("guardrail_information") or []:
             mode = info.get("guardrail_mode")
             modes = mode if isinstance(mode, list) else [mode]
-            mode_values = {getattr(m, "value", m) for m in modes}
+            # A mode may be a GuardrailEventHooks, a plain string, a GuardrailMode
+            # dict (unhashable at runtime), or a list of these. Resolve each to its
+            # string value and keep only strings, so an unhashable type (dict) can
+            # never enter the set and raise TypeError (which would abort the rest of
+            # success-event logging). Non-string modes are ignored, not counted.
+            mode_values = set()
+            for m in modes:
+                value = getattr(m, "value", m)
+                if isinstance(value, str):
+                    mode_values.add(value)
             if mode_values and mode_values <= additive_modes:
                 total += float(info.get("duration") or 0.0)
         return total

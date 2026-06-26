@@ -111,6 +111,32 @@ def test_get_guardrail_overhead_seconds_excludes_logging_only_and_mcp():
     assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.05) < 1e-6
 
 
+def test_get_guardrail_overhead_seconds_ignores_dict_mode_without_error():
+    """guardrail_mode may be a GuardrailMode TypedDict (an unhashable dict at
+    runtime, from the enterprise Mode-hook path). It must not raise TypeError and
+    must not be counted (the phase can't be resolved to a blocking pre/post)."""
+    payload = StandardLoggingPayload(
+        guardrail_information=[
+            # GuardrailMode TypedDict -> plain dict at runtime
+            {"guardrail_mode": {"tags": {"default": ["pre_call"]}}, "duration": 0.3},
+            {"guardrail_mode": GuardrailEventHooks.post_call, "duration": 0.05},
+        ],
+    )
+    # dict-typed mode is ignored (no TypeError); only the post_call entry counts
+    assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.05) < 1e-6
+
+
+def test_get_guardrail_overhead_seconds_ignores_dict_inside_list_mode():
+    """A list-typed mode containing a dict must not raise and the dict is ignored."""
+    payload = StandardLoggingPayload(
+        guardrail_information=[
+            {"guardrail_mode": [GuardrailEventHooks.pre_call, {"k": "v"}], "duration": 0.1},
+        ],
+    )
+    # the dict is ignored; remaining mode is pre_call -> counted
+    assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.1) < 1e-6
+
+
 def _patch_label_factory(monkeypatch):
     monkeypatch.setattr(
         "litellm.integrations.prometheus.prometheus_label_factory",
