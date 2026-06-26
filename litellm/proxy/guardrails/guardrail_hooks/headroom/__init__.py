@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, List, Union
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -13,8 +15,8 @@ if TYPE_CHECKING:
 
 
 def _coerce_event_hook(
-    mode: Union[str, List[str], Mode],
-) -> Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]:
+    mode: str | list[str] | Mode,
+) -> GuardrailEventHooks | list[GuardrailEventHooks] | Mode:
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):
@@ -23,7 +25,7 @@ def _coerce_event_hook(
 
 
 def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
+    litellm_params: LitellmParams, guardrail: Guardrail
 ) -> HeadroomGuardrail:
     import litellm
 

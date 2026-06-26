@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import HTTPException
 from httpx import Response as HttpxResponse
@@ -37,13 +37,14 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isin
 class HeadroomGuardrail(CustomGuardrail):
     def __init__(
         self,
-        api_base: Optional[str] = None,
-        api_key: Optional[str] = None,
-        model: Optional[str] = None,
-        guardrail_name: Optional[str] = None,
-        event_hook: Optional[
-            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
-        ] = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        guardrail_name: str | None = None,
+        event_hook: GuardrailEventHooks
+        | list[GuardrailEventHooks]
+        | Mode
+        | None = None,
         default_on: bool = False,
     ):
         self.headroom_api_base = (
@@ -77,9 +78,9 @@ class HeadroomGuardrail(CustomGuardrail):
 
     async def _call_compress(
         self,
-        messages: List[dict[str, object]],
-        model: Optional[str],
-    ) -> List[dict[str, object]]:
+        messages: list[dict[str, object]],
+        model: str | None,
+    ) -> list[dict[str, object]]:
         payload: dict[str, object] = {"messages": messages}
         if model:
             payload["model"] = model
@@ -88,7 +89,7 @@ class HeadroomGuardrail(CustomGuardrail):
         if self.headroom_api_key:
             request_headers["Authorization"] = f"Bearer {self.headroom_api_key}"
 
-        raw_response: Optional[HttpxResponse] = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
+        raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
             url=f"{self.headroom_api_base}/v1/compress",
             json=payload,
             headers=request_headers,
@@ -144,7 +145,7 @@ class HeadroomGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
         if input_type != "request":
             return inputs
@@ -172,7 +173,7 @@ class HeadroomGuardrail(CustomGuardrail):
         return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel[object]"]]:
+    def get_config_model() -> type[GuardrailConfigModel[object]] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
             HeadroomGuardrailConfigModel,
         )
