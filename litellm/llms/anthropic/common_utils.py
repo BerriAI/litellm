@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -10,6 +11,9 @@ import httpx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
+)
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -498,7 +502,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             "computer_20241022": "computer-use-2024-10-22",
         }
         return computer_tool_beta_mapping.get(
-            computer_tool_version, "computer-use-2024-10-22"  # Default fallback
+            computer_tool_version,
+            "computer-use-2024-10-22",  # Default fallback
         )
 
     def get_anthropic_beta_list(
@@ -997,6 +1002,67 @@ def _is_empty_text_block(block: Any) -> bool:
         return False
     text = block.get("text")
     return not isinstance(text, str) or not text.strip()
+
+
+def normalize_anthropic_tool_use_id(raw_id: str) -> str:
+    """
+    Normalize a tool_use / tool_result id for Anthropic's ``^[a-zA-Z0-9_-]+$``
+    pattern.
+
+    Strips Gemini thought-signature suffixes (``__thought__``) first, then
+    replaces any remaining invalid characters with underscores.
+    """
+    base_id = (
+        raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+        if THOUGHT_SIGNATURE_SEPARATOR in raw_id
+        else raw_id
+    )
+    sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", base_id)
+    return sanitized or "tool_use_id"
+
+
+def _sanitize_tool_use_id_content_block(block: Any) -> Any:
+    if not isinstance(block, dict):
+        return block
+    block_type = block.get("type")
+    if block_type in ("tool_use", "server_tool_use"):
+        raw_id = block.get("id")
+        if isinstance(raw_id, str):
+            normalized = normalize_anthropic_tool_use_id(raw_id)
+            if normalized != raw_id:
+                return {**block, "id": normalized}
+    elif block_type == "tool_result":
+        raw_id = block.get("tool_use_id")
+        if isinstance(raw_id, str):
+            normalized = normalize_anthropic_tool_use_id(raw_id)
+            if normalized != raw_id:
+                return {**block, "tool_use_id": normalized}
+    return block
+
+
+def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
+    """
+    Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
+    ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
+    ``^[a-zA-Z0-9_-]+$`` requirement.
+
+    Cross-provider clients (e.g. Claude Code routed through kimi) may replay
+    conversation history containing ids like ``functions.Bash:0`` with ``.``
+    and ``:`` — valid on the upstream provider but rejected by Anthropic when
+    the session is switched to a native Anthropic deployment.
+    """
+    out: list[Any] = []
+    for m in messages:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            out.append(m)
+            continue
+        content = m["content"]
+        new_content = [_sanitize_tool_use_id_content_block(b) for b in content]
+        if new_content == content:
+            out.append(m)
+        else:
+            out.append({**m, "content": new_content})
+    return out
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

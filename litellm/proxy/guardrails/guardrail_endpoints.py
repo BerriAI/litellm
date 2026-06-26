@@ -617,9 +617,7 @@ class GuardrailSubmissionItem(BaseModel):
     guardrail_name: str
     status: str  # pending_review | active | rejected
     team_id: Optional[str] = None
-    team_guardrail: bool = (
-        False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
-    )
+    team_guardrail: bool = False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
     litellm_params: Optional[Dict[str, Any]] = None
     guardrail_info: Optional[Dict[str, Any]] = None
     submitted_by_user_id: Optional[str] = None
@@ -2322,16 +2320,17 @@ async def apply_guardrail(
             )
 
         request_processor = ProxyBaseLLMRequestProcessing(data=data)
-        data, litellm_logging_obj = (
-            await request_processor.common_processing_pre_call_logic(
-                request=fastapi_request,
-                general_settings=general_settings,
-                user_api_key_dict=user_api_key_dict,
-                version=version,
-                proxy_logging_obj=proxy_logging_obj,
-                proxy_config=proxy_config,
-                route_type="apply_guardrail",
-            )
+        (
+            data,
+            litellm_logging_obj,
+        ) = await request_processor.common_processing_pre_call_logic(
+            request=fastapi_request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="apply_guardrail",
         )
 
         if litellm_logging_obj is not None:

@@ -96,7 +96,19 @@ class OpenAITextCompletion(BaseLLM):
                         organization=organization,
                     )
                 else:
-                    return self.acompletion(api_base=api_base, data=data, headers=headers, model_response=model_response, api_key=api_key, logging_obj=logging_obj, model=model, timeout=timeout, max_retries=max_retries, organization=organization, client=client)  # type: ignore
+                    return self.acompletion(
+                        api_base=api_base,
+                        data=data,
+                        headers=headers,
+                        model_response=model_response,
+                        api_key=api_key,
+                        logging_obj=logging_obj,
+                        model=model,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                        organization=organization,
+                        client=client,
+                    )  # type: ignore
             elif optional_params.get("stream", False):
                 return self.streaming(
                     logging_obj=logging_obj,
@@ -124,7 +136,9 @@ class OpenAITextCompletion(BaseLLM):
                 else:
                     openai_client = client
 
-                raw_response = openai_client.completions.with_raw_response.create(**data)  # type: ignore
+                raw_response = openai_client.completions.with_raw_response.create(
+                    **data
+                )  # type: ignore
                 response = raw_response.parse()
                 response_json = response.model_dump()
 

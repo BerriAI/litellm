@@ -256,7 +256,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         headers["Content-Encoding"] = "gzip"
 
         response = await self.async_client.post(
-            self.upload_url, content=compressed_data, headers=headers  # type: ignore
+            self.upload_url,
+            content=compressed_data,
+            headers=headers,  # type: ignore
         )
 
         response.raise_for_status()

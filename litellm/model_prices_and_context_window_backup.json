@@ -273,6 +273,19 @@
             "/v1/images/generations"
         ]
     },
+    "aiml/openai/gpt-image-2": {
+        "litellm_provider": "aiml",
+        "metadata": {
+            "notes": "OpenAI gpt-image-2 via AI/ML API - flagship multimodal image generation and editing model with reasoning and 2K output. output_cost_per_image is AI/ML's published medium-quality rate; like the other aiml image entries it is billed as a flat per-image price"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.054,
+        "source": "https://docs.aimlapi.com/api-references/image-models/openai/gpt-image-2",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
     "amazon.nova-canvas-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 2600,
@@ -25567,8 +25580,18 @@
     },
     "mistral/mistral-ocr-latest": {
         "litellm_provider": "mistral",
-        "ocr_cost_per_page": 0.001,
-        "annotation_cost_per_page": 0.003,
+        "ocr_cost_per_page": 0.004,
+        "annotation_cost_per_page": 0.005,
+        "mode": "ocr",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ],
+        "source": "https://mistral.ai/pricing#api-pricing"
+    },
+    "mistral/mistral-ocr-4-0": {
+        "litellm_provider": "mistral",
+        "ocr_cost_per_page": 0.004,
+        "annotation_cost_per_page": 0.005,
         "mode": "ocr",
         "supported_endpoints": [
             "/v1/ocr"
@@ -25787,7 +25810,7 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
-    "mistral/mistral-medium-latest": {
+    "mistral/mistral-medium-2508": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 131072,
@@ -25795,8 +25818,41 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 2e-06,
+        "source": "https://mistral.ai/news/mistral-medium-3",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-medium-2604": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "mistral/mistral-medium-latest": {
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "mistral",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-06,
+        "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -25827,6 +25883,7 @@
         "source": "https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true

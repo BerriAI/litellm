@@ -142,7 +142,9 @@ class BedrockEmbedding(BaseAWSLLM):
             client = client
 
         try:
-            response = await client.post(url=api_base, headers=headers, data=json.dumps(data))  # type: ignore
+            response = await client.post(
+                url=api_base, headers=headers, data=json.dumps(data)
+            )  # type: ignore
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
@@ -456,10 +458,10 @@ class BedrockEmbedding(BaseAWSLLM):
             batch_data = []
             for i in input:
                 if model == "amazon.titan-embed-image-v1":
-                    transformed_request: (
-                        AmazonEmbeddingRequest
-                    ) = AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
-                        input=i, inference_params=inference_params
+                    transformed_request: AmazonEmbeddingRequest = (
+                        AmazonTitanMultimodalEmbeddingG1Config()._transform_request(
+                            input=i, inference_params=inference_params
+                        )
                     )
                 elif model == "amazon.titan-embed-text-v1":
                     transformed_request = AmazonTitanG1Config()._transform_request(
