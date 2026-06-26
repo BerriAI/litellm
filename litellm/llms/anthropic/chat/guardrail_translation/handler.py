@@ -193,11 +193,21 @@ class AnthropicMessagesHandler(BaseTranslation):
                     for m in guardrailed_structured_messages
                     if m.get("role") != "system"
                 ]
-                data["messages"] = anthropic_messages_pt(
+                converted = anthropic_messages_pt(
                     messages=non_system,
                     model=model,
                     llm_provider="anthropic",
                 )
+                for msg in converted:
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        for block in content:
+                            if (
+                                isinstance(block, dict)
+                                and block.get("type") == "thinking"
+                            ):
+                                block.pop("cache_control", None)
+                data["messages"] = converted
             else:
                 # Step 3: Map guardrail responses back to original message structure
                 await self._apply_guardrail_responses_to_input(
