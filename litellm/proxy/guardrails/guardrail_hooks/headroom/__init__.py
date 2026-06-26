@@ -22,7 +22,9 @@ def _coerce_event_hook(
     return GuardrailEventHooks(mode)
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> HeadroomGuardrail:
+def initialize_guardrail(
+    litellm_params: "LitellmParams", guardrail: "Guardrail"
+) -> HeadroomGuardrail:
     import litellm
 
     _callback = HeadroomGuardrail(

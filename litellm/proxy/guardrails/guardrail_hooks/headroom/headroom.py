@@ -7,7 +7,10 @@ from httpx import Response as HttpxResponse
 from typing_extensions import TypeGuard
 
 from litellm._logging import verbose_proxy_logger
-from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
@@ -38,10 +41,14 @@ class HeadroomGuardrail(CustomGuardrail):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         guardrail_name: Optional[str] = None,
-        event_hook: Optional[Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]] = None,
+        event_hook: Optional[
+            Union[GuardrailEventHooks, List[GuardrailEventHooks], Mode]
+        ] = None,
         default_on: bool = False,
     ):
-        self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
+        self.headroom_api_base = (
+            api_base or get_secret_str("HEADROOM_API_BASE") or ""
+        ).rstrip("/")
         if not self.headroom_api_base:
             raise ValueError(
                 "Headroom guardrail requires an API base URL. "
@@ -143,7 +150,9 @@ class HeadroomGuardrail(CustomGuardrail):
             return inputs
 
         if self._should_bypass(request_data):
-            verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
+            verbose_proxy_logger.debug(
+                "Headroom: %s header set; skipping compression", BYPASS_HEADER
+            )
             return inputs
 
         structured_messages = inputs.get("structured_messages")
