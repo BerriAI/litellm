@@ -5561,6 +5561,36 @@ class TestCheckOauth2UpstreamAuth:
         mock_probe.assert_awaited_once_with(self.SERVER_URL, "Bearer db-fresh-token")
 
     @pytest.mark.asyncio
+    async def test_stale_stored_db_token_raises_401_and_preserves_upstream_challenge(
+        self,
+    ):
+        from litellm.proxy._experimental.mcp_server.server import (
+            _check_oauth2_upstream_auth,
+        )
+
+        upstream_www = (
+            'Bearer error="invalid_token", resource_metadata="https://upstream/x"'
+        )
+        allowed, db, probe = self._patches(
+            [self._oauth2_server()],
+            {"Authorization": "Bearer stale-db-token"},
+            (401, upstream_www),
+        )
+        with allowed, db, probe as mock_probe:
+            with pytest.raises(HTTPException) as exc_info:
+                await _check_oauth2_upstream_auth(
+                    scope=self._scope(),
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-test", user_id="u1"),
+                    mcp_servers=["oauth_test"],
+                    oauth2_headers={"Authorization": "Bearer client-token"},
+                    client_ip=None,
+                )
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers["www-authenticate"] == upstream_www
+        mock_probe.assert_awaited_once_with(self.SERVER_URL, "Bearer stale-db-token")
+
+    @pytest.mark.asyncio
     async def test_skips_m2m_client_credentials_servers(self):
         from litellm.proxy._experimental.mcp_server.server import (
             _check_oauth2_upstream_auth,
