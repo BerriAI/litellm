@@ -411,6 +411,8 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 def update_valid_token_with_end_user_params(
     valid_token: UserAPIKeyAuth, end_user_params: dict
 ) -> UserAPIKeyAuth:
+    # Copy the token before mutating to avoid polluting the cached version
+    valid_token = valid_token.model_copy(deep=False)
     valid_token.end_user_id = end_user_params.get("end_user_id")
     # Only overwrite token fields when the DB-derived value is not None.
     # This prevents DB lookups (where the budget table has no value set)
