@@ -3606,3 +3606,212 @@ async def test_spend_user_fn_strips_password_field(client, monkeypatch):
         assert "password" not in body[0]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+# ---------------------------------------------------------------------------
+# general_settings.spend_logs_pagination_mode: count (default) | window | cursor
+#
+# YugabyteDB clusters time out on the separate COUNT(*) round trip the default
+# "count" mode issues before the data query. "window" folds the count into the
+# data query via COUNT(*) OVER (); "cursor" drops the count entirely and uses
+# keyset pagination on (startTime, request_id).
+# ---------------------------------------------------------------------------
+
+from litellm.proxy.spend_tracking.spend_management_endpoints import (
+    _decode_spend_logs_cursor,
+    _encode_spend_logs_cursor,
+    _resolve_pagination_mode,
+)
+
+
+def test_resolve_pagination_mode():
+    assert _resolve_pagination_mode(None) == "count"
+    assert _resolve_pagination_mode("count") == "count"
+    assert _resolve_pagination_mode("anything-else") == "count"
+    assert _resolve_pagination_mode("window") == "window"
+    assert _resolve_pagination_mode("cursor") == "cursor"
+
+
+def test_spend_logs_cursor_round_trip():
+    token = _encode_spend_logs_cursor("2025-01-01T00:00:03+00:00", "req_c")
+    decoded = _decode_spend_logs_cursor(token)
+    assert decoded.start_time == "2025-01-01T00:00:03+00:00"
+    assert decoded.request_id == "req_c"
+
+
+def test_spend_logs_cursor_encodes_datetime():
+    dt = datetime.datetime(2025, 1, 1, 0, 0, 3, tzinfo=timezone.utc)
+    token = _encode_spend_logs_cursor(dt, "req_c")
+    assert _decode_spend_logs_cursor(token).start_time == dt.isoformat()
+
+
+def test_decode_spend_logs_cursor_rejects_garbage():
+    with pytest.raises(HTTPException) as exc:
+        _decode_spend_logs_cursor("not a real cursor !!!")
+    assert exc.value.status_code == 400
+
+
+def _make_capturing_prisma(rows, capture):
+    """Mock prisma that records the raw SQL + params and returns ``rows``."""
+
+    async def mock_query_raw(sql_query, *params):
+        capture["sql"] = sql_query
+        capture["params"] = params
+        return list(rows)
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_spendlogs = MagicMock()
+            self.db.litellm_spendlogs.count = AsyncMock(return_value=len(rows))
+            self.db.query_raw = AsyncMock(side_effect=mock_query_raw)
+
+    return MockPrismaClient()
+
+
+def _admin_overrides(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.proxy.spend_tracking.spend_management_endpoints._is_admin_view_safe",
+        lambda user_api_key_dict: True,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+    )
+
+
+@pytest.mark.asyncio
+async def test_window_mode_folds_count_into_data_query(client, monkeypatch):
+    rows = [
+        {
+            "request_id": "r1",
+            "startTime": "2025-01-01T00:00:02+00:00",
+            "total_count": 137,
+        },
+        {
+            "request_id": "r2",
+            "startTime": "2025-01-01T00:00:01+00:00",
+            "total_count": 137,
+        },
+    ]
+    capture: dict = {}
+    prisma = _make_capturing_prisma(rows, capture)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(
+        ps, "general_settings", {"spend_logs_pagination_mode": "window"}
+    )
+    _admin_overrides(monkeypatch)
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        # the count comes from the window column, not a separate COUNT(*) call
+        prisma.db.litellm_spendlogs.count.assert_not_called()
+        assert "COUNT(*) OVER ()" in capture["sql"]
+        assert body["total"] == 137
+        assert body["total_pages"] == 3  # ceil(137 / 50)
+        # the internal total_count column must not leak into the rows
+        assert all("total_count" not in row for row in body["data"])
+        assert [row["request_id"] for row in body["data"]] == ["r1", "r2"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_cursor_mode_first_page_emits_next_cursor(client, monkeypatch):
+    # page_size + 1 rows returned -> there is a next page
+    rows = [
+        {"request_id": "r1", "startTime": "2025-01-01T00:00:03+00:00"},
+        {"request_id": "r2", "startTime": "2025-01-01T00:00:02+00:00"},
+        {"request_id": "r3", "startTime": "2025-01-01T00:00:01+00:00"},
+    ]
+    capture: dict = {}
+    prisma = _make_capturing_prisma(rows, capture)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(
+        ps, "general_settings", {"spend_logs_pagination_mode": "cursor"}
+    )
+    _admin_overrides(monkeypatch)
+
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "page_size": 2,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        prisma.db.litellm_spendlogs.count.assert_not_called()
+        assert "OFFSET" not in capture["sql"]
+        assert 'ORDER BY "startTime"' in capture["sql"]
+        assert "request_id" in capture["sql"].split("ORDER BY")[1]
+        # over-fetch by one to detect the next page
+        assert capture["params"][-1] == 3
+        # only page_size rows returned to the client
+        assert [row["request_id"] for row in body["data"]] == ["r1", "r2"]
+        assert body["total_pages"] == 2  # current page + 1 because more exist
+        # next_cursor points at the last returned row, not the over-fetched one
+        decoded = _decode_spend_logs_cursor(body["next_cursor"])
+        assert decoded.request_id == "r2"
+        assert decoded.start_time == "2025-01-01T00:00:02+00:00"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sort_order,expected_cmp", [("desc", "<"), ("asc", ">")])
+async def test_cursor_mode_last_page_no_next_cursor_and_keyset_predicate(
+    client, monkeypatch, sort_order, expected_cmp
+):
+    # only page_size rows returned (< page_size + 1) -> last page
+    rows = [
+        {"request_id": "r5", "startTime": "2025-01-01T00:00:05+00:00"},
+        {"request_id": "r6", "startTime": "2025-01-01T00:00:06+00:00"},
+    ]
+    capture: dict = {}
+    prisma = _make_capturing_prisma(rows, capture)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(
+        ps, "general_settings", {"spend_logs_pagination_mode": "cursor"}
+    )
+    _admin_overrides(monkeypatch)
+
+    cursor = _encode_spend_logs_cursor("2025-01-01T00:00:07+00:00", "r7")
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "start_date": "2024-12-25 00:00:00",
+                "end_date": "2025-01-02 23:59:59",
+                "page_size": 2,
+                "page": 2,
+                "sort_order": sort_order,
+                "cursor": cursor,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        assert f'("startTime", request_id) {expected_cmp}' in capture["sql"]
+        # the decoded cursor values are bound as params
+        assert "2025-01-01T00:00:07+00:00" in capture["params"]
+        assert "r7" in capture["params"]
+        # no next page
+        assert body["next_cursor"] is None
+        assert body["total_pages"] == 2  # equals current page
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)

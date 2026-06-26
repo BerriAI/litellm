@@ -1,4 +1,5 @@
 #### SPEND MANAGEMENT #####
+import base64
 import collections
 import json
 import os
@@ -7,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -1712,6 +1714,52 @@ async def calculate_spend(request: SpendCalculateRequest):
         )
 
 
+SpendLogsPaginationMode = Literal["count", "window", "cursor"]
+
+_SPEND_LOGS_UI_COLUMNS = (
+    "request_id, call_type, api_key, spend, total_tokens, "
+    'prompt_tokens, completion_tokens, "startTime", "endTime", '
+    '"completionStartTime", model, model_id, model_group, '
+    'custom_llm_provider, api_base, "user", metadata, '
+    "cache_hit, cache_key, request_tags, team_id, "
+    "organization_id, end_user, requester_ip_address, "
+    "session_id, status, mcp_namespaced_tool_name, agent_id, "
+    'COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms'
+)
+
+
+class _SpendLogsCursor(BaseModel):
+    start_time: str
+    request_id: str
+
+
+def _resolve_pagination_mode(raw: object) -> SpendLogsPaginationMode:
+    if raw == "window":
+        return "window"
+    if raw == "cursor":
+        return "cursor"
+    return "count"
+
+
+def _encode_spend_logs_cursor(start_time: object, request_id: object) -> str:
+    start_time_iso = (
+        start_time.isoformat() if isinstance(start_time, datetime) else str(start_time)
+    )
+    payload = _SpendLogsCursor(start_time=start_time_iso, request_id=str(request_id))
+    return base64.urlsafe_b64encode(payload.model_dump_json().encode()).decode()
+
+
+def _decode_spend_logs_cursor(cursor: str) -> _SpendLogsCursor:
+    try:
+        decoded = base64.urlsafe_b64decode(cursor.encode()).decode()
+        return _SpendLogsCursor.model_validate_json(decoded)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid pagination cursor: {cursor}",
+        ) from e
+
+
 @router.get(
     "/spend/logs/v2",
     tags=["Budget & Spend Tracking"],
@@ -1803,6 +1851,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         default="desc",
         description="Sort order: asc or desc",
     ),
+    cursor: Optional[str] = fastapi.Query(
+        default=None,
+        description="Opaque keyset pagination cursor; only used when general_settings.spend_logs_pagination_mode is 'cursor'",
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -1816,7 +1868,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 -H "Authorization: Bearer sk-1234"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import general_settings, prisma_client
 
     if prisma_client is None:
         raise ProxyException(
@@ -2009,11 +2061,6 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         order_column = sort_by
         order_direction = (sort_order or "desc").lower()
 
-        # Get total count of records
-        total_records = await prisma_client.db.litellm_spendlogs.count(
-            where=where_conditions,
-        )
-
         # Build raw SQL to fetch paginated data WITHOUT heavy columns
         # (messages, response, proxy_server_request can be hundreds of KB per row).
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
@@ -2118,31 +2165,74 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         else:
             _order_expr = order_column
 
-        sql_query = f"""
-            SELECT
-                request_id, call_type, api_key, spend, total_tokens,
-                prompt_tokens, completion_tokens, "startTime", "endTime",
-                "completionStartTime", model, model_id, model_group,
-                custom_llm_provider, api_base, "user", metadata,
-                cache_hit, cache_key, request_tags, team_id,
-                organization_id, end_user, requester_ip_address,
-                session_id, status, mcp_namespaced_tool_name, agent_id,
-                COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
-            FROM "LiteLLM_SpendLogs"
-            WHERE {" AND ".join(sql_conditions)}
-            ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
-            LIMIT ${p} OFFSET ${p + 1}
-        """
-        sql_params.extend([page_size, skip])
+        mode = _resolve_pagination_mode(
+            general_settings.get("spend_logs_pagination_mode")
+        )
+        next_cursor: Optional[str] = None
 
-        data = await prisma_client.db.query_raw(sql_query, *sql_params)
-
-        # Calculate total pages
-        total_pages = (total_records + page_size - 1) // page_size
+        if mode == "cursor":
+            cursor_dir = "ASC" if order_direction == "asc" else "DESC"
+            if cursor is not None:
+                decoded = _decode_spend_logs_cursor(cursor)
+                cursor_cmp = "<" if cursor_dir == "DESC" else ">"
+                sql_conditions.append(
+                    f'("startTime", request_id) {cursor_cmp} (${p}::timestamp, ${p + 1})'
+                )
+                sql_params.append(decoded.start_time)
+                sql_params.append(decoded.request_id)
+                p += 2
+            sql_query = f"""
+                SELECT {_SPEND_LOGS_UI_COLUMNS}
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                ORDER BY "startTime" {cursor_dir}, request_id {cursor_dir}
+                LIMIT ${p}
+            """
+            sql_params.append(page_size + 1)
+            rows = await prisma_client.db.query_raw(sql_query, *sql_params)
+            has_next = len(rows) > page_size
+            data = rows[:page_size]
+            if has_next and data:
+                last_row = data[-1]
+                next_cursor = _encode_spend_logs_cursor(
+                    last_row.get("startTime"), last_row.get("request_id")
+                )
+            total_records = (page - 1) * page_size + len(data) + (1 if has_next else 0)
+            total_pages = page + (1 if has_next else 0)
+        elif mode == "window":
+            sql_query = f"""
+                SELECT {_SPEND_LOGS_UI_COLUMNS},
+                    COUNT(*) OVER () AS total_count
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+                LIMIT ${p} OFFSET ${p + 1}
+            """
+            sql_params.extend([page_size, skip])
+            data = await prisma_client.db.query_raw(sql_query, *sql_params)
+            total_records = int(data[0]["total_count"]) if data else 0
+            for row in data:
+                if isinstance(row, dict):
+                    row.pop("total_count", None)
+            total_pages = (total_records + page_size - 1) // page_size
+        else:
+            total_records = await prisma_client.db.litellm_spendlogs.count(
+                where=where_conditions,
+            )
+            sql_query = f"""
+                SELECT {_SPEND_LOGS_UI_COLUMNS}
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+                LIMIT ${p} OFFSET ${p + 1}
+            """
+            sql_params.extend([page_size, skip])
+            data = await prisma_client.db.query_raw(sql_query, *sql_params)
+            total_pages = (total_records + page_size - 1) // page_size
 
         verbose_proxy_logger.debug("data= %s", json.dumps(data, indent=4, default=str))
 
-        return await _build_ui_spend_logs_response(
+        response = await _build_ui_spend_logs_response(
             prisma_client,
             data,
             total_records,
@@ -2151,6 +2241,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             total_pages,
             enrich_session_counts=not is_v2,
         )
+        if mode == "cursor":
+            response["next_cursor"] = next_cursor
+        return response
     except Exception as e:
         verbose_proxy_logger.exception(f"Error in ui_view_spend_logs: {e}")
         raise handle_exception_on_proxy(e)

@@ -42627,6 +42627,8 @@ export interface operations {
                 sort_by?: string;
                 /** @description Sort order: asc or desc */
                 sort_order?: string | null;
+                /** @description Opaque keyset pagination cursor; only used when general_settings.spend_logs_pagination_mode is 'cursor' */
+                cursor?: string | null;
             };
             header?: never;
             path?: never;

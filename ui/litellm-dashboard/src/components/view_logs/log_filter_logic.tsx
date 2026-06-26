@@ -1,5 +1,5 @@
 import moment from "moment";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { uiSpendLogsCall } from "../networking";
 import { Team } from "../key_team_helpers/key_list";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -13,6 +13,7 @@ export interface PaginatedResponse {
   page: number;
   page_size: number;
   total_pages: number;
+  next_cursor?: string | null;
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): [T, React.Dispatch<React.SetStateAction<T>>] {
@@ -119,6 +120,21 @@ export function useLogFilterLogic({
     return merged;
   }, [filters, debouncedFilters]);
 
+  // Keyset cursors keyed by page; only populated when the backend runs in
+  // cursor mode (returns next_cursor). Rebuilt whenever the query identity
+  // changes so a stale forward chain is never reused.
+  const pageCursorsRef = useRef<Map<number, string | null>>(new Map([[1, null]]));
+  useEffect(() => {
+    pageCursorsRef.current = new Map([[1, null]]);
+  }, [startTime, endTime, isCustomDate, effectiveFilters, filterByCurrentUser, userID, sortBy, sortOrder]);
+
+  const getPageCursor = (page: number): string | null => pageCursorsRef.current.get(page) ?? null;
+  const rememberNextCursor = (page: number, response: PaginatedResponse): void => {
+    if (response.next_cursor !== undefined) {
+      pageCursorsRef.current.set(page + 1, response.next_cursor ?? null);
+    }
+  };
+
   const logsQuery = useQuery<PaginatedResponse>({
     queryKey: [
       "logs",
@@ -155,6 +171,7 @@ export function useLogFilterLogic({
         end_date: formattedEndTime,
         page: currentPage,
         page_size: pageSize,
+        cursor: getPageCursor(currentPage),
         params: {
           api_key: effectiveFilters[FILTER_KEYS.KEY_HASH] || undefined,
           team_id: effectiveFilters[FILTER_KEYS.TEAM_ID] || undefined,
@@ -171,6 +188,8 @@ export function useLogFilterLogic({
           sort_order: sortOrder,
         },
       });
+
+      rememberNextCursor(currentPage, response);
 
       return response;
     },

@@ -2026,6 +2026,7 @@ interface UiSpendLogsCallOptions {
   page?: number;
   page_size?: number;
   params?: UiSpendLogsParams;
+  cursor?: string | null;
 }
 
 export const uiSpendLogsCall = async ({
@@ -2035,6 +2036,7 @@ export const uiSpendLogsCall = async ({
   page = 1,
   page_size = 50,
   params = {},
+  cursor = null,
 }: UiSpendLogsCallOptions) => {
   try {
     // Construct base URL
@@ -2045,6 +2047,9 @@ export const uiSpendLogsCall = async ({
     queryParams.append("end_date", end_date);
     queryParams.append("page", page.toString());
     queryParams.append("page_size", page_size.toString());
+    if (cursor) {
+      queryParams.append("cursor", cursor);
+    }
 
     // Add optional params only when explicitly provided
     for (const [key, value] of Object.entries(params)) {
