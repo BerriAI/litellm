@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GENERIC_GUARDRAIL_ACTION_BLOCKED,
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
@@ -174,10 +175,14 @@ class GenericGuardrailAPI(CustomGuardrail):
 
     And return:
     {
-        "action": "BLOCKED" | "NONE" | "GUARDRAIL_INTERVENED",
+        "action": "BLOCKED" | "NONE" | "GUARDRAIL_INTERVENED" | "WAIT",
         "blocked_reason": str (optional, only if action is BLOCKED),
         "text": str (optional, modified text if action is GUARDRAIL_INTERVENED)
     }
+
+    "WAIT" is only valid in the streaming action protocol (auto-enabled when
+    the guardrail implements apply_guardrail_action) and only when
+    is_final=False on the request.
     """
 
     def __init__(
@@ -188,6 +193,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         extra_headers: Optional[list] = None,
+        supports_streaming_action_protocol: bool = False,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(
@@ -222,6 +228,17 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             unreachable_fallback
         )
+
+        # Streaming action-protocol opt-in. The wrapper class always defines
+        # apply_guardrail_action (it's just an HTTP call), but whether the
+        # backing 3rd-party service actually understands `is_final` and the
+        # WAIT action lives on the service, not on this Python class. Only
+        # advertise action-protocol support to LiteLLM's auto-detect when
+        # the operator confirms (via this flag) that their service speaks
+        # the protocol. Otherwise hide the method so the iterator hook
+        # falls back to moderation, matching the service's real behavior.
+        if not supports_streaming_action_protocol:
+            self.apply_guardrail_action = None  # type: ignore[assignment,method-assign]
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:
@@ -367,6 +384,102 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
         raise Exception(f"Generic Guardrail API failed: {str(error)}")
 
+    async def _post_guardrail_request(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> Optional[GenericGuardrailAPIResponse]:
+        """
+        Build payload, POST to the guardrail endpoint, parse the response.
+
+        Returns the parsed GenericGuardrailAPIResponse on success, or None
+        when transport errors are absorbed by the fail-open policy. Does NOT
+        interpret the action field — callers decide what to do with the response.
+        """
+        # Extract texts and images from inputs
+        texts = inputs.get("texts", [])
+        images = inputs.get("images")
+        tools = inputs.get("tools")
+        structured_messages = inputs.get("structured_messages")
+        tool_calls = inputs.get("tool_calls")
+        model = inputs.get("model")
+        is_final = inputs.get("is_final")
+
+        if request_data is None:
+            request_data = {}
+
+        request_body = request_data.get("body") or {}
+
+        additional_params = {**self.additional_provider_specific_params}
+        dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
+        if dynamic_params:
+            additional_params.update(dynamic_params)
+
+        user_metadata = self._extract_user_api_key_metadata(request_data)
+        extra_allowlist = (
+            {h.lower() for h in self.extra_headers if isinstance(h, str)}
+            if self.extra_headers
+            else None
+        )
+        inbound_headers = _extract_inbound_headers(
+            request_data=request_data,
+            logging_obj=logging_obj,
+            extra_allowlist=extra_allowlist,
+        )
+
+        guardrail_request = GenericGuardrailAPIRequest(
+            litellm_call_id=logging_obj.litellm_call_id if logging_obj else None,
+            litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
+            texts=texts,
+            request_data=user_metadata,
+            request_headers=inbound_headers,
+            litellm_version=litellm_version,
+            images=images,
+            tools=tools,
+            structured_messages=structured_messages,
+            tool_calls=tool_calls,
+            additional_provider_specific_params=additional_params,
+            input_type=input_type,
+            model=model,
+            is_final=is_final,
+        )
+
+        headers = self._build_request_headers()
+
+        try:
+            response = await self.async_handler.post(
+                url=self.api_base,
+                json=guardrail_request.model_dump(mode="json"),
+                headers=headers,
+            )
+            response.raise_for_status()
+            response_json = response.json()
+
+            verbose_proxy_logger.debug(
+                "Generic Guardrail API response: %s", response_json
+            )
+            return GenericGuardrailAPIResponse.from_dict(response_json)
+        except Timeout as e:
+            self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
+            return None
+        except httpx.HTTPStatusError as e:
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            is_unreachable = status_code in (502, 503, 504)
+            self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj, is_unreachable=is_unreachable
+            )
+            return None
+        except httpx.RequestError as e:
+            self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
+            return None
+        except Exception as e:
+            self._handle_guardrail_request_error(
+                e, inputs, input_type, logging_obj, is_unreachable=False
+            )
+            return None
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -397,117 +510,66 @@ class GenericGuardrailAPI(CustomGuardrail):
         """
         verbose_proxy_logger.debug("Generic Guardrail API: Applying guardrail to text")
 
-        # Extract texts and images from inputs
         texts = inputs.get("texts", [])
         images = inputs.get("images")
         tools = inputs.get("tools")
-        structured_messages = inputs.get("structured_messages")
-        tool_calls = inputs.get("tool_calls")
-        model = inputs.get("model")
 
-        # Use provided request_data or create an empty dict
-        if request_data is None:
-            request_data = {}
-
-        request_body = request_data.get("body") or {}
-
-        # Merge additional provider specific params from config and dynamic params
-        additional_params = {**self.additional_provider_specific_params}
-
-        # Get dynamic params from request if available
-        dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
-        if dynamic_params:
-            additional_params.update(dynamic_params)
-
-        # Extract user API key metadata
-        user_metadata = self._extract_user_api_key_metadata(request_data)
-        extra_allowlist = (
-            {h.lower() for h in self.extra_headers if isinstance(h, str)}
-            if self.extra_headers
-            else None
-        )
-        inbound_headers = _extract_inbound_headers(
+        guardrail_response = await self._post_guardrail_request(
+            inputs=inputs,
             request_data=request_data,
+            input_type=input_type,
             logging_obj=logging_obj,
-            extra_allowlist=extra_allowlist,
         )
 
-        # Create request payload
-        guardrail_request = GenericGuardrailAPIRequest(
-            litellm_call_id=logging_obj.litellm_call_id if logging_obj else None,
-            litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
+        # Fail-open transport error path: _handle_guardrail_request_error returned
+        # a passthrough; mirror its shape here.
+        if guardrail_response is None:
+            return_inputs: GenericGuardrailAPIInputs = {}
+            return_inputs.update(inputs)
+            return return_inputs
+
+        if guardrail_response.action == GENERIC_GUARDRAIL_ACTION_BLOCKED:
+            error_message = (
+                guardrail_response.blocked_reason or "Content violates policy"
+            )
+            verbose_proxy_logger.warning(
+                "Generic Guardrail API blocked request: %s", error_message
+            )
+            raise GuardrailRaisedException(
+                guardrail_name=GUARDRAIL_NAME,
+                message=error_message,
+                should_wrap_with_default_message=False,
+            )
+
+        return self._build_guardrail_return_inputs(
             texts=texts,
-            request_data=user_metadata,
-            request_headers=inbound_headers,
-            litellm_version=litellm_version,
             images=images,
             tools=tools,
-            structured_messages=structured_messages,
-            tool_calls=tool_calls,
-            additional_provider_specific_params=additional_params,
-            input_type=input_type,
-            model=model,
+            guardrail_response=guardrail_response,
         )
 
-        headers = self._build_request_headers()
+    @log_guardrail_information
+    async def apply_guardrail_action(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> Optional[GenericGuardrailAPIResponse]:
+        """
+        Streaming action protocol entry point.
 
-        try:
-            # Make the API request
-            # Use mode="json" to ensure all iterables are converted to lists
-            response = await self.async_handler.post(
-                url=self.api_base,
-                json=guardrail_request.model_dump(mode="json"),
-                headers=headers,
-            )
+        Returns the raw GenericGuardrailAPIResponse without raising on BLOCKED —
+        the caller (the unified guardrail iterator hook in action mode) drives
+        the wait/pass/block/modify state machine.
 
-            response.raise_for_status()
-            response_json = response.json()
-
-            verbose_proxy_logger.debug(
-                "Generic Guardrail API response: %s", response_json
-            )
-
-            guardrail_response = GenericGuardrailAPIResponse.from_dict(response_json)
-
-            # Handle the response
-            if guardrail_response.action == "BLOCKED":
-                # Block the request
-                error_message = (
-                    guardrail_response.blocked_reason or "Content violates policy"
-                )
-                verbose_proxy_logger.warning(
-                    "Generic Guardrail API blocked request: %s", error_message
-                )
-                raise GuardrailRaisedException(
-                    guardrail_name=GUARDRAIL_NAME,
-                    message=error_message,
-                    should_wrap_with_default_message=False,
-                )
-
-            return self._build_guardrail_return_inputs(
-                texts=texts,
-                images=images,
-                tools=tools,
-                guardrail_response=guardrail_response,
-            )
-
-        except GuardrailRaisedException:
-            raise
-        except Timeout as e:
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj
-            )
-        except httpx.HTTPStatusError as e:
-            status_code = getattr(getattr(e, "response", None), "status_code", None)
-            is_unreachable = status_code in (502, 503, 504)
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj, is_unreachable=is_unreachable
-            )
-        except httpx.RequestError as e:
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj
-            )
-        except Exception as e:
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj, is_unreachable=False
-            )
+        Returns None on fail-open transport error; the caller should treat None
+        as "no modification, no block, no wait" (i.e. emit accumulated text
+        unchanged).
+        """
+        return await self._post_guardrail_request(
+            inputs=inputs,
+            request_data=request_data,
+            input_type=input_type,
+            logging_obj=logging_obj,
+        )

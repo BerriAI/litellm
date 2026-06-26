@@ -22,6 +22,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             litellm_params, "unreachable_fallback", "fail_closed"
         ),
         extra_headers=getattr(litellm_params, "extra_headers", None),
+        supports_streaming_action_protocol=getattr(
+            litellm_params, "supports_streaming_action_protocol", False
+        ),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

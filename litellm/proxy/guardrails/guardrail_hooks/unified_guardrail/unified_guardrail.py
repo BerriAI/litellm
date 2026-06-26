@@ -19,14 +19,224 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms import load_guardrail_translation_mappings
+from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+    GENERIC_GUARDRAIL_ACTION_BLOCKED,
+    GENERIC_GUARDRAIL_ACTION_GUARDRAIL_INTERVENED,
+    GENERIC_GUARDRAIL_ACTION_NONE,
+    GENERIC_GUARDRAIL_ACTION_WAIT,
+)
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import (
+    CallTypes,
+    CallTypesLiteral,
+    Delta,
+    GenericGuardrailAPIInputs,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 # Call types that use NDJSON streaming (A2A); guardrail HTTPException is emitted as in-stream error
 A2A_CALL_TYPES = (CallTypes.asend_message, CallTypes.send_message)
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
+
+
+def _supports_action_protocol(guardrail_to_apply: Any) -> bool:
+    """
+    True iff the guardrail instance advertises support for the streaming
+    action protocol.
+
+    Auto-detected by looking for a callable `apply_guardrail_action` method
+    on the guardrail instance. For Python-class-backed guardrails (subclass
+    `CustomGuardrail` and override the method), presence on the class is the
+    truth: the method *is* the implementation.
+
+    For HTTP-service-backed wrappers like `GenericGuardrailAPI`, the wrapper
+    class always *could* call apply_guardrail_action over the wire — but
+    the protocol's actual semantics (handling `is_final`, returning WAIT)
+    live on the third-party service. Such wrappers must hide the method on
+    instances whose backing service doesn't support it (typically by
+    setting `self.apply_guardrail_action = None` when an operator opt-in
+    flag is off), so this auto-detection reflects the service's
+    capabilities rather than the wrapper's.
+
+    Guardrails for which this returns False receive the historical
+    moderation-mode iterator hook (observe-only); guardrails for which it
+    returns True drive the wait/pass/block/modify state machine.
+    """
+    return callable(getattr(guardrail_to_apply, "apply_guardrail_action", None))
+
+
+def _combine_streaming_text(chunks: List[Any]) -> str:
+    """Concatenate delta.content across all chunks for choice index 0."""
+    parts: List[str] = []
+    for chunk in chunks:
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+        choice = choices[0]
+        delta = getattr(choice, "delta", None)
+        if delta is None:
+            continue
+        content = getattr(delta, "content", None)
+        if content:
+            parts.append(content)
+    return "".join(parts)
+
+
+def _build_delta_chunk(
+    template: Any,
+    content: str,
+) -> ModelResponseStream:
+    """Build a content-only delta chunk modelled on `template`'s id/model/created."""
+    return ModelResponseStream(
+        id=getattr(template, "id", None),
+        created=getattr(template, "created", None),
+        model=getattr(template, "model", None),
+        object=getattr(template, "object", "chat.completion.chunk"),
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=content, role="assistant"),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+def _build_terminal_chunk(
+    template: Any,
+    finish_reason: str = "stop",
+) -> ModelResponseStream:
+    """Build an empty-content chunk carrying the stream's finish_reason."""
+    return ModelResponseStream(
+        id=getattr(template, "id", None),
+        created=getattr(template, "created", None),
+        model=getattr(template, "model", None),
+        object=getattr(template, "object", "chat.completion.chunk"),
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def _last_finish_reason(chunks: List[Any], default: str = "stop") -> str:
+    """Pull the finish_reason off the most recent chunk that has one."""
+    for chunk in reversed(chunks):
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+        fr = getattr(choices[0], "finish_reason", None)
+        if fr:
+            return fr
+    return default
+
+
+def _chunk_tool_call_deltas(chunk: Any) -> List[Any]:
+    """Return tool_call deltas (if any) for choice 0 of `chunk`, else empty list."""
+    choices = getattr(chunk, "choices", None)
+    if not choices:
+        return []
+    delta = getattr(choices[0], "delta", None)
+    if delta is None:
+        return []
+    tcs = getattr(delta, "tool_calls", None)
+    if not tcs:
+        return []
+    return list(tcs)
+
+
+def _get_attr_or_key(obj: Any, key: str) -> Any:
+    """Read `key` off `obj` whether it's a dict (subscript) or a model (attribute)."""
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
+def _accumulate_tool_calls(chunks: List[Any]) -> List[dict]:
+    """
+    Reduce all tool_call deltas across chunks into per-index accumulated state.
+
+    Returns a list of {id, type, function: {name, arguments}} dicts (one per
+    distinct tool_call index seen), in index order. `arguments` is the
+    concatenation of all argument deltas seen for that index.
+
+    Used to surface the in-progress tool calls to a guardrail in streaming
+    action mode so the guardrail can inspect/block based on the args. Note
+    that mid-stream the args JSON may not yet parse; guardrails that need
+    a complete payload should return WAIT until they can parse it.
+    """
+    by_index: dict[int, dict] = {}
+    _g = _get_attr_or_key
+    for chunk in chunks:
+        for tc in _chunk_tool_call_deltas(chunk):
+            idx = getattr(tc, "index", None)
+            if idx is None and isinstance(tc, dict):
+                idx = tc.get("index")
+            if idx is None:
+                continue
+            slot = by_index.setdefault(
+                idx,
+                {"id": None, "type": None, "function": {"name": None, "arguments": ""}},
+            )
+
+            if slot["id"] is None:
+                slot["id"] = _g(tc, "id")
+            if slot["type"] is None:
+                slot["type"] = _g(tc, "type")
+            fn = _g(tc, "function")
+            if fn is not None:
+                if slot["function"]["name"] is None:
+                    name = _g(fn, "name")
+                    if name:
+                        slot["function"]["name"] = name
+                args = _g(fn, "arguments")
+                if args:
+                    slot["function"]["arguments"] += args
+    return [by_index[i] for i in sorted(by_index.keys())]
+
+
+def _replay_tool_call_chunks(
+    chunks: List[Any],
+    start_idx: int,
+    end_idx: int,
+) -> List[ModelResponseStream]:
+    """
+    Build emit-ready chunks for tool_call deltas in chunks[start_idx:end_idx].
+
+    Each output chunk carries only the tool_call portion of the original (no
+    content, no finish_reason). Chunks with no tool_call deltas in the slice
+    are skipped. Used in action mode so tool_call deltas reach the client
+    after the guardrail clears them, even though text content is rebuilt
+    from the cursor.
+    """
+    out: List[ModelResponseStream] = []
+    for chunk in chunks[start_idx:end_idx]:
+        tcs = _chunk_tool_call_deltas(chunk)
+        if not tcs:
+            continue
+        out.append(
+            ModelResponseStream(
+                id=getattr(chunk, "id", None),
+                created=getattr(chunk, "created", None),
+                model=getattr(chunk, "model", None),
+                object=getattr(chunk, "object", "chat.completion.chunk"),
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(tool_calls=tcs),
+                        finish_reason=None,
+                    )
+                ],
+            )
+        )
+    return out
 
 
 def _get_a2a_request_id(
@@ -305,6 +515,13 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         Supports sampling_rate parameter to control how often chunks are processed.
         sampling_rate=1 means every chunk, sampling_rate=5 means every 5th chunk, etc.
+
+        Two operating modes, auto-detected per-guardrail:
+        - moderation (default): observe-only — chunks pass through to client
+          unmodified; guardrail can block via raised exception. Selected when
+          the guardrail does not implement apply_guardrail_action.
+        - action: streaming action protocol (wait/pass/block/modify). Selected
+          when the guardrail implements apply_guardrail_action.
         """
 
         global endpoint_guardrail_translation_mappings
@@ -362,6 +579,21 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             async for item in response:
                 yield item
+            return
+
+        # Auto-detect dispatch: guardrails implementing apply_guardrail_action
+        # opt into the streaming action protocol; everything else stays on
+        # the historical moderation-mode iterator hook below.
+        if _supports_action_protocol(guardrail_to_apply):
+            async for chunk in self._action_mode_stream(
+                response=response,
+                guardrail_to_apply=guardrail_to_apply,
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                sampling_rate=max(1, int(sampling_rate)),
+                end_of_stream_only=bool(end_of_stream_only),
+            ):
+                yield chunk
             return
 
         # Initialize translation mappings if needed
@@ -524,3 +756,323 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield error_chunk
                 else:
                     raise
+
+    async def _call_action_guardrail(
+        self,
+        *,
+        guardrail_to_apply: CustomGuardrail,
+        accumulated_text: str,
+        chunks: List[Any],
+        is_final: bool,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> Optional[Any]:
+        """
+        Call apply_guardrail_action on the guardrail with the accumulated text.
+
+        Returns the raw GenericGuardrailAPIResponse, or None when the guardrail
+        returns no decision (transport fail-open, or this guardrail integration
+        does not implement the action protocol). Callers treat None as
+        "no modification, no block" (NONE-equivalent).
+        """
+        apply_action = getattr(guardrail_to_apply, "apply_guardrail_action", None)
+        if apply_action is None:
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: iterator_hook_mode=action requires "
+                "guardrail.apply_guardrail_action; guardrail=%s does not "
+                "implement it. Falling back to passthrough.",
+                getattr(guardrail_to_apply, "guardrail_name", "<unknown>"),
+            )
+            return None
+
+        inputs: GenericGuardrailAPIInputs = {
+            "texts": [accumulated_text],
+            "is_final": is_final,
+        }
+        first_chunk = chunks[0] if chunks else None
+        model = getattr(first_chunk, "model", None) if first_chunk else None
+        if model:
+            inputs["model"] = model
+
+        # Surface accumulated tool_calls for inspect-and-block. Modify is not
+        # supported in action mode — tool_call chunks pass through unchanged
+        # on emit, regardless of guardrail response.
+        accumulated_tool_calls = _accumulate_tool_calls(chunks)
+        if accumulated_tool_calls:
+            inputs["tool_calls"] = accumulated_tool_calls  # type: ignore[typeddict-item]
+
+        return await apply_action(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="response",
+            logging_obj=request_data.get("litellm_logging_obj"),
+        )
+
+    async def _action_mode_stream(  # noqa: PLR0915
+        self,
+        *,
+        response: Any,
+        guardrail_to_apply: CustomGuardrail,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        sampling_rate: int,
+        end_of_stream_only: bool = False,
+    ) -> AsyncGenerator[Any, None]:
+        """
+        Streaming action protocol state machine.
+
+        Buffers upstream chunks, calls the guardrail at sample points (and
+        on every chunk while in WAIT state), emits delta chunks past the
+        cursor on NONE/GUARDRAIL_INTERVENED, terminates on BLOCKED, and
+        always makes a final is_final=True call after upstream EOS.
+
+        When `end_of_stream_only=True`, the per-sample mid-stream calls are
+        skipped entirely: chunks accumulate without invoking the guardrail
+        and without emitting anything to the client; a single is_final=True
+        call decides the whole response. This preserves the operator's
+        `streaming_end_of_stream_only` config flag for action-mode
+        guardrails — without it, an action-mode guardrail would still be
+        sampled mid-stream and could emit content past the cursor before
+        the final inspection had a chance to BLOCK.
+        """
+        cursor = 0
+        in_wait_state = False
+        chunk_counter = 0
+        all_chunks: List[Any] = []
+        # Index into all_chunks of the next chunk whose tool_call deltas (if
+        # any) have not yet been replayed to the client. Advances on every
+        # NONE/GUARDRAIL_INTERVENED emit so tool_call deltas reach the client
+        # in lockstep with text emission, never mid-WAIT.
+        tool_calls_replayed_through = 0
+        template_chunk: Optional[Any] = None
+        guardrail_name = getattr(guardrail_to_apply, "guardrail_name", GUARDRAIL_NAME)
+
+        async for item in response:
+            chunk_counter += 1
+            all_chunks.append(item)
+            if template_chunk is None:
+                template_chunk = item
+
+            # end_of_stream_only forces buffer-all behavior: skip per-sample
+            # guardrail calls and per-sample emissions; a single is_final=True
+            # call below decides the whole response.
+            if end_of_stream_only:
+                continue
+
+            sample_due = (chunk_counter % sampling_rate == 0) or in_wait_state
+            if not sample_due:
+                continue
+
+            accumulated_text = _combine_streaming_text(all_chunks)
+            decision = await self._call_action_guardrail(
+                guardrail_to_apply=guardrail_to_apply,
+                accumulated_text=accumulated_text,
+                chunks=all_chunks,
+                is_final=False,
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+            new_text, action = self._resolve_action_decision(
+                decision=decision,
+                accumulated_text=accumulated_text,
+            )
+
+            if action == GENERIC_GUARDRAIL_ACTION_BLOCKED:
+                error_message = (
+                    decision.blocked_reason if decision is not None else None
+                ) or "Content violates policy"
+                verbose_proxy_logger.warning(
+                    "UnifiedLLMGuardrails action mode: BLOCKED mid-stream by %s: %s",
+                    guardrail_name,
+                    error_message,
+                )
+                raise GuardrailRaisedException(
+                    guardrail_name=guardrail_name,
+                    message=error_message,
+                    should_wrap_with_default_message=False,
+                )
+
+            if action == GENERIC_GUARDRAIL_ACTION_WAIT:
+                in_wait_state = True
+                continue
+
+            # NONE or GUARDRAIL_INTERVENED — emit delta past cursor and
+            # replay any buffered tool_call deltas accumulated since last emit.
+            #
+            # Edge case: NONE with `len(new_text) < cursor` happens when an
+            # earlier call returned an *expanded* GUARDRAIL_INTERVENED text
+            # and a subsequent call returns NONE on raw accumulated text
+            # that's now shorter than what's already been emitted. The bytes
+            # through `cursor` are committed; emitting raw shorter text past
+            # cursor isn't possible (already covered) and raising would
+            # terminate an otherwise healthy stream. Defer to the next call
+            # instead — cursor and tool-call replay marker stay put, so a
+            # later GUARDRAIL_INTERVENED can refine cleanly.
+            if action == GENERIC_GUARDRAIL_ACTION_NONE and len(new_text) < cursor:
+                verbose_proxy_logger.debug(
+                    "UnifiedLLMGuardrails action mode: %s returned NONE "
+                    "with len=%d < cursor=%d; deferring emission to next "
+                    "call",
+                    guardrail_name,
+                    len(new_text),
+                    cursor,
+                )
+                in_wait_state = False
+                continue
+
+            # GUARDRAIL_INTERVENED with shrink IS a real protocol violation:
+            # the guardrail tried to retract its own modifications.
+            self._validate_cursor_monotonic(
+                new_text=new_text,
+                cursor=cursor,
+                guardrail_name=guardrail_name,
+                is_final=False,
+            )
+            delta = new_text[cursor:]
+            cursor = len(new_text)
+            in_wait_state = False
+            if delta and template_chunk is not None:
+                yield _build_delta_chunk(template_chunk, delta)
+            for tc_chunk in _replay_tool_call_chunks(
+                all_chunks, tool_calls_replayed_through, len(all_chunks)
+            ):
+                yield tc_chunk
+            tool_calls_replayed_through = len(all_chunks)
+
+        # Upstream exhausted — final call with is_final=True.
+        accumulated_text = _combine_streaming_text(all_chunks)
+        decision = await self._call_action_guardrail(
+            guardrail_to_apply=guardrail_to_apply,
+            accumulated_text=accumulated_text,
+            chunks=all_chunks,
+            is_final=True,
+            request_data=request_data,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        new_text, action = self._resolve_action_decision(
+            decision=decision,
+            accumulated_text=accumulated_text,
+        )
+
+        if action == GENERIC_GUARDRAIL_ACTION_BLOCKED:
+            error_message = (
+                decision.blocked_reason if decision is not None else None
+            ) or "Content violates policy"
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails action mode: BLOCKED at EOS by %s: %s",
+                guardrail_name,
+                error_message,
+            )
+            raise GuardrailRaisedException(
+                guardrail_name=guardrail_name,
+                message=error_message,
+                should_wrap_with_default_message=False,
+            )
+
+        if action == GENERIC_GUARDRAIL_ACTION_WAIT:
+            verbose_proxy_logger.error(
+                "UnifiedLLMGuardrails action mode: %s returned WAIT at "
+                "is_final=True (action protocol violation)",
+                guardrail_name,
+            )
+            fallback = getattr(
+                guardrail_to_apply, "unreachable_fallback", "fail_closed"
+            )
+            if fallback == "fail_open":
+                new_text = accumulated_text
+            else:
+                raise GuardrailRaisedException(
+                    guardrail_name=guardrail_name,
+                    message=(
+                        "guardrail returned WAIT at end of stream "
+                        "(action protocol violation)"
+                    ),
+                    should_wrap_with_default_message=False,
+                )
+
+        # At EOS we can't retract bytes already emitted. If the guardrail
+        # returns text shorter than what's been emitted, emit nothing more
+        # — bytes through `cursor` were sent (with whatever substitutions
+        # earlier calls applied) and falling back to `accumulated_text`
+        # here would leak the raw, unmodified tail (e.g. unredacted PII)
+        # for guardrails that rewrote mid-stream but returned short at EOS.
+        # The terminal chunk below still carries the finish_reason.
+        if len(new_text) < cursor:
+            verbose_proxy_logger.error(
+                "UnifiedLLMGuardrails action mode (EOS): %s returned text "
+                "shorter than already-emitted (cursor=%d, new=%d) — "
+                "stopping emission to avoid leaking unmodified tail",
+                guardrail_name,
+                cursor,
+                len(new_text),
+            )
+        else:
+            delta = new_text[cursor:]
+            cursor = len(new_text)
+            if delta and template_chunk is not None:
+                yield _build_delta_chunk(template_chunk, delta)
+        # Replay any tool_call deltas that arrived between the last sample-point
+        # emit and EOS so the client sees the complete tool-call stream.
+        for tc_chunk in _replay_tool_call_chunks(
+            all_chunks, tool_calls_replayed_through, len(all_chunks)
+        ):
+            yield tc_chunk
+        tool_calls_replayed_through = len(all_chunks)
+
+        if template_chunk is not None:
+            yield _build_terminal_chunk(
+                template_chunk,
+                finish_reason=_last_finish_reason(all_chunks),
+            )
+
+    @staticmethod
+    def _resolve_action_decision(
+        decision: Any,
+        accumulated_text: str,
+    ) -> tuple[str, str]:
+        """Pull (new_text, action) from a GenericGuardrailAPIResponse, with NONE fallback."""
+        if decision is None:
+            return accumulated_text, GENERIC_GUARDRAIL_ACTION_NONE
+        action = decision.action or GENERIC_GUARDRAIL_ACTION_NONE
+        if action == GENERIC_GUARDRAIL_ACTION_GUARDRAIL_INTERVENED and decision.texts:
+            return decision.texts[0], action
+        if action not in (
+            GENERIC_GUARDRAIL_ACTION_NONE,
+            GENERIC_GUARDRAIL_ACTION_BLOCKED,
+            GENERIC_GUARDRAIL_ACTION_GUARDRAIL_INTERVENED,
+            GENERIC_GUARDRAIL_ACTION_WAIT,
+        ):
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails action mode: unknown action=%r; "
+                "treating as NONE",
+                action,
+            )
+            return accumulated_text, GENERIC_GUARDRAIL_ACTION_NONE
+        return accumulated_text, action
+
+    @staticmethod
+    def _validate_cursor_monotonic(
+        new_text: str,
+        cursor: int,
+        guardrail_name: str,
+        is_final: bool,
+    ) -> None:
+        if len(new_text) >= cursor:
+            return
+        msg = (
+            f"guardrail attempted to retract already-emitted content "
+            f"(cursor={cursor}, returned len={len(new_text)})"
+        )
+        verbose_proxy_logger.error(
+            "UnifiedLLMGuardrails action mode: %s — %s (is_final=%s)",
+            guardrail_name,
+            msg,
+            is_final,
+        )
+        raise GuardrailRaisedException(
+            guardrail_name=guardrail_name,
+            message=f"{msg} — action protocol violation",
+            should_wrap_with_default_message=False,
+        )

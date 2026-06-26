@@ -3863,3 +3863,4 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
     model: Optional[str]  # the model being used for the LLM call
+    is_final: bool  # streaming action protocol: True iff this is the final guardrail call for the stream
