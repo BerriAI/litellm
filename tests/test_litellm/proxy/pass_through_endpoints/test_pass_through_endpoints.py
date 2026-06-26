@@ -3276,8 +3276,10 @@ async def test_multipart_passthrough_preserves_boundary():
     async def mock_httpx_request(method, url, **kwargs):
         # Verify that files parameter is passed (not json)
         assert "files" in kwargs, "Files should be passed for multipart requests"
-        files = dict(kwargs["files"])
-        assert "file" in files, "File field should be in files"
+        file_parts = [
+            value for name, value in kwargs["files"] if name == "file"
+        ]
+        assert len(file_parts) == 1, "File field should be in files"
 
         # Verify content-type is NOT in headers (httpx will set it with correct boundary)
         headers = kwargs.get("headers", {})
@@ -3285,7 +3287,7 @@ async def test_multipart_passthrough_preserves_boundary():
             "content-type" not in headers
         ), "content-type should be removed for multipart"
 
-        filename, content, content_type = files["file"]
+        filename, content, content_type = file_parts[0]
         assert filename == "test.txt"
         assert content == b"test file content"
         assert content_type == "text/plain"

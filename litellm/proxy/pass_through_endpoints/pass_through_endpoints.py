@@ -6,6 +6,7 @@ import posixpath
 import traceback
 from base64 import b64encode
 from datetime import datetime
+from itertools import groupby
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
@@ -499,21 +500,23 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             if isinstance(field_value, (StarletteUploadFile, UploadFile))
         ]
 
-        field_names = tuple(
-            dict.fromkeys(
-                field_name
-                for field_name, field_value in form_items
-                if not isinstance(field_value, (StarletteUploadFile, UploadFile))
-            )
+        non_file_items = tuple(
+            (field_name, field_value)
+            for field_name, field_value in form_items
+            if not isinstance(field_value, (StarletteUploadFile, UploadFile))
         )
+        field_order = {
+            field_name: index
+            for index, field_name in enumerate(
+                dict.fromkeys(field_name for field_name, _ in non_file_items)
+            )
+        }
         form_data_dict = {
-            name: [
-                field_value
-                for field_name, field_value in form_items
-                if field_name == name
-                and not isinstance(field_value, (StarletteUploadFile, UploadFile))
-            ]
-            for name in field_names
+            field_name: [value for _, value in group]
+            for field_name, group in groupby(
+                sorted(non_file_items, key=lambda item: field_order[item[0]]),
+                key=lambda item: item[0],
+            )
         }
 
         # Remove content-type header - httpx will set it correctly with the new boundary
