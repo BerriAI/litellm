@@ -1991,13 +1991,16 @@ async def _user_api_key_auth_builder(
             else:
                 valid_token.team_object_permission = None
 
-            # Only cache when the key is a real team_id (non-team keys must not use key=None).
+            # Cache under the canonical "team_id:{id}" key so get_team_object and
+            # _update_team_cache serve this write from the L2 cache. The guard keeps a
+            # non-team (personal) key, whose team_id is None, from reaching the cache
+            # layer, which Redis rejects with a NoneType key error.
             if valid_token.team_id is not None and _team_obj is not None:
                 await user_api_key_cache.async_set_cache(
-                    key=valid_token.team_id,
+                    key=f"team_id:{valid_token.team_id}",
                     value=_team_obj,
                     model_type=LiteLLM_TeamTableCachedObj,
-                )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
+                )
 
             # Fetch project object if key belongs to a project
             _project_obj = None
