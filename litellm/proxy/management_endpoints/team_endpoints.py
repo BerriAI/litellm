@@ -1026,6 +1026,7 @@ async def new_team(
             _is_user_org_admin_for_org_id,
         )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            LOGGING_EXPORTERS_KEY,
             validate_logging_exporter_assignment,
         )
         from litellm.proxy.management_helpers.audit_logs import (
@@ -1041,14 +1042,17 @@ async def new_team(
 
         # New team has no admins yet, so only proxy admin or an org admin of
         # the destination org may assign logging exporters at creation time.
-        validate_logging_exporter_assignment(
-            data.metadata,
-            user_api_key_dict,
-            caller_is_org_admin=await _is_user_org_admin_for_org_id(
-                user_api_key_dict=user_api_key_dict,
-                organization_id=data.organization_id,
-            ),
-        )
+        # Skip the org-admin lookup entirely when the field isn't being
+        # written, to avoid hitting the cache for unrelated /team/new calls.
+        if isinstance(data.metadata, dict) and LOGGING_EXPORTERS_KEY in data.metadata:
+            validate_logging_exporter_assignment(
+                data.metadata,
+                user_api_key_dict,
+                caller_is_org_admin=await _is_user_org_admin_for_org_id(
+                    user_api_key_dict=user_api_key_dict,
+                    organization_id=data.organization_id,
+                ),
+            )
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -1733,6 +1737,7 @@ async def update_team(
             _is_user_team_admin,
         )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            LOGGING_EXPORTERS_KEY,
             validate_logging_exporter_assignment,
         )
         from litellm.proxy.proxy_server import (
@@ -1801,18 +1806,21 @@ async def update_team(
             user_api_key_dict=user_api_key_dict,
         )
 
-        # logging_exporters gate runs once the team's identity is loaded so we
-        # know whether the caller is team-admin or org-admin of this team.
-        validate_logging_exporter_assignment(
-            data.metadata,
-            user_api_key_dict,
-            caller_is_team_admin=_is_user_team_admin(
-                user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
-            ),
-            caller_is_org_admin=await _is_user_org_admin_for_team(
-                user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
-            ),
-        )
+        # logging_exporters gate runs once the team's identity is loaded so
+        # we know team-admin / org-admin status. Skip the org-admin lookup
+        # entirely when the field isn't being written, since /team/update
+        # is called for many unrelated reasons.
+        if isinstance(data.metadata, dict) and LOGGING_EXPORTERS_KEY in data.metadata:
+            validate_logging_exporter_assignment(
+                data.metadata,
+                user_api_key_dict,
+                caller_is_team_admin=_is_user_team_admin(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
+                ),
+                caller_is_org_admin=await _is_user_org_admin_for_team(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
+                ),
+            )
 
         _check_passthrough_routes_caller_permission(
             data, user_api_key_dict, entity="team"
