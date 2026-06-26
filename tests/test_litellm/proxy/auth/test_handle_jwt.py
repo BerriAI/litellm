@@ -5020,6 +5020,7 @@ async def test_resolve_db_team_fallback_distinguishes_no_membership_vs_model_den
     assert model_denied.value.status_code == 403
     assert "requested model" in model_denied.value.detail
     assert "gpt-4" in model_denied.value.detail
+    assert "only_team" not in model_denied.value.detail
 
     assert no_member.value.status_code == 403
     assert "not a member of any team" in no_member.value.detail

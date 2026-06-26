@@ -2061,8 +2061,9 @@ class JWTAuthManager:
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"No team has access to the requested model: {requested_model}. "
-                        f"Checked teams={user_team_ids}. Check `/models` to see all available models."
+                        f"No team you are a member of has access to the requested "
+                        f"model: {requested_model}. Check `/models` to see the models "
+                        f"available to you."
                     ),
                 )
             raise HTTPException(
