@@ -4,7 +4,7 @@ Covers ``_should_use_guardrail_load_balancing``, ``_execute_guardrail_hook``,
 ``_execute_guardrail_with_load_balancing``, ``_process_guardrail_callback``,
 ``_process_prompt_template``, ``_process_guardrail_metadata``,
 ``_maybe_execute_pipelines``, ``_handle_pipeline_result``,
-``_run_guardrail_task_with_enrichment``.
+``_run_guardrail_with_metrics``, ``_emit_guardrail_metrics``.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
@@ -425,23 +426,42 @@ def test_handle_pipeline_result_unknown_action_returns_data():
 
 
 # ---------------------------------------------------------------------------
-# _run_guardrail_task_with_enrichment
+# _run_guardrail_with_metrics
 # ---------------------------------------------------------------------------
 
 
+def _prometheus_callback() -> MagicMock:
+    """Stand-in PrometheusLogger that records ``_record_guardrail_metrics`` calls.
+
+    ``MagicMock(spec=PrometheusLogger)`` passes the ``isinstance`` check inside
+    ``_emit_guardrail_metrics`` while letting us capture the recorded labels.
+    """
+    return MagicMock(spec=PrometheusLogger)
+
+
 @pytest.mark.asyncio
-async def test_run_guardrail_task_with_enrichment_passes_result():
+async def test_run_guardrail_with_metrics_passes_result_and_records_success(monkeypatch):
     async def task():
         return {"a": 1, "b": 2, "c": 3}
 
-    out = await ProxyLogging._run_guardrail_task_with_enrichment(
-        callback=MagicMock(guardrail_name="g"), coro=task()
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom])
+
+    out = await ProxyLogging._run_guardrail_with_metrics(
+        callback=MagicMock(guardrail_name="g"), coro=task(), hook_type="during_call"
     )
+
     assert out == {"a": 1, "b": 2, "c": 3}
+    recorded = prom._record_guardrail_metrics.call_args.kwargs
+    assert recorded["guardrail_name"] == "g"
+    assert recorded["status"] == "success"
+    assert recorded["error_type"] is None
+    assert recorded["hook_type"] == "during_call"
+    assert recorded["latency_seconds"] >= 0
 
 
 @pytest.mark.asyncio
-async def test_run_guardrail_task_with_enrichment_enriches_http_exception_raises():
+async def test_run_guardrail_with_metrics_records_error_and_enriches(monkeypatch):
     detail = {"error": "blocked"}
 
     async def task():
@@ -450,9 +470,79 @@ async def test_run_guardrail_task_with_enrichment_enriches_http_exception_raises
     cb = MagicMock()
     cb.guardrail_name = "presidio"
     cb.event_hook = "pre_call"
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom])
+
     with pytest.raises(HTTPException):
-        await ProxyLogging._run_guardrail_task_with_enrichment(callback=cb, coro=task())
+        await ProxyLogging._run_guardrail_with_metrics(
+            callback=cb, coro=task(), hook_type="post_call"
+        )
+
     assert detail["guardrail_name"] == "presidio"
+    recorded = prom._record_guardrail_metrics.call_args.kwargs
+    assert recorded["status"] == "error"
+    assert recorded["error_type"] == "HTTPException"
+    assert recorded["hook_type"] == "post_call"
+
+
+# ---------------------------------------------------------------------------
+# during_call / post_call phases emit the latency metric (LIT-3999 regression)
+# ---------------------------------------------------------------------------
+
+
+def _moderation_guardrail() -> MagicMock:
+    cb = MagicMock(spec=CustomGuardrail)
+    cb.__class__ = CustomGuardrail
+    cb.guardrail_name = "g"
+    cb.event_hook = GuardrailEventHooks.during_call
+    cb.use_native_during_call_hook = False
+    cb.should_run_guardrail = MagicMock(return_value=True)
+    cb.async_moderation_hook = AsyncMock(return_value=None)
+    cb.async_post_call_success_hook = AsyncMock(return_value=None)
+    return cb
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_records_latency_metric(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    cb = _moderation_guardrail()
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom, cb])
+
+    await proxy_logging.during_call_hook(
+        data={"model": "m"},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+    )
+
+    cb.async_moderation_hook.assert_awaited_once()
+    recorded = prom._record_guardrail_metrics.call_args.kwargs
+    assert recorded["hook_type"] == "during_call"
+    assert recorded["guardrail_name"] == "g"
+    assert recorded["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_records_latency_metric(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    cb = _moderation_guardrail()
+    prom = _prometheus_callback()
+    monkeypatch.setattr(litellm, "callbacks", [prom, cb])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "m"},
+        response=litellm.ModelResponse(),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    cb.async_post_call_success_hook.assert_awaited_once()
+    recorded = prom._record_guardrail_metrics.call_args.kwargs
+    assert recorded["hook_type"] == "post_call"
+    assert recorded["guardrail_name"] == "g"
+    assert recorded["status"] == "success"
 
 
 # ---------------------------------------------------------------------------
