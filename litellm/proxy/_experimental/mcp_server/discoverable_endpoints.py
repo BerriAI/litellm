@@ -1205,7 +1205,7 @@ async def _fetch_upstream_authorization_server_metadata(
         if cached is not None and cached[0] > now:
             return cached[1]
 
-        payload: Optional[dict] = None
+        payload = None
         for candidate in candidates:
             payload = await _get_oauth_metadata_json(candidate)
             if payload is not None:
