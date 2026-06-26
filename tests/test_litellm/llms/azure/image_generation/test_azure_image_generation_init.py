@@ -579,3 +579,43 @@ def test_azure_image_generation_with_api_key_sets_api_key_header():
     sent_headers = mock_post.call_args.kwargs["headers"]
     assert sent_headers.get("api-key") == "sk-test"
     assert "Authorization" not in sent_headers
+
+
+@pytest.mark.asyncio
+async def test_azure_aimage_generation_keyless_sets_bearer_header():
+    azure_chat = AzureChatCompletion()
+
+    data = {"model": "gpt-image-1-mini", "prompt": "a cat", "n": 1, "size": "1024x1024"}
+    azure_client_params = {
+        "api_base": "https://res.openai.azure.com/",
+        "api_version": "2025-04-01-preview",
+        "azure_ad_token_provider": (lambda: "wif-token"),
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "created": 1,
+        "data": [{"url": "https://example.com/cat.png"}],
+    }
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+
+    with patch(
+        "litellm.llms.azure.azure.get_async_httpx_client", return_value=mock_client
+    ):
+        await azure_chat.aimage_generation(
+            data=data,
+            model_response=None,
+            azure_client_params=azure_client_params,
+            api_key=None,
+            input=[],
+            logging_obj=MagicMock(),
+            headers={},
+            model="gpt-image-1-mini",
+            timeout=60.0,
+        )
+
+    sent_headers = mock_client.post.call_args.kwargs["headers"]
+    assert sent_headers.get("Authorization") == "Bearer wif-token"
+    assert "api-key" not in sent_headers

@@ -1167,6 +1167,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ) -> ImageResponse:
         response: Optional[dict] = None
         try:
+            headers = resolve_azure_image_auth_headers(
+                headers=headers,
+                api_key=api_key,
+                azure_ad_token_provider=azure_client_params.get(
+                    "azure_ad_token_provider"
+                ),
+                azure_ad_token=azure_client_params.get("azure_ad_token"),
+            )
             # response = await azure_client.images.generate(**data, timeout=timeout)
             api_base: str = azure_client_params.get(
                 "api_base", ""
