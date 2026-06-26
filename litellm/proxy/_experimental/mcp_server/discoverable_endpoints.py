@@ -446,21 +446,24 @@ async def exchange_token_with_server(
                 detail="code is required for authorization_code grant",
             )
         proxy_base_url = get_request_base_url(request)
-        # Replay the client's own redirect_uri only when this server delegates
-        # auth to the upstream — the client then ran /authorize directly against
-        # the provider with that URI. In relay mode the provider only ever saw
-        # the proxy callback, so the code exchange must send that same URI back.
-        effective_redirect_uri = (
-            redirect_uri
-            if redirect_uri and mcp_server.delegate_auth_to_upstream
-            else f"{proxy_base_url}/callback"
-        )
+        # When the server delegates auth to the upstream, the client ran
+        # /authorize directly against the provider with its own redirect_uri
+        # and the upstream bound the code to that URI; forward whatever the
+        # client sent and omit the field if it sent none rather than
+        # substituting the proxy callback (RFC 6749 §4.1.3). In relay mode the
+        # provider only ever saw the proxy callback, so the exchange must
+        # replay it.
+        if mcp_server.delegate_auth_to_upstream:
+            effective_redirect_uri = redirect_uri
+        else:
+            effective_redirect_uri = f"{proxy_base_url}/callback"
         token_data = {
             "grant_type": "authorization_code",
             "client_id": resolved_client_id,
             "code": code,
-            "redirect_uri": effective_redirect_uri,
         }
+        if effective_redirect_uri:
+            token_data["redirect_uri"] = effective_redirect_uri
         if resolved_client_secret is not None:
             token_data["client_secret"] = resolved_client_secret
         if code_verifier:
@@ -1179,10 +1182,16 @@ async def _fetch_upstream_authorization_server_metadata(
     if not upstream.scheme or not upstream.netloc:
         return None
 
-    discovery_url = (
-        f"{upstream.scheme}://{upstream.netloc}/.well-known/oauth-authorization-server"
-    )
-    cache_key = (mcp_server.server_id, discovery_url)
+    host_base = f"{upstream.scheme}://{upstream.netloc}"
+    candidates = [f"{host_base}/.well-known/oauth-authorization-server"]
+    # RFC 8414 §3.1: when the issuer has a path component, the well-known URI
+    # is built by inserting the suffix between host and path.
+    if upstream.path and upstream.path not in ("", "/"):
+        candidates.append(
+            f"{host_base}/.well-known/oauth-authorization-server{upstream.path.rstrip('/')}"
+        )
+
+    cache_key = (mcp_server.server_id, mcp_server.url)
     now = time.time()
     _prune_oauth_metadata_cache(now)
     cached = _OAUTH_METADATA_CACHE.get(cache_key)
@@ -1196,7 +1205,12 @@ async def _fetch_upstream_authorization_server_metadata(
         if cached is not None and cached[0] > now:
             return cached[1]
 
-        payload = await _get_oauth_metadata_json(discovery_url)
+        payload: Optional[dict] = None
+        for candidate in candidates:
+            payload = await _get_oauth_metadata_json(candidate)
+            if payload is not None:
+                break
+
         ttl = (
             _OAUTH_METADATA_CACHE_TTL_SECONDS
             if payload is not None

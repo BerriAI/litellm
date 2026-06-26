@@ -2748,25 +2748,30 @@ async def _posted_token_data(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "client_redirect_uri,expected_redirect_uri",
-    [
-        (
-            "http://localhost:6274/oauth/callback",
-            "http://localhost:6274/oauth/callback",
-        ),
-        (None, "https://litellm.example.com/callback"),
-    ],
-)
-async def test_token_exchange_forwards_client_redirect_uri(client_redirect_uri, expected_redirect_uri):
+async def test_token_exchange_forwards_client_redirect_uri():
     """The client-supplied redirect_uri must be forwarded verbatim to the
-    upstream token endpoint (passthrough loopback flow); when the client sends
-    none, fall back to the proxy callback."""
+    upstream token endpoint (passthrough loopback flow); the upstream bound
+    the code to that loopback URI at /authorize."""
     data = await _posted_token_data(
         grant_type="authorization_code",
-        redirect_uri=client_redirect_uri,
+        redirect_uri="http://localhost:6274/oauth/callback",
     )
-    assert data["redirect_uri"] == expected_redirect_uri
+    assert data["redirect_uri"] == "http://localhost:6274/oauth/callback"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_omits_redirect_uri_when_client_omits_it_under_delegation():
+    """In passthrough mode the upstream code is bound to the client's own
+    loopback redirect_uri, not the proxy callback. When the client omits
+    redirect_uri on the token POST (RFC 6749 §4.1.3 permits this for clients
+    with a single registered URI), the upstream call must omit it as well;
+    substituting the proxy callback would mismatch the upstream binding and
+    fail the exchange."""
+    data = await _posted_token_data(
+        grant_type="authorization_code",
+        redirect_uri=None,
+    )
+    assert "redirect_uri" not in data
 
 
 @pytest.mark.asyncio
@@ -3246,6 +3251,62 @@ async def test_get_oauth_metadata_json_returns_none_on_failures():
     bad_json_client.get = AsyncMock(return_value=bad_json_response)
     with patch(patch_target, return_value=bad_json_client):
         assert await de._get_oauth_metadata_json(discovery_url) is None
+
+
+@pytest.mark.asyncio
+async def test_discovery_falls_back_to_authorization_server_path_candidate():
+    """A delegated server whose host-only oauth-authorization-server probe
+    misses falls back to the RFC 8414 §3.1 path-suffix form so that providers
+    publishing metadata only at the path-qualified well-known URL (e.g.
+    Microsoft Graph-backed MCP) still drive discovery to the real upstream
+    instead of leaking the LiteLLM relay endpoints."""
+    import litellm.proxy._experimental.mcp_server.discoverable_endpoints as de
+    from fastapi import Request
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    de._OAUTH_METADATA_CACHE.clear()
+    global_mcp_server_manager.registry.clear()
+    server = _make_oauth2_server(
+        server_id="path_mcp",
+        url="https://graph.microsoft.example/tenant/mcp",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    host_miss = MagicMock()
+    host_miss.status_code = 404
+    path_hit = MagicMock()
+    path_hit.status_code = 200
+    path_hit.json.return_value = {
+        "authorization_endpoint": "https://login.example/authorize",
+        "registration_endpoint": "https://login.example/register",
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[host_miss, path_hit])
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=fake_client,
+        ):
+            response = await de._build_oauth_authorization_server_response(
+                request=mock_request, mcp_server_name="path_mcp"
+            )
+    finally:
+        de._OAUTH_METADATA_CACHE.clear()
+        global_mcp_server_manager.registry.clear()
+
+    assert [call.args[0] for call in fake_client.get.await_args_list] == [
+        "https://graph.microsoft.example/.well-known/oauth-authorization-server",
+        "https://graph.microsoft.example/.well-known/oauth-authorization-server/tenant/mcp",
+    ]
+    assert response["authorization_endpoint"] == "https://login.example/authorize"
+    assert response["registration_endpoint"] == "https://login.example/register"
 
 
 @pytest.mark.asyncio
