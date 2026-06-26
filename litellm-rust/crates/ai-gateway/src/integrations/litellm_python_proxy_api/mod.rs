@@ -1,7 +1,8 @@
 //! A `CustomLogger` that ships finished events to the LiteLLM Python proxy's
 //! `/v1/rust_control_plane/logs` endpoint.
 //!
-//! The callback path is non-blocking: `log_success_event` / `log_failure_event`
+//! The callback path is non-blocking: `async_log_success_event` /
+//! `async_log_failure_event`
 //! build a `LogRecord` and `try_send` it onto a bounded channel, returning a
 //! `LogError` (never panicking, never awaiting) if the channel is full or the
 //! worker has gone away. A spawned background worker drains the channel, batches
@@ -15,54 +16,14 @@ use reqwest::Client;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
-use crate::constants::{
-    DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS, DEFAULT_MAX_BATCH_SIZE,
-    DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH,
+use crate::constants::{DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH};
+use crate::integrations::custom_logger::{
+    CallbackTiming, CallbackValue, CustomLogger, LogError, LogFuture, LoggingError,
+    ModelCallDetails,
 };
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::{
-    CallbackLogsRequest, LogError, LogRecord, LoggingError, StandardLoggingPayload,
-};
+use types::{CallbackLogsRequest, EgressTunables, LogRecord};
 
-/// Egress worker tunables. Each field defaults to the matching `DEFAULT_*` const
-/// in `crate::constants` and is overridable via an env var (read once at logger
-/// construction).
-struct EgressTunables {
-    channel_capacity: usize,
-    max_batch_size: usize,
-    flush_interval: Duration,
-}
-
-impl EgressTunables {
-    fn from_env() -> Self {
-        Self {
-            channel_capacity: env_positive(
-                "LITELLM_LOG_CHANNEL_CAPACITY",
-                DEFAULT_CHANNEL_CAPACITY,
-            ),
-            max_batch_size: env_positive("LITELLM_LOG_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE),
-            flush_interval: Duration::from_millis(env_positive(
-                "LITELLM_LOG_FLUSH_INTERVAL_MS",
-                DEFAULT_FLUSH_INTERVAL_MS,
-            )),
-        }
-    }
-}
-
-/// Parse a positive integer env var, falling back to `default` on missing,
-/// unparseable, or non-positive values. Generic over the integer type so one
-/// helper serves both the `usize` capacities and the `u64` interval.
-fn env_positive<T>(name: &str, default: T) -> T
-where
-    T: std::str::FromStr + PartialOrd + From<u8>,
-{
-    let zero = T::from(0u8);
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.trim().parse::<T>().ok())
-        .filter(|n| *n > zero)
-        .unwrap_or(default)
-}
+pub mod types;
 
 /// Ships realtime logging events to the LiteLLM Python proxy.
 pub struct LiteLLMPythonProxyAPILogger {
@@ -118,23 +79,50 @@ impl LiteLLMPythonProxyAPILogger {
 }
 
 impl CustomLogger for LiteLLMPythonProxyAPILogger {
-    fn log_success_event(&self, payload: &StandardLoggingPayload) -> Result<(), LogError> {
-        self.enqueue(LogRecord {
-            status: "success".to_string(),
-            payload: payload.clone(),
-            error: None,
+    fn async_log_success_event<'a>(
+        &'a self,
+        model_call_details: &'a ModelCallDetails,
+        _response_obj: &'a CallbackValue,
+        _timing: CallbackTiming,
+    ) -> LogFuture<'a> {
+        Box::pin(async move {
+            if let Some(payload) = &model_call_details.standard_logging_payload {
+                self.enqueue(LogRecord {
+                    status: "success".to_string(),
+                    payload: payload.clone(),
+                    error: None,
+                })?;
+            }
+            Ok(())
         })
     }
 
-    fn log_failure_event(
-        &self,
-        payload: &StandardLoggingPayload,
-        error: &LoggingError,
-    ) -> Result<(), LogError> {
-        self.enqueue(LogRecord {
-            status: "failure".to_string(),
-            payload: payload.clone(),
-            error: Some(format!("{}: {}", error.kind, error.message)),
+    fn async_log_failure_event<'a>(
+        &'a self,
+        model_call_details: &'a ModelCallDetails,
+        _response_obj: Option<&'a CallbackValue>,
+        _timing: CallbackTiming,
+    ) -> LogFuture<'a> {
+        Box::pin(async move {
+            if let Some(payload) = &model_call_details.standard_logging_payload {
+                let fallback_error;
+                let error = match &model_call_details.failure_error {
+                    Some(error) => error,
+                    None => {
+                        fallback_error = LoggingError {
+                            message: "callback failure event".to_string(),
+                            kind: "CallbackFailure".to_string(),
+                        };
+                        &fallback_error
+                    }
+                };
+                self.enqueue(LogRecord {
+                    status: "failure".to_string(),
+                    payload: payload.clone(),
+                    error: Some(format!("{}: {}", error.kind, error.message)),
+                })?;
+            }
+            Ok(())
         })
     }
 }

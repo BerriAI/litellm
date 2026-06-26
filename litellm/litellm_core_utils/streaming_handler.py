@@ -189,9 +189,7 @@ class CustomStreamWrapper:
             True if self.check_send_stream_usage(self.stream_options) else False
         )
         self.tool_call = False
-        self.chunks: List = (
-            []
-        )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.chunks: List = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
@@ -1438,10 +1436,11 @@ class CustomStreamWrapper:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
             chunk = cast(ModelResponseStream, chunk)
+            chunk_finish_reason = chunk.choices[0].finish_reason
             response_obj = {
                 "text": chunk.choices[0].delta.content,
-                "is_finished": True,
-                "finish_reason": chunk.choices[0].finish_reason,
+                "is_finished": chunk_finish_reason is not None,
+                "finish_reason": chunk_finish_reason,
                 "original_chunk": chunk,
                 "tool_calls": (
                     chunk.choices[0].delta.tool_calls
@@ -1860,8 +1859,10 @@ class CustomStreamWrapper:
         Caches the streaming response
         """
         if not cache_hit and self.logging_obj._llm_caching_handler is not None:
-            await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
-                processed_chunk
+            await (
+                self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
+                    processed_chunk
+                )
             )
 
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
@@ -2216,7 +2217,9 @@ class CustomStreamWrapper:
                             )
                         )
                         # Add MCP metadata to final chunk if present (after hooks)
-                        processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)  # type: ignore[reportArgumentType]
+                        processed_chunk = self._add_mcp_metadata_to_final_chunk(
+                            processed_chunk
+                        )  # type: ignore[reportArgumentType]
 
                     return processed_chunk
                 raise StopAsyncIteration
@@ -2228,7 +2231,9 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(
+                            _next_sync_or_exhausted, self.completion_stream
+                        )  # type: ignore[arg-type]
                         if chunk is _SYNC_ITER_EXHAUSTED:
                             raise StopAsyncIteration
                     if chunk is not None and chunk != b"":

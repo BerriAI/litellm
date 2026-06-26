@@ -1755,9 +1755,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 tool_call_temperature = tool_call_generation_config.get("temperature")
                 if tool_call_temperature is not None:
-                    tool_call_done_event["response"][
-                        "temperature"
-                    ] = tool_call_temperature
+                    tool_call_done_event["response"]["temperature"] = (
+                        tool_call_temperature
+                    )
                 tool_call_max_output_tokens = tool_call_generation_config.get(
                     "maxOutputTokens"
                 )

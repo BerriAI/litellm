@@ -234,12 +234,18 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         }
 
         # Add optional top_k parameter if provided (already mapped from top_n in map_cohere_rerank_params)
-        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:  # type: ignore
+        if (
+            "top_k" in optional_rerank_params
+            and optional_rerank_params.get("top_k") is not None
+        ):  # type: ignore
             request_data["top_k"] = optional_rerank_params.get("top_k")  # type: ignore
 
         # Add Nvidia-specific truncate parameter if provided
         # This is passed through from non_default_params, not in base OptionalRerankParams
-        if "truncate" in optional_rerank_params and optional_rerank_params.get("truncate") is not None:  # type: ignore
+        if (
+            "truncate" in optional_rerank_params
+            and optional_rerank_params.get("truncate") is not None
+        ):  # type: ignore
             truncate_value = optional_rerank_params.get("truncate")  # type: ignore
             if truncate_value in ["NONE", "END"]:
                 request_data["truncate"] = truncate_value  # type: ignore

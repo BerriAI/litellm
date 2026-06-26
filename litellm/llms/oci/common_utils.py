@@ -339,7 +339,9 @@ def sign_with_manual_credentials(
     private_key = (
         load_private_key_from_str(oci_key_content)
         if oci_key_content
-        else load_private_key_from_file(oci_key_file) if oci_key_file else None
+        else load_private_key_from_file(oci_key_file)
+        if oci_key_file
+        else None
     )
 
     if private_key is None:
