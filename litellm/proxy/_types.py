@@ -1229,11 +1229,6 @@ from litellm.models.team import LiteLLM_ModelTable as LiteLLM_ModelTable  # noqa
 
 
 # MCP Types
-class SpecialMCPServerName(str, enum.Enum):
-    all_team_servers = "all-team-mcpservers"
-    all_proxy_servers = "all-proxy-mcpservers"
-
-
 class MCPApprovalStatus(str, enum.Enum):
     pending_review = "pending_review"
     active = "active"
@@ -2986,6 +2981,7 @@ class SpecialModelNames(enum.Enum):
 class SpecialMCPServerNames(enum.Enum):
     no_mcp_servers = "no-mcp-servers"
     all_proxy_mcp_servers = "all-proxy-mcps"
+    all_team_mcp_servers = "all-team-mcps"
 
 
 class SpecialProxyStrings(enum.Enum):

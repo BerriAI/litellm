@@ -17,9 +17,12 @@ from litellm.proxy._types import (
     MCPEnvVarScope,
     MCPSubmissionsSummary,
     NewMCPServerRequest,
-    SpecialMCPServerName,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
+)
+from litellm.proxy._experimental.mcp_server.permission_grant import (
+    AllTeamServers,
+    parse_mcp_server_grant,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _get_salt_key,
@@ -494,9 +497,10 @@ async def get_all_mcp_servers_for_user(
         )
         mcp_server_ids.update(token_mcp_servers)
 
-        # check for special team membership
+        # all-team-mcps expands to the key's team servers, so discovery matches
+        # what the access resolver grants at request time.
         if (
-            SpecialMCPServerName.all_team_servers in mcp_server_ids
+            isinstance(parse_mcp_server_grant(token_mcp_servers), AllTeamServers)
             and user.team_id is not None
         ):
             team_mcp_servers = await get_mcp_servers_by_team(

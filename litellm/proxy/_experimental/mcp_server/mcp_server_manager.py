@@ -53,6 +53,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.permission_grant import (
     AllServers,
+    AllTeamServers,
     ExplicitServers,
     NoServers,
     parse_mcp_server_grant,
@@ -4190,6 +4191,8 @@ class MCPServerManager:
         match grant:
             case AllServers():
                 return list(registry.keys())
+            case AllTeamServers():
+                return [SpecialMCPServerNames.all_team_mcp_servers.value]
             case NoServers():
                 return [SpecialMCPServerNames.no_mcp_servers.value]
             case ExplicitServers(identifiers=explicit):

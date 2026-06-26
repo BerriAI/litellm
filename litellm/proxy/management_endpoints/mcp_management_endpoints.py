@@ -163,10 +163,12 @@ if MCP_AVAILABLE:
         MCPUserEnvVarsStatus,
         NewMCPServerRequest,
         RejectMCPServerRequest,
-        SpecialMCPServerName,
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
         UserMCPManagementMode,
+    )
+    from litellm.proxy._experimental.mcp_server.permission_grant import (
+        MCP_GRANT_SENTINELS,
     )
     from litellm.proxy.auth.user_api_key_auth import (
         _user_api_key_auth_builder,
@@ -1451,11 +1453,9 @@ if MCP_AVAILABLE:
                 },
             )
 
-        # Block reserved special server IDs
-        if (
-            SpecialMCPServerName.all_team_servers == payload.server_id
-            or SpecialMCPServerName.all_proxy_servers == payload.server_id
-        ):
+        # Block reserved special server IDs — a grant sentinel must never be
+        # usable as a real server_id.
+        if payload.server_id in MCP_GRANT_SENTINELS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={

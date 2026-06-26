@@ -209,6 +209,32 @@ class TestMCPServerManager:
         sentinel = SpecialMCPServerNames.no_mcp_servers.value
         assert manager.expand_permission_list([sentinel]) == [sentinel]
 
+    async def test_expand_permission_list_all_team_mcps_passthrough(self):
+        """all-team-mcps cannot be expanded here (it needs team context, which
+        the registry-only manager lacks), so it is surfaced unexpanded for the
+        key resolver to map onto the team set. Pin that the literal survives and
+        is never confused with a registered server."""
+        manager = MCPServerManager()
+        await manager.add_server(
+            LiteLLM_MCPServerTable(
+                server_id="srv-x",
+                alias="srv-x",
+                description="",
+                url=None,
+                transport=MCPTransport.stdio,
+                command="python",
+                args=["-m", "server"],
+                env={},
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+        sentinel = SpecialMCPServerNames.all_team_mcp_servers.value
+        assert manager.expand_permission_list([sentinel]) == [sentinel]
+        # Mixed with a real id the sentinel still dominates (most-restrictive
+        # grant), so the named server is NOT additionally resolved.
+        assert manager.expand_permission_list([sentinel, "srv-x"]) == [sentinel]
+
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""
         manager = MCPServerManager()

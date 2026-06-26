@@ -25,6 +25,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     MCPTransport,
     NewMCPServerRequest,
+    SpecialMCPServerNames,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
@@ -2588,6 +2589,49 @@ class TestUpdateMCPServer:
             # Verify the result includes extra_headers
             assert result.extra_headers == ["X-Custom-Header", "X-Another-Header"]
             assert result.alias == "Updated Test Server"
+
+
+class TestAddMCPServerReservedIds:
+    """A grant sentinel must never be usable as a real MCP server_id — otherwise
+    a real server could shadow the permission sentinel and corrupt grant parsing.
+    Pins that the guard tracks the live SpecialMCPServerNames values."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "reserved_id",
+        [
+            SpecialMCPServerNames.no_mcp_servers.value,
+            SpecialMCPServerNames.all_proxy_mcp_servers.value,
+            SpecialMCPServerNames.all_team_mcp_servers.value,
+        ],
+    )
+    async def test_create_rejects_grant_sentinel_server_id(self, reserved_id):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        payload = NewMCPServerRequest(
+            server_id=reserved_id,
+            alias="echo",
+            url="https://echo.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            pytest.raises(HTTPException) as exc_info,
+        ):
+            await add_mcp_server(payload=payload, user_api_key_dict=admin)
+        assert exc_info.value.status_code == 400
 
 
 class TestAddMCPServerAtomicity:

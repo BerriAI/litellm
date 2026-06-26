@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import MCPServerSelector from "./MCPServerSelector";
-import { ALL_PROXY_MCPS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import {
+  ALL_PROXY_MCPS_SENTINEL,
+  ALL_TEAM_MCPS_SENTINEL,
+  NO_MCP_SERVERS_SENTINEL,
+} from "../mcp_tools/constants";
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
   useMCPServers: vi.fn(),
@@ -45,15 +49,22 @@ const mockUseMCPServers = vi.mocked(useMCPServers);
 const mockUseMCPAccessGroups = vi.mocked(useMCPAccessGroups);
 const mockUseMCPToolsets = vi.mocked(useMCPToolsets);
 
+const setupMcpHooks = (servers: { server_id: string; server_name: string }[]) => {
+  vi.clearAllMocks();
+  mockUseMCPServers.mockReturnValue({ data: servers, isLoading: false } as unknown as ReturnType<typeof useMCPServers>);
+  mockUseMCPAccessGroups.mockReturnValue({
+    data: [],
+    isLoading: false,
+  } as unknown as ReturnType<typeof useMCPAccessGroups>);
+  mockUseMCPToolsets.mockReturnValue({
+    data: [],
+    isLoading: false,
+  } as unknown as ReturnType<typeof useMCPToolsets>);
+};
+
 describe("MCPServerSelector no-mcp-servers option", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockUseMCPServers.mockReturnValue({
-      data: [{ server_id: "srv-1", server_name: "Server One" }],
-      isLoading: false,
-    } as any);
-    mockUseMCPAccessGroups.mockReturnValue({ data: [], isLoading: false } as any);
-    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false } as any);
+    setupMcpHooks([{ server_id: "srv-1", server_name: "Server One" }]);
   });
 
   const optionByValue = (value: string) =>
@@ -101,13 +112,7 @@ describe("MCPServerSelector no-mcp-servers option", () => {
 
 describe("MCPServerSelector all-proxy-mcps option", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockUseMCPServers.mockReturnValue({
-      data: [{ server_id: "srv-1", server_name: "Server One" }],
-      isLoading: false,
-    } as any);
-    mockUseMCPAccessGroups.mockReturnValue({ data: [], isLoading: false } as any);
-    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false } as any);
+    setupMcpHooks([{ server_id: "srv-1", server_name: "Server One" }]);
   });
 
   const optionByValue = (value: string) =>
@@ -150,5 +155,73 @@ describe("MCPServerSelector all-proxy-mcps option", () => {
     );
     expect(optionByValue("srv-1")?.disabled).toBe(true);
     expect(optionByValue(ALL_PROXY_MCPS_SENTINEL)?.disabled).toBe(false);
+  });
+});
+
+describe("MCPServerSelector all-team-mcps option", () => {
+  beforeEach(() => {
+    setupMcpHooks([{ server_id: "srv-1", server_name: "Server One" }]);
+  });
+
+  const optionByValue = (value: string) =>
+    Array.from(screen.getByTestId("mcp-select").querySelectorAll("option")).find(
+      (o) => (o as HTMLOptionElement).value === value,
+    ) as HTMLOptionElement | undefined;
+
+  it("hides All Team MCPs when no team is selected, even with allowAllTeamMcps", () => {
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        allowAllTeamMcps
+        onChange={vi.fn()}
+        value={{ servers: [], accessGroups: [] }}
+      />,
+    );
+    expect(optionByValue(ALL_TEAM_MCPS_SENTINEL)).toBeUndefined();
+  });
+
+  it("shows All Team MCPs once a team is selected", () => {
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        allowAllTeamMcps
+        teamId="team-1"
+        onChange={vi.fn()}
+        value={{ servers: [], accessGroups: [] }}
+      />,
+    );
+    expect(optionByValue(ALL_TEAM_MCPS_SENTINEL)).toBeDefined();
+  });
+
+  it("emits an exclusive sentinel when All Team MCPs is selected", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        allowAllTeamMcps
+        teamId="team-1"
+        onChange={onChange}
+        value={{ servers: ["srv-1"], accessGroups: [] }}
+      />,
+    );
+    await userEvent.selectOptions(screen.getByTestId("mcp-select"), [ALL_TEAM_MCPS_SENTINEL]);
+
+    expect(onChange).toHaveBeenCalledWith({ servers: [ALL_TEAM_MCPS_SENTINEL], accessGroups: [], toolsets: [] });
+  });
+
+  it("makes the three exclusive sentinels mutually exclusive", () => {
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        allowNoMcpServers
+        allowAllTeamMcps
+        teamId="team-1"
+        onChange={vi.fn()}
+        value={{ servers: [ALL_TEAM_MCPS_SENTINEL], accessGroups: [] }}
+      />,
+    );
+    expect(optionByValue(ALL_TEAM_MCPS_SENTINEL)?.disabled).toBe(false);
+    expect(optionByValue(NO_MCP_SERVERS_SENTINEL)?.disabled).toBe(true);
+    expect(optionByValue("srv-1")?.disabled).toBe(true);
   });
 });

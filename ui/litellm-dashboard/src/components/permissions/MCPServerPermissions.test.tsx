@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import MCPServerPermissions from "./MCPServerPermissions";
 import * as networking from "../networking";
-import { ALL_PROXY_MCPS_SENTINEL } from "../mcp_tools/constants";
+import { ALL_PROXY_MCPS_SENTINEL, ALL_TEAM_MCPS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("../networking");
 
@@ -269,6 +269,26 @@ describe("MCPServerPermissions", () => {
     expect(await screen.findByText(/All proxy MCP servers/)).toBeInTheDocument();
     // The sentinel must not leak into the list as a fake server id.
     expect(screen.queryByText(ALL_PROXY_MCPS_SENTINEL)).not.toBeInTheDocument();
+  });
+
+  it("should display the all-team-mcps grant instead of listing the sentinel as a server", async () => {
+    /**
+     * The all-team-mcps sentinel renders the "team's servers" grant state rather
+     * than a literal server row, so a viewer sees the key tracks its team.
+     */
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <MCPServerPermissions
+        mcpServers={[ALL_TEAM_MCPS_SENTINEL]}
+        mcpAccessGroups={[]}
+        mcpToolPermissions={{}}
+        accessToken={mockAccessToken}
+      />,
+    );
+
+    expect(await screen.findByText(/All team MCP servers/)).toBeInTheDocument();
+    expect(screen.queryByText(ALL_TEAM_MCPS_SENTINEL)).not.toBeInTheDocument();
   });
 
   it("should handle multiple servers with different tool permissions", async () => {

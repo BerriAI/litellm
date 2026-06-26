@@ -1098,3 +1098,67 @@ async def test_validate_teamless_non_admin_all_proxy_raises(
             is_proxy_admin=False,
         )
     assert exc_info.value.status_code == 403
+
+
+# ---- Tests for the all-team-mcps grant ----
+
+ALL_TEAM = SpecialMCPServerNames.all_team_mcp_servers.value
+
+
+def test_extract_requested_mcp_server_ids_excludes_all_team_sentinel():
+    obj_perm = {"mcp_servers": [ALL_TEAM, "server-1"]}
+    assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1"}
+
+
+@pytest.mark.asyncio
+async def test_validate_key_all_team_in_team_allowed_and_preserved():
+    """A key in a team may carry all-team-mcps: it resolves to the team grant at
+    request time, so the validator accepts it and leaves the sentinel intact
+    (so it keeps tracking the team) without enumerating servers."""
+    team_obj = _make_team_obj(mcp_servers=["server-1"])
+    obj_perm = {"mcp_servers": [ALL_TEAM]}
+    result = await validate_key_mcp_servers_against_team(
+        object_permission=obj_perm,
+        team_obj=team_obj,
+    )
+    assert result == obj_perm
+    assert obj_perm["mcp_servers"] == [ALL_TEAM]
+
+
+@pytest.mark.asyncio
+async def test_validate_key_all_team_teamless_raises():
+    """all-team-mcps on a teamless key is rejected, not silently resolved to
+    zero: there is no team to track, so it is a meaningless grant."""
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": [ALL_TEAM]},
+            team_obj=None,
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_validate_key_all_team_teamless_admin_still_raises():
+    """Unlike all-proxy-mcps (which a proxy admin may assign to a teamless key),
+    all-team-mcps stays team-only even for an admin — it has no team to resolve
+    against."""
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": [ALL_TEAM]},
+            team_obj=None,
+            is_proxy_admin=True,
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_resolve_team_allowed_mcp_servers_all_team_returns_empty():
+    """A team carrying all-team-mcps is nonsensical (a team cannot grant 'its own
+    team's servers' recursively), so the team resolver fails closed to empty
+    rather than the registry."""
+    mock_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    mock_perm.mcp_servers = [ALL_TEAM]
+    mock_perm.mcp_access_groups = ["group-a"]
+    mock_perm.mcp_tool_permissions = {"server-x": ["tool1"]}
+    result = await _resolve_team_allowed_mcp_servers(mock_perm)
+    assert result == set()

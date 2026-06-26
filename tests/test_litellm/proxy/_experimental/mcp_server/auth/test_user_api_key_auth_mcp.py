@@ -280,6 +280,65 @@ class TestMCPRequestHandler:
 
         assert result == [SpecialMCPServerNames.no_mcp_servers.value]
 
+    @pytest.mark.parametrize(
+        "team_servers,expected",
+        [
+            (["team_server1", "team_server2"], ["team_server1", "team_server2"]),
+            # Fail closed: a team that grants nothing leaves an all-team-mcps key
+            # with zero servers rather than inheriting the whole proxy.
+            ([], []),
+        ],
+    )
+    async def test_all_team_mcps_sentinel_resolves_to_team_set(
+        self, team_servers, expected
+    ):
+        """A key scoped to all-team-mcps resolves to exactly its team's servers,
+        tracking the team grant and never leaking the sentinel marker."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="test-team"
+        )
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.all_team_mcp_servers.value
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ), patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_team",
+            new_callable=AsyncMock,
+            return_value=team_servers,
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert sorted(result) == sorted(expected)
+        assert SpecialMCPServerNames.all_team_mcp_servers.value not in result
+
+    async def test_get_allowed_mcp_servers_for_key_returns_all_team_marker(self):
+        """_get_allowed_mcp_servers_for_key surfaces the all-team-mcps sentinel
+        unexpanded so the caller can map it onto the team set, ignoring any other
+        entries on the key."""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.all_team_mcp_servers.value,
+            "some-other-server",
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth
+            )
+
+        assert result == [SpecialMCPServerNames.all_team_mcp_servers.value]
+
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""
 

@@ -9,6 +9,7 @@ from starlette.types import Scope
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy._experimental.mcp_server.permission_grant import (
+    AllTeamServers,
     NoServers,
     parse_mcp_server_grant,
 )
@@ -647,12 +648,11 @@ class MCPRequestHandler:
                     user_api_key_auth
                 )
             )
+            key_grant = parse_mcp_server_grant(allowed_mcp_servers_for_key)
 
             # The key explicitly opted out of every MCP server. This overrides
             # team inheritance and additive grants (mirrors no-default-models).
-            if isinstance(
-                parse_mcp_server_grant(allowed_mcp_servers_for_key), NoServers
-            ):
+            if isinstance(key_grant, NoServers):
                 return []
 
             allowed_mcp_servers_for_team = (
@@ -677,7 +677,11 @@ class MCPRequestHandler:
             has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
 
             # 1. Key/team ceiling. An empty set means "this level does not restrict".
-            if not team_set:
+            if isinstance(key_grant, AllTeamServers):
+                # The key explicitly requested its team's full grant: resolve to
+                # exactly the team set, failing closed when the team grants nothing.
+                base = team_set
+            elif not team_set:
                 base = key_set  # no team restriction
             elif not key_set:
                 base = team_set  # key has no own perms → inherits team
@@ -1071,13 +1075,13 @@ class MCPRequestHandler:
             if key_object_permission is None:
                 return []
 
-            # Sentinel opt-out: surface it unexpanded so the caller can short-circuit
-            # to zero servers instead of inheriting the team.
-            if isinstance(
-                parse_mcp_server_grant(key_object_permission.mcp_servers or []),
-                NoServers,
-            ):
+            # Sentinels are surfaced unexpanded so the caller can short-circuit:
+            # no-mcp-servers -> zero servers, all-team-mcps -> the team's own set.
+            key_grant = parse_mcp_server_grant(key_object_permission.mcp_servers or [])
+            if isinstance(key_grant, NoServers):
                 return [SpecialMCPServerNames.no_mcp_servers.value]
+            if isinstance(key_grant, AllTeamServers):
+                return [SpecialMCPServerNames.all_team_mcp_servers.value]
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(

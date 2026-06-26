@@ -16,6 +16,7 @@ MCP_GRANT_SENTINELS: frozenset[str] = frozenset(
     {
         SpecialMCPServerNames.no_mcp_servers.value,
         SpecialMCPServerNames.all_proxy_mcp_servers.value,
+        SpecialMCPServerNames.all_team_mcp_servers.value,
     }
 )
 
@@ -23,6 +24,16 @@ MCP_GRANT_SENTINELS: frozenset[str] = frozenset(
 @dataclass(frozen=True, slots=True)
 class AllServers:
     """Grant every MCP server on the proxy, including ones added later."""
+
+
+@dataclass(frozen=True, slots=True)
+class AllTeamServers:
+    """Grant every MCP server the holder's team can reach.
+
+    Key-only: it is resolved against the team at request time, so it tracks the
+    team grant and fails closed (zero servers) when the key has no team or the
+    team grants nothing.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,18 +48,21 @@ class ExplicitServers:
     identifiers: frozenset[str]
 
 
-MCPServerGrant = Union[AllServers, NoServers, ExplicitServers]
+MCPServerGrant = Union[AllServers, AllTeamServers, NoServers, ExplicitServers]
 
 
 def parse_mcp_server_grant(raw: Iterable[str]) -> MCPServerGrant:
     """Resolve precedence once, most-restrictive first.
 
-    ``no-mcp-servers`` blocks everything and beats ``all-proxy-mcps``; absent any
-    sentinel the entries are explicit identifiers.
+    ``no-mcp-servers`` blocks everything; ``all-team-mcps`` caps to the team and
+    so beats the broader ``all-proxy-mcps``; absent any sentinel the entries are
+    explicit identifiers.
     """
     values = frozenset(raw)
     if SpecialMCPServerNames.no_mcp_servers.value in values:
         return NoServers()
+    if SpecialMCPServerNames.all_team_mcp_servers.value in values:
+        return AllTeamServers()
     if SpecialMCPServerNames.all_proxy_mcp_servers.value in values:
         return AllServers()
     return ExplicitServers(values)

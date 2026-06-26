@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._experimental.mcp_server.permission_grant import (
     MCP_GRANT_SENTINELS,
     AllServers,
+    AllTeamServers,
     ExplicitServers,
     MCPServerGrant,
     NoServers,
@@ -372,7 +373,10 @@ async def _resolve_team_allowed_mcp_servers(
     """
     grant = parse_mcp_server_grant(team_object_permission.mcp_servers or [])
     match grant:
-        case NoServers():
+        case NoServers() | AllTeamServers():
+            # no-mcp-servers blocks everything; all-team-mcps is key-only and
+            # meaningless on a team (a team cannot grant "its own team's
+            # servers"), so a misconfigured team fails closed to no servers.
             return set()
         case AllServers():
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -694,6 +698,17 @@ async def validate_key_mcp_servers_against_team(
                     "all-proxy-mcps cannot be granted directly on a key. A key in a "
                     "team inherits the team's MCP grant at request time; only a proxy "
                     "admin may assign all-proxy-mcps to a teamless key."
+                )
+            },
+        )
+    if isinstance(key_grant, AllTeamServers) and team_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "all-team-mcps can only be granted to a key that belongs to a "
+                    "team. It resolves to the team's MCP servers at request time, so "
+                    "a teamless key would reach zero servers."
                 )
             },
         )
