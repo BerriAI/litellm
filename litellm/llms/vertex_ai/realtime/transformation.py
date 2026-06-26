@@ -198,7 +198,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         setup_config.setdefault("inputAudioTranscription", {})
         setup_config.setdefault("outputAudioTranscription", {})
 
-        return setup_config
+        return self._finalize_gemini_live_setup(model, setup_config)
 
     def transform_realtime_request(
         self,
