@@ -402,7 +402,11 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
 
         mock_api_key = "sk-my-test-key"
         cache_value = UserAPIKeyAuth(
-            token=hash_token(mock_api_key), rpm_limit=rpm_limit
+            token=hash_token(mock_api_key),
+            rpm_limit=rpm_limit,
+            # auth=true pass-through routes are gated by allowed_passthrough_routes;
+            # grant access so the request reaches the rpm/forwarding path under test.
+            metadata={"allowed_passthrough_routes": ["/api/public/ingestion"]},
         )
 
         _cohere_api_key = os.environ.get("COHERE_API_KEY")
