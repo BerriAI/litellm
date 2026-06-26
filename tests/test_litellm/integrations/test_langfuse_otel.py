@@ -245,7 +245,16 @@ class TestLangfuseOtelIntegration:
             ), "Mismatch between expected and actual OTEL attribute mapping."
 
     def test_openai_extra_body_trace_id_controls_langfuse_otel_trace_identity(self):
+        """A non-hex ``metadata.trace_id`` from ``extra_body`` must drive the
+        exported OTEL span-context trace id (Langfuse derives a trace's identity
+        from it), deterministically hashed the same way ``langfuse.create_trace_id``
+        does so the caller can reproduce the id from their external id."""
+        import hashlib
+
         trace_id = "global_20260225143025_ord2468"
+        expected_otel_trace_id = hashlib.sha256(trace_id.encode("utf-8")).digest()[
+            :16
+        ].hex()
         generation_name = "ishaan-test-generation"
         exporter = InMemorySpanExporter()
         logger = LangfuseOtelLogger(
@@ -286,7 +295,7 @@ class TestLangfuseOtelIntegration:
         )
 
         assert generation_span.attributes.get("langfuse.trace.id") == trace_id
-        assert format(generation_span.context.trace_id, "032x") == trace_id
+        assert format(generation_span.context.trace_id, "032x") == expected_otel_trace_id
 
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
