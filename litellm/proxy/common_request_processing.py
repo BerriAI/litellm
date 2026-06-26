@@ -1112,20 +1112,9 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         ### AUTO STREAM USAGE TRACKING ###
-        # If always_include_stream_usage is enabled and this is a streaming request
-        # automatically add stream_options={'include_usage': True} if not already set
-        if (
-            general_settings.get("always_include_stream_usage", False) is True
-            and self.data.get("stream", False) is True
-        ):
-            # Only set if stream_options is not already provided by the client
-            if "stream_options" not in self.data:
-                self.data["stream_options"] = {"include_usage": True}
-            elif (
-                isinstance(self.data["stream_options"], dict)
-                and "include_usage" not in self.data["stream_options"]
-            ):
-                self.data["stream_options"]["include_usage"] = True
+        ProxyBaseLLMRequestProcessing._apply_stream_options_for_usage(
+            self.data, general_settings, route_type
+        )
         ### CALL HOOKS ### - modify/reject incoming data before calling the model
 
         ## LOGGING OBJECT ## - initialize logging object for logging success/failure events for call
@@ -1938,6 +1927,33 @@ class ProxyBaseLLMRequestProcessing:
         if "stream" in data and data["stream"] is True:
             return True
         return False
+
+    @staticmethod
+    def _apply_stream_options_for_usage(
+        data: dict, general_settings: dict, route_type: str
+    ) -> None:
+        """Inject stream_options={'include_usage': True} for streaming requests.
+
+        Skipped for Responses API routes (aresponses, _aresponses_websocket)
+        because Azure/OpenAI Responses API does not support stream_options —
+        usage is included automatically in response.completed events.
+        """
+        _is_responses_api_route = route_type in {
+            "aresponses",
+            "_aresponses_websocket",
+        }
+        if (
+            general_settings.get("always_include_stream_usage", False) is True
+            and data.get("stream", False) is True
+            and not _is_responses_api_route
+        ):
+            if "stream_options" not in data:
+                data["stream_options"] = {"include_usage": True}
+            elif (
+                isinstance(data["stream_options"], dict)
+                and "include_usage" not in data["stream_options"]
+            ):
+                data["stream_options"]["include_usage"] = True
 
     @staticmethod
     def _has_post_call_guardrails() -> bool:
