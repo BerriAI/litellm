@@ -101,3 +101,75 @@ async def test_async_transform_request_strips_unsupported_tools_from_body():
 
     assert [tool["type"] for tool in body["tools"]] == ["function"]
     assert body["tools"][0]["function"]["name"] == "shell"
+
+
+_JSON_SCHEMA_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "answer",
+        "schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
+}
+
+
+def test_downgrade_json_schema_to_json_object():
+    config = DeepSeekChatConfig()
+    messages, optional_params = config._downgrade_json_schema_to_json_object(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "Is the sky blue?"}],
+        optional_params={"response_format": dict(_JSON_SCHEMA_RESPONSE_FORMAT)},
+    )
+
+    assert optional_params["response_format"] == {"type": "json_object"}
+    injected = messages[-1]
+    assert injected["role"] == "user"
+    # DeepSeek json_object mode requires the word "json" in the prompt
+    assert "json" in injected["content"].lower()
+    assert "answer" in injected["content"]
+
+
+def test_downgrade_is_noop_for_json_object():
+    config = DeepSeekChatConfig()
+    original_messages = [{"role": "user", "content": "Is the sky blue?"}]
+    messages, optional_params = config._downgrade_json_schema_to_json_object(
+        model="deepseek-chat",
+        messages=original_messages,
+        optional_params={"response_format": {"type": "json_object"}},
+    )
+
+    assert optional_params["response_format"] == {"type": "json_object"}
+    assert messages == original_messages
+
+
+def test_transform_request_downgrades_json_schema_response_format():
+    config = DeepSeekChatConfig()
+    body = config.transform_request(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "Is the sky blue?"}],
+        optional_params={"response_format": dict(_JSON_SCHEMA_RESPONSE_FORMAT)},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["response_format"] == {"type": "json_object"}
+    assert any("answer" in m.get("content", "") for m in body["messages"])
+
+
+async def test_async_transform_request_downgrades_json_schema_response_format():
+    config = DeepSeekChatConfig()
+    body = await config.async_transform_request(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "Is the sky blue?"}],
+        optional_params={"response_format": dict(_JSON_SCHEMA_RESPONSE_FORMAT)},
+        litellm_params={},
+        headers={},
+    )
+
+    assert body["response_format"] == {"type": "json_object"}
+    assert any("answer" in m.get("content", "") for m in body["messages"])
