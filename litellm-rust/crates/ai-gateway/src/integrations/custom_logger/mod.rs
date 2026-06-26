@@ -211,6 +211,7 @@ mod tests {
                 user_api_key_team_id: Some("team".to_string()),
                 ..Default::default()
             },
+            hidden_params: Default::default(),
             messages: Some(json!([{"role": "user", "content": "read this"}])),
         }
     }

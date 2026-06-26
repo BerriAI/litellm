@@ -351,6 +351,7 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
     .expect("ocr request succeeds");
 
     assert_eq!(response["pages"][0]["markdown"], "ok");
+    assert_eq!(response["_hidden_params"]["litellm_rust"], true);
     assert_eq!(
         guardrail.events(),
         vec!["async_pre_call_hook", "async_moderation_hook"]

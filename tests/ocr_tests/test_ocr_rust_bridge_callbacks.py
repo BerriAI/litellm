@@ -60,14 +60,11 @@ class OCRCustomGuardrail(CustomGuardrail):
         self, user_api_key_dict, cache, data: dict[str, Any], call_type: str
     ) -> None:
         self.calls.append({"data": data, "call_type": call_type})
-        data["document"] = {
-            **data["document"],
-            "guardrail_executed": True,
-        }
         data["optional_params"] = {
             **data["optional_params"],
             "include_image_base64": True,
         }
+        data["guardrail_executed"] = True
 
     async def async_log_success_event(
         self,
@@ -114,6 +111,7 @@ async def test_rust_ocr_executes_custom_logger_from_callback_manager():
     )
 
     assert len(response.pages) > 0
+    assert response._hidden_params["litellm_rust"] is True
     assert custom_logger.response_obj["object"] == "ocr"
     assert len(custom_logger.response_obj["value"]["pages"]) > 0
     assert isinstance(custom_logger.start_time, datetime)
@@ -128,6 +126,7 @@ async def test_rust_ocr_executes_custom_logger_from_callback_manager():
     assert logged_payload["custom_llm_provider"] == "mistral"
     assert logged_payload["call_type"] == "ocr"
     assert logged_payload["response_cost"] == 0.0
+    assert logged_payload["hidden_params"]["litellm_rust"] is True
 
 
 @pytest.mark.asyncio
@@ -144,8 +143,9 @@ async def test_rust_ocr_executes_custom_guardrail_from_callback_manager():
     )
 
     assert len(response.pages) > 0
+    assert response._hidden_params["litellm_rust"] is True
     assert custom_guardrail.calls[0]["call_type"] == "ocr"
-    assert custom_guardrail.calls[0]["data"]["document"]["guardrail_executed"] is True
+    assert custom_guardrail.calls[0]["data"]["guardrail_executed"] is True
     assert (
         custom_guardrail.calls[0]["data"]["optional_params"]["include_image_base64"]
         is True

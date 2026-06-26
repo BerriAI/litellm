@@ -2728,6 +2728,7 @@ class StandardLoggingHiddenParams(TypedDict):
     batch_models: Optional[List[str]]
     litellm_model_name: Optional[str]  # the model name sent to the provider by litellm
     usage_object: Optional[dict]
+    litellm_rust: Optional[bool]
 
 
 class StandardLoggingModelInformation(TypedDict):

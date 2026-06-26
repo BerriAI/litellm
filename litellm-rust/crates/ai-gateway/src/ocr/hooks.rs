@@ -5,6 +5,7 @@ use std::pin::Pin;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrAuthStrategy;
+use litellm_core::ocr::types::litellm_rust_hidden_params;
 use litellm_core::CoreResult;
 use serde_json::{json, Map, Value};
 
@@ -168,6 +169,7 @@ impl OcrLifecycleHooks {
                 user_api_key_team_id: self.request_metadata.user_api_key_team_id.clone(),
                 ..Default::default()
             },
+            hidden_params: litellm_rust_hidden_params().into_iter().collect(),
             messages: None,
         }
     }

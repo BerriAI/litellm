@@ -3197,6 +3197,7 @@ class SpendLogsMetadata(TypedDict):
         str
     ]  # S3/GCS object key for cold storage retrieval
     litellm_overhead_time_ms: Optional[float]  # LiteLLM overhead time in milliseconds
+    litellm_rust: Optional[bool]  # True when the request used the LiteLLM Rust path
     attempted_retries: Optional[
         int
     ]  # Number of retries attempted (0 = first attempt succeeded)

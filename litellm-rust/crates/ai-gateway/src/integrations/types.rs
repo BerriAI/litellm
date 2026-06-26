@@ -58,6 +58,8 @@ pub struct StandardLoggingPayload {
 
     pub metadata: StandardLoggingMetadata,
 
+    pub hidden_params: HashMap<String, Value>,
+
     /// Optional; stored as request input on the spend log row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages: Option<Value>,
