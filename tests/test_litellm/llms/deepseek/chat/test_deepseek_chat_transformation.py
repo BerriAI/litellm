@@ -153,6 +153,30 @@ def test_downgrade_json_schema_without_schema_body_still_downgrades():
         assert messages == original_messages
 
 
+def test_downgrade_reads_response_schema_key():
+    """Some callers pass the schema under a top-level `response_schema` key
+    (mirrors GroqChatConfig's extraction); it is downgraded and injected too."""
+    config = DeepSeekChatConfig()
+    messages, optional_params = config._downgrade_json_schema_to_json_object(
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "Is the sky blue?"}],
+        optional_params={
+            "response_format": {
+                "type": "json_schema",
+                "response_schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+    )
+
+    assert optional_params["response_format"] == {"type": "json_object"}
+    assert "answer" in messages[-1]["content"]
+
+
 def test_downgrade_is_noop_for_json_object():
     config = DeepSeekChatConfig()
     original_messages = [{"role": "user", "content": "Is the sky blue?"}]
