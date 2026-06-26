@@ -179,18 +179,6 @@ model_list:
       mode: batch
 
 
-files_settings:
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
-  - custom_llm_provider: azure
-    api_base: os.environ/AZURE_API_BASE
-    api_key: os.environ/AZURE_API_KEY
-    api_version: "2024-07-01-preview"
-  - custom_llm_provider: vertex_ai
-    vertex_project: os.environ/VERTEXAI_PROJECT
-    vertex_location: us-central1
-    vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
-    bucket_name: os.environ/GCS_BUCKET_NAME
   - model_name: rust-ocr-mistral
     litellm_params:
       model: mistral/mistral-ocr-latest
@@ -220,6 +208,19 @@ files_settings:
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: us-central1
 
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+  - custom_llm_provider: azure
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2024-07-01-preview"
+  - custom_llm_provider: vertex_ai
+    vertex_project: os.environ/VERTEXAI_PROJECT
+    vertex_location: us-central1
+    vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+    bucket_name: os.environ/GCS_BUCKET_NAME
+
 
 mcp_servers:
   deepwiki_mcp:
@@ -246,4 +247,3 @@ guardrails:
         CREDIT_CARD: BLOCK
         US_SSN: BLOCK
         PHONE_NUMBER: BLOCK
-
