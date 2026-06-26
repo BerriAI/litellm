@@ -550,6 +550,63 @@ class TestLangfuseOtelIntegration:
             # Endpoint assertion removed as side effect is gone
 
 
+class TestNormalizeTraceIdForOtel:
+    """Unit tests for the trace-id normalization helper."""
+
+    def test_valid_lowercase_hex_passthrough(self):
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        tid = "abcdef0123456789abcdef0123456789"
+        assert normalize_trace_id_for_otel(tid) == tid
+
+    def test_uppercase_hex_is_lowercased(self):
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        assert (
+            normalize_trace_id_for_otel("ABCDEF0123456789ABCDEF0123456789")
+            == "abcdef0123456789abcdef0123456789"
+        )
+
+    def test_dashed_uuid_is_stripped_not_hashed(self):
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        assert (
+            normalize_trace_id_for_otel("123e4567-e89b-12d3-a456-426614174000")
+            == "123e4567e89b12d3a456426614174000"
+        )
+
+    def test_external_id_hashed_like_langfuse_create_trace_id(self):
+        """Non-hex ids hash the ORIGINAL string (dashes and case preserved) so
+        the result is byte-for-byte ``langfuse.create_trace_id(seed=...)``."""
+        import hashlib
+
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        for seed in ("global_20260225143025_ord2468", "Order-42", "ab-cd"):
+            assert (
+                normalize_trace_id_for_otel(seed)
+                == hashlib.sha256(seed.encode("utf-8")).digest()[:16].hex()
+            )
+
+    def test_output_is_always_32_lowercase_hex(self):
+        import re
+
+        from litellm.integrations.langfuse.langfuse_otel import (
+            normalize_trace_id_for_otel,
+        )
+
+        for seed in ("x", "global_seed", "ABCDEF0123456789ABCDEF0123456789", "1-2-3"):
+            assert re.fullmatch(r"[0-9a-f]{32}", normalize_trace_id_for_otel(seed))
+
+
 class TestLangfuseOtelResponsesAPI:
     """Test suite for Langfuse OTEL integration with ResponsesAPI"""
 

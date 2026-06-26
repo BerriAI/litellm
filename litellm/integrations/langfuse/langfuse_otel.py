@@ -1,7 +1,9 @@
 import base64
 import json  # <--- NEW
 import os
+import re
 from datetime import datetime
+from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -25,6 +27,23 @@ else:
 
 LANGFUSE_CLOUD_EU_ENDPOINT = "https://cloud.langfuse.com/api/public/otel"
 LANGFUSE_CLOUD_US_ENDPOINT = "https://us.cloud.langfuse.com/api/public/otel"
+
+_OTEL_TRACE_ID_HEX = re.compile(r"[0-9a-f]{32}")
+
+
+def normalize_trace_id_for_otel(trace_id: str) -> str:
+    """Map an arbitrary trace id onto a valid 32-hex-char OTEL/Langfuse trace id.
+
+    Langfuse derives a trace's identity from the OTEL span-context trace id, which
+    must be 32 lowercase hex chars. An id that is already valid (case-insensitively,
+    or a dashed UUID) is reused directly so an explicit valid id is preserved; any
+    other string is hashed exactly as ``langfuse.create_trace_id(seed=...)`` does,
+    so a caller can reproduce the trace id from their external id.
+    """
+    canonical = trace_id.replace("-", "").lower()
+    if _OTEL_TRACE_ID_HEX.fullmatch(canonical):
+        return canonical
+    return sha256(trace_id.encode("utf-8")).digest()[:16].hex()
 
 
 class LangfuseOtelLogger(OpenTelemetry):
