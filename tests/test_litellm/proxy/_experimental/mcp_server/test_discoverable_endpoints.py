@@ -2866,6 +2866,23 @@ async def test_authorization_code_scope_resolution(request_scope, expected_scope
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_scope", [None, "custom.read"])
+async def test_authorization_code_omits_scope_in_relay_mode(request_scope):
+    """Relay mode (delegate_auth_to_upstream off) must not send scope on the
+    code exchange, even with configured server scopes or a client-sent scope.
+    The relay ran /authorize itself so the upstream already bound the scope to
+    the code (RFC 6749 §4.1.3); injecting scope here regresses pre-passthrough
+    relay deployments whose IdPs reject an unexpected scope parameter."""
+    data = await _posted_token_data(
+        grant_type="authorization_code",
+        scope=request_scope,
+        server_scopes=["read", "write"],
+        delegate_auth_to_upstream=False,
+    )
+    assert "scope" not in data
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "client_scope,expected",
     [

@@ -468,10 +468,17 @@ async def exchange_token_with_server(
             token_data["client_secret"] = resolved_client_secret
         if code_verifier:
             token_data["code_verifier"] = code_verifier
-        if scope:
-            token_data["scope"] = scope
-        elif mcp_server.scopes:
-            token_data["scope"] = " ".join(mcp_server.scopes)
+        # Scope on the code exchange is delegated-mode only, gated on the same
+        # predicate as redirect_uri above so relay mode keeps its pre-passthrough
+        # behavior of omitting it (RFC 6749 §4.1.3 derives scope from the original
+        # /authorize, and strict IdPs reject an unexpected scope here). Delegated
+        # upstreams like Entra require it, so forward the client scope or fall
+        # back to the configured server scopes (AADSTS900144).
+        if mcp_server.delegates_oauth_to_upstream:
+            if scope:
+                token_data["scope"] = scope
+            elif mcp_server.scopes:
+                token_data["scope"] = " ".join(mcp_server.scopes)
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
