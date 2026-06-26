@@ -1391,17 +1391,32 @@ class LiteLLMCompletionResponsesConfig:
                 )
             elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
+                # FIX (BerriAI/litellm#27276 Bug 2): Codex CLI and OpenAI Agents
+                # SDK sometimes nest function tool fields under
+                # ``function.{name,description,parameters,strict}`` (Chat
+                # Completion style) even when sent through the Responses API.
+                # Read from BOTH the nested form AND the top-level Responses
+                # API form so neither client style produces an empty function
+                # name (which DeepSeek rejects with HTTP 400 "Invalid
+                # 'tools[N].function.name': empty string").
+                _fn_obj: Dict[str, Any] = tool.get("function") or {}  # type: ignore[assignment]
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
-                parameters = dict(typed_tool.get("parameters", {}) or {})
+                parameters = dict(
+                    _fn_obj.get("parameters") or typed_tool.get("parameters", {}) or {}
+                )
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
                 chat_completion_tool: Dict[str, Any] = {
                     "type": "function",
                     "function": {
-                        "name": typed_tool.get("name") or "",
-                        "description": typed_tool.get("description") or "",
+                        "name": _fn_obj.get("name") or typed_tool.get("name") or "",
+                        "description": _fn_obj.get("description")
+                        or typed_tool.get("description")
+                        or "",
                         "parameters": parameters,
-                        "strict": typed_tool.get("strict", False) or False,
+                        "strict": _fn_obj.get("strict")
+                        or typed_tool.get("strict", False)
+                        or False,
                     },
                 }
                 if tool.get("cache_control"):
@@ -1417,6 +1432,18 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
+            elif tool.get("type") in ("custom", "shell"):
+                # FIX (BerriAI/litellm#27276 Bug 1): drop Codex-specific tool
+                # types (``custom`` / ``shell``) that Chat-Completion providers
+                # like DeepSeek reject with HTTP 400 ``tools[N].type: unknown
+                # variant 'custom', expected 'function'``. ``drop_params: true``
+                # does NOT traverse the ``tools[]`` array, so we drop here at
+                # the transformation boundary.
+                # Other non-function tool types (``computer_use``,
+                # ``code_execution_*``, ``tool_search_tool_*``, Anthropic /
+                # Vertex extensions, ...) are still forwarded so downstream
+                # provider-specific transforms can consume them.
+                pass
             else:
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
