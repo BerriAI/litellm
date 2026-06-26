@@ -316,15 +316,13 @@ class StandardBuiltInToolCostTracking:
     ) -> Usage | None:
         """Return a Usage carrying server_tool_use.web_search_requests sourced from a
         raw Anthropic /v1/messages response dict when the reconstructed Usage dropped
-        it. The original Usage is returned unchanged when it already exposes the field
-        or the response is not an Anthropic dict."""
+        it (or was never supplied). The original Usage is returned unchanged when it
+        already exposes the field or the response is not an Anthropic dict."""
         from litellm.llms.anthropic.cost_calculation import (
             get_anthropic_web_search_requests_from_response,
         )
 
-        if usage is None:
-            return None
-        if (
+        if usage is not None and (
             _get_web_search_requests(getattr(usage, "server_tool_use", None))
             is not None
         ):
@@ -334,13 +332,10 @@ class StandardBuiltInToolCostTracking:
         )
         if web_search_requests is None:
             return usage
-        return usage.model_copy(
-            update={
-                "server_tool_use": ServerToolUse(
-                    web_search_requests=web_search_requests
-                )
-            }
-        )
+        server_tool_use = ServerToolUse(web_search_requests=web_search_requests)
+        if usage is None:
+            return Usage(server_tool_use=server_tool_use)
+        return usage.model_copy(update={"server_tool_use": server_tool_use})
 
     @staticmethod
     def response_object_includes_web_search_call(
