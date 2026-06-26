@@ -139,9 +139,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
     def _downgrade_json_schema_to_json_object(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
-    ) -> Tuple[List[AllMessageValues], dict]:
+    ) -> tuple[list[AllMessageValues], dict]:
         """
         DeepSeek's /chat/completions rejects `response_format={"type": "json_schema"}`
         with "This response_format type is unavailable now" — no DeepSeek model
