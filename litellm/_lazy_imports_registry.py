@@ -267,6 +267,7 @@ LLM_CONFIG_NAMES = (
     "ZAIChatConfig",
     "AIMLChatConfig",
     "VolcEngineChatConfig",
+    "TokenHubChatConfig",
     "CodestralTextCompletionConfig",
     "InceptionTextCompletionConfig",
     "AzureOpenAIAssistantsAPIConfig",
@@ -280,6 +281,7 @@ LLM_CONFIG_NAMES = (
     "HostedVLLMEmbeddingConfig",
     # Alias for backwards compatibility
     "VolcEngineConfig",  # Alias for VolcEngineChatConfig
+    "TokenHubConfig",  # Alias for TokenHubChatConfig
     "LlamafileChatConfig",
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
@@ -1045,6 +1047,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
     ),
+    "TokenHubChatConfig": (
+        ".llms.tokenhub.chat.transformation",
+        "TokenHubChatConfig",
+    ),
     "CodestralTextCompletionConfig": (
         ".llms.codestral.completion.transformation",
         "CodestralTextCompletionConfig",
@@ -1084,6 +1090,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VolcEngineConfig": (
         ".llms.volcengine.chat.transformation",
         "VolcEngineChatConfig",
+    ),  # Alias
+    "TokenHubConfig": (
+        ".llms.tokenhub.chat.transformation",
+        "TokenHubChatConfig",
     ),  # Alias
     "LlamafileChatConfig": (
         ".llms.llamafile.chat.transformation",

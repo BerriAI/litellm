@@ -104,6 +104,8 @@ def get_supported_openai_params(
         return litellm.AI21ChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "volcengine":
         return litellm.VolcEngineConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "tokenhub":
+        return litellm.TokenHubConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "bedrock_mantle":

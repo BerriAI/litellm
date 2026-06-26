@@ -5711,6 +5711,7 @@ def completion(  # type: ignore
             or custom_llm_provider == "baseten"
             or custom_llm_provider == "sambanova"
             or custom_llm_provider == "volcengine"
+            or custom_llm_provider == "tokenhub"
             or custom_llm_provider == "anyscale"
             or custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
