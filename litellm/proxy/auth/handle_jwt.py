@@ -1969,6 +1969,7 @@ class JWTAuthManager:
     @staticmethod
     async def _resolve_db_team_fallback(
         user_object: LiteLLM_UserTable | None,
+        user_id: str | None,
         requested_model: str | None,
         enforce_team_based_model_access: bool,
         team_id_upsert: bool,
@@ -1976,7 +1977,7 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
-    ) -> tuple[str | None, LiteLLM_TeamTable | None]:
+    ) -> tuple[str | None, LiteLLM_TeamTable | None, LiteLLM_TeamMembership | None]:
         """
         Resolve a team for a user whose JWT carries no team claims by selecting
         the first DB team membership that loads successfully and, when a model is
@@ -1984,8 +1985,12 @@ class JWTAuthManager:
         check the claim-based path enforces, so a team's `models` restriction is
         not bypassed by the fallback.
 
+        The resolved team's membership row is loaded too (when user_id is set) so
+        per-team membership budget limits are enforced on the fallback path the
+        same as on the claim-based path.
+
         Raises HTTP 403 when the user has no usable DB team membership and
-        `enforce_team_based_model_access` is set; otherwise returns (None, None).
+        `enforce_team_based_model_access` is set; otherwise returns (None, None, None).
         """
         from litellm.proxy.proxy_server import llm_router
 
@@ -2018,7 +2023,27 @@ class JWTAuthManager:
                 "JWT DB team fallback: resolved team_id=%s from user DB membership",
                 candidate_team_id,
             )
-            return candidate_team_id, team_object
+            if user_id:
+                try:
+                    return (
+                        candidate_team_id,
+                        team_object,
+                        await get_team_membership(
+                            user_id=user_id,
+                            team_id=candidate_team_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            parent_otel_span=parent_otel_span,
+                            proxy_logging_obj=proxy_logging_obj,
+                        ),
+                    )
+                except Exception:
+                    verbose_proxy_logger.debug(
+                        "JWT DB team fallback: membership lookup failed for team_id=%s",
+                        candidate_team_id,
+                        exc_info=True,
+                    )
+            return candidate_team_id, team_object, None
 
         if enforce_team_based_model_access:
             raise HTTPException(
@@ -2027,7 +2052,7 @@ class JWTAuthManager:
                     "User is not a member of any team. Add the user to a team via the LiteLLM UI or API."
                 ),
             )
-        return None, None
+        return None, None, None
 
     @staticmethod
     def _validate_header_team_in_db_membership(
@@ -2272,8 +2297,13 @@ class JWTAuthManager:
             jwt_handler.litellm_jwtauth.fallback_to_db_teams and not all_team_ids
         )
         if team_id is None and db_team_fallback:
-            team_id, team_object = await JWTAuthManager._resolve_db_team_fallback(
+            (
+                team_id,
+                team_object,
+                team_membership_object,
+            ) = await JWTAuthManager._resolve_db_team_fallback(
                 user_object=user_object,
+                user_id=user_id,
                 requested_model=request_data.get("model"),
                 enforce_team_based_model_access=jwt_handler.litellm_jwtauth.enforce_team_based_model_access,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
@@ -2296,7 +2326,7 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
             )
-        elif db_team_fallback:
+        elif db_team_fallback and team_id == header_team_id:
             JWTAuthManager._validate_header_team_in_db_membership(
                 team_id=team_id,
                 user_object=user_object,
