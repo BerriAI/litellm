@@ -547,6 +547,63 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+def _check_permissions_caller_permission(
+    permissions: Optional[dict],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set the `permissions` dict on a key.
+
+    The field grants ambient capabilities (e.g. `get_spend_routes` exposes
+    `/global/spend/*`), so it must follow the same admin gate as
+    `allowed_routes`. Without this gate a non-admin can self-grant capabilities
+    they do not hold, including read access to global spend.
+    """
+    if not permissions:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can set `permissions` on a key."},
+    )
+
+
+def _check_budget_limits_delegation_ceiling(
+    budget_limits: Optional[List[BudgetLimitEntry]],
+    delegation_ceiling: Optional[float],
+    user_api_key_dict: UserAPIKeyAuth,
+    is_ui_session_team_key: bool,
+) -> None:
+    """
+    Enforce the delegation ceiling on every per-window budget entry.
+
+    The single-value `max_budget` check upstream guards the all-time budget;
+    `budget_limits` lets a key carry independent concurrent windows and was
+    bypassing the ceiling entirely, so a non-admin caller could mint a key
+    with a window budget far above their own authority.
+    """
+    if not budget_limits:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if is_ui_session_team_key:
+        return
+    if delegation_ceiling is None:
+        return
+    over_ceiling = next((w for w in budget_limits if w.max_budget > delegation_ceiling), None)
+    if over_ceiling is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"budget_limits entry max_budget ({over_ceiling.max_budget}) "
+                    f"cannot exceed the caller's own max_budget ({delegation_ceiling})."
+                )
+            },
+        )
+
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -743,6 +800,17 @@ async def _common_key_generation_helper(
                 )
             },
         )
+
+    _check_budget_limits_delegation_ceiling(
+        budget_limits=data.budget_limits,
+        delegation_ceiling=delegation_ceiling,
+        user_api_key_dict=user_api_key_dict,
+        is_ui_session_team_key=is_ui_session_team_key,
+    )
+    _check_permissions_caller_permission(
+        permissions=data.permissions,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
