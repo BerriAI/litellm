@@ -1,4 +1,4 @@
-"""Tests proving Rust OCR receives and executes Python callbacks."""
+"""Network-free tests proving Rust OCR receives and executes Python callbacks."""
 
 from datetime import datetime
 from typing import Any, Optional
@@ -14,7 +14,7 @@ from litellm.types.utils import StandardLoggingPayload
 MODEL = "mistral/mistral-ocr-latest"
 DOCUMENT: dict[str, object] = {
     "type": "document_url",
-    "document_url": "https://example.com/test.pdf",
+    "document_url": "data:application/pdf;base64,JVBERi0xLjQK",
 }
 FAKE_RUST_OCR_RESPONSE: dict[str, object] = {
     "pages": [{"index": 0, "markdown": "hello from rust ocr"}],
@@ -78,7 +78,7 @@ class OCRCustomGuardrail(CustomGuardrail):
         self.success_log_calls += 1
 
 
-class ExecutingRustAocrBridge:
+class MockExecutingRustAocrBridge:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
@@ -155,7 +155,7 @@ def reset_litellm_rust_callbacks():
 
 @pytest.mark.asyncio
 async def test_rust_ocr_executes_custom_logger_from_callback_manager():
-    bridge = ExecutingRustAocrBridge()
+    bridge = MockExecutingRustAocrBridge()
     custom_logger = OCRCustomLogger()
     litellm.logging_callback_manager.add_litellm_callback(custom_logger)
     litellm.use_litellm_rust(True, aocr=bridge)
@@ -188,7 +188,7 @@ async def test_rust_ocr_executes_custom_logger_from_callback_manager():
 
 @pytest.mark.asyncio
 async def test_rust_ocr_executes_custom_guardrail_from_callback_manager():
-    bridge = ExecutingRustAocrBridge()
+    bridge = MockExecutingRustAocrBridge()
     custom_guardrail = OCRCustomGuardrail()
     litellm.logging_callback_manager.add_litellm_callback(custom_guardrail)
     litellm.use_litellm_rust(True, aocr=bridge)

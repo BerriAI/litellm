@@ -78,7 +78,7 @@ class OCRResponse(LiteLLMPydanticObjectBase):
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
-        extra_fields = getattr(self, "__pydantic_extra__", None)
+        extra_fields = self.model_extra
         if isinstance(extra_fields, dict):
             hidden_params = extra_fields.pop("_hidden_params", None)
             if isinstance(hidden_params, dict):

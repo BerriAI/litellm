@@ -266,6 +266,8 @@ def _get_rust_bridge_callbacks() -> tuple[list[object], list[object]]:
         if isinstance(callback, CustomGuardrail):
             if callback not in guardrails:
                 guardrails.append(callback)
+        # CustomGuardrail inherits CustomLogger; keep it in both lists so
+        # Rust OCR runs guard hooks and success/failure logging hooks.
         if isinstance(callback, CustomLogger) and callback not in callbacks:
             callbacks.append(callback)
     return callbacks, guardrails

@@ -390,7 +390,9 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
         ),
         litellm_overhead_time_ms=litellm_overhead_time_ms,
         litellm_rust=(
-            standard_logging_payload.get("hidden_params", {}).get("litellm_rust", None)
+            (standard_logging_payload.get("hidden_params") or {}).get(
+                "litellm_rust", None
+            )
             if standard_logging_payload is not None
             else None
         ),
