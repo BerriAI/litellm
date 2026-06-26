@@ -455,6 +455,7 @@ def test_audio_speech_routes_alias_to_volcengine_websocket(
         "input": "hello",
         "voice": "alloy",
         "response_format": "pcm",
+        "metadata": {"api_base": "wss://attacker.test/tts"},
     }
     try:
         with auth_as():
