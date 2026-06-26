@@ -2,6 +2,8 @@
 Common utilities for Volcengine LLM provider
 """
 
+from urllib.parse import urlparse
+
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -102,4 +104,17 @@ def get_volcengine_configured_ws_api_base(
 
 
 def _is_volcengine_ws_api_base(value: object) -> bool:
-    return isinstance(value, str) and value.startswith(("ws://", "wss://"))
+    if not isinstance(value, str):
+        return False
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "wss"
+        and parsed.hostname == "openspeech.bytedance.com"
+        and parsed.username is None
+        and parsed.password is None
+        and port in (None, 443)
+    )

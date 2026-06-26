@@ -131,7 +131,9 @@ async def test_async_transcription_uses_volcengine_ws_and_returns_text(monkeypat
             "resource_id": "attacker-resource",
         },
         litellm_params={
-            "metadata": {"api_base": "wss://example.test/asr"},
+            "metadata": {
+                "api_base": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel?deployment=test"
+            },
             "resource_id": "volc.seedasr.sauc.duration",
         },
         model_response=TranscriptionResponse(),
@@ -145,7 +147,9 @@ async def test_async_transcription_uses_volcengine_ws_and_returns_text(monkeypat
     assert response.text == "你好世界"
     assert response._hidden_params["custom_llm_provider"] == "volcengine"
     assert response._hidden_params["audio_transcription_duration"] == 0.2
-    assert fake_connect.args == ("wss://example.test/asr",)
+    assert fake_connect.args == (
+        "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel?deployment=test",
+    )
     assert fake_connect.kwargs["additional_headers"]["X-Api-Key"] == "speech-api-key"
     assert "X-Api-App-Key" not in fake_connect.kwargs["additional_headers"]
     assert "X-Api-Access-Key" not in fake_connect.kwargs["additional_headers"]
@@ -165,9 +169,13 @@ def test_stt_get_complete_url_ignores_request_api_base():
             api_key="speech-api-key",
             model="volc.seedasr.sauc.duration",
             optional_params={},
-            litellm_params={"metadata": {"api_base": "wss://example.test/asr"}},
+            litellm_params={
+                "metadata": {
+                    "api_base": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel?deployment=test"
+                }
+            },
         )
-        == "wss://example.test/asr"
+        == "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel?deployment=test"
     )
     assert config.get_complete_url(
         api_base="wss://attacker.test/asr",
@@ -175,4 +183,14 @@ def test_stt_get_complete_url_ignores_request_api_base():
         model="volc.seedasr.sauc.duration",
         optional_params={},
         litellm_params={},
+    ).startswith("wss://openspeech.bytedance.com/")
+    assert config.get_complete_url(
+        api_base="wss://attacker.test/asr",
+        api_key="speech-api-key",
+        model="volc.seedasr.sauc.duration",
+        optional_params={},
+        litellm_params={
+            "api_base": "wss://attacker.test/asr",
+            "metadata": {"api_base": "wss://attacker.test/asr"},
+        },
     ).startswith("wss://openspeech.bytedance.com/")

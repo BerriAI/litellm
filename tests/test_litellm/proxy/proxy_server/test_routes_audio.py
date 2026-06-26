@@ -391,7 +391,7 @@ def test_audio_transcription_routes_alias_to_volcengine_websocket(
                 "litellm_params": {
                     "model": "volcengine/volc.seedasr.sauc.duration",
                     "api_key": "speech-api-key",
-                    "api_base": "wss://example.test/asr",
+                    "api_base": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
                 },
             }
         ],
@@ -402,6 +402,7 @@ def test_audio_transcription_routes_alias_to_volcengine_websocket(
         "model": "volc.seedasr.sauc.duration",
         "response_format": "json",
         "language": "zh",
+        "api_base": "wss://attacker.test/asr",
     }
     try:
         with auth_as():
@@ -411,7 +412,7 @@ def test_audio_transcription_routes_alias_to_volcengine_websocket(
 
     assert response.status_code == 200, response.text
     assert response.json()["text"] == "volcengine transcript ok"
-    assert fake_connect.args == ("wss://example.test/asr",)
+    assert fake_connect.args == ("wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",)
     assert fake_connect.kwargs["additional_headers"]["X-Api-Key"] == "speech-api-key"
     assert (
         fake_connect.kwargs["additional_headers"]["X-Api-Resource-Id"]
@@ -443,7 +444,7 @@ def test_audio_speech_routes_alias_to_volcengine_websocket(
                 "litellm_params": {
                     "model": "volcengine/seed-tts-2.0",
                     "api_key": "speech-api-key",
-                    "api_base": "wss://example.test/tts",
+                    "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
                     "resource_id": "seed-tts-2.0",
                 },
             }
@@ -455,6 +456,7 @@ def test_audio_speech_routes_alias_to_volcengine_websocket(
         "input": "hello",
         "voice": "alloy",
         "response_format": "pcm",
+        "api_base": "wss://attacker.test/tts",
         "metadata": {"api_base": "wss://attacker.test/tts"},
     }
     try:
@@ -466,7 +468,9 @@ def test_audio_speech_routes_alias_to_volcengine_websocket(
     assert response.status_code == 200, response.text
     assert response.headers.get("content-type") == "audio/pcm"
     assert response.content == pcm
-    assert fake_connect.args == ("wss://example.test/tts",)
+    assert fake_connect.args == (
+        "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+    )
     assert fake_connect.kwargs["additional_headers"]["X-Api-Key"] == "speech-api-key"
     assert (
         fake_connect.kwargs["additional_headers"]["X-Api-Resource-Id"] == "seed-tts-2.0"

@@ -157,7 +157,9 @@ async def test_tts_dispatch_uses_volcengine_ws_and_returns_pcm(monkeypatch):
             "resource_id": "attacker-resource",
         },
         litellm_params_dict={
-            "metadata": {"api_base": "wss://example.test/tts"},
+            "metadata": {
+                "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection?deployment=test"
+            },
             "resource_id": "seed-tts-2.0-configured",
         },
         logging_obj=MagicMock(),
@@ -170,7 +172,9 @@ async def test_tts_dispatch_uses_volcengine_ws_and_returns_pcm(monkeypatch):
 
     assert await _read_binary_response(response) == pcm
     assert response._hidden_params["content_type"] == "audio/pcm"
-    assert fake_connect.args == ("wss://example.test/tts",)
+    assert fake_connect.args == (
+        "wss://openspeech.bytedance.com/api/v3/tts/bidirection?deployment=test",
+    )
     assert fake_connect.kwargs["additional_headers"]["X-Api-Key"] == "speech-api-key"
     assert "X-Api-App-Id" not in fake_connect.kwargs["additional_headers"]
     assert "X-Api-Access-Key" not in fake_connect.kwargs["additional_headers"]
@@ -210,7 +214,7 @@ async def test_tts_dispatch_maps_official_2_0_model_name(monkeypatch):
         timeout=1,
         extra_headers=None,
         aspeech=True,
-        api_base="wss://example.test/tts",
+        api_base="wss://openspeech.bytedance.com/api/v3/tts/bidirection",
         api_key="speech-api-key",
     )
 
@@ -228,12 +232,24 @@ def test_tts_get_complete_url_ignores_request_api_base():
         config.get_complete_url(
             model="seed-tts-2.0",
             api_base="wss://attacker.test/tts",
-            litellm_params={"metadata": {"api_base": "wss://example.test/tts"}},
+            litellm_params={
+                "metadata": {
+                    "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection?deployment=test"
+                }
+            },
         )
-        == "wss://example.test/tts"
+        == "wss://openspeech.bytedance.com/api/v3/tts/bidirection?deployment=test"
     )
     assert config.get_complete_url(
         model="seed-tts-2.0",
         api_base="wss://attacker.test/tts",
         litellm_params={},
+    ).startswith("wss://openspeech.bytedance.com/")
+    assert config.get_complete_url(
+        model="seed-tts-2.0",
+        api_base="wss://attacker.test/tts",
+        litellm_params={
+            "api_base": "wss://attacker.test/tts",
+            "metadata": {"api_base": "wss://attacker.test/tts"},
+        },
     ).startswith("wss://openspeech.bytedance.com/")
