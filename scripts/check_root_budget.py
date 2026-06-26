@@ -34,11 +34,9 @@ def current_root_metrics() -> dict[str, int]:
         else:
             root_dirs.add(parts[0])
 
-    root_file_bytes = sum(Path(file_path).stat().st_size for file_path in root_files)
     return {
         "max_tracked_root_dirs": len(root_dirs),
         "max_tracked_root_entries": len(root_files) + len(root_dirs),
-        "max_tracked_root_file_bytes": root_file_bytes,
         "max_tracked_root_files": len(root_files),
     }
 
