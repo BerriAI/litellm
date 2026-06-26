@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
@@ -57,7 +57,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # "metadata",
         ]
 
-    def _remove_scope_from_cache_control(self, anthropic_messages_request: Dict) -> None:
+    def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
         Remove `scope` field from cache_control blocks.
 
@@ -111,9 +111,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def _normalize_system_role_messages(
         self,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
-    ) -> Tuple[List[Dict], Dict]:
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
+    ) -> tuple[list[dict], dict]:
         """Move ``role: "system"`` entries from the messages array into the
         top-level ``system`` field.
 
@@ -121,32 +121,22 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         ``role: "system"`` inside messages — they only accept ``system`` as a
         top-level parameter.
         """
-        system_role_messages = [
-            m for m in messages if isinstance(m, dict) and m.get("role") == "system"
-        ]
+        system_role_messages = [m for m in messages if isinstance(m, dict) and m.get("role") == "system"]
         if not system_role_messages:
             return messages, anthropic_messages_optional_request_params
 
         # Remove system-role entries from messages
-        filtered_messages = [
-            m
-            for m in messages
-            if not (isinstance(m, dict) and m.get("role") == "system")
-        ]
+        filtered_messages = [m for m in messages if not (isinstance(m, dict) and m.get("role") == "system")]
 
         # Merge into top-level system
         existing_system = anthropic_messages_optional_request_params.get("system")
         system_blocks: list = []
 
         if existing_system is not None:
-            system_blocks.extend(
-                AnthropicMessagesConfig._as_system_content_blocks(existing_system)
-            )
+            system_blocks.extend(AnthropicMessagesConfig._as_system_content_blocks(existing_system))
 
         for msg in system_role_messages:
-            system_blocks.extend(
-                AnthropicMessagesConfig._as_system_content_blocks(msg.get("content"))
-            )
+            system_blocks.extend(AnthropicMessagesConfig._as_system_content_blocks(msg.get("content")))
 
         if system_blocks:
             anthropic_messages_optional_request_params["system"] = system_blocks
@@ -216,12 +206,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+    ) -> tuple[dict, Optional[str]]:
         # Check for Anthropic OAuth token in Authorization header
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
 
@@ -242,7 +232,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
-    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: Dict) -> None:
+    def _translate_reasoning_effort_to_anthropic(model: str, optional_params: dict) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
         Caller-supplied ``thinking`` / ``output_config`` win over the alias.
@@ -290,7 +280,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params["output_config"] = existing_output_config
 
     @staticmethod
-    def _translate_legacy_thinking_for_adaptive_model(model: str, optional_params: Dict) -> None:
+    def _translate_legacy_thinking_for_adaptive_model(model: str, optional_params: dict) -> None:
         """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
         Caller-provided ``output_config.effort`` is never overridden.
         """
@@ -324,11 +314,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: List[Dict],
-        anthropic_messages_optional_request_params: Dict,
+        messages: list[dict],
+        anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         No transformation is needed for Anthropic messages
 
@@ -355,10 +345,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Normalize role: "system" entries from messages array into top-level system.
         # Some partner endpoints (Vertex AI, Bedrock) reject role: "system" in messages.
         if self.should_normalize_system_role_messages():
-            messages, anthropic_messages_optional_request_params = (
-                self._normalize_system_role_messages(
-                    messages, anthropic_messages_optional_request_params
-                )
+            messages, anthropic_messages_optional_request_params = self._normalize_system_role_messages(
+                messages, anthropic_messages_optional_request_params
             )
 
         system_param = anthropic_messages_optional_request_params.get("system")

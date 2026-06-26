@@ -43,9 +43,7 @@ class TestNormalizeSystemRoleMessages:
         messages = [{"role": "user", "content": "hello"}]
         params = {}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == messages
         assert result_params == {}
@@ -58,14 +56,10 @@ class TestNormalizeSystemRoleMessages:
         ]
         params = {}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == [{"role": "user", "content": "hello"}]
-        assert result_params["system"] == [
-            {"type": "text", "text": "You are helpful"}
-        ]
+        assert result_params["system"] == [{"type": "text", "text": "You are helpful"}]
 
     def test_existing_system_merged_with_system_messages(self):
         config = self._make_config()
@@ -75,9 +69,7 @@ class TestNormalizeSystemRoleMessages:
         ]
         params = {"system": "Base instruction"}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == [{"role": "user", "content": "hello"}]
         assert result_params["system"] == [
@@ -94,9 +86,7 @@ class TestNormalizeSystemRoleMessages:
         ]
         params = {}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == [{"role": "user", "content": "hi"}]
         assert result_params["system"] == [
@@ -115,14 +105,10 @@ class TestNormalizeSystemRoleMessages:
         ]
         params = {}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == [{"role": "user", "content": "hello"}]
-        assert result_params["system"] == [
-            {"type": "text", "text": "Block content"}
-        ]
+        assert result_params["system"] == [{"type": "text", "text": "Block content"}]
 
     def test_existing_system_as_list_merged_correctly(self):
         config = self._make_config()
@@ -132,9 +118,7 @@ class TestNormalizeSystemRoleMessages:
         ]
         params = {"system": [{"type": "text", "text": "Existing block"}]}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == [{"role": "user", "content": "hello"}]
         assert result_params["system"] == [
@@ -150,9 +134,7 @@ class TestNormalizeSystemRoleMessages:
         ]
         params = {}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == [{"role": "user", "content": "hello"}]
         assert "system" not in result_params
@@ -166,9 +148,7 @@ class TestNormalizeSystemRoleMessages:
         ]
         params = {}
 
-        result_messages, result_params = config._normalize_system_role_messages(
-            messages, params
-        )
+        result_messages, result_params = config._normalize_system_role_messages(messages, params)
 
         assert result_messages == [
             "not a dict",
