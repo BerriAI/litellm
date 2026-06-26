@@ -271,6 +271,60 @@ class TestExecuteWithMcpClient:
         )
 
     @pytest.mark.asyncio
+    async def test_interactive_oauth_with_creds_keeps_user_token(self, monkeypatch):
+        """Regression: an interactive OAuth server that has client_id/secret/token_url
+        AND an authorization_url (e.g. the hosted Slack MCP) must NOT be mistaken
+        for M2M. The user's forwarded token must reach the MCP client, not be
+        dropped for a client_credentials fetch."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured["server"] = kwargs.get("server")
+            captured["extra_headers"] = kwargs.get("extra_headers")
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="slack",
+            url="https://mcp.slack.com/mcp",
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://slack.com/oauth/v2_user/authorize",
+            token_url="https://slack.com/api/oauth.v2.user.access",
+            credentials={
+                "client_id": "123.456",
+                "client_secret": "my-secret",
+            },
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer user-token"},
+        )
+
+        assert result["status"] == "ok"
+        assert captured["server"].has_client_credentials is False
+        assert captured["extra_headers"]["Authorization"] == "Bearer user-token"
+
+    @pytest.mark.asyncio
     async def test_catches_exception_group(self, monkeypatch):
         """MCP SDK's anyio TaskGroup raises BaseExceptionGroup which does not
         inherit from Exception.  The handler must catch it and return an error
