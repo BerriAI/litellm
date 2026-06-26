@@ -1513,8 +1513,16 @@ async def _user_api_key_auth_builder(
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
 
-            ## Check UI Hash Key
-            if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            ## Check UI/CLI Hash Key
+            # Attempt decryption for non-sk- tokens unless the operator has
+            # explicitly set EXPERIMENTAL_UI_LOGIN=false to disable it.
+            # Unset (None) keeps the new default of always attempting decryption;
+            # decryption fails closed for anything that is not a genuine blob.
+            if (
+                valid_token is None
+                and not api_key.startswith("sk-")
+                and get_secret_bool("EXPERIMENTAL_UI_LOGIN") is not False
+            ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(
                     api_key
                 )
@@ -2726,9 +2734,9 @@ async def _return_user_api_key_auth_obj(
         user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
     else:
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
 
 
 def get_api_key_from_custom_header(
