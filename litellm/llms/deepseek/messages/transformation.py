@@ -2,7 +2,7 @@
 DeepSeek Anthropic-compatible messages transformation config.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -11,7 +11,6 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import AllMessageValues
 
 
 class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
