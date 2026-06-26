@@ -1,8 +1,12 @@
 import json
 import os
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+    InMemorySpanExporter,
+)
 
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
 from litellm.integrations.opentelemetry import OpenTelemetryConfig
@@ -239,6 +243,50 @@ class TestLangfuseOtelIntegration:
             assert (
                 actual == expected
             ), "Mismatch between expected and actual OTEL attribute mapping."
+
+    def test_openai_extra_body_trace_id_controls_langfuse_otel_trace_identity(self):
+        trace_id = "global_20260225143025_ord2468"
+        generation_name = "ishaan-test-generation"
+        exporter = InMemorySpanExporter()
+        logger = LangfuseOtelLogger(
+            config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
+            callback_name="langfuse_otel",
+        )
+        metadata_from_openai_extra_body = {
+            "generation_name": generation_name,
+            "trace_id": trace_id,
+        }
+        kwargs = {
+            "litellm_params": {"metadata": metadata_from_openai_extra_body},
+            "messages": [{"role": "user", "content": "hi"}],
+            "model": "doubao",
+            "call_type": "acompletion",
+        }
+        response_obj = {
+            "id": "chatcmpl-test",
+            "choices": [
+                {"message": {"role": "assistant", "content": "ok"}},
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+        now = datetime.now()
+        with patch("litellm.integrations.arize._utils.set_attributes"):
+            logger.log_success_event(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=now,
+                end_time=now,
+            )
+
+        generation_span = next(
+            span
+            for span in exporter.get_finished_spans()
+            if span.attributes.get("langfuse.generation.name") == generation_name
+        )
+
+        assert generation_span.attributes.get("langfuse.trace.id") == trace_id
+        assert format(generation_span.context.trace_id, "032x") == trace_id
 
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
