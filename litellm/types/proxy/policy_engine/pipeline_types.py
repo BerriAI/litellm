@@ -99,8 +99,11 @@ class PipelineStepResult(BaseModel):
 class PipelineExecutionResult(BaseModel):
     """Result of executing an entire pipeline."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     terminal_action: str  # block | allow | modify_response
     step_results: List[PipelineStepResult]
     modified_data: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
     modify_response_message: Optional[str] = None
+    original_exception: Optional[Exception] = Field(default=None, exclude=True)

@@ -364,6 +364,16 @@ def _enrich_http_exception_with_guardrail_context(
         detail.setdefault("guardrail_mode", event_hook)
 
 
+def _exception_changes_request_flow(exc: BaseException) -> bool:
+    """
+    True for guardrail exceptions the proxy turns into an alternate request flow
+    (a reroute or a passthrough response) rather than a block. A pipeline step
+    configured to block must honor that block, so these are surfaced as the
+    generic pipeline block instead of being re-raised verbatim.
+    """
+    return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
+
+
 @dataclass(frozen=True)
 class _CallbackCapabilities:
     """Cached per-hook capability flags derived from ``litellm.callbacks``.
@@ -1352,7 +1362,7 @@ class ProxyLogging:
 
     @staticmethod
     def _handle_pipeline_result(
-        result: Any,
+        result: PipelineExecutionResult,
         data: dict,
         policy_name: str,
     ) -> dict:
@@ -1367,6 +1377,21 @@ class ProxyLogging:
             return data
 
         if result.terminal_action == "block":
+            original_exception = result.original_exception
+            if original_exception is not None and not _exception_changes_request_flow(
+                original_exception
+            ):
+                blocking_step = result.step_results[-1] if result.step_results else None
+                if blocking_step is not None:
+                    callback = PipelineExecutor.find_guardrail_callback(
+                        blocking_step.guardrail_name
+                    )
+                    if callback is not None:
+                        _enrich_http_exception_with_guardrail_context(
+                            original_exception, callback
+                        )
+                raise original_exception
+
             step_results_serializable = [
                 {
                     "guardrail": sr.guardrail_name,

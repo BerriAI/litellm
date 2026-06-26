@@ -6,7 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -64,7 +64,12 @@ class PipelineExecutor:
         for i, step in enumerate(steps):
             start_time = time.perf_counter()
 
-            outcome, modified_data, error_detail = await PipelineExecutor._run_step(
+            (
+                outcome,
+                modified_data,
+                error_detail,
+                original_exception,
+            ) = await PipelineExecutor._run_step(
                 step=step,
                 mode=mode,
                 data=working_data,
@@ -108,6 +113,7 @@ class PipelineExecutor:
                     terminal_action="block",
                     step_results=step_results,
                     error_message=error_detail,
+                    original_exception=original_exception,
                 )
 
             if action == "modify_response":
@@ -134,22 +140,30 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: Any,
         call_type: str,
-    ) -> tuple:
+    ) -> tuple[
+        Literal["pass", "fail", "error"],
+        Optional[dict],
+        Optional[str],
+        Optional[Exception],
+    ]:
         """
         Run a single pipeline step's guardrail.
 
         Returns:
-            Tuple of (outcome, modified_data, error_detail) where:
+            Tuple of (outcome, modified_data, error_detail, original_exception):
             - outcome: "pass", "fail", or "error"
             - modified_data: dict if guardrail returned modified data, else None
             - error_detail: error message string if fail/error, else None
+            - original_exception: the exception the guardrail raised, so the
+              pipeline can re-raise it verbatim and match the direct-attachment
+              response/trace, else None
         """
-        callback = PipelineExecutor._find_guardrail_callback(step.guardrail)
+        callback = PipelineExecutor.find_guardrail_callback(step.guardrail)
         if callback is None:
             verbose_proxy_logger.warning(
                 f"Pipeline: guardrail '{step.guardrail}' not found in callbacks"
             )
-            return ("error", None, f"Guardrail '{step.guardrail}' not found")
+            return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
         try:
             # Inject guardrail name into metadata so should_run_guardrail() allows it
@@ -182,26 +196,26 @@ class PipelineExecutor:
                     response=data.get("response"),  # type: ignore
                 )
             else:
-                return ("error", None, f"Unsupported pipeline mode: {mode}")
+                return ("error", None, f"Unsupported pipeline mode: {mode}", None)
 
             # Normal return means pass
             modified_data = None
             if response is not None and isinstance(response, dict):
                 modified_data = response
-            return ("pass", modified_data, None)
+            return ("pass", modified_data, None, None)
 
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
                 error_msg = _extract_error_message(e)
-                return ("fail", None, error_msg)
+                return ("fail", None, error_msg, e)
             else:
                 verbose_proxy_logger.error(
                     f"Pipeline: unexpected error from guardrail '{step.guardrail}': {e}"
                 )
-                return ("error", None, str(e))
+                return ("error", None, str(e), e)
 
     @staticmethod
-    def _find_guardrail_callback(guardrail_name: str) -> Optional[CustomGuardrail]:
+    def find_guardrail_callback(guardrail_name: str) -> Optional[CustomGuardrail]:
         """Look up an initialized guardrail callback by name from litellm.callbacks."""
         for callback in litellm.callbacks:
             if isinstance(callback, CustomGuardrail):
