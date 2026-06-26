@@ -34,6 +34,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.customer_endpoints import (
     BlockUsersResponse,
+    CustomerResponse,
     DeleteCustomersResponse,
     UnblockUsersResponse,
 )
@@ -229,7 +230,7 @@ async def _handle_customer_object_permission_update(
     "/customer/new",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=LiteLLM_EndUserTable,
+    response_model=CustomerResponse,
 )
 async def new_end_user(
     data: NewCustomerRequest,
@@ -422,7 +423,7 @@ async def new_end_user(
     "/customer/info",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=LiteLLM_EndUserTable,
+    response_model=CustomerResponse,
 )
 @router.get(
     "/end_user/info",
@@ -497,7 +498,7 @@ async def end_user_info(
     "/customer/update",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=LiteLLM_EndUserTable,
+    response_model=CustomerResponse,
 )
 @router.post(
     "/end_user/update",
@@ -796,7 +797,7 @@ async def delete_end_user(
     "/customer/list",
     tags=["Customer Management"],
     dependencies=[Depends(user_api_key_auth)],
-    response_model=List[LiteLLM_EndUserTable],
+    response_model=List[CustomerResponse],
 )
 @router.get(
     "/end_user/list",
@@ -844,7 +845,7 @@ async def list_end_user(
             include={"litellm_budget_table": True, "object_permission": True}
         )
 
-        returned_response: List[LiteLLM_EndUserTable] = []
+        returned_response: List[CustomerResponse] = []
         for item in response:
             item_dict = item.model_dump()
             # Remove reverse relations from object_permission
@@ -857,7 +858,7 @@ async def list_end_user(
                     "end_users",
                 ]:
                     item_dict["object_permission"].pop(field, None)
-            returned_response.append(LiteLLM_EndUserTable(**item_dict))
+            returned_response.append(CustomerResponse(**item_dict))
         return returned_response
 
     except Exception as e:

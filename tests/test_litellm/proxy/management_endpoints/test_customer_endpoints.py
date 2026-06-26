@@ -8,7 +8,6 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import (
-    LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     LitellmUserRoles,
     ProxyException,
@@ -20,6 +19,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 )
 from litellm.types.proxy.management_endpoints.customer_endpoints import (
     BlockUsersResponse,
+    CustomerResponse,
     DeleteCustomersResponse,
     UnblockUsersResponse,
 )
@@ -230,11 +230,6 @@ def test_error_schema_consistency(mock_prisma_client, mock_user_api_key_auth):
     assert error["code"] == "404"
 
     # Test /customer/new - duplicate user error
-    from unittest.mock import MagicMock
-
-    mock_end_user = LiteLLM_EndUserTable(
-        user_id="existing-user", alias="Existing User", blocked=False
-    )
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(
         side_effect=Exception("Unique constraint failed on the fields: (`user_id`)")
     )
@@ -330,11 +325,11 @@ def test_customer_endpoints_error_schema_consistency(
 EXPECTED_RESPONSE_MODELS = {
     "/customer/block": BlockUsersResponse,
     "/customer/unblock": UnblockUsersResponse,
-    "/customer/new": LiteLLM_EndUserTable,
-    "/customer/update": LiteLLM_EndUserTable,
+    "/customer/new": CustomerResponse,
+    "/customer/update": CustomerResponse,
     "/customer/delete": DeleteCustomersResponse,
-    "/customer/info": LiteLLM_EndUserTable,
-    "/customer/list": List[LiteLLM_EndUserTable],
+    "/customer/info": CustomerResponse,
+    "/customer/list": List[CustomerResponse],
     "/customer/daily/activity": SpendAnalyticsPaginatedResponse,
 }
 
@@ -357,7 +352,7 @@ def test_customer_new_documented_in_openapi_schema():
     """
     schema = app.openapi()["paths"]["/customer/new"]["post"]
     json_schema = schema["responses"]["200"]["content"]["application/json"]["schema"]
-    assert json_schema["$ref"].endswith("/LiteLLM_EndUserTable")
+    assert json_schema["$ref"].endswith("/CustomerResponse")
 
 
 def test_update_customer_response_preserves_budget_id(
@@ -385,6 +380,57 @@ def test_update_customer_response_preserves_budget_id(
 
     assert response.status_code == 200
     assert response.json()["budget_id"] == "budget-123"
+
+
+def test_update_customer_response_keeps_nested_budget_server_fields(
+    mock_prisma_client, mock_user_api_key_auth
+):
+    """
+    Faithfulness regression: /customer/update embeds the full budget row. The
+    response_model must keep the server-managed budget fields the endpoint used
+    to return (budget_reset_at, created_at) instead of the narrow write-allowlist
+    shape. The intentionally-internal audit fields (created_by/updated_by) stay out.
+    """
+    existing = LiteLLM_EndUserTable(user_id="cust-1", blocked=False)
+    raw_row = MagicMock()
+    raw_row.model_dump.return_value = {
+        "user_id": "cust-1",
+        "blocked": False,
+        "alias": "renamed",
+        "spend": 0.0,
+        "allowed_model_region": None,
+        "default_model": None,
+        "budget_id": "b-1",
+        "object_permission_id": None,
+        "object_permission": None,
+        "litellm_budget_table": {
+            "budget_id": "b-1",
+            "max_budget": 10.0,
+            "budget_duration": "30d",
+            "budget_reset_at": "2024-02-01T00:00:00",
+            "created_at": "2024-01-01T00:00:00",
+            "created_by": "admin",
+            "updated_at": "2024-01-02T00:00:00",
+            "updated_by": "admin",
+        },
+    }
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=existing
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=raw_row)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "cust-1", "alias": "renamed"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    budget = response.json()["litellm_budget_table"]
+    assert budget["budget_reset_at"] == "2024-02-01T00:00:00"
+    assert budget["created_at"] == "2024-01-01T00:00:00"
+    assert "created_by" not in budget
+    assert "updated_by" not in budget
 
 
 def test_block_customer_success_serializes_through_response_model(
