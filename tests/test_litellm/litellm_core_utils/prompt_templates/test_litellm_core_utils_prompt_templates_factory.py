@@ -2918,3 +2918,126 @@ def test_bedrock_converse_messages_pt_document_rejects_url_source():
         _bedrock_converse_messages_pt(
             messages, "anthropic.claude-sonnet-4-6", "bedrock"
         )
+
+
+# ── make_valid_bedrock_tool_use_id + round-trip pairing tests ──
+# Regression coverage for the PLT-716 / Kimi K2.5 tokenizer drift case where
+# an assistant emits a tool call whose ``name`` and ``id`` carry invalid
+# characters (e.g. whitespace, slash). Bedrock Converse rejects such requests
+# pre-flight with three validation errors:
+#   1. messages[N].toolUse.name fails ^[a-zA-Z0-9_-]+$
+#   2. messages[N].toolUse.toolUseId fails ^[a-zA-Z0-9_.:-]+$
+#   3. messages[N+1].toolResult.toolUseId fails ^[a-zA-Z0-9_.:-]+$
+# Sanitizing all three so call/result pairing survives the rewrite is what
+# this group of tests verifies.
+
+
+def test_make_valid_bedrock_tool_use_id_whitespace():
+    """Whitespace is replaced with underscores (period and colon preserved)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        make_valid_bedrock_tool_use_id,
+    )
+
+    assert (
+        make_valid_bedrock_tool_use_id("functions read_file:4")
+        == "functions_read_file:4"
+    )
+
+
+def test_make_valid_bedrock_tool_use_id_preserves_allowed_chars():
+    """The Bedrock toolUseId pattern allows underscore, period, colon, hyphen."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        make_valid_bedrock_tool_use_id,
+    )
+
+    raw = "functions.read_file:0-suffix_v2"
+    assert make_valid_bedrock_tool_use_id(raw) == raw
+
+
+def test_make_valid_bedrock_tool_use_id_replaces_slash_and_hash():
+    """Slashes, hashes, and other invalid chars all become underscores."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        make_valid_bedrock_tool_use_id,
+    )
+
+    assert make_valid_bedrock_tool_use_id("a/b#c") == "a_b_c"
+
+
+def test_make_valid_bedrock_tool_use_id_empty_passthrough():
+    """Empty input is returned unchanged (matches make_valid_bedrock_tool_name)."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        make_valid_bedrock_tool_use_id,
+    )
+
+    assert make_valid_bedrock_tool_use_id("") == ""
+    # The signature is ``str -> str`` to match downstream TypedDict callers
+    # (``BedrockToolUseBlock.toolUseId``); the helper still defensively returns
+    # the input unchanged when None slips in. Suppress the resulting mypy
+    # error here — annotating the helper as ``Optional[str]`` would force a
+    # cascade of ``cast(str, ...)`` calls at the use sites.
+    assert make_valid_bedrock_tool_use_id(None) is None  # type: ignore[arg-type]
+
+
+def test_bedrock_tool_call_invoke_sanitizes_drifted_name_and_id():
+    """
+    Assistant emit with whitespace-bearing ``name`` and ``id`` (Kimi K2.5
+    drift shape) is rewritten so both fields match Bedrock's regex.
+    """
+    tool_calls = [
+        {
+            "id": "functions read_file:4",
+            "type": "function",
+            "function": {
+                "name": "functions read_file",
+                "arguments": '{"path": "x.sv"}',
+            },
+        }
+    ]
+    result = _convert_to_bedrock_tool_call_invoke(tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["name"] == "functions_read_file"
+    assert result[0]["toolUse"]["toolUseId"] == "functions_read_file:4"
+    assert result[0]["toolUse"]["input"] == {"path": "x.sv"}
+
+
+def test_bedrock_tool_call_result_sanitizes_drifted_id():
+    """User-side ``toolResult.toolUseId`` mirrors the same sanitization."""
+    message: ChatCompletionToolMessage = {
+        "role": "tool",
+        "tool_call_id": "functions read_file:4",
+        "content": "result body",
+    }
+    result = _convert_to_bedrock_tool_call_result(message)
+    assert result["toolResult"]["toolUseId"] == "functions_read_file:4"
+
+
+def test_bedrock_tool_pairing_round_trip_after_sanitization():
+    """
+    Toolcall id sanitized on the assistant side must match the toolResult id
+    sanitized on the user side so Bedrock can pair the two blocks.
+    """
+    drifted_id = "functions read_file:4"
+
+    assistant_blocks = _convert_to_bedrock_tool_call_invoke(
+        [
+            {
+                "id": drifted_id,
+                "type": "function",
+                "function": {
+                    "name": "functions read_file",
+                    "arguments": "{}",
+                },
+            }
+        ]
+    )
+    tool_message: ChatCompletionToolMessage = {
+        "role": "tool",
+        "tool_call_id": drifted_id,
+        "content": "ok",
+    }
+    result_block = _convert_to_bedrock_tool_call_result(tool_message)
+
+    assert (
+        assistant_blocks[0]["toolUse"]["toolUseId"]
+        == result_block["toolResult"]["toolUseId"]
+    )

@@ -3993,7 +3993,12 @@ def _convert_to_bedrock_tool_call_invoke(
         _parts_list: List[BedrockContentBlock] = []
         for tool in tool_calls:
             if "function" in tool:
-                tool_id = tool["id"]
+                # Sanitize once at the top of the loop iteration so the
+                # split-objects path below (``block_id = f"{tool_id}_{obj_idx}"``)
+                # inherits a clean base id, and the assistant-side toolUse.name
+                # matches Bedrock's pattern even when an upstream model emits
+                # invalid characters (e.g. Kimi K2.5 tokenizer drift).
+                tool_id = make_valid_bedrock_tool_use_id(tool["id"])
                 name = make_valid_bedrock_tool_name(tool["function"].get("name", ""))
                 arguments = tool["function"].get("arguments", "")
 
@@ -4224,7 +4229,12 @@ def _convert_to_bedrock_tool_call_result(
     )
 
     message.get("name", "")
-    id = str(message.get("tool_call_id", str(uuid.uuid4())))
+    # Mirror the sanitization applied to ``toolUse.toolUseId`` in
+    # ``_convert_to_bedrock_tool_call_invoke`` so the call-result pairing
+    # survives a rewrite of invalid characters.
+    id = make_valid_bedrock_tool_use_id(
+        str(message.get("tool_call_id", str(uuid.uuid4())))
+    )
 
     tool_result = BedrockToolResultBlock(
         content=tool_result_content_blocks, toolUseId=id
@@ -5447,6 +5457,37 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
         )
 
     return valid_string
+
+
+def make_valid_bedrock_tool_use_id(input_tool_use_id: str) -> str:
+    """
+    Replaces any invalid characters in the input tool_use_id with underscores
+    so it matches Bedrock Converse's required pattern ``^[a-zA-Z0-9_.:-]+$``.
+
+    Bedrock Converse rejects ``toolUse.toolUseId`` and ``toolResult.toolUseId``
+    values that contain whitespace, slashes, ``#``, etc., even when the
+    matching ``toolUse.name`` is valid. Some upstream models (notably Kimi
+    K2.5 on Bedrock CMI) intermittently emit ids like ``"functions read_file:4"``
+    (space) due to tokenizer drift; sanitizing here lets the request reach
+    the model rather than failing pre-flight validation.
+
+    The same sanitization must be applied to ``toolUse.toolUseId`` on the
+    assistant side and the mirrored ``toolResult.toolUseId`` on the user /
+    tool message side so the call-result pairing survives the rewrite
+    deterministically.
+    """
+
+    def replace_invalid(char: str) -> str:
+        """
+        Bedrock tool_use_ids allow alphanumerics, underscore, period, colon, hyphen.
+        """
+        if char.isalnum() or char in ("_", ".", ":", "-"):
+            return char
+        return "_"
+
+    if input_tool_use_id is None or len(input_tool_use_id) == 0:
+        return input_tool_use_id
+    return "".join(replace_invalid(char) for char in input_tool_use_id)
 
 
 def add_cache_point_tool_block(
