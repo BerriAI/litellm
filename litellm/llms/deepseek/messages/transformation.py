@@ -116,9 +116,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
                 sanitized_tools.append(tool)
         return sanitized_tools
 
-    def _fill_reasoning_content(
-        self, messages: List[Dict]
-    ) -> List[Dict]:
+    def _fill_reasoning_content(self, messages: List[Dict]) -> List[Dict]:
         """
         DeepSeek thinking mode requires `reasoning_content` to be passed back on
         every assistant message in multi-turn conversations. If it is missing,
@@ -200,9 +198,12 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             anthropic_messages_request["tools"] = self._sanitize_tools_for_deepseek(
                 anthropic_messages_request["tools"]
             )
-        if self._thinking_mode_active(
-            model=model, optional_params=anthropic_messages_optional_request_params
-        ) and "messages" in anthropic_messages_request:
+        if (
+            self._thinking_mode_active(
+                model=model, optional_params=anthropic_messages_optional_request_params
+            )
+            and "messages" in anthropic_messages_request
+        ):
             anthropic_messages_request["messages"] = self._fill_reasoning_content(
                 anthropic_messages_request["messages"]
             )
