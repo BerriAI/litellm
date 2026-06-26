@@ -685,3 +685,81 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+class TestBedrockMantleWireFormatDispatch:
+    """The bedrock_mantle provider owns the whole Mantle endpoint; the AWS vendor
+    namespace selects the wire format. Anthropic models (anthropic.*) are served
+    over the Anthropic Messages surface, every other vendor over the
+    OpenAI-compatible surface, so the format is an internal routing detail rather
+    than a separate provider."""
+
+    def test_helper_routes_only_anthropic_namespace_to_messages(self):
+        from litellm.llms.bedrock_mantle.common_utils import (
+            mantle_uses_anthropic_messages,
+        )
+
+        assert mantle_uses_anthropic_messages("anthropic.claude-mythos-preview") is True
+        assert (
+            mantle_uses_anthropic_messages(
+                "bedrock_mantle/anthropic.claude-mythos-preview"
+            )
+            is True
+        )
+        assert mantle_uses_anthropic_messages("openai.gpt-5.5") is False
+        assert mantle_uses_anthropic_messages("google.gemma-4-31b") is False
+        assert mantle_uses_anthropic_messages(None) is False
+
+    def test_config_resolver_dispatches_on_namespace(self):
+        from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+        from litellm.utils import ProviderConfigManager
+
+        anthropic_cfg = ProviderConfigManager._get_bedrock_mantle_config(
+            "anthropic.claude-mythos-preview"
+        )
+        openai_cfg = ProviderConfigManager._get_bedrock_mantle_config("openai.gpt-5.5")
+
+        assert isinstance(anthropic_cfg, AmazonMantleConfig)
+        assert isinstance(openai_cfg, BedrockMantleChatConfig)
+
+    def test_provider_chat_config_resolves_anthropic_via_bedrock_mantle(self):
+        from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_chat_config(
+            model="anthropic.claude-mythos-preview",
+            provider=LlmProviders.BEDROCK_MANTLE,
+        )
+
+        assert isinstance(cfg, AmazonMantleConfig)
+
+    def test_anthropic_mantle_model_targets_messages_endpoint(self):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager._get_bedrock_mantle_config(
+            "anthropic.claude-mythos-preview"
+        )
+
+        url = cfg.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="anthropic.claude-mythos-preview",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={},
+        )
+
+        assert url == "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages"
+
+    def test_get_llm_provider_leaves_anthropic_mantle_api_base_for_sigv4(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+
+        resolved_model, provider, dynamic_api_key, api_base = litellm.get_llm_provider(
+            model="bedrock_mantle/anthropic.claude-mythos-preview"
+        )
+
+        assert provider == "bedrock_mantle"
+        assert resolved_model == "anthropic.claude-mythos-preview"
+        assert api_base is None
+        assert dynamic_api_key is None

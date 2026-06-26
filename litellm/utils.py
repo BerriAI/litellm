@@ -4784,7 +4784,9 @@ def get_optional_params(
             ),
         )
     elif custom_llm_provider == "bedrock_mantle":
-        optional_params = litellm.BedrockMantleChatConfig().map_openai_params(
+        optional_params = ProviderConfigManager._get_bedrock_mantle_config(
+            model
+        ).map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -8474,8 +8476,8 @@ class ProviderConfigManager:
             LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
             LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
             LlmProviders.BEDROCK_MANTLE: (
-                lambda: litellm.BedrockMantleChatConfig(),
-                False,
+                lambda model: ProviderConfigManager._get_bedrock_mantle_config(model),
+                True,
             ),
             LlmProviders.A2A: (lambda: litellm.A2AConfig(), False),
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
@@ -8650,6 +8652,27 @@ class ProviderConfigManager:
         from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 
         return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_bedrock_mantle_config(model: str) -> BaseConfig:
+        """Get the Bedrock Mantle config for a model's wire format.
+
+        The Mantle endpoint hosts both an OpenAI-compatible surface and the
+        Anthropic Messages surface; the vendor namespace decides which, so the
+        bedrock_mantle provider owns the whole endpoint and the format is an
+        internal routing detail rather than a separate provider.
+        """
+        from litellm.llms.bedrock_mantle.common_utils import (
+            mantle_uses_anthropic_messages,
+        )
+
+        if mantle_uses_anthropic_messages(model):
+            from litellm.llms.bedrock.chat.mantle.transformation import (
+                AmazonMantleConfig,
+            )
+
+            return AmazonMantleConfig()
+        return litellm.BedrockMantleChatConfig()
 
     @staticmethod
     def _get_cohere_config(model: str) -> BaseConfig:

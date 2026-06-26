@@ -107,9 +107,11 @@ def get_supported_openai_params(
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "bedrock_mantle":
-        return litellm.BedrockMantleChatConfig().get_supported_openai_params(
-            model=model
-        )
+        from litellm.utils import ProviderConfigManager
+
+        return ProviderConfigManager._get_bedrock_mantle_config(
+            model
+        ).get_supported_openai_params(model=model)
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vllm":
