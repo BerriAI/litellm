@@ -303,22 +303,34 @@ def test_thinking_mode_active_returns_true_only_when_explicitly_enabled():
     """Guard must fire ONLY on `thinking: {type: enabled}`, not other shapes."""
     config = DeepSeekAnthropicMessagesConfig()
     # explicit enabled -> fill
-    assert config._thinking_mode_active(
-        model="deepseek-v4-pro",
-        optional_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
-    ) is True
+    assert (
+        config._thinking_mode_active(
+            model="deepseek-v4-pro",
+            optional_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        )
+        is True
+    )
     # type=disabled -> no fill
-    assert config._thinking_mode_active(
-        model="deepseek-v4-pro",
-        optional_params={"thinking": {"type": "disabled"}},
-    ) is False
+    assert (
+        config._thinking_mode_active(
+            model="deepseek-v4-pro",
+            optional_params={"thinking": {"type": "disabled"}},
+        )
+        is False
+    )
     # thinking absent -> no fill (most common non-thinking case)
-    assert config._thinking_mode_active(
-        model="deepseek-v4-pro",
-        optional_params={"max_tokens": 100},
-    ) is False
+    assert (
+        config._thinking_mode_active(
+            model="deepseek-v4-pro",
+            optional_params={"max_tokens": 100},
+        )
+        is False
+    )
     # thinking present but not a dict (defensive) -> no fill
-    assert config._thinking_mode_active(
-        model="deepseek-v4-pro",
-        optional_params={"thinking": None},
-    ) is False
+    assert (
+        config._thinking_mode_active(
+            model="deepseek-v4-pro",
+            optional_params={"thinking": None},
+        )
+        is False
+    )
