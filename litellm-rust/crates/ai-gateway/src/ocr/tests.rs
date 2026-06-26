@@ -9,14 +9,14 @@ use tokio::net::{TcpListener, TcpStream};
 
 use super::common_utils::{has_header, ocr_provider_config, string_headers, truncate_error_body};
 use super::{ocr, OcrRequest};
-use crate::integrations::custom_guardrail::{
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
-use crate::integrations::types::RequestMetadata;
+use litellm_core::integrations::types::RequestMetadata;
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();

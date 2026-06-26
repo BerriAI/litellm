@@ -5,9 +5,9 @@ use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use litellm_core::ocr::transformation::OcrProviderConfig;
 use serde_json::{Map, Value};
 
-use crate::integrations::custom_guardrail::CustomGuardrail;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
+use litellm_core::integrations::custom_guardrail::CustomGuardrail;
+use litellm_core::integrations::custom_logger::CustomLogger;
+use litellm_core::integrations::types::RequestMetadata;
 
 pub struct OcrRequest<'a> {
     pub model: &'a str,

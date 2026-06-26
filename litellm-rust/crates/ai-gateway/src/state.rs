@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::io::realtime_pool::RealtimePool;
 use litellm_core::router::Router;
 
-use crate::integrations::custom_logger::CustomLogger;
+use litellm_core::integrations::custom_logger::CustomLogger;
 
 /// Shared application state handed to every route handler.
 #[derive(Clone)]

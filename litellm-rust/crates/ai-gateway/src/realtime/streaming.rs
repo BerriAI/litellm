@@ -13,10 +13,10 @@ use litellm_core::realtime::types::RealtimeEvent;
 use serde_json::Value;
 
 use crate::constants::DEFAULT_PROVIDER;
-use crate::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
+use litellm_core::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload, Usage,
 };
 
@@ -233,8 +233,8 @@ impl RealTimeStreaming {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integrations::custom_logger::LogError;
-    use crate::integrations::custom_logger::LogFuture;
+    use litellm_core::integrations::custom_logger::LogError;
+    use litellm_core::integrations::custom_logger::LogFuture;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn event(raw: &str) -> RealtimeEvent {

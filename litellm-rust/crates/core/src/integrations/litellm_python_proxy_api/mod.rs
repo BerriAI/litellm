@@ -16,7 +16,6 @@ use reqwest::Client;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
-use crate::constants::{DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH};
 use crate::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogError, LogFuture, LoggingError,
     ModelCallDetails,
@@ -24,6 +23,14 @@ use crate::integrations::custom_logger::{
 use types::{CallbackLogsRequest, EgressTunables, LogRecord};
 
 pub mod types;
+
+/// Default LiteLLM control-plane base URL for request-log egress when
+/// `LITELLM_PROXY_BASE_URL` is unset.
+const DEFAULT_PROXY_BASE_URL: &str = "http://localhost:4000";
+
+/// The logs ingest path appended to the proxy base. Not a tunable; it is the
+/// proxy's API contract (the rust-control-plane router on the Python proxy).
+const RUST_CONTROL_PLANE_LOGS_PATH: &str = "/v1/rust_control_plane/logs";
 
 /// Ships realtime logging events to the LiteLLM Python proxy.
 pub struct LiteLLMPythonProxyAPILogger {
