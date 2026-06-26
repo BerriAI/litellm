@@ -108,10 +108,10 @@ class GuardrailMessageFilterResult(NamedTuple):
 class ApplyGuardrailMessageSelection(NamedTuple):
     """Messages selected for an apply_guardrail scan + write-back metadata."""
 
-    filtered_messages: Optional[List[AllMessageValues]]
+    filtered_messages: Optional[list[AllMessageValues]]
     # Slice of the flat `texts` list actually scanned (offset, length),
     # used to write masked content back to the right positions. None = whole list.
-    scanned_slice: Optional[Tuple[int, int]]
+    scanned_slice: Optional[tuple[int, int]]
     # True when messages were selected by their original role.
     scanned_role_subset: bool
     # True when there is nothing to scan (e.g. no user-role message).
@@ -399,10 +399,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _locate_message_texts_slice(
         self,
-        structured_messages: List[AllMessageValues],
+        structured_messages: list[AllMessageValues],
         target_index: int,
-        texts: List[str],
-    ) -> Optional[Tuple[int, int]]:
+        texts: list[str],
+    ) -> Optional[tuple[int, int]]:
         """
         Map one message's text segments to their (offset, length) slice in the
         flat `texts` list built by the guardrail translation handler.
@@ -426,7 +426,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _select_messages_for_apply_guardrail(
         self,
-        texts: List[str],
+        texts: list[str],
         inputs: "GenericGuardrailAPIInputs",
         request_data: dict,
         input_type: Literal["request", "response"],
@@ -441,7 +441,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         leaking tool/assistant content to the INPUT scan
         (https://github.com/BerriAI/litellm/issues/23476).
         """
-        mock_messages: List[AllMessageValues] = [
+        mock_messages: list[AllMessageValues] = [
             ChatCompletionUserMessage(role="user", content=text) for text in texts
         ]
 
@@ -463,7 +463,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # None, and the write-back guard below safely skips masking rather than
         # corrupting positions.
         structured_messages = cast(
-            Optional[List[AllMessageValues]],
+            Optional[list[AllMessageValues]],
             inputs.get("structured_messages") or request_data.get("messages"),
         )
         if input_type != "request" or not structured_messages:
@@ -504,6 +504,42 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             ),
             scanned_role_subset=True,
         )
+
+    def _merge_masked_texts(
+        self,
+        masked_texts: list,
+        texts: list,
+        scanned_slice: Optional[tuple[int, int]],
+        scanned_role_subset: bool,
+    ) -> list:
+        """
+        Reconcile the guardrail's masked output with the flat `texts` list.
+
+        - No masked output: keep the originals (guardrail allowed content as-is).
+        - A slice was scanned: write masked content back to those positions only,
+          keeping the list aligned with the caller's message↔text mappings.
+        - A role-selected subset was scanned but could not be mapped back to
+          flat-text positions (scanned_slice is None): keep the originals rather
+          than misapply masked content to the wrong message. Guarding on
+          scanned_slice rather than a length comparison also covers the case
+          where the masked subset happens to match len(texts) (e.g. both length
+          1).
+        - Otherwise (whole list scanned): use the masked output as-is.
+        """
+        if not masked_texts:
+            return texts
+        if scanned_slice is not None:
+            offset, length = scanned_slice
+            merged_texts = list(texts)
+            for masked_index, masked_text in enumerate(masked_texts[:length]):
+                merged_texts[offset + masked_index] = masked_text
+            return merged_texts
+        if scanned_role_subset:
+            verbose_proxy_logger.warning(
+                "Bedrock Guardrail: could not align masked texts with request texts, skipping masking write-back"
+            )
+            return texts
+        return masked_texts
 
     def _merge_filtered_messages(
         self,
@@ -1852,30 +1888,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                                 masked_text = str(text_content)
                                 masked_texts.append(masked_text)
 
-            # If no output/outputs were provided, use the original texts
-            # This happens when the guardrail allows content without modification
-            if not masked_texts:
-                masked_texts = texts
-            elif scanned_slice is not None:
-                # Only a slice of `texts` was scanned — write masked content
-                # back to those positions, keeping the list aligned with the
-                # caller's message↔text mappings.
-                offset, length = scanned_slice
-                merged_texts = list(texts)
-                for masked_index, masked_text in enumerate(masked_texts[:length]):
-                    merged_texts[offset + masked_index] = masked_text
-                masked_texts = merged_texts
-            elif scanned_role_subset and scanned_slice is None:
-                # Scanned a role-selected subset but could not map it back to
-                # flat-text positions (scanned_slice is None) — keep the
-                # original texts rather than misapply masked content to the
-                # wrong message. Guarding on scanned_slice rather than a length
-                # comparison also covers the case where the masked subset
-                # happens to match len(texts) (e.g. both lists have length 1).
-                verbose_proxy_logger.warning(
-                    "Bedrock Guardrail: could not align masked texts with request texts, skipping masking write-back"
-                )
-                masked_texts = texts
+            # Reconcile masked output with the flat `texts` list (write back to
+            # the scanned slice only, or skip if it can't be aligned).
+            masked_texts = self._merge_masked_texts(
+                masked_texts=masked_texts,
+                texts=texts,
+                scanned_slice=scanned_slice,
+                scanned_role_subset=scanned_role_subset,
+            )
 
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Successfully applied guardrail"
