@@ -2,7 +2,7 @@
 Mistral OCR transformation implementation.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import httpx
 
@@ -14,6 +14,8 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
 )
 from litellm.secret_managers.main import get_secret_str
+
+MISTRAL_OCR_API_KEY_ENV_VAR = "MISTRAL_API_KEY"
 
 
 class MistralOCRConfig(BaseOCRConfig):
@@ -42,6 +44,7 @@ class MistralOCRConfig(BaseOCRConfig):
         - extract_footer: Whether to extract document footer
         - table_format: Table output format ("markdown" or "html")
         - confidence_scores_granularity: Confidence score level ("word" or "page")
+        - include_blocks: Whether to return paragraph-level bounding boxes and typed content blocks (OCR 4)
         - id: Request identifier
         """
         return [
@@ -56,8 +59,12 @@ class MistralOCRConfig(BaseOCRConfig):
             "extract_footer",
             "table_format",
             "confidence_scores_granularity",
+            "include_blocks",
             "id",
         ]
+
+    def get_api_key_env_var(self) -> str | None:
+        return MISTRAL_OCR_API_KEY_ENV_VAR
 
     def map_ocr_params(
         self,
@@ -85,9 +92,9 @@ class MistralOCRConfig(BaseOCRConfig):
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -95,7 +102,7 @@ class MistralOCRConfig(BaseOCRConfig):
         """
         # Get API key from environment if not provided
         if api_key is None:
-            api_key = get_secret_str("MISTRAL_API_KEY")
+            api_key = get_secret_str(MISTRAL_OCR_API_KEY_ENV_VAR)
 
         if api_key is None:
             raise ValueError(
@@ -113,10 +120,10 @@ class MistralOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """

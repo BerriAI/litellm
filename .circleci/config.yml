@@ -190,6 +190,8 @@ jobs:
     working_directory: ~/project
     environment:
       UV_PYTHON: "3.11"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "5"
     steps:
       - checkout
       - run:
@@ -205,6 +207,24 @@ jobs:
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
+            $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
+            $rustupVersion = "1.28.2"
+            $rustupUrl = "https://static.rust-lang.org/rustup/archive/$rustupVersion/x86_64-pc-windows-msvc/rustup-init.exe"
+            Invoke-WebRequest -Uri $rustupUrl -OutFile $rustupInit
+            $rustupExpected = "88d8258dcf6ae4f7a80c7d1088e1f36fa7025a1cfd1343731b4ee6f385121fc0"
+            $rustupActual = (Get-FileHash -Path $rustupInit -Algorithm SHA256).Hash.ToLower()
+            if ($rustupActual -ne $rustupExpected) {
+              throw "rustup installer hash mismatch: expected $rustupExpected got $rustupActual"
+            }
+            & $rustupInit -y --profile minimal --default-toolchain stable
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            Remove-Item $rustupInit
+            $cargoBin = Join-Path $HOME ".cargo\bin"
+            $env:Path = "$cargoBin;$env:Path"
+            rustc --version
+            cargo --version
             $installer = Join-Path $env:TEMP "uv-install.ps1"
             Invoke-WebRequest -Uri https://astral.sh/uv/0.10.9/install.ps1 -OutFile $installer
             $expected = "d43ffff8d28e7d1e7d1831a212465f12b24a43c7f87f386e95e2a5915aee5d7d"
@@ -222,7 +242,20 @@ jobs:
             if (-not (Select-String -Path $PROFILE -SimpleMatch $uvBin -Quiet)) {
               Add-Content -Path $PROFILE -Value "`$env:Path = `"$uvBin;`$env:Path`""
             }
-            uv sync --frozen --group dev --python 3.11
+            if (-not (Select-String -Path $PROFILE -SimpleMatch $cargoBin -Quiet)) {
+              Add-Content -Path $PROFILE -Value "`$env:Path = `"$cargoBin;`$env:Path`""
+            }
+            for ($attempt = 1; $attempt -le 5; $attempt++) {
+              Write-Host "uv sync attempt $attempt/5"
+              uv sync --frozen --group dev --python 3.11
+              if ($LASTEXITCODE -eq 0) {
+                break
+              }
+              if ($attempt -eq 5) {
+                exit $LASTEXITCODE
+              }
+              Start-Sleep -Seconds 15
+            }
       - run:
           name: Run Windows-specific test
           command: |
@@ -232,6 +265,9 @@ jobs:
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
+            $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
+            cargo --version
+            Get-ChildItem -Path "litellm\rust_bridge" -Filter "_native*" -File -ErrorAction SilentlyContinue | Remove-Item -Force
             uv build --wheel --out-dir dist
             uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
 
@@ -1020,7 +1056,9 @@ jobs:
           name: Run tests
           command: |
             mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/ocr_tests/**/test_*.py")
+            TEST_FILES=$(printf "%s\n%s\n" \
+              "$(circleci tests glob "tests/ocr_tests/**/test_*.py")" \
+              "tests/test_litellm/ocr/test_rust_bridge.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \

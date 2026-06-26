@@ -521,9 +521,9 @@ class MCPRequestHandler:
                         if server_alias not in server_auth_headers:
                             server_auth_headers[server_alias] = {}
 
-                        server_auth_headers[server_alias][
-                            auth_header_name
-                        ] = header_value
+                        server_auth_headers[server_alias][auth_header_name] = (
+                            header_value
+                        )
                         verbose_logger.debug(
                             f"Found server auth header: {server_alias} -> {auth_header_name}: {header_value[:10]}..."
                         )
@@ -624,7 +624,9 @@ class MCPRequestHandler:
 
         Permission hierarchy (all rules are intersections):
         1. Get allowed servers from key permissions
-        2. Get allowed servers from team permissions (key inherits from team, or intersection)
+        2. Get allowed servers from team permissions (key inherits from team, or
+           intersection; or inherits nothing when require_key_mcp_access_defined
+           is enabled, making the team a ceiling rather than a default)
         3. Get allowed servers from end_user permissions (intersected if set)
         4. Get allowed servers from agent permissions (intersected if set)
         5. Get allowed servers from org permissions — org acts as a ceiling: if the org
@@ -677,7 +679,16 @@ class MCPRequestHandler:
             if not team_set:
                 base = key_set  # no team restriction
             elif not key_set:
-                base = team_set  # key has no own perms → inherits team
+                # A key that grants no MCP servers of its own inherits the
+                # team's by default. With require_key_mcp_access_defined the
+                # team is a ceiling rather than a default, so the key must
+                # grant servers explicitly (or via an access group) to reach
+                # any — it inherits none.
+                base = (
+                    set()
+                    if general_settings.get("require_key_mcp_access_defined", False)
+                    else team_set
+                )
             else:
                 base = key_set & team_set  # both restrict → intersect
 
@@ -1383,9 +1394,9 @@ class MCPRequestHandler:
         cache_key = f"agent_object_permission_id:{agent_id}"
 
         try:
-            object_permission_id: Optional[str] = (
-                await user_api_key_cache.async_get_cache(key=cache_key)
-            )
+            object_permission_id: Optional[
+                str
+            ] = await user_api_key_cache.async_get_cache(key=cache_key)
 
             if object_permission_id == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
                 return None

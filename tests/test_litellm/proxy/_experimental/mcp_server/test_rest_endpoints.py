@@ -1800,3 +1800,71 @@ class TestConnectionErrorMessage:
         message = rest_endpoints._connection_error_message(RuntimeError("weird"))
         assert "weird" not in message
         assert "proxy logs" in message.lower()
+
+
+class TestToolResponseMcpInfoEnrichment:
+    """The REST tools/list response must expose the user-facing alias and the
+    server_id alongside the internal server_name so clients (agent builder UIs)
+    can map the internal config key to a friendly name without needing the
+    mcp_routes-gated server listing.
+    """
+
+    def test_enriches_mcp_info_with_alias_and_server_id(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        server = MCPServer(
+            server_id="a1b2c3d4",
+            name="mcpAtlassian",
+            alias="atlassian",
+            server_name="mcpAtlassian",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "mcpAtlassian"},
+        )
+        tools = [
+            MCPTool(
+                name="get_issue",
+                description="Fetch a Jira issue",
+                inputSchema={"type": "object"},
+            )
+        ]
+
+        result = rest_endpoints._create_tool_response_objects(tools, server)
+
+        assert result[0].mcp_info == {
+            "server_name": "mcpAtlassian",
+            "server_id": "a1b2c3d4",
+            "alias": "atlassian",
+        }
+
+    def test_alias_none_is_explicit_in_mcp_info(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        server = MCPServer(
+            server_id="server-uuid",
+            name="no_alias_server",
+            alias=None,
+            server_name="no_alias_server",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "no_alias_server"},
+        )
+        tools = [
+            MCPTool(
+                name="ping",
+                description="Ping",
+                inputSchema={"type": "object"},
+            )
+        ]
+
+        result = rest_endpoints._create_tool_response_objects(tools, server)
+
+        assert result[0].mcp_info == {
+            "server_name": "no_alias_server",
+            "server_id": "server-uuid",
+            "alias": None,
+        }

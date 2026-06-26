@@ -12,7 +12,7 @@ export interface ApiBaseInputs {
   serverRootPath?: string | null;
 }
 
-const normalizeRootPath = (serverRootPath: string | null | undefined): string => {
+export const normalizeRootPath = (serverRootPath: string | null | undefined): string => {
   const trimmed = (serverRootPath ?? "").trim();
   if (trimmed === "" || trimmed === "/") return "";
   const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;

@@ -304,7 +304,7 @@ def run_eval() -> Tuple[int, int, List[dict]]:
 
     # Summary
     print("=" * 70)
-    print(f"RESULTS: {passed}/{total} passed ({100*passed/total:.1f}%)")
+    print(f"RESULTS: {passed}/{total} passed ({100 * passed / total:.1f}%)")
     print("=" * 70)
 
     if failures:

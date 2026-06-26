@@ -321,3 +321,21 @@ class TwoStepFileUploadConfig(TypedDict, total=False):
     upload_request: Required[TwoStepFileUploadRequest]
     upload_url_location: Required[Literal["headers", "body"]]
     upload_url_key: str
+
+
+class ResumableChunkedUploadConfig(TypedDict, total=False):
+    """Drives a memory-bounded resumable upload (GCS JSON API).
+
+    The handler POSTs to the upload URL to open a session, reads the session URI
+    from ``session_url_header``, then PUTs ``body_stream`` to that URI in
+    ``chunk_size``-byte chunks (a 256 KiB multiple) using Content-Range, so the
+    payload is never buffered in full and the transfer is resumable.
+
+    ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``Any`` here to
+    avoid importing the llms layer into types.
+    """
+
+    body_stream: Required[Any]
+    chunk_size: int
+    session_url_header: str
+    initiate_headers: Dict[str, str]

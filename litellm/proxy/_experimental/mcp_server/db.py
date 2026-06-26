@@ -695,7 +695,8 @@ async def update_mcp_server(
     data_dict["updated_by"] = touched_by
 
     updated_mcp_server = await MCPServerRepository(prisma_client).table.update(
-        where={"server_id": data.server_id}, data=data_dict  # type: ignore
+        where={"server_id": data.server_id},
+        data=data_dict,  # type: ignore
     )
 
     _decrypt_env_vars_on_returned_row(updated_mcp_server)

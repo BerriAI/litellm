@@ -182,7 +182,7 @@ class Authenticator:
                     )
             except httpx.HTTPStatusError as e:
                 verbose_logger.error(
-                    f"HTTP error refreshing API key (attempt {attempt+1}/{max_retries}): {str(e)}"
+                    f"HTTP error refreshing API key (attempt {attempt + 1}/{max_retries}): {str(e)}"
                 )
             except Exception as e:
                 verbose_logger.error(f"Unexpected error refreshing API key: {str(e)}")
@@ -318,7 +318,7 @@ class Authenticator:
                     and resp_json.get("error") == "authorization_pending"
                 ):
                     verbose_logger.debug(
-                        f"Authorization pending (attempt {attempt+1}/{max_attempts})"
+                        f"Authorization pending (attempt {attempt + 1}/{max_attempts})"
                     )
                 else:
                     verbose_logger.warning(f"Unexpected response: {resp_json}")

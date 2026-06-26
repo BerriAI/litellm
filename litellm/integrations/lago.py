@@ -131,9 +131,9 @@ class LagoLogger(CustomLogger):
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         _url = os.getenv("LAGO_API_BASE")
-        assert _url is not None and isinstance(
-            _url, str
-        ), "LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={}".format(_url)
+        assert _url is not None and isinstance(_url, str), (
+            "LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={}".format(_url)
+        )
         if _url.endswith("/"):
             _url += "api/v1/events"
         else:
@@ -165,10 +165,10 @@ class LagoLogger(CustomLogger):
         try:
             verbose_logger.debug("ENTERS LAGO CALLBACK")
             _url = os.getenv("LAGO_API_BASE")
-            assert _url is not None and isinstance(
-                _url, str
-            ), "LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={}".format(
-                _url
+            assert _url is not None and isinstance(_url, str), (
+                "LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={}".format(
+                    _url
+                )
             )
             if _url.endswith("/"):
                 _url += "api/v1/events"

@@ -21,6 +21,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Iterable,
     List,
     Literal,
     NoReturn,
@@ -32,13 +33,15 @@ from typing import (
 from fastapi import HTTPException
 from pydantic import BaseModel
 
+import json
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
+    _count_entry_tokens,
+    _estimate_batch_entry_tokens,
     _extract_file_access_credentials,
-    _get_batch_job_input_file_usage,
-    _get_file_content_as_dictionary,
-    _get_models_from_batch_input_file_content,
+    _iter_batch_input_lines,
 )
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
@@ -537,6 +540,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             # Managed files require bypassing the HTTP endpoint (which runs access-check hooks)
             # and calling the managed files hook directly with the user's credentials.
             is_managed_file = _is_base64_encoded_unified_file_id(file_id)
+            # For managed files the unified file id encodes the proxy model
+            # alias(es) the file was uploaded for; auth validates against those.
             target_model_names = (
                 get_models_from_unified_file_id(is_managed_file)
                 if is_managed_file
@@ -568,7 +573,38 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     f"Expected bytes content from file retrieval for {file_id}, "
                     f"got {type(file_content_bytes)}"
                 )
-            file_content_as_dict = _get_file_content_as_dictionary(file_content_bytes)
+
+            # Single streaming pass over the JSONL lines, accounting each row
+            # independently. One bad row can never abort the pass: a malformed
+            # line is skipped (its request can't run upstream anyway) and a row
+            # the token counter can't measure falls back to a conservative
+            # size-based estimate. This guarantees two things a restricted caller
+            # must not be able to break by crafting a row that raises:
+            #   1. The allowlist check below always sees every parseable
+            #      ``body.model`` (the loop never stops early), so models can't be
+            #      smuggled in after a bad row.
+            #   2. The token total is never silently zeroed, so the TPM limit
+            #      can't be evaded by sending uncountable rows.
+            # Counting stays best-effort, so a legitimate (e.g. multimodal) row
+            # the counter can't measure is estimated, not hard-rejected.
+            models: set = set()
+            total_tokens = 0
+            request_count = 0
+            for raw_line in _iter_batch_input_lines(file_content_bytes):
+                request_count += 1
+                try:
+                    entry = json.loads(raw_line)
+                except Exception:
+                    total_tokens += _estimate_batch_entry_tokens(raw_line)
+                    continue
+                if isinstance(entry, dict):
+                    model = (entry.get("body") or {}).get("model")
+                    if model:
+                        models.add(model)
+                try:
+                    total_tokens += _count_entry_tokens(entry)
+                except Exception:
+                    total_tokens += _estimate_batch_entry_tokens(raw_line)
 
             # Validate every model named in the batch JSONL against the
             # caller's per-key model allowlist. Without this, a caller
@@ -578,17 +614,12 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if user_api_key_dict is not None:
                 await self._enforce_batch_file_model_access(
                     user_api_key_dict=user_api_key_dict,
-                    file_content_as_dict=file_content_as_dict,
+                    models=models,
                     target_model_names=target_model_names or None,
                 )
 
-            input_file_usage = _get_batch_job_input_file_usage(
-                file_content_dictionary=file_content_as_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
-            request_count = len(file_content_as_dict)
             return BatchFileUsage(
-                total_tokens=input_file_usage.total_tokens,
+                total_tokens=total_tokens,
                 request_count=request_count,
             )
 
@@ -614,14 +645,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def _enforce_batch_file_model_access(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        file_content_as_dict: List[dict],
+        models: Optional[Iterable[str]] = None,
         target_model_names: Optional[List[str]] = None,
     ) -> None:
         """Reject the batch if the caller is not authorized for the upload target.
 
         For managed files, ``target_model_names`` (from the unified file id) is
-        the proxy alias the file was uploaded for and is used directly for auth.
-        For legacy/non-managed files, falls back to ``body.model`` values in the JSONL.
+        the proxy alias the file was uploaded for and is checked directly.
+        Otherwise the ``body.model`` values collected from the JSONL (``models``)
+        are checked.
 
         Reuses standard auth helpers so the same model access rules the proxy
         enforces on `/chat/completions` apply here.
@@ -640,10 +672,9 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         if target_model_names:
             models = target_model_names
-        else:
-            models = _get_models_from_batch_input_file_content(file_content_as_dict)
-            if not models:
-                return
+
+        if not models:
+            return
 
         team_object = None
         if (

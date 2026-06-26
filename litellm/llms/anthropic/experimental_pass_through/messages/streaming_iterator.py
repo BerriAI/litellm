@@ -87,7 +87,7 @@ class BaseAnthropicMessagesStreamingIterator:
         """
         if isinstance(chunk, dict):
             event_type: str = str(chunk.get("type", "message"))
-            payload = f"event: {event_type}\n" f"data: {json.dumps(chunk)}\n\n"
+            payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
             return payload.encode()
         else:
             # For non-dict chunks, return as is

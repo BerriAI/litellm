@@ -550,8 +550,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             "response": response_data,
         }
         verbose_logger.debug(
-            f"Sending request to tool blocking service: "
-            f"{self.tool_blocking_endpoint}"
+            f"Sending request to tool blocking service: {self.tool_blocking_endpoint}"
         )
         http_response = await self.tool_blocking_client.post(
             self.tool_blocking_endpoint,

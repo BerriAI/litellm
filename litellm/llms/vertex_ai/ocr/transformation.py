@@ -2,7 +2,7 @@
 Vertex AI Mistral OCR transformation implementation.
 """
 
-from typing import Dict, Optional
+from typing import Dict
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
@@ -13,6 +13,8 @@ from litellm.llms.base_llm.ocr.transformation import DocumentType, OCRRequestDat
 from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
+VERTEX_AI_OCR_API_KEY_ENV_VAR = "VERTEX_AI_API_KEY"
 
 
 class VertexAIOCRConfig(MistralOCRConfig):
@@ -32,13 +34,16 @@ class VertexAIOCRConfig(MistralOCRConfig):
         super().__init__()
         self.vertex_base = VertexBase()
 
+    def get_api_key_env_var(self) -> str | None:
+        return VERTEX_AI_OCR_API_KEY_ENV_VAR
+
     def validate_environment(
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -46,6 +51,13 @@ class VertexAIOCRConfig(MistralOCRConfig):
 
         Vertex AI uses Bearer token authentication with access token from credentials.
         """
+        if api_key is not None:
+            return {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                **headers,
+            }
+
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
@@ -73,10 +85,10 @@ class VertexAIOCRConfig(MistralOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """

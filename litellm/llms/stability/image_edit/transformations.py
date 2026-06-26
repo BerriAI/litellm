@@ -80,7 +80,9 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             if k in param_mapping:
                 # Map param if mapping exists and value is valid
                 if k == "size" and v in OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO:
-                    mapped_params[param_mapping[k]] = OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]  # type: ignore
+                    mapped_params[param_mapping[k]] = (
+                        OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO[v]
+                    )  # type: ignore
                 # Don't copy "size" itself to final dict
             elif k == "n":
                 # Store for logic but do not add to outgoing params

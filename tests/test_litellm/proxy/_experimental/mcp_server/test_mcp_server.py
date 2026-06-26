@@ -3313,6 +3313,7 @@ async def test_list_tools_filters_by_key_team_permissions():
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
+    server.short_prefix = None
     server.allowed_tools = None
     server.disallowed_tools = None
     server.server_name = "server1"
@@ -3423,6 +3424,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
+    server.short_prefix = None
     server.allowed_tools = None
     server.disallowed_tools = None
     server.server_name = "server1"
@@ -3519,6 +3521,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
     server.server_id = "server1"
     server.name = "Test Server"
     server.alias = "test"
+    server.short_prefix = None
     server.allowed_tools = None
     server.disallowed_tools = None
     server.server_name = "server1"
@@ -3620,7 +3623,9 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     server = MagicMock()
     server.server_id = "gitmcp_server"
     server.name = "GITMCP"
-    server.alias = "gitmcp"
+    server.alias = "GITMCP"
+    server.short_prefix = None
+    server.server_name = "GITMCP"
     server.allowed_tools = None
     server.disallowed_tools = None
 

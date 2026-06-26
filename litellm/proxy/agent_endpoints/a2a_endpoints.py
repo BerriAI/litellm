@@ -305,16 +305,19 @@ async def _handle_stream_message(
     if not A2A_SDK_AVAILABLE:
 
         async def _error_stream():
-            yield json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {
-                        "code": -32603,
-                        "message": "Server error: 'a2a' package not installed",
-                    },
-                }
-            ) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32603,
+                            "message": "Server error: 'a2a' package not installed",
+                        },
+                    }
+                )
+                + "\n"
+            )
 
         return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
 
@@ -392,9 +395,10 @@ async def _handle_stream_message(
             else:
                 async for chunk in a2a_stream:
                     if hasattr(chunk, "model_dump"):
-                        yield json.dumps(
-                            chunk.model_dump(mode="json", exclude_none=True)
-                        ) + "\n"
+                        yield (
+                            json.dumps(chunk.model_dump(mode="json", exclude_none=True))
+                            + "\n"
+                        )
                     else:
                         yield json.dumps(chunk) + "\n"
         except Exception as e:
@@ -414,13 +418,19 @@ async def _handle_stream_message(
                     e = transformed_exception
             if isinstance(e, HTTPException):
                 raise
-            yield json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
-                }
-            ) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32603,
+                            "message": f"Streaming error: {str(e)}",
+                        },
+                    }
+                )
+                + "\n"
+            )
 
     return StreamingResponse(stream_response(), media_type="application/x-ndjson")
 
@@ -826,9 +836,9 @@ async def invoke_agent_a2a(
             )
             if method == "agent/getAuthenticatedExtendedCard":
                 if isinstance(result.get("result"), dict) and "url" in result["result"]:
-                    result["result"][
-                        "url"
-                    ] = f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+                    result["result"]["url"] = (
+                        f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+                    )
             from litellm.types.agents import LiteLLMSendMessageResponse
 
             response = LiteLLMSendMessageResponse.from_dict(

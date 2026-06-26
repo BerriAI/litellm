@@ -529,7 +529,8 @@ class OCIChatConfig(BaseConfig):
                 )
             else:
                 selected_params["tools"] = adapt_tool_definition_to_oci_standard(  # type: ignore[assignment]
-                    selected_params["tools"], vendor  # type: ignore[arg-type]
+                    selected_params["tools"],
+                    vendor,  # type: ignore[arg-type]
                 )
 
         # Normalise tool_choice to OCI's flat uppercase dict form

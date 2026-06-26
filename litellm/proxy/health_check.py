@@ -194,7 +194,8 @@ async def _run_model_health_check(model: dict):
     litellm_params = model["litellm_params"]
     model_info = model.get("model_info", {})
     mode = _resolve_health_check_mode(
-        model_info, litellm_params  # any-ok: untyped router config dict
+        model_info,
+        litellm_params,  # any-ok: untyped router config dict
     )
     litellm_params = _update_litellm_params_for_health_check(model_info, litellm_params)
     timeout = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
@@ -454,11 +455,13 @@ def _update_litellm_params_for_health_check(
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID, and pins `custom_llm_provider` to `bedrock` (only when the deployment hasn't already set one, so an explicit `bedrock_converse` survives) so the bare model id still resolves to the provider (e.g. cross-region ids like `us.cohere.embed-v4:0`)
     """
     mode = _resolve_health_check_mode(
-        model_info, litellm_params  # any-ok: untyped router config dict
+        model_info,
+        litellm_params,  # any-ok: untyped router config dict
     )
     litellm_params["messages"] = _get_random_llm_message()
     if _should_inject_health_check_max_tokens(
-        model_info, mode  # any-ok: untyped router config dict
+        model_info,
+        mode,  # any-ok: untyped router config dict
     ):
         _resolved_max_tokens = _resolve_health_check_max_tokens(
             model_info, litellm_params

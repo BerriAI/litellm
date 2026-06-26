@@ -12,6 +12,17 @@ import { MCPToolset, MCPToolsetTool } from "./types";
 
 const { Text: AntdText } = Typography;
 
+// Display-only. Toolsets persist {server_id, bare tool_name}; the gateway serves
+// each tool prefixed as "{server-prefix}-{tool}". Render that qualified form so
+// the same tool name on different servers stays distinguishable. This mirrors the
+// backend default MCP_TOOL_PREFIX_SEPARATOR; overriding that env var only changes
+// this cosmetic label, never what is stored or how tools are matched.
+const MCP_TOOL_PREFIX_SEPARATOR = "-";
+
+function displayToolName(serverPrefix: string | undefined, toolName: string): string {
+  return serverPrefix ? `${serverPrefix}${MCP_TOOL_PREFIX_SEPARATOR}${toolName}` : toolName;
+}
+
 interface MCPToolsetsTabProps {
   accessToken: string | null;
   userRole: string | null;
@@ -138,6 +149,10 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
   const [saving, setSaving] = useState(false);
   const [serverSearch, setServerSearch] = useState("");
   const { data: mcpServers = [] } = useMCPServers();
+  const serverPrefixById = React.useMemo(
+    () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
+    [mcpServers],
+  );
 
   React.useEffect(() => {
     if (open) {
@@ -254,7 +269,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
                 >
                   <div className="min-w-0 text-left">
                     <span className="text-xs font-medium text-purple-800 group-hover:text-red-600 truncate block">
-                      {tool.tool_name}
+                      {displayToolName(serverPrefixById.get(tool.server_id), tool.tool_name)}
                     </span>
                     <span className="text-[10px] text-purple-400 truncate block">{tool.server_id.slice(0, 8)}…</span>
                   </div>
@@ -282,8 +297,9 @@ function toolsetColumns(
   isAdmin: boolean,
   onEdit: (t: MCPToolset) => void,
   onDelete: (id: string) => void,
-  proxyBaseUrl: string,
+  serverPrefixById: Map<string, string>,
 ): ColumnDef<MCPToolset>[] {
+  const proxyBaseUrl = getProxyBaseUrl();
   return [
     {
       header: "Toolset ID",
@@ -334,7 +350,7 @@ function toolsetColumns(
                 key={i}
                 className="inline-flex items-center px-1.5 py-0.5 rounded bg-purple-50 border border-purple-200 text-purple-700 text-xs"
               >
-                {t.tool_name}
+                {displayToolName(serverPrefixById.get(t.server_id), t.tool_name)}
               </span>
             ))}
             {tools.length > 4 && <span className="text-xs text-gray-400 self-center">+{tools.length - 4} more</span>}
@@ -431,6 +447,7 @@ function ToolsetUsageGuide() {
 export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
   const queryClient = useQueryClient();
   const { data: toolsets = [], isLoading } = useMCPToolsets();
+  const { data: mcpServers = [] } = useMCPServers();
   const [createOpen, setCreateOpen] = useState(false);
   const [editToolset, setEditToolset] = useState<MCPToolset | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -466,8 +483,11 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
     }
   };
 
-  const proxyBaseUrl = getProxyBaseUrl();
-  const columns = toolsetColumns(isAdmin, setEditToolset, setDeleteId, proxyBaseUrl);
+  const serverPrefixById = React.useMemo(
+    () => new Map(mcpServers.map((s) => [s.server_id, s.alias || s.server_name || s.server_id])),
+    [mcpServers],
+  );
+  const columns = toolsetColumns(isAdmin, setEditToolset, setDeleteId, serverPrefixById);
 
   return (
     <div className="mt-4">

@@ -4,9 +4,22 @@ A minimal Axum service that fronts OpenAI's realtime API. Clients open a
 WebSocket to `GET /v1/realtime`; the gateway authenticates, selects a deployment,
 dials OpenAI upstream, and splices the two sockets frame-by-frame.
 
+## Crates
+
+`litellm-rust` is exactly three crates (a crate is a **layer**, not a route):
+
+| Crate | Role | Pure / I/O |
+|-------|------|------------|
+| litellm-core | Translation layer — types, route contracts (traits), provider transforms (modules under `providers/`), and the router. Builds requests/responses; no network. | Pure |
+| litellm-ai-gateway | Routes + host — the only crate that touches the network. HTTP/WebSocket I/O (modules under `io/`) plus the Axum server binary (behind the `server` feature). | I/O |
+| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — a thin adapter over litellm-ai-gateway's I/O. | Binding |
+
+Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
 - **Health:** `GET /health/readiness`, `GET /health/liveness`, `GET /health/gil`
+- **Request logs:** POSTed to a LiteLLM proxy at `/v1/rust_control_plane/logs` (see [Request logging](#request-logging))
 
 > **Realtime serving is pure Rust.** Python is used at **load time only** — to
 > read the config once at boot. The realtime hot path never touches Python.
@@ -53,6 +66,7 @@ overridden at deploy time (e.g. a Render secret file mounted at the same path).
 | `OPENAI_API_KEY` | yes | — | Upstream OpenAI key. Referenced by config.yaml as `os.environ/OPENAI_API_KEY` for the gateway→OpenAI dial. |
 | `HOST` | no | `127.0.0.1` | **Set to `0.0.0.0` in any container/deploy** or external traffic is refused. |
 | `PORT` | no | `4001` | Listen port. Render and most PaaS inject this automatically. |
+| `LITELLM_PROXY_BASE_URL` | no | `http://localhost:4000` | LiteLLM proxy that request logs are POSTed to. See [Request logging](#request-logging). |
 
 > Secrets (`LITELLM_MASTER_KEY`, `OPENAI_API_KEY`) are never baked into the image
 > or `render.yaml` — inject them at deploy time only.
@@ -70,6 +84,18 @@ stand-in built from the environment:
 This mode links no libpython and needs no config file, but it only supports one
 hard-coded OpenAI deployment. **config.yaml is the recommended path** — use the
 stand-in only for the leanest possible build.
+
+## Request logging
+
+The gateway runs no spend logic. When a session ends it builds one
+`StandardLoggingPayload` and POSTs it to `{LITELLM_PROXY_BASE_URL}/v1/rust_control_plane/logs`
+(admin-only, bearer = `LITELLM_MASTER_KEY`), and the proxy replays it through its
+normal callbacks (spend logs, Langfuse, etc.). The POST is non-blocking: a bounded
+channel drained by a background worker, dropping with a counter if the proxy is
+down. It sends one payload per session. Both env vars are in the table above.
+
+Worker tuning, rarely needed: `LITELLM_LOG_CHANNEL_CAPACITY` (4096),
+`LITELLM_LOG_BATCH_SIZE` (256), `LITELLM_LOG_FLUSH_INTERVAL_MS` (500).
 
 ## Build & run with Docker
 

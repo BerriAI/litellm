@@ -88,12 +88,12 @@ class VectorStorePreCallHook(CustomLogger):
                 pass
 
             # Use database fallback to ensure synchronization across instances
-            vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = (
-                await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
-                    non_default_params=non_default_params,
-                    tools=tools,
-                    prisma_client=prisma_client,
-                )
+            vector_stores_to_run: List[
+                LiteLLM_ManagedVectorStore
+            ] = await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
+                non_default_params=non_default_params,
+                tools=tools,
+                prisma_client=prisma_client,
             )
 
             if not vector_stores_to_run:

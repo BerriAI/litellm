@@ -179,9 +179,7 @@ class VertexBase:
                     scopes=["https://www.googleapis.com/auth/cloud-platform"],
                 )
                 if project_id is None:
-                    project_id = (
-                        creds.quota_project_id
-                    )  # authorized user credentials don't have a project_id, only quota_project_id
+                    project_id = creds.quota_project_id  # authorized user credentials don't have a project_id, only quota_project_id
             else:
                 creds = self._credentials_from_service_account(
                     json_obj,
@@ -838,12 +836,13 @@ class VertexBase:
         self._credentials_project_mapping.pop(credential_cache_key, None)
 
         try:
-            _credentials, credential_project_id = (
-                await self._load_and_cache_credentials(
-                    credentials=credentials,
-                    project_id=project_id,
-                    credential_cache_key=credential_cache_key,
-                )
+            (
+                _credentials,
+                credential_project_id,
+            ) = await self._load_and_cache_credentials(
+                credentials=credentials,
+                project_id=project_id,
+                credential_cache_key=credential_cache_key,
             )
             if project_id is None and isinstance(credential_project_id, str):
                 project_id = credential_project_id
@@ -1068,10 +1067,11 @@ class VertexBase:
 
                 # Load credentials if not cached
                 if _credentials is None:
-                    _credentials, credential_project_id = (
-                        await self._load_and_cache_credentials(
-                            credentials, project_id, credential_cache_key
-                        )
+                    (
+                        _credentials,
+                        credential_project_id,
+                    ) = await self._load_and_cache_credentials(
+                        credentials, project_id, credential_cache_key
                     )
 
                 # Resolve project_id from credentials if not provided

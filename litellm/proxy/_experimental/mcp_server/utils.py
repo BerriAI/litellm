@@ -332,6 +332,30 @@ def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
     return prefixed_name, ""
 
 
+def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
+    """Strip ``server``'s registered prefix from a prefixed tool/resource name.
+
+    Unlike :func:`split_server_prefix_from_name`, which guesses the boundary at
+    the first separator, this removes exactly ``{known_prefix}{separator}`` for
+    one of the server's actual registered prefixes. It therefore stays correct
+    when a prefix itself contains the separator (e.g. the UUID ``server_id``
+    used as the fallback prefix when a server has no alias, or a legacy
+    hyphenated alias), where the first-separator split would cut inside the
+    prefix and never match the stored bare tool name.
+
+    Returns ``name`` unchanged when ``server`` is known but none of its prefixes
+    match (the name is already unprefixed). Falls back to the legacy split only
+    when ``server`` is ``None``.
+    """
+    if server is None:
+        return split_server_prefix_from_name(name)[0]
+    for prefix in iter_known_server_prefixes(server):
+        candidate = normalize_server_name(prefix) + MCP_TOOL_PREFIX_SEPARATOR
+        if name.startswith(candidate):
+            return name[len(candidate) :]
+    return name
+
+
 def is_tool_name_prefixed(
     tool_name: str,
     known_server_prefixes: Optional[set] = None,

@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -50,11 +50,16 @@ jobs:
         run: |
           uv sync --frozen
 
-      - name: Check Black formatting
+      - name: Check ruff format
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          cd litellm
-          uv run --no-sync black --check --exclude '/enterprise/' .
-          cd ..
+          git diff --name-only "$BASE_SHA"...HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
+            echo "No changed litellm Python files to check with ruff format."
+            exit 0
+          fi
+          xargs uv run --no-sync ruff format --check --line-length 88 --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
 
       - name: Debug - Check file state
         run: |

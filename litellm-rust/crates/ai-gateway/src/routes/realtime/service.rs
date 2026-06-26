@@ -1,6 +1,6 @@
 //! Business logic: select a deployment with the (pure) core router, then call the
 //! provider splice. The seam between `core::router` (selection only) and
-//! `providers` (the actual WebSocket I/O).
+//! `io` (the actual WebSocket I/O).
 //!
 //! On connect we try a pre-warmed upstream from the pool (handshake already paid,
 //! `session.created` buffered) and relay it instantly. On a pool miss or dead warm
@@ -9,12 +9,12 @@
 
 use std::time::Duration;
 
+use crate::io::realtime_pool::{upstream_key, RealtimePool};
 use futures_util::{Sink, Stream};
 use litellm_core::error::CoreError;
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router;
 use litellm_core::CoreResult;
-use litellm_providers::realtime_pool::{upstream_key, RealtimePool};
 
 /// Select a deployment for `model` and splice the client stream to the provider.
 ///
@@ -26,6 +26,7 @@ pub async fn run<In, Out>(
     pool: &RealtimePool,
     model: &str,
     idle_timeout: Option<Duration>,
+    observe: impl FnMut(&RealtimeEvent) + Send,
     client_in: In,
     client_out: Out,
 ) -> CoreResult<()>
@@ -52,10 +53,11 @@ where
         params.api_base.as_deref(),
     ) {
         if let Some(handoff) = pool.take(&key) {
-            return litellm_providers::realtime::realtime_warm(
+            return crate::io::realtime::realtime_warm(
                 provider_model,
                 handoff,
                 idle_timeout,
+                observe,
                 client_in,
                 client_out,
             )
@@ -64,11 +66,12 @@ where
     }
 
     // Cold path: fresh dial (the original behavior).
-    litellm_providers::realtime::realtime(
+    crate::io::realtime::realtime(
         provider_model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
         idle_timeout,
+        observe,
         client_in,
         client_out,
     )

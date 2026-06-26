@@ -1,17 +1,10 @@
 import sys
 import os
-import traceback
-from dotenv import load_dotenv
-from fastapi import Request
-from datetime import datetime
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-from litellm import Router
 import pytest
-import litellm
-from unittest.mock import patch, MagicMock, AsyncMock
 
 import json
 from io import BytesIO
@@ -76,6 +69,29 @@ def test_tuple_input(sample_jsonl_bytes):
     assert result.content_type == "application/jsonl"
 
 
+def test_tuple_with_file_handle_rewrites_model(sample_jsonl_bytes):
+    """Security regression: when the tuple's content element is a file handle
+    (batch uploads stream from the spooled upload handle), the model must still
+    be rewritten. Otherwise a restricted body.model survives unmodified and
+    bypasses the batch model allowlist, which only checks the upload target."""
+    new_model = "approved-target-model"
+    handle = BytesIO(sample_jsonl_bytes)
+    test_tuple = ("test.jsonl", handle, "application/json")
+
+    result = replace_model_in_jsonl(test_tuple, new_model)
+
+    assert isinstance(result, InMemoryFile)
+    rows = [
+        json.loads(line)
+        for line in result.getvalue().decode("utf-8").splitlines()
+        if line.strip()
+    ]
+    assert rows, "rewrite must produce rows"
+    # every row now carries the rewritten target, not the original (restricted) model
+    assert all(row["body"]["model"] == new_model for row in rows)
+    assert all(row["body"]["model"] != "gpt-5.5" for row in rows)
+
+
 def test_file_like_object(sample_file_like):
     """Test with file-like object input"""
     new_model = "claude-3"
@@ -129,9 +145,9 @@ def test_should_replace_model_in_jsonl():
     """Test that should_replace_model_in_jsonl returns the correct value"""
     from litellm.router_utils.batch_utils import should_replace_model_in_jsonl
 
-    assert should_replace_model_in_jsonl(purpose="batch") == True
-    assert should_replace_model_in_jsonl(purpose="test") == False
-    assert should_replace_model_in_jsonl(purpose="user_data") == False
+    assert should_replace_model_in_jsonl(purpose="batch") is True
+    assert should_replace_model_in_jsonl(purpose="test") is False
+    assert should_replace_model_in_jsonl(purpose="user_data") is False
 
 
 def test_parse_jsonl_with_embedded_newlines_simple():
@@ -215,6 +231,63 @@ def test_parse_jsonl_with_embedded_newlines_whitespace_only():
     result = parse_jsonl_with_embedded_newlines(content)
 
     assert len(result) == 0
+
+
+def test_replace_model_in_jsonl_malformed_middle_row_returns_original():
+    """Regression: a malformed/truncated middle row must not silently drop the
+    rows that follow it. The streaming rewrite accumulates physical lines into a
+    buffer; a row that never parses poisons the buffer so every later valid row
+    is concatenated into it and dropped. Returning that partial rewrite would
+    ship a truncated batch with no error to the caller. Instead the original
+    content is returned unchanged so the provider rejects the bad batch loudly."""
+    content = (
+        b'{"custom_id":"a","body":{"model":"x"}}\n'
+        b'{"custom_id":"b","body":{"model":\n'  # truncated, never completes
+        b'{"custom_id":"c","body":{"model":"x"}}\n'
+    )
+
+    result = replace_model_in_jsonl(content, "new-model")
+
+    assert (
+        result == content
+    ), "must return the original unchanged, not a partial rewrite"
+
+
+def test_replace_model_in_jsonl_malformed_row_seekable_handle_rewound():
+    """When the source is a seekable handle that gets consumed during the failed
+    rewrite, it must be rewound to 0 so the caller can re-read the full original."""
+    content = (
+        b'{"custom_id":"a","body":{"model":"x"}}\n'
+        b'{"custom_id":"b","body":{"model":\n'
+        b'{"custom_id":"c","body":{"model":"x"}}\n'
+    )
+    handle = BytesIO(content)
+
+    result = replace_model_in_jsonl(handle, "new-model")
+
+    assert result is handle
+    assert handle.read() == content, "handle must be rewound for the caller to re-read"
+
+
+def test_replace_model_in_jsonl_multi_row_rewrites_every_model():
+    """Happy path: a well-formed multi-row file gets every row's model rewritten
+    and no row is dropped."""
+    content = (
+        b'{"custom_id":"a","body":{"model":"old1"}}\n'
+        b'{"custom_id":"b","body":{"model":"old2"}}\n'
+        b'{"custom_id":"c","body":{"model":"old3"}}\n'
+    )
+
+    result = replace_model_in_jsonl(content, "new-model")
+
+    assert isinstance(result, InMemoryFile)
+    rows = [
+        json.loads(line)
+        for line in result.getvalue().decode("utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["custom_id"] for row in rows] == ["a", "b", "c"]
+    assert all(row["body"]["model"] == "new-model" for row in rows)
 
 
 def test_replace_model_in_jsonl_with_embedded_newlines():
