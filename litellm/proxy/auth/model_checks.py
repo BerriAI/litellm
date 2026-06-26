@@ -364,9 +364,12 @@ def expand_wildcard_deployments_for_model_info(
     """
     expanded: list[dict[str, Any]] = []
     for deployment in deployments:
-        model_name = deployment.get("model_name") or ""
-        litellm_params_dict = deployment.get("litellm_params") or {}
-        litellm_model = litellm_params_dict.get("model") or ""
+        model_name = str(deployment.get("model_name") or "")
+        raw_params = deployment.get("litellm_params")
+        litellm_params_dict: dict[str, Any] = (
+            raw_params if isinstance(raw_params, dict) else {}
+        )
+        litellm_model = str(litellm_params_dict.get("model") or "")
 
         # Determine the wildcard pattern to expand.
         # Branch order matters: only fall to litellm_model when model_name is
@@ -385,7 +388,9 @@ def expand_wildcard_deployments_for_model_info(
 
         try:
             litellm_params = (
-                LiteLLM_Params(**litellm_params_dict) if litellm_params_dict else None
+                LiteLLM_Params.model_validate(litellm_params_dict)
+                if litellm_params_dict
+                else None
             )
         except Exception:
             expanded.append(deployment)
