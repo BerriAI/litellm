@@ -9,6 +9,7 @@ import AddPromptForm from "./add_prompt_form";
 import PromptEditorView from "./prompt_editor_view";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
+import { useTranslation } from "react-i18next";
 
 interface PromptsProps {
   accessToken: string | null;
@@ -16,6 +17,7 @@ interface PromptsProps {
 }
 
 const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
+  const { t } = useTranslation();
   const [promptsList, setPromptsList] = useState<PromptSpec[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedEnvironment, setSelectedEnvironment] = useState<string | undefined>(undefined);
@@ -101,11 +103,11 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
     setIsDeleting(true);
     try {
       await deletePromptCall(accessToken, promptToDelete.id);
-      NotificationsManager.success(`Prompt "${promptToDelete.name}" deleted successfully`);
+      NotificationsManager.success(t("prompts.deleteSuccess", { name: promptToDelete.name }));
       fetchPrompts(); // Refresh the list
     } catch (error) {
       console.error("Error deleting prompt:", error);
-      NotificationsManager.fromBackend("Failed to delete prompt");
+      NotificationsManager.fromBackend(t("prompts.deleteFailed"));
     } finally {
       setIsDeleting(false);
       setPromptToDelete(null);
@@ -141,24 +143,24 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
               {canModify && (
                 <>
                   <Button onClick={handleAddPrompt} disabled={!accessToken}>
-                    + Add New Prompt
+                    {t("prompts.addNewPrompt")}
                   </Button>
                   <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
-                    Upload .prompt File
+                    {t("prompts.uploadPromptFile")}
                   </Button>
                 </>
               )}
             </div>
             <Select
-              placeholder="All Environments"
+              placeholder={t("prompts.allEnvironments")}
               allowClear
               value={selectedEnvironment}
               onChange={(value) => setSelectedEnvironment(value)}
               style={{ width: 180 }}
               options={[
-                { label: "Development", value: "development" },
-                { label: "Staging", value: "staging" },
-                { label: "Production", value: "production" },
+                { label: t("prompts.envDevelopment"), value: "development" },
+                { label: t("prompts.envStaging"), value: "staging" },
+                { label: t("prompts.envProduction"), value: "production" },
               ]}
             />
           </div>
@@ -183,16 +185,16 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
 
       {promptToDelete && (
         <Modal
-          title="Delete Prompt"
+          title={t("prompts.deleteModalTitle")}
           open={promptToDelete !== null}
           onOk={handleDeleteConfirm}
           onCancel={handleDeleteCancel}
           confirmLoading={isDeleting}
-          okText="Delete"
+          okText={t("common.delete")}
           okButtonProps={{ danger: true }}
         >
-          <p>Are you sure you want to delete prompt: {promptToDelete.name} ?</p>
-          <p>This action cannot be undone.</p>
+          <p>{t("prompts.deleteConfirm", { name: promptToDelete.name })}</p>
+          <p>{t("prompts.deleteCannotUndo")}</p>
         </Modal>
       )}
     </div>

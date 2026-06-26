@@ -1,5 +1,6 @@
 import React from "react";
 import { Input } from "antd";
+import { useTranslation } from "react-i18next";
 
 interface ReliabilityRetriesSectionProps {
   routerSettings: { [key: string]: any };
@@ -10,11 +11,13 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
   routerSettings,
   routerFieldsMetadata,
 }) => {
+  const { t } = useTranslation();
+
   return (
     <div className="space-y-6">
       <div className="max-w-3xl">
-        <h3 className="text-sm font-medium text-gray-900">Reliability & Retries</h3>
-        <p className="text-xs text-gray-500 mt-1">Configure retry logic and failure handling</p>
+        <h3 className="text-sm font-medium text-gray-900">{t("routerSettings.reliabilityRetriesSection.title")}</h3>
+        <p className="text-xs text-gray-500 mt-1">{t("routerSettings.reliabilityRetriesSection.subtitle")}</p>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">

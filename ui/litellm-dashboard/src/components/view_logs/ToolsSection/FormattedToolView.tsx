@@ -3,6 +3,7 @@
  */
 
 import { Typography, Table } from "antd";
+import { useTranslation } from "react-i18next";
 import { ParsedTool, ParameterRow } from "./types";
 
 const { Text } = Typography;
@@ -12,6 +13,7 @@ interface FormattedToolViewProps {
 }
 
 export function FormattedToolView({ tool }: FormattedToolViewProps) {
+  const { t } = useTranslation();
   // Parse parameters for table display
   const parameterRows: ParameterRow[] = Object.entries(tool.parameters?.properties || {}).map(
     ([name, schema]: [string, any]) => ({
@@ -25,7 +27,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
 
   const columns = [
     {
-      title: "Parameter",
+      title: t("viewLogs.formattedToolView.colParameter"),
       dataIndex: "name",
       key: "name",
       render: (name: string, record: ParameterRow) => (
@@ -36,7 +38,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
       ),
     },
     {
-      title: "Type",
+      title: t("viewLogs.formattedToolView.colType"),
       dataIndex: "type",
       key: "type",
       render: (type: string) => (
@@ -46,7 +48,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
       ),
     },
     {
-      title: "Description",
+      title: t("viewLogs.formattedToolView.colDescription"),
       dataIndex: "description",
       key: "description",
       render: (desc: string) => <Text type="secondary">{desc}</Text>,
@@ -80,7 +82,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
               marginBottom: 8,
             }}
           >
-            Parameters
+            {t("viewLogs.formattedToolView.parametersLabel")}
           </Text>
           <Table dataSource={parameterRows} columns={columns} pagination={false} size="small" bordered />
         </div>
@@ -97,7 +99,7 @@ export function FormattedToolView({ tool }: FormattedToolViewProps) {
               marginBottom: 8,
             }}
           >
-            Called With
+            {t("viewLogs.formattedToolView.calledWithLabel")}
           </Text>
           <div
             style={{

@@ -11,7 +11,8 @@ import {
 } from "@tanstack/react-table";
 import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Badge, Text } from "@tremor/react";
 import { Tooltip } from "antd";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 
@@ -22,6 +23,7 @@ interface DeletedTeamsTableProps {
 }
 
 export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeamsTableProps) {
+  const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>([
     {
       id: "deleted_at",
@@ -29,161 +31,164 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
     },
   ]);
 
-  const columns: ColumnDef<DeletedTeam>[] = [
-    {
-      id: "team_alias",
-      accessorKey: "team_alias",
-      header: "Team Name",
-      size: 150,
-      maxSize: 200,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[200px]">{value || "-"}</span>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      id: "team_id",
-      accessorKey: "team_id",
-      header: "Team ID",
-      size: 150,
-      maxSize: 250,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">{value || "-"}</span>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      id: "created_at",
-      accessorKey: "created_at",
-      header: "Created",
-      size: 120,
-      maxSize: 140,
-      cell: (info) => {
-        const value = info.getValue();
-        return (
-          <span className="block max-w-[140px]">{value ? new Date(value as string).toLocaleDateString() : "-"}</span>
-        );
-      },
-    },
-    {
-      id: "spend",
-      accessorKey: "spend",
-      header: "Spend (USD)",
-      size: 100,
-      maxSize: 140,
-      cell: (info) => {
-        const spend = (info.row.original as any).spend as number | undefined;
-        return (
-          <span className="block max-w-[140px]">{spend !== undefined ? formatNumberWithCommas(spend, 4) : "-"}</span>
-        );
-      },
-    },
-    {
-      id: "max_budget",
-      accessorKey: "max_budget",
-      header: "Budget (USD)",
-      size: 110,
-      maxSize: 150,
-      cell: (info) => {
-        const maxBudget = info.getValue() as number | null;
-        return (
-          <span className="block max-w-[150px]">
-            {maxBudget === null || maxBudget === undefined ? "No limit" : `$${formatNumberWithCommas(maxBudget)}`}
-          </span>
-        );
-      },
-    },
-    {
-      id: "models",
-      accessorKey: "models",
-      header: "Models",
-      size: 200,
-      maxSize: 300,
-      cell: (info) => {
-        const models = info.getValue() as string[];
-        if (!Array.isArray(models) || models.length === 0) {
+  const columns: ColumnDef<DeletedTeam>[] = useMemo(
+    () => [
+      {
+        id: "team_alias",
+        accessorKey: "team_alias",
+        header: t("deletedTeams.deletedTeamsTable.colTeamName"),
+        size: 150,
+        maxSize: 200,
+        cell: (info) => {
+          const value = info.getValue() as string;
           return (
-            <Badge size={"xs"} color="red">
-              <Text>All Proxy Models</Text>
-            </Badge>
+            <Tooltip title={value || undefined}>
+              <span className="truncate block max-w-[200px]">{value || "-"}</span>
+            </Tooltip>
           );
-        }
-        return (
-          <div className="flex flex-wrap gap-1 max-w-[300px]">
-            {models.slice(0, 3).map((model: string, index: number) =>
-              model === "all-proxy-models" ? (
-                <Badge key={index} size={"xs"} color="red">
-                  <Text>All Proxy Models</Text>
-                </Badge>
-              ) : (
-                <Badge key={index} size={"xs"} color="blue">
-                  <Text>
-                    {model.length > 30 ? `${getModelDisplayName(model).slice(0, 30)}...` : getModelDisplayName(model)}
-                  </Text>
-                </Badge>
-              ),
-            )}
-            {models.length > 3 && (
-              <Badge size={"xs"} color="gray">
-                <Text>
-                  +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
-                </Text>
+        },
+      },
+      {
+        id: "team_id",
+        accessorKey: "team_id",
+        header: t("deletedTeams.deletedTeamsTable.colTeamId"),
+        size: 150,
+        maxSize: 250,
+        cell: (info) => {
+          const value = info.getValue() as string;
+          return (
+            <Tooltip title={value}>
+              <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">{value || "-"}</span>
+            </Tooltip>
+          );
+        },
+      },
+      {
+        id: "created_at",
+        accessorKey: "created_at",
+        header: t("deletedTeams.deletedTeamsTable.colCreated"),
+        size: 120,
+        maxSize: 140,
+        cell: (info) => {
+          const value = info.getValue();
+          return (
+            <span className="block max-w-[140px]">{value ? new Date(value as string).toLocaleDateString() : "-"}</span>
+          );
+        },
+      },
+      {
+        id: "spend",
+        accessorKey: "spend",
+        header: t("deletedTeams.deletedTeamsTable.colSpend"),
+        size: 100,
+        maxSize: 140,
+        cell: (info) => {
+          const spend = (info.row.original as any).spend as number | undefined;
+          return (
+            <span className="block max-w-[140px]">{spend !== undefined ? formatNumberWithCommas(spend, 4) : "-"}</span>
+          );
+        },
+      },
+      {
+        id: "max_budget",
+        accessorKey: "max_budget",
+        header: t("deletedTeams.deletedTeamsTable.colBudget"),
+        size: 110,
+        maxSize: 150,
+        cell: (info) => {
+          const maxBudget = info.getValue() as number | null;
+          return (
+            <span className="block max-w-[150px]">
+              {maxBudget === null || maxBudget === undefined
+                ? t("deletedTeams.deletedTeamsTable.noLimit")
+                : `$${formatNumberWithCommas(maxBudget)}`}
+            </span>
+          );
+        },
+      },
+      {
+        id: "models",
+        accessorKey: "models",
+        header: t("deletedTeams.deletedTeamsTable.colModels"),
+        size: 200,
+        maxSize: 300,
+        cell: (info) => {
+          const models = info.getValue() as string[];
+          if (!Array.isArray(models) || models.length === 0) {
+            return (
+              <Badge size={"xs"} color="red">
+                <Text>{t("deletedTeams.deletedTeamsTable.allProxyModels")}</Text>
               </Badge>
-            )}
-          </div>
-        );
+            );
+          }
+          return (
+            <div className="flex flex-wrap gap-1 max-w-[300px]">
+              {models.slice(0, 3).map((model: string, index: number) =>
+                model === "all-proxy-models" ? (
+                  <Badge key={index} size={"xs"} color="red">
+                    <Text>{t("deletedTeams.deletedTeamsTable.allProxyModels")}</Text>
+                  </Badge>
+                ) : (
+                  <Badge key={index} size={"xs"} color="blue">
+                    <Text>
+                      {model.length > 30 ? `${getModelDisplayName(model).slice(0, 30)}...` : getModelDisplayName(model)}
+                    </Text>
+                  </Badge>
+                ),
+              )}
+              {models.length > 3 && (
+                <Badge size={"xs"} color="gray">
+                  <Text>{t("deletedTeams.deletedTeamsTable.moreModels", { count: models.length - 3 })}</Text>
+                </Badge>
+              )}
+            </div>
+          );
+        },
       },
-    },
-    {
-      id: "organization_id",
-      accessorKey: "organization_id",
-      header: "Organization",
-      size: 150,
-      maxSize: 200,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[200px]">{value || "-"}</span>
-          </Tooltip>
-        );
+      {
+        id: "organization_id",
+        accessorKey: "organization_id",
+        header: t("deletedTeams.deletedTeamsTable.colOrganization"),
+        size: 150,
+        maxSize: 200,
+        cell: (info) => {
+          const value = info.getValue() as string;
+          return (
+            <Tooltip title={value || undefined}>
+              <span className="truncate block max-w-[200px]">{value || "-"}</span>
+            </Tooltip>
+          );
+        },
       },
-    },
-    {
-      id: "deleted_at",
-      accessorKey: "deleted_at",
-      header: "Deleted At",
-      size: 120,
-      maxSize: 140,
-      cell: (info) => {
-        const value = (info.row.original as any).deleted_at as string | null | undefined;
-        return <span className="block max-w-[140px]">{value ? new Date(value).toLocaleDateString() : "-"}</span>;
+      {
+        id: "deleted_at",
+        accessorKey: "deleted_at",
+        header: t("deletedTeams.deletedTeamsTable.colDeletedAt"),
+        size: 120,
+        maxSize: 140,
+        cell: (info) => {
+          const value = (info.row.original as any).deleted_at as string | null | undefined;
+          return <span className="block max-w-[140px]">{value ? new Date(value).toLocaleDateString() : "-"}</span>;
+        },
       },
-    },
-    {
-      id: "deleted_by",
-      accessorKey: "deleted_by",
-      header: "Deleted By",
-      size: 120,
-      maxSize: 180,
-      cell: (info) => {
-        const value = (info.row.original as any).deleted_by as string | null | undefined;
-        return (
-          <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">{value || "-"}</span>
-          </Tooltip>
-        );
+      {
+        id: "deleted_by",
+        accessorKey: "deleted_by",
+        header: t("deletedTeams.deletedTeamsTable.colDeletedBy"),
+        size: 120,
+        maxSize: 180,
+        cell: (info) => {
+          const value = (info.row.original as any).deleted_by as string | null | undefined;
+          return (
+            <Tooltip title={value || undefined}>
+              <span className="truncate block max-w-[180px]">{value || "-"}</span>
+            </Tooltip>
+          );
+        },
       },
-    },
-  ];
+    ],
+    [t],
+  );
 
   const table = useReactTable({
     data: teams,
@@ -205,10 +210,10 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
       <div className="border-b py-4 flex-1 overflow-hidden">
         <div className="flex items-center justify-between w-full mb-4">
           {isLoading || isFetching ? (
-            <span className="inline-flex text-sm text-gray-700">Loading...</span>
+            <span className="inline-flex text-sm text-gray-700">{t("common.loading")}</span>
           ) : (
             <span className="inline-flex text-sm text-gray-700">
-              Showing {teams.length} {teams.length === 1 ? "team" : "teams"}
+              {t("deletedTeams.deletedTeamsTable.showingTeams", { count: teams.length })}
             </span>
           )}
         </div>
@@ -288,7 +293,7 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
                     <TableRow>
                       <TableCell colSpan={columns.length} className="h-8 text-center">
                         <div className="text-center text-gray-500">
-                          <p>🚅 Loading teams...</p>
+                          <p>{t("deletedTeams.deletedTeamsTable.loadingTeams")}</p>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -315,7 +320,7 @@ export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeams
                     <TableRow>
                       <TableCell colSpan={columns.length} className="h-8 text-center">
                         <div className="text-center text-gray-500">
-                          <p>No deleted teams found</p>
+                          <p>{t("deletedTeams.deletedTeamsTable.noDeletedTeams")}</p>
                         </div>
                       </TableCell>
                     </TableRow>

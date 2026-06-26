@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, Collapse, Drawer, Empty, Spin, Table, Tooltip, Typography } from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { proxyBaseUrl } from "@/components/networking";
 
 const { Text } = Typography;
@@ -118,6 +119,7 @@ const StatusDot: React.FC<{ status: RunStatus; size?: number }> = ({ status, siz
 const TRUNCATE_AT = 120;
 
 const TruncatedValue: React.FC<{ value: string }> = ({ value }) => {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   if (value.length <= TRUNCATE_AT) {
     return <span style={{ color: "#27272a", wordBreak: "break-all" }}>{value}</span>;
@@ -137,7 +139,7 @@ const TruncatedValue: React.FC<{ value: string }> = ({ value }) => {
           flexShrink: 0,
         }}
       >
-        {expanded ? "less" : "more"}
+        {expanded ? t("workflowRuns.index.less") : t("workflowRuns.index.more")}
       </button>
     </span>
   );
@@ -146,13 +148,14 @@ const TruncatedValue: React.FC<{ value: string }> = ({ value }) => {
 // ── metadata card ─────────────────────────────────────────────────────────────
 
 const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
+  const { t } = useTranslation();
   const meta = run.metadata ?? {};
 
   const primaryFields: { key: string; label: string }[] = [
-    { key: "state", label: "state" },
-    { key: "worktree_path", label: "worktree" },
-    { key: "grill_session_id", label: "grill session" },
-    { key: "session_id", label: "session" },
+    { key: "state", label: t("workflowRuns.index.metaState") },
+    { key: "worktree_path", label: t("workflowRuns.index.metaWorktree") },
+    { key: "grill_session_id", label: t("workflowRuns.index.grillSession") },
+    { key: "session_id", label: t("workflowRuns.index.metaSession") },
   ];
 
   const primaryKeys = new Set(["title", ...primaryFields.map((f) => f.key)]);
@@ -274,10 +277,11 @@ const GanttTimeline: React.FC<{
   run: WorkflowRun;
   events: WorkflowRunEvent[];
 }> = ({ run, events }) => {
+  const { t } = useTranslation();
   if (events.length === 0) {
     return (
       <div style={{ padding: "16px 0", color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>
-        No events recorded
+        {t("workflowRuns.index.noEvents")}
       </div>
     );
   }
@@ -473,6 +477,7 @@ const MessageRow: React.FC<{ msg: WorkflowRunMessage }> = ({ msg }) => {
 // ── main component ────────────────────────────────────────────────────────────
 
 const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
+  const { t } = useTranslation();
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [loadingRuns, setLoadingRuns] = useState(false);
   const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null);
@@ -543,7 +548,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
 
   const columns = [
     {
-      title: "Run",
+      title: t("workflowRuns.index.colRun"),
       dataIndex: "run_id",
       key: "run",
       render: (_: string, run: WorkflowRun) => (
@@ -557,13 +562,13 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       ),
     },
     {
-      title: "Type",
+      title: t("workflowRuns.index.colType"),
       dataIndex: "workflow_type",
       key: "workflow_type",
       render: (v: string) => <span style={{ fontFamily: "monospace", fontSize: 12, color: "#71717a" }}>{v}</span>,
     },
     {
-      title: "Status",
+      title: t("workflowRuns.index.colStatus"),
       dataIndex: "status",
       key: "status",
       render: (status: RunStatus, run: WorkflowRun) => {
@@ -577,7 +582,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       },
     },
     {
-      title: "Created",
+      title: t("workflowRuns.index.colCreated"),
       dataIndex: "created_at",
       key: "created_at",
       render: (v: string) => <span style={{ fontSize: 12, color: "#a1a1aa" }}>{timeAgo(v)}</span>,
@@ -604,10 +609,8 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         }}
       >
         <div>
-          <div style={{ fontSize: 18, fontWeight: 600, color: "#18181b" }}>Workflow Runs</div>
-          <div style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>
-            Durable state tracking for agents and automated workflows
-          </div>
+          <div style={{ fontSize: 18, fontWeight: 600, color: "#18181b" }}>{t("workflowRuns.index.pageTitle")}</div>
+          <div style={{ fontSize: 13, color: "#71717a", marginTop: 2 }}>{t("workflowRuns.index.pageSubtitle")}</div>
         </div>
         <Button
           icon={<ReloadOutlined />}
@@ -615,7 +618,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
           loading={loadingRuns}
           style={{ color: "#71717a", borderColor: "#e4e4e7" }}
         >
-          Refresh
+          {t("common.refresh")}
         </Button>
       </div>
 
@@ -635,7 +638,9 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
           locale={{
             emptyText: (
               <Empty
-                description={<span style={{ color: "#a1a1aa", fontSize: 13 }}>No workflow runs yet</span>}
+                description={
+                  <span style={{ color: "#a1a1aa", fontSize: 13 }}>{t("workflowRuns.index.noRunsYet")}</span>
+                }
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
               />
             ),
@@ -689,7 +694,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                   gap: 4,
                 }}
               >
-                ← close
+                {t("workflowRuns.index.closeDrawer")}
               </button>
               <Button
                 size="small"
@@ -698,7 +703,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                 loading={loadingDetail}
                 style={{ color: "#71717a", borderColor: "#e4e4e7" }}
               >
-                Refresh
+                {t("common.refresh")}
               </Button>
             </div>
 
@@ -715,9 +720,9 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                   key: "timeline",
                   label: (
                     <span style={{ fontSize: 12, fontWeight: 500, color: "#3f3f46" }}>
-                      Timeline
+                      {t("workflowRuns.index.timeline")}
                       <span style={{ marginLeft: 6, fontSize: 11, color: "#a1a1aa", fontWeight: 400 }}>
-                        {events.length} {events.length === 1 ? "event" : "events"}
+                        {t("workflowRuns.index.eventCount", { count: events.length })}
                       </span>
                     </span>
                   ),
@@ -731,7 +736,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                   key: "messages",
                   label: (
                     <span style={{ fontSize: 12, fontWeight: 500, color: "#3f3f46" }}>
-                      Messages
+                      {t("workflowRuns.index.messages")}
                       <span style={{ marginLeft: 6, fontSize: 11, color: "#a1a1aa", fontWeight: 400 }}>
                         {messages.length}
                       </span>
@@ -740,7 +745,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                   children:
                     messages.length === 0 ? (
                       <div style={{ padding: "12px 4px", color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>
-                        No messages
+                        {t("workflowRuns.index.noMessages")}
                       </div>
                     ) : (
                       <div style={{ paddingBottom: 4 }}>

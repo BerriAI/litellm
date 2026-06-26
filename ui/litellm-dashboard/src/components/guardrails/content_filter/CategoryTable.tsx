@@ -1,6 +1,7 @@
 import React from "react";
 import { Typography, Select, Table, Tag, Button } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -28,9 +29,10 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
   onRemove,
   readOnly = false,
 }) => {
+  const { t } = useTranslation();
   const columns = [
     {
-      title: "Category",
+      title: t("guardrails.categoryTable.colCategory"),
       dataIndex: "display_name",
       key: "display_name",
       render: (displayName: string, record: ContentCategory) => (
@@ -47,7 +49,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       ),
     },
     {
-      title: "Severity Threshold",
+      title: t("guardrails.categoryTable.colSeverityThreshold"),
       dataIndex: "severity_threshold",
       key: "severity_threshold",
       width: 180,
@@ -67,15 +69,15 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             style={{ width: 150 }}
             size="small"
           >
-            <Option value="high">High</Option>
-            <Option value="medium">Medium</Option>
-            <Option value="low">Low</Option>
+            <Option value="high">{t("guardrails.categoryTable.severityHigh")}</Option>
+            <Option value="medium">{t("guardrails.categoryTable.severityMedium")}</Option>
+            <Option value="low">{t("guardrails.categoryTable.severityLow")}</Option>
           </Select>
         );
       },
     },
     {
-      title: "Action",
+      title: t("guardrails.categoryTable.colAction"),
       dataIndex: "action",
       key: "action",
       width: 150,
@@ -90,8 +92,8 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
             style={{ width: 120 }}
             size="small"
           >
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
+            <Option value="BLOCK">{t("guardrails.categoryTable.actionBlock")}</Option>
+            <Option value="MASK">{t("guardrails.categoryTable.actionMask")}</Option>
           </Select>
         );
       },
@@ -105,14 +107,18 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       width: 100,
       render: (_: any, record: ContentCategory) => (
         <Button type="text" danger size="small" icon={<DeleteOutlined />} onClick={() => onRemove?.(record.id)}>
-          Delete
+          {t("common.delete")}
         </Button>
       ),
     } as any);
   }
 
   if (categories.length === 0) {
-    return <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>No categories configured.</div>;
+    return (
+      <div style={{ textAlign: "center", padding: "40px 0", color: "#999" }}>
+        {t("guardrails.categoryTable.noCategories")}
+      </div>
+    );
   }
 
   return <Table dataSource={categories} columns={columns} rowKey="id" pagination={false} size="small" />;

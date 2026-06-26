@@ -3,12 +3,14 @@
 import React from "react";
 import { Alert } from "antd";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
+import { Trans, useTranslation } from "react-i18next";
 
 interface DebugWarningBannerProps {
   accessToken: string | null;
 }
 
 export const DebugWarningBanner: React.FC<DebugWarningBannerProps> = ({ accessToken }) => {
+  const { t } = useTranslation();
   const { data: healthData } = useHealthReadinessDetails(accessToken);
 
   // Only show banner if detailed debug mode is explicitly enabled
@@ -18,14 +20,8 @@ export const DebugWarningBanner: React.FC<DebugWarningBannerProps> = ({ accessTo
 
   return (
     <Alert
-      message="Performance Warning: Detailed Debug Mode Active"
-      description={
-        <>
-          Detailed debug logging (<code>LITELLM_LOG=DEBUG</code>) is currently enabled. This mode logs extensive
-          diagnostic information and will significantly degrade performance. It should only be used for troubleshooting
-          and disabled in production environments.
-        </>
-      }
+      message={t("debugWarningBanner.message")}
+      description={<Trans i18nKey="debugWarningBanner.description" components={{ code: <code /> }} />}
       type="warning"
       showIcon
       banner

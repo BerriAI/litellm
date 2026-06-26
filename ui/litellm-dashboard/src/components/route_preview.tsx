@@ -1,6 +1,7 @@
 import React from "react";
 import { Card, Typography } from "antd";
 import { RightOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { Trans, useTranslation } from "react-i18next";
 
 const { Title, Text } = Typography;
 import { getProxyBaseUrl } from "./networking";
@@ -12,6 +13,7 @@ interface RoutePreviewProps {
 }
 
 const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, includeSubpath }) => {
+  const { t } = useTranslation();
   const proxyBaseUrl = getProxyBaseUrl();
 
   const getLiteLLMProxyUrl = () => {
@@ -26,20 +28,20 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
   return (
     <Card className="p-5">
       <Title level={5} className="text-lg font-semibold text-gray-900 mb-2">
-        Route Preview
+        {t("routePreview.title")}
       </Title>
       <Text type="secondary" className="text-gray-600 mb-5" style={{ display: "block" }}>
-        How your requests will be routed
+        {t("routePreview.subtitle")}
       </Text>
 
       <div className="space-y-5">
         {/* Basic routing */}
         <div>
-          <div className="text-base font-semibold text-gray-900 mb-3">Basic routing:</div>
+          <div className="text-base font-semibold text-gray-900 mb-3">{t("routePreview.basicRouting")}</div>
           <div className="flex items-center gap-4">
             {/* Your endpoint */}
             <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-              <div className="text-sm text-gray-600 mb-2">Your endpoint</div>
+              <div className="text-sm text-gray-600 mb-2">{t("routePreview.yourEndpoint")}</div>
               <code className="font-mono text-sm text-gray-900">{getLiteLLMProxyUrl()}</code>
             </div>
 
@@ -50,7 +52,7 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
 
             {/* Forwards to */}
             <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-              <div className="text-sm text-gray-600 mb-2">Forwards to</div>
+              <div className="text-sm text-gray-600 mb-2">{t("routePreview.forwardsTo")}</div>
               <code className="font-mono text-sm text-gray-900">{targetValue}</code>
             </div>
           </div>
@@ -60,11 +62,11 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
           <>
             {/* With subpaths */}
             <div>
-              <div className="text-base font-semibold text-gray-900 mb-3">With subpaths:</div>
+              <div className="text-base font-semibold text-gray-900 mb-3">{t("routePreview.withSubpaths")}</div>
               <div className="flex items-center gap-4">
                 {/* Your endpoint + subpath */}
                 <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                  <div className="text-sm text-gray-600 mb-2">Your endpoint + subpath</div>
+                  <div className="text-sm text-gray-600 mb-2">{t("routePreview.yourEndpointSubpath")}</div>
                   <code className="font-mono text-sm text-gray-900">
                     {pathValue && `${proxyBaseUrl}${pathValue}`}
                     <span className="text-blue-600">/v1/text-to-image/base/model</span>
@@ -78,7 +80,7 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
 
                 {/* Forwards to with subpath */}
                 <div className="flex-1 bg-gray-50 border border-gray-200 rounded-lg p-3">
-                  <div className="text-sm text-gray-600 mb-2">Forwards to</div>
+                  <div className="text-sm text-gray-600 mb-2">{t("routePreview.forwardsTo")}</div>
                   <code className="font-mono text-sm text-gray-900">
                     {targetValue}
                     <span className="text-blue-600">/v1/text-to-image/base/model</span>
@@ -87,9 +89,7 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
               </div>
 
               {/* Note */}
-              <div className="mt-3 text-sm text-gray-600">
-                Any path after {pathValue} will be appended to the target URL
-              </div>
+              <div className="mt-3 text-sm text-gray-600">{t("routePreview.subpathNote", { pathValue })}</div>
             </div>
           </>
         )}
@@ -99,10 +99,13 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({ pathValue, targetValue, inc
             <div className="flex items-start">
               <InfoCircleOutlined className="text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
               <div className="text-sm text-blue-700">
-                <span className="font-medium">Not seeing the routing you wanted?</span> Try enabling - Include Subpaths
-                - above - this allows subroutes like{" "}
-                <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-xs">/api/v1/models</code> to be
-                forwarded automatically.
+                <Trans
+                  i18nKey="routePreview.subpathHint"
+                  components={{
+                    bold: <span className="font-medium" />,
+                    code: <code className="bg-blue-100 px-1 py-0.5 rounded font-mono text-xs" />,
+                  }}
+                />
               </div>
             </div>
           </div>

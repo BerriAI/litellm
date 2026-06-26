@@ -1,11 +1,13 @@
 "use client";
 import { useState } from "react";
 import { Alert } from "antd";
+import { useTranslation } from "react-i18next";
 import { useDeletedKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { DeletedKeysTable } from "./DeletedKeysTable/DeletedKeysTable";
 
 export default function DeletedKeysPage() {
+  const { t } = useTranslation();
   const { premiumUser } = useAuthorized();
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize] = useState(50);
@@ -19,8 +21,8 @@ export default function DeletedKeysPage() {
           type="info"
           banner
           showIcon
-          message="Coming soon to Enterprise"
-          description="Deleted key auditing is graduating from beta into our Enterprise audit & compliance suite."
+          message={t("deletedKeys.deletedKeysPage.comingSoonToEnterprise")}
+          description={t("deletedKeys.deletedKeysPage.auditingDescription")}
         />
       )}
       <DeletedKeysTable

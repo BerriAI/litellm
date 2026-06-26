@@ -10,7 +10,9 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import { Badge, Select } from "antd";
-import React from "react";
+import React, { useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 export type UsageOption =
   | "global"
   | "my-usage"
@@ -42,72 +44,72 @@ interface OptionConfig {
   descriptionForNonAdmin?: string;
   badgeText?: string;
 }
-const OPTIONS: OptionConfig[] = [
+const getOptions = (t: TFunction): OptionConfig[] => [
   {
     value: "global",
-    label: "Global Usage",
-    showForAdmin: "Global Usage",
-    showForNonAdmin: "Your Usage",
-    description: "View usage across all resources",
-    descriptionForAdmin: "View usage across all resources",
-    descriptionForNonAdmin: "View your usage",
+    label: t("usagePage.usageViewSelect.globalUsageLabel"),
+    showForAdmin: t("usagePage.usageViewSelect.globalUsageLabel"),
+    showForNonAdmin: t("usagePage.usageViewSelect.yourUsageLabel"),
+    description: t("usagePage.usageViewSelect.globalUsageDesc"),
+    descriptionForAdmin: t("usagePage.usageViewSelect.globalUsageDesc"),
+    descriptionForNonAdmin: t("usagePage.usageViewSelect.yourUsageDesc"),
     icon: <GlobalOutlined style={{ fontSize: "16px" }} />,
   },
   {
     value: "my-usage",
-    label: "Your Usage",
-    description: "View your own usage",
+    label: t("usagePage.usageViewSelect.yourUsageLabel"),
+    description: t("usagePage.usageViewSelect.myUsageDesc"),
     icon: <UserOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
   },
   {
     value: "organization",
-    label: "Organization Usage",
-    showForAdmin: "Organization Usage",
-    showForNonAdmin: "Your Organization Usage",
-    description: "View organization-level usage",
-    descriptionForAdmin: "View usage across all organizations",
-    descriptionForNonAdmin: "View your organization's usage",
+    label: t("usagePage.usageViewSelect.organizationUsageLabel"),
+    showForAdmin: t("usagePage.usageViewSelect.organizationUsageLabel"),
+    showForNonAdmin: t("usagePage.usageViewSelect.yourOrganizationUsageLabel"),
+    description: t("usagePage.usageViewSelect.organizationUsageDesc"),
+    descriptionForAdmin: t("usagePage.usageViewSelect.organizationUsageAdminDesc"),
+    descriptionForNonAdmin: t("usagePage.usageViewSelect.organizationUsageNonAdminDesc"),
     icon: <BankOutlined style={{ fontSize: "16px" }} />,
   },
   {
     value: "team",
-    label: "Team Usage",
-    description: "View usage by team",
+    label: t("usagePage.usageViewSelect.teamUsageLabel"),
+    description: t("usagePage.usageViewSelect.teamUsageDesc"),
     icon: <TeamOutlined style={{ fontSize: "16px" }} />,
   },
   {
     value: "customer",
-    label: "Customer Usage",
-    description: "View usage by customer accounts",
+    label: t("usagePage.usageViewSelect.customerUsageLabel"),
+    description: t("usagePage.usageViewSelect.customerUsageDesc"),
     icon: <ShoppingCartOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
   },
   {
     value: "tag",
-    label: "Tag Usage",
-    description: "View usage grouped by tags",
+    label: t("usagePage.usageViewSelect.tagUsageLabel"),
+    description: t("usagePage.usageViewSelect.tagUsageDesc"),
     icon: <TagsOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
   },
   {
     value: "agent",
-    label: "Agent Usage (A2A)",
-    description: "View usage by AI agents",
+    label: t("usagePage.usageViewSelect.agentUsageLabel"),
+    description: t("usagePage.usageViewSelect.agentUsageDesc"),
     icon: <RobotOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
   },
   {
     value: "user",
-    label: "User Usage",
-    description: "View usage by individual users",
+    label: t("usagePage.usageViewSelect.userUsageLabel"),
+    description: t("usagePage.usageViewSelect.userUsageDesc"),
     icon: <UserOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
   },
   {
     value: "user-agent-activity",
-    label: "User Agent Activity",
-    description: "View detailed user agent activity logs",
+    label: t("usagePage.usageViewSelect.userAgentActivityLabel"),
+    description: t("usagePage.usageViewSelect.userAgentActivityDesc"),
     icon: <LineChartOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
   },
@@ -117,36 +119,42 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   onChange,
   isAdmin,
   canViewTagUsage = false,
-  title = "Usage View",
-  description = "Select the usage data you want to view",
+  title,
+  description,
   "data-id": dataId,
 }) => {
+  const { t } = useTranslation();
+  const options = useMemo(() => getOptions(t), [t]);
+  const resolvedTitle = title ?? t("usagePage.usageViewSelect.title");
+  const resolvedDescription = description ?? t("usagePage.usageViewSelect.description");
   const getFilteredOptions = () => {
-    return OPTIONS.filter((option) => {
-      if (option.value === "tag" && canViewTagUsage) {
+    return options
+      .filter((option) => {
+        if (option.value === "tag" && canViewTagUsage) {
+          return true;
+        }
+        if (option.adminOnly && !isAdmin) {
+          return false;
+        }
         return true;
-      }
-      if (option.adminOnly && !isAdmin) {
-        return false;
-      }
-      return true;
-    }).map((option) => {
-      let label = option.label;
-      let desc = option.description;
-      if (option.showForAdmin && option.showForNonAdmin) {
-        label = isAdmin ? option.showForAdmin : option.showForNonAdmin;
-      }
-      if (option.descriptionForAdmin && option.descriptionForNonAdmin) {
-        desc = isAdmin ? option.descriptionForAdmin : option.descriptionForNonAdmin;
-      }
-      return {
-        value: option.value,
-        label,
-        description: desc,
-        icon: option.icon,
-        badgeText: option.badgeText,
-      };
-    });
+      })
+      .map((option) => {
+        let label = option.label;
+        let desc = option.description;
+        if (option.showForAdmin && option.showForNonAdmin) {
+          label = isAdmin ? option.showForAdmin : option.showForNonAdmin;
+        }
+        if (option.descriptionForAdmin && option.descriptionForNonAdmin) {
+          desc = isAdmin ? option.descriptionForAdmin : option.descriptionForNonAdmin;
+        }
+        return {
+          value: option.value,
+          label,
+          description: desc,
+          icon: option.icon,
+          badgeText: option.badgeText,
+        };
+      });
   };
   const filteredOptions = getFilteredOptions();
   return (
@@ -157,8 +165,8 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
             <BarChartOutlined style={{ fontSize: "32px" }} />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-gray-900 mb-0.5 leading-tight">{title}</h3>
-            <p className="text-xs text-gray-600 leading-tight">{description}</p>
+            <h3 className="text-sm font-semibold text-gray-900 mb-0.5 leading-tight">{resolvedTitle}</h3>
+            <p className="text-xs text-gray-600 leading-tight">{resolvedDescription}</p>
           </div>
         </div>
         <div className="flex-shrink-0">

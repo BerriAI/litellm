@@ -1,4 +1,5 @@
 import { DeleteOutlined, FilePdfOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 interface FilePreviewCardProps {
   file: File;
@@ -7,6 +8,7 @@ interface FilePreviewCardProps {
 }
 
 function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
+  const { t } = useTranslation();
   const isPdf = file.name.toLowerCase().endsWith(".pdf");
 
   return (
@@ -20,14 +22,16 @@ function FilePreviewCard({ file, previewUrl, onRemove }: FilePreviewCardProps) {
           ) : (
             <img
               src={previewUrl || ""}
-              alt="Upload preview"
+              alt={t("playground.filePreviewCard.uploadPreview")}
               className="w-10 h-10 rounded-md border border-gray-200 object-cover"
             />
           )}
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-gray-900 truncate">{file.name}</div>
-          <div className="text-xs text-gray-500">{isPdf ? "PDF" : "Image"}</div>
+          <div className="text-xs text-gray-500">
+            {isPdf ? t("playground.filePreviewCard.pdf") : t("playground.filePreviewCard.image")}
+          </div>
         </div>
         <button
           className="flex items-center justify-center w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded-full transition-colors"

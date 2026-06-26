@@ -4,7 +4,8 @@ import { SearchOutlined } from "@ant-design/icons";
 import { Input, Select } from "antd";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { ModelDataTable } from "@/components/model_dashboard/table";
-import { skillHubColumns } from "@/components/skill_hub_table_columns";
+import { useTranslation } from "react-i18next";
+import { getSkillHubColumns } from "@/components/skill_hub_table_columns";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 
 interface SkillHubDashboardProps {
@@ -24,6 +25,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   publicPage = false,
   onPublishSuccess,
 }) => {
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
@@ -70,7 +72,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   }
 
   if (isLoading) {
-    return <div className="text-center py-16 text-gray-400">Loading skills...</div>;
+    return <div className="text-center py-16 text-gray-400">{t("aiHub.skillHubDashboard.loadingSkills")}</div>;
   }
 
   return (
@@ -78,15 +80,15 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
       {/* Stats row */}
       <div className="grid grid-cols-3 gap-4">
         <div className="border border-gray-200 rounded-lg p-4">
-          <div className="text-xs text-gray-500 mb-1">Total Skills</div>
+          <div className="text-xs text-gray-500 mb-1">{t("aiHub.skillHubDashboard.statTotalSkills")}</div>
           <div className="text-2xl font-semibold text-gray-900">{totalSkills}</div>
         </div>
         <div className="border border-gray-200 rounded-lg p-4">
-          <div className="text-xs text-gray-500 mb-1">Namespaces</div>
+          <div className="text-xs text-gray-500 mb-1">{t("aiHub.skillHubDashboard.statNamespaces")}</div>
           <div className="text-2xl font-semibold text-gray-900">{namespaces.length}</div>
         </div>
         <div className="border border-gray-200 rounded-lg p-4">
-          <div className="text-xs text-gray-500 mb-1">Domains</div>
+          <div className="text-xs text-gray-500 mb-1">{t("aiHub.skillHubDashboard.statDomains")}</div>
           <div className="text-2xl font-semibold text-gray-900">{domains.length}</div>
         </div>
       </div>
@@ -94,10 +96,12 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
       {/* Search + filters + table */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700">All {publicPage ? "Public " : ""}Skills</h3>
+          <h3 className="text-sm font-semibold text-gray-700">
+            {publicPage ? t("aiHub.skillHubDashboard.allPublicSkills") : t("aiHub.skillHubDashboard.allSkills")}
+          </h3>
           <div className="flex items-center gap-2">
             <Select
-              placeholder="All Domains"
+              placeholder={t("aiHub.skillHubDashboard.allDomainsPlaceholder")}
               allowClear
               value={domainFilter}
               onChange={(val) => setDomainFilter(val)}
@@ -106,7 +110,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
             />
             <Input
               prefix={<SearchOutlined className="text-gray-400" />}
-              placeholder="Search by name, namespace, or tag…"
+              placeholder={t("aiHub.skillHubDashboard.searchPlaceholder")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               style={{ width: 280 }}
@@ -115,14 +119,14 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           </div>
         </div>
         <ModelDataTable
-          columns={skillHubColumns((skill) => setSelectedSkill(skill), copyToClipboard, publicPage)}
+          columns={getSkillHubColumns(t, (skill) => setSelectedSkill(skill), copyToClipboard, publicPage)}
           data={filteredSkills}
           isLoading={false}
           defaultSorting={[{ id: "name", desc: false }]}
         />
         <div className="mt-3 text-center">
           <Text className="text-sm text-gray-500">
-            Showing {filteredSkills.length} of {totalSkills} skill{totalSkills !== 1 ? "s" : ""}
+            {t("aiHub.skillHubDashboard.showing", { filtered: filteredSkills.length, count: totalSkills })}
           </Text>
         </div>
       </div>

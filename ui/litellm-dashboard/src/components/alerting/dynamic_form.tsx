@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Form, Input, InputNumber, Button as Button2 } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 import { Button, Badge, Icon, Text, TableRow, TableCell, Switch } from "@tremor/react";
@@ -26,6 +27,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   handleSubmit,
   premiumUser,
 }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
 
   const onFinish = () => {
@@ -86,7 +88,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
               <TableCell>
                 <Button className="flex items-center justify-center">
                   <a href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
-                    ✨ Enterprise Feature
+                    {t("alerting.dynamicForm.enterpriseFeature")}
                   </a>
                 </Button>
               </TableCell>
@@ -122,23 +124,23 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
           <TableCell>
             {value.stored_in_db == true ? (
               <Badge icon={CheckCircleIcon} className="text-white">
-                In DB
+                {t("alerting.dynamicForm.inDb")}
               </Badge>
             ) : value.stored_in_db == false ? (
-              <Badge className="text-gray bg-white outline">In Config</Badge>
+              <Badge className="text-gray bg-white outline">{t("alerting.dynamicForm.inConfig")}</Badge>
             ) : (
-              <Badge className="text-gray bg-white outline">Not Set</Badge>
+              <Badge className="text-gray bg-white outline">{t("alerting.dynamicForm.notSet")}</Badge>
             )}
           </TableCell>
           <TableCell>
             <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-              Reset
+              {t("common.reset")}
             </Icon>
           </TableCell>
         </TableRow>
       ))}
       <div>
-        <Button2 htmlType="submit">Update Settings</Button2>
+        <Button2 htmlType="submit">{t("alerting.dynamicForm.updateSettings")}</Button2>
       </div>
     </Form>
   );

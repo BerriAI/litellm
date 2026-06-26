@@ -7,8 +7,10 @@ import CloudZeroCreationModal from "./CloudZeroCreateModal";
 import { useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { CloudZeroIntegrationSettings } from "./CloudZeroIntegrationSettings";
+import { useTranslation } from "react-i18next";
 
 export default function CloudZeroCostTracking() {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const { data: settings, isLoading, error } = useCloudZeroSettings(accessToken);
   const queryClient = useQueryClient();
@@ -28,7 +30,7 @@ export default function CloudZeroCostTracking() {
   if (isLoading) {
     return (
       <Card>
-        <Typography.Text>Loading CloudZero settings...</Typography.Text>
+        <Typography.Text>{t("cloudZero.cloudZeroCostTracking.loadingSettings")}</Typography.Text>
       </Card>
     );
   }
@@ -37,7 +39,9 @@ export default function CloudZeroCostTracking() {
     return (
       <Card>
         <Typography.Text className="text-red-600">
-          Error loading CloudZero settings: {error instanceof Error ? error.message : String(error)}
+          {t("cloudZero.cloudZeroCostTracking.errorLoadingSettings", {
+            error: error instanceof Error ? error.message : String(error),
+          })}
         </Typography.Text>
       </Card>
     );

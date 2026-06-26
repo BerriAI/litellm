@@ -20,6 +20,7 @@ import {
 import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import AddCredentialsTab from "./AddCredentialModal";
@@ -32,6 +33,7 @@ interface CredentialsPanelProps {
 }
 
 const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
+  const { t } = useTranslation();
   const { accessToken, userRole } = useAuthorized();
   // Admin Viewer follows the read-parity rule: see credentials, do not modify.
   const canModifyCredentials = isProxyAdminRole(userRole ?? "");
@@ -65,7 +67,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     };
 
     await credentialUpdateCall(accessToken, values.credential_name, newCredential);
-    NotificationsManager.success("Credential updated successfully");
+    NotificationsManager.success(t("modelAdd.credentials.updatedSuccess"));
     setIsUpdateModalOpen(false);
     await refetchCredentials();
   };
@@ -89,7 +91,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
 
     // Add to list and close modal
     await credentialCreateCall(accessToken, newCredential);
-    NotificationsManager.success("Credential added successfully");
+    NotificationsManager.success(t("modelAdd.credentials.addedSuccess"));
     setIsAddModalOpen(false);
     await refetchCredentials();
   };
@@ -117,10 +119,10 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     setIsCredentialDeleting(true);
     try {
       await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
-      NotificationsManager.success("Credential deleted successfully");
+      NotificationsManager.success(t("modelAdd.credentials.deletedSuccess"));
       await refetchCredentials();
     } catch (error) {
-      NotificationsManager.error("Failed to delete credential");
+      NotificationsManager.error(t("modelAdd.credentials.deleteFailed"));
     } finally {
       setCredentialToDelete(null);
       setIsDeleteModalOpen(false);
@@ -140,25 +142,27 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto p-2">
-      {canModifyCredentials && <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>}
+      {canModifyCredentials && (
+        <Button onClick={() => setIsAddModalOpen(true)}>{t("modelAdd.credentials.addCredential")}</Button>
+      )}
       <div className="flex justify-between items-center mt-4 mb-4">
-        <Text>Configured credentials for different AI providers. Add and manage your API credentials.</Text>
+        <Text>{t("modelAdd.credentials.configuredCredentials")}</Text>
       </div>
 
       <Card>
         <Table>
           <TableHead>
             <TableRow>
-              <TableHeaderCell>Credential Name</TableHeaderCell>
-              <TableHeaderCell>Provider</TableHeaderCell>
-              <TableHeaderCell>Actions</TableHeaderCell>
+              <TableHeaderCell>{t("modelAdd.credentials.credentialName")}</TableHeaderCell>
+              <TableHeaderCell>{t("modelAdd.credentials.provider")}</TableHeaderCell>
+              <TableHeaderCell>{t("common.actions")}</TableHeaderCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {!credentialList || credentialList.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={4} className="text-center py-4 text-gray-500">
-                  No credentials configured
+                  {t("modelAdd.credentials.noCredentials")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -219,12 +223,15 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
         isOpen={isDeleteModalOpen}
         onCancel={closeDeleteModal}
         onOk={handleDeleteCredential}
-        title="Delete Credential?"
-        message="Are you sure you want to delete this credential? This action cannot be undone and may break existing integrations."
-        resourceInformationTitle="Credential Information"
+        title={t("modelAdd.credentials.deleteTitle")}
+        message={t("modelAdd.credentials.deleteMessage")}
+        resourceInformationTitle={t("modelAdd.credentials.credentialInformation")}
         resourceInformation={[
-          { label: "Credential Name", value: credentialToDelete?.credential_name },
-          { label: "Provider", value: credentialToDelete?.credential_info?.custom_llm_provider || "-" },
+          { label: t("modelAdd.credentials.credentialName"), value: credentialToDelete?.credential_name },
+          {
+            label: t("modelAdd.credentials.provider"),
+            value: credentialToDelete?.credential_info?.custom_llm_provider || "-",
+          },
         ]}
         confirmLoading={isCredentialDeleting}
         requiredConfirmation={credentialToDelete?.credential_name}

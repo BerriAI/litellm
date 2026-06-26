@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface RecognitionMetadata {
   recognizer_name: string;
@@ -24,6 +25,7 @@ const getScoreColor = (score: number): string => {
 };
 
 const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) => {
+  const { t } = useTranslation();
   const [entityListExpanded, setEntityListExpanded] = useState(true);
   const [expandedEntities, setExpandedEntities] = useState<Record<number, boolean>>({});
 
@@ -47,7 +49,9 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
-        <h4 className="font-medium">Detected Entities ({entities.length})</h4>
+        <h4 className="font-medium">
+          {t("viewLogs.presidioDetectedEntities.detectedEntities", { count: entities.length })}
+        </h4>
       </div>
 
       {entityListExpanded && (
@@ -71,10 +75,15 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                     <span className="font-medium mr-2">{entity.entity_type}</span>
-                    <span className={`font-mono ${getScoreColor(entity.score)}`}>Score: {entity.score.toFixed(2)}</span>
+                    <span className={`font-mono ${getScoreColor(entity.score)}`}>
+                      {t("viewLogs.presidioDetectedEntities.scoreLabel", { score: entity.score.toFixed(2) })}
+                    </span>
                   </div>
                   <span className="text-xs text-gray-500">
-                    Position: {entity.start}-{entity.end}
+                    {t("viewLogs.presidioDetectedEntities.positionRange", {
+                      start: entity.start,
+                      end: entity.end,
+                    })}
                   </span>
                 </div>
 
@@ -83,17 +92,26 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
                     <div className="grid grid-cols-2 gap-4 mb-2">
                       <div className="space-y-2">
                         <div className="flex">
-                          <span className="font-medium w-1/3">Entity Type:</span>
+                          <span className="font-medium w-1/3">
+                            {t("viewLogs.presidioDetectedEntities.entityTypeLabel")}
+                          </span>
                           <span>{entity.entity_type}</span>
                         </div>
                         <div className="flex">
-                          <span className="font-medium w-1/3">Position:</span>
+                          <span className="font-medium w-1/3">
+                            {t("viewLogs.presidioDetectedEntities.positionLabel")}
+                          </span>
                           <span>
-                            Characters {entity.start}-{entity.end}
+                            {t("viewLogs.presidioDetectedEntities.characters", {
+                              start: entity.start,
+                              end: entity.end,
+                            })}
                           </span>
                         </div>
                         <div className="flex">
-                          <span className="font-medium w-1/3">Confidence:</span>
+                          <span className="font-medium w-1/3">
+                            {t("viewLogs.presidioDetectedEntities.confidenceLabel")}
+                          </span>
                           <span className={getScoreColor(entity.score)}>{entity.score.toFixed(2)}</span>
                         </div>
                       </div>
@@ -102,11 +120,15 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
                         {entity.recognition_metadata && (
                           <>
                             <div className="flex">
-                              <span className="font-medium w-1/3">Recognizer:</span>
+                              <span className="font-medium w-1/3">
+                                {t("viewLogs.presidioDetectedEntities.recognizerLabel")}
+                              </span>
                               <span>{entity.recognition_metadata.recognizer_name}</span>
                             </div>
                             <div className="flex overflow-hidden">
-                              <span className="font-medium w-1/3">Identifier:</span>
+                              <span className="font-medium w-1/3">
+                                {t("viewLogs.presidioDetectedEntities.identifierLabel")}
+                              </span>
                               <span className="truncate text-xs font-mono">
                                 {entity.recognition_metadata.recognizer_identifier}
                               </span>
@@ -115,7 +137,9 @@ const PresidioDetectedEntities = ({ entities }: PresidioDetectedEntitiesProps) =
                         )}
                         {entity.analysis_explanation && (
                           <div className="flex">
-                            <span className="font-medium w-1/3">Explanation:</span>
+                            <span className="font-medium w-1/3">
+                              {t("viewLogs.presidioDetectedEntities.explanationLabel")}
+                            </span>
                             <span>{entity.analysis_explanation}</span>
                           </div>
                         )}

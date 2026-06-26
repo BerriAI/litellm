@@ -14,6 +14,7 @@ import {
 import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { useTranslation } from "react-i18next";
 
 // Extend the column meta type to include className
 declare module "@tanstack/react-table" {
@@ -43,6 +44,7 @@ export function ModelDataTable<TData, TValue>({
   enablePagination = false,
   onRowClick,
 }: ModelDataTableProps<TData, TValue>) {
+  const { t } = useTranslation();
   const [sorting, setSorting] = React.useState<SortingState>(defaultSorting);
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [columnSizing, setColumnSizing] = React.useState({});
@@ -160,7 +162,7 @@ export function ModelDataTable<TData, TValue>({
                 <TableRow>
                   <TableCell colSpan={columns.length} className="h-8 text-center">
                     <div className="text-center text-gray-500">
-                      <p>🚅 Loading models...</p>
+                      <p>{t("modelDashboard.table.loadingModels")}</p>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -194,7 +196,7 @@ export function ModelDataTable<TData, TValue>({
                 <TableRow>
                   <TableCell colSpan={columns.length} className="h-8 text-center">
                     <div className="text-center text-gray-500">
-                      <p>No models found</p>
+                      <p>{t("modelDashboard.table.noModels")}</p>
                     </div>
                   </TableCell>
                 </TableRow>

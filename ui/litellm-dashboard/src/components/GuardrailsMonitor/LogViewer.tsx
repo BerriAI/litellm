@@ -2,36 +2,34 @@ import { CheckCircleOutlined, CloseOutlined, DownOutlined, WarningOutlined } fro
 import { useQuery } from "@tanstack/react-query";
 import moment from "moment";
 import { Button, Spin } from "antd";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { uiSpendLogsCall } from "@/components/networking";
 import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
 import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
 import type { LogEntry } from "./mockData";
 
-const actionConfig: Record<
+const actionStyles: Record<
   "blocked" | "passed" | "flagged",
-  { icon: React.ElementType; color: string; bg: string; border: string; label: string }
+  { icon: React.ElementType; color: string; bg: string; border: string }
 > = {
   blocked: {
     icon: CloseOutlined,
     color: "text-red-600",
     bg: "bg-red-50",
     border: "border-red-200",
-    label: "Blocked",
   },
   passed: {
     icon: CheckCircleOutlined,
     color: "text-green-600",
     bg: "bg-green-50",
     border: "border-green-200",
-    label: "Passed",
   },
   flagged: {
     icon: WarningOutlined,
     color: "text-amber-600",
     bg: "bg-amber-50",
     border: "border-amber-200",
-    label: "Flagged",
   },
 };
 
@@ -56,10 +54,20 @@ export function LogViewer({
   startDate = "",
   endDate = "",
 }: LogViewerProps) {
+  const { t } = useTranslation();
   const [sampleSize, setSampleSize] = useState(10);
   const [activeFilter, setActiveFilter] = useState<string>(filterAction);
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const actionConfig = useMemo(
+    () => ({
+      blocked: { ...actionStyles.blocked, label: t("guardrailsMonitor.logViewer.actionBlocked") },
+      passed: { ...actionStyles.passed, label: t("guardrailsMonitor.logViewer.actionPassed") },
+      flagged: { ...actionStyles.flagged, label: t("guardrailsMonitor.logViewer.actionFlagged") },
+    }),
+    [t],
+  );
 
   const filteredLogs = logs.filter((log) => activeFilter === "all" || log.action === activeFilter);
   const displayLogs = filteredLogs.slice(0, sampleSize);
@@ -109,14 +117,19 @@ export function LogViewer({
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div>
             <h3 className="text-base font-semibold text-gray-900">
-              {guardrailName ? `Logs — ${guardrailName}` : "Request Logs"}
+              {guardrailName
+                ? t("guardrailsMonitor.logViewer.titleWithName", { name: guardrailName })
+                : t("guardrailsMonitor.logViewer.titleDefault")}
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
               {logsLoading
-                ? "Loading…"
+                ? t("common.loading")
                 : logs.length > 0
-                  ? `Showing ${displayLogs.length} of ${total} entries`
-                  : "No logs for this period. Select a guardrail and date range."}
+                  ? t("guardrailsMonitor.logViewer.showingEntries", {
+                      shown: displayLogs.length,
+                      total,
+                    })
+                  : t("guardrailsMonitor.logViewer.noLogsForPeriod")}
             </p>
           </div>
           {logs.length > 0 && (
@@ -135,7 +148,7 @@ export function LogViewer({
               </div>
               <div className="h-4 w-px bg-gray-200" />
               <div className="flex items-center gap-1">
-                <span className="text-xs text-gray-500 mr-1">Sample:</span>
+                <span className="text-xs text-gray-500 mr-1">{t("guardrailsMonitor.logViewer.sampleLabel")}</span>
                 {sampleSizes.map((size) => (
                   <Button
                     key={size}
@@ -158,7 +171,9 @@ export function LogViewer({
         </div>
       )}
       {!logsLoading && displayLogs.length === 0 && (
-        <div className="py-12 text-center text-sm text-gray-500">No logs to display. Adjust filters or date range.</div>
+        <div className="py-12 text-center text-sm text-gray-500">
+          {t("guardrailsMonitor.logViewer.noLogsToDisplay")}
+        </div>
       )}
       {!logsLoading && displayLogs.length > 0 && (
         <div className="divide-y divide-gray-100">

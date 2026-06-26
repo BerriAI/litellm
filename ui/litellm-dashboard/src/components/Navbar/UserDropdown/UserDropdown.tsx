@@ -21,6 +21,7 @@ import {
 import type { MenuProps } from "antd";
 import { Button, Divider, Dropdown, Space, Switch, Tag, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 
@@ -62,6 +63,7 @@ interface UserDropdownProps {
 }
 
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
+  const { t } = useTranslation();
   const { userId, userEmail, userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
   const disableUsageIndicator = useDisableUsageIndicator();
@@ -80,7 +82,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
       label: (
         <Space>
           <LogoutOutlined />
-          Logout
+          {t("user.logout")}
         </Space>
       ),
       onClick: onLogout,
@@ -96,11 +98,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
         </Space>
         {premiumUser ? (
           <Tag icon={<CrownOutlined />} color="gold">
-            Premium
+            {t("user.premium")}
           </Tag>
         ) : (
-          <Tooltip title="Upgrade to Premium for advanced features" placement="left">
-            <Tag icon={<CrownOutlined />}>Standard</Tag>
+          <Tooltip title={t("user.upgradeTooltip")} placement="left">
+            <Tag icon={<CrownOutlined />}>{t("user.standard")}</Tag>
           </Tooltip>
         )}
       </Space>
@@ -108,7 +110,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
         <Space>
           <UserOutlined />
-          <Text type="secondary">User ID</Text>
+          <Text type="secondary">{t("user.userId")}</Text>
         </Space>
         <Text copyable ellipsis style={{ maxWidth: "150px" }} title={userId || "-"}>
           {userId || "-"}
@@ -117,13 +119,13 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
         <Space>
           <SafetyOutlined />
-          <Text type="secondary">Role</Text>
+          <Text type="secondary">{t("user.role")}</Text>
         </Space>
         <Text>{userRole}</Text>
       </Space>
       <Divider style={{ margin: "8px 0" }} />
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide New Feature Indicators</Text>
+        <Text type="secondary">{t("user.hideNewFeatureIndicators")}</Text>
         <Switch
           size="small"
           checked={disableShowNewBadge}
@@ -137,11 +139,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableShowNewBadge");
             }
           }}
-          aria-label="Toggle hide new feature indicators"
+          aria-label={t("user.toggleHideNewFeatureIndicators")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide All Prompts</Text>
+        <Text type="secondary">{t("user.hideAllPrompts")}</Text>
         <Switch
           size="small"
           checked={disableShowPrompts}
@@ -154,11 +156,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableShowPrompts");
             }
           }}
-          aria-label="Toggle hide all prompts"
+          aria-label={t("user.toggleHideAllPrompts")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Usage Indicator</Text>
+        <Text type="secondary">{t("user.hideUsageIndicator")}</Text>
         <Switch
           size="small"
           checked={disableUsageIndicator}
@@ -171,11 +173,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableUsageIndicator");
             }
           }}
-          aria-label="Toggle hide usage indicator"
+          aria-label={t("user.toggleHideUsageIndicator")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Blog Posts</Text>
+        <Text type="secondary">{t("user.hideBlogPosts")}</Text>
         <Switch
           size="small"
           checked={disableBlogPosts}
@@ -188,11 +190,11 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableBlogPosts");
             }
           }}
-          aria-label="Toggle hide blog posts"
+          aria-label={t("user.toggleHideBlogPosts")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Text type="secondary">Hide Bouncing Icon</Text>
+        <Text type="secondary">{t("user.hideBouncingIcon")}</Text>
         <Switch
           size="small"
           checked={disableBouncingIcon}
@@ -205,7 +207,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableBouncingIcon");
             }
           }}
-          aria-label="Toggle hide bouncing icon"
+          aria-label={t("user.toggleHideBouncingIcon")}
         />
       </Space>
     </Space>
@@ -214,7 +216,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
   const seed = userEmail || userId || "user";
   const initials = initialsFromIdentity(userEmail, userId);
   const hue = hueFromString(seed);
-  const displayName = navAccountDisplayName(userEmail, userId);
+  const displayName = navAccountDisplayName(userEmail, userId, t("user.accountFallback"));
 
   return (
     <Dropdown
@@ -233,7 +235,10 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
       <Button
         type="text"
         className="!flex max-w-[min(200px,34vw)] items-center gap-2 !rounded-md !py-0.5 !pl-1 !pr-2 transition-colors hover:!bg-gray-100"
-        aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+        aria-label={t("user.accountMenuAriaLabel", {
+          role: userRole ?? t("common.unknown"),
+          identity: userEmail || userId || t("common.unknown"),
+        })}
         aria-haspopup="menu"
       >
         <span

@@ -16,6 +16,7 @@ import {
   TableHeaderSortDropdown,
   SortState,
 } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
+import { useTranslation } from "react-i18next";
 
 // Extend the column meta type to include className
 declare module "@tanstack/react-table" {
@@ -47,6 +48,7 @@ export function AllModelsDataTable<TData, TValue>({
   enablePagination = false,
   onRowClick,
 }: AllModelsDataTableProps<TData, TValue>) {
+  const { t } = useTranslation();
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
   const [columnSizing, setColumnSizing] = React.useState({});
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
@@ -173,7 +175,7 @@ export function AllModelsDataTable<TData, TValue>({
                 <TableRow>
                   <TableCell colSpan={columns.length} className="h-8 text-center">
                     <div className="text-center text-gray-500">
-                      <p>🚅 Loading models...</p>
+                      <p>{t("modelDashboard.allModelsTable.loadingModels")}</p>
                     </div>
                   </TableCell>
                 </TableRow>
@@ -207,7 +209,7 @@ export function AllModelsDataTable<TData, TValue>({
                 <TableRow>
                   <TableCell colSpan={columns.length} className="h-8 text-center">
                     <div className="text-center text-gray-500">
-                      <p>No models found</p>
+                      <p>{t("modelDashboard.allModelsTable.noModels")}</p>
                     </div>
                   </TableCell>
                 </TableRow>

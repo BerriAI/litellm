@@ -7,6 +7,7 @@
 import { Button as TremorButton } from "@tremor/react";
 import { Button } from "antd";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 import NotificationManager from "../../../molecules/notifications_manager";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -24,6 +25,7 @@ interface AddFallbacksProps {
 }
 
 export default function AddFallbacks({ accessToken, value = [], onChange }: AddFallbacksProps) {
+  const { t } = useTranslation();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens
@@ -83,9 +85,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
     // Validation
     const invalidGroups = groups.filter((g) => !g.primaryModel || g.fallbackModels.length === 0);
     if (invalidGroups.length > 0) {
-      MessageManager.error(
-        `Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`,
-      );
+      MessageManager.error(t("settingsPages.addFallbacks.incompleteGroups", { count: invalidGroups.length }));
       return;
     }
 
@@ -105,7 +105,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
       setIsSaving(true);
       try {
         await onChange(updatedFallbacks);
-        NotificationManager.success(`${groups.length} fallback configuration(s) added successfully!`);
+        NotificationManager.success(t("settingsPages.addFallbacks.addSuccess", { count: groups.length }));
         handleCancel();
       } catch (error) {
         // Error handling is done in handleFallbacksChange, so we don't need to show another notification here
@@ -125,7 +125,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
         onClick={() => setIsModalVisible(true)}
         icon={() => <span className="mr-1">+</span>}
       >
-        Add Fallbacks
+        {t("settingsPages.addFallbacks.addButton")}
       </TremorButton>
       <AddFallbacksModal open={isModalVisible} onCancel={handleCancel}>
         <FallbackSelectionForm
@@ -140,7 +140,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
         {groups.length > 0 && (
           <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
             <Button type="default" onClick={handleCancel} disabled={isSaving}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="default"
@@ -148,7 +148,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
               disabled={groups.length === 0 || isSaving}
               loading={isSaving}
             >
-              {isSaving ? "Saving Configuration..." : "Save All Configurations"}
+              {isSaving ? t("settingsPages.addFallbacks.savingButton") : t("settingsPages.addFallbacks.saveButton")}
             </Button>
           </div>
         )}

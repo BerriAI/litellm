@@ -16,6 +16,7 @@ import { Badge, Button, Select, Skeleton, Space, Typography } from "antd";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import debounce from "lodash/debounce";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation, Trans } from "react-i18next";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
 type ModelViewMode = "all" | "current_team";
@@ -38,6 +39,7 @@ const AllModelsTab = ({
   setSelectedModelId,
   setSelectedTeamId,
 }: AllModelsTabProps) => {
+  const { t } = useTranslation();
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { accessToken, userId, userRole, premiumUser } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
@@ -204,7 +206,7 @@ const AllModelsTab = ({
     try {
       setDeleteLoading(true);
       await modelDeleteCall(accessToken, deleteModalModelId);
-      NotificationsManager.success("Model deleted successfully");
+      NotificationsManager.success(t("pages.allModelsTab.modelDeletedSuccess"));
       queryClient.invalidateQueries({ queryKey: ["models", "list"] });
       refetchModels();
     } catch (error) {
@@ -223,7 +225,9 @@ const AllModelsTab = ({
     try {
       setPausingModelId(modelId);
       await modelPatchUpdateCall(accessToken, { blocked }, modelId);
-      NotificationsManager.success(blocked ? "Model paused" : "Model resumed");
+      NotificationsManager.success(
+        blocked ? t("pages.allModelsTab.modelPaused") : t("pages.allModelsTab.modelResumed"),
+      );
       // invalidateQueries already schedules a refetch for active observers
       // on this key — no need to also call refetchModels() (would double-fetch).
       queryClient.invalidateQueries({ queryKey: ["models", "list"] });
@@ -244,7 +248,7 @@ const AllModelsTab = ({
             <div className="border-b px-6 py-4 bg-gray-50">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                  <Text className="text-lg font-semibold text-gray-900">{t("pages.allModelsTab.currentTeam")}</Text>
                   <div className="w-80">
                     {isLoading ? (
                       <Skeleton.Input active block size="large" />
@@ -277,7 +281,7 @@ const AllModelsTab = ({
                             label: (
                               <Space direction="horizontal" align="center">
                                 <Badge color="blue" size="small" />
-                                <Text style={{ fontSize: 16 }}>Personal</Text>
+                                <Text style={{ fontSize: 16 }}>{t("pages.allModelsTab.personal")}</Text>
                               </Space>
                             ),
                           },
@@ -300,7 +304,7 @@ const AllModelsTab = ({
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
-                  <Text className="text-lg font-semibold text-gray-900">View:</Text>
+                  <Text className="text-lg font-semibold text-gray-900">{t("pages.allModelsTab.view")}</Text>
                   <div className="w-64">
                     {isLoading ? (
                       <Skeleton.Input active block size="large" />
@@ -317,7 +321,7 @@ const AllModelsTab = ({
                             label: (
                               <Space direction="horizontal" align="center">
                                 <Badge color="purple" size="small" />
-                                <Text style={{ fontSize: 16 }}>Current Team Models</Text>
+                                <Text style={{ fontSize: 16 }}>{t("pages.allModelsTab.currentTeamModels")}</Text>
                               </Space>
                             ),
                           },
@@ -326,7 +330,7 @@ const AllModelsTab = ({
                             label: (
                               <Space direction="horizontal" align="center">
                                 <Badge color="gray" size="small" />
-                                <Text style={{ fontSize: 16 }}>All Available Models</Text>
+                                <Text style={{ fontSize: 16 }}>{t("pages.allModelsTab.allAvailableModels")}</Text>
                               </Space>
                             ),
                           },
@@ -343,25 +347,35 @@ const AllModelsTab = ({
                   <div className="text-xs text-gray-500">
                     {currentTeam === "personal" ? (
                       <span>
-                        To access these models: Create a Virtual Key without selecting a team on the{" "}
-                        <a
-                          href="/public?login=success&page=api-keys"
-                          className="text-gray-600 hover:text-gray-800 underline"
-                        >
-                          Virtual Keys page
-                        </a>
+                        <Trans
+                          i18nKey="pages.allModelsTab.accessInfoPersonal"
+                          components={{
+                            a: (
+                              <a
+                                href="/public?login=success&page=api-keys"
+                                className="text-gray-600 hover:text-gray-800 underline"
+                              />
+                            ),
+                          }}
+                        />
                       </span>
                     ) : (
                       <span>
-                        To access these models: Create a Virtual Key and select Team as &quot;
-                        {typeof currentTeam !== "string" ? currentTeam.team_alias || currentTeam.team_id : ""}&quot; on
-                        the{" "}
-                        <a
-                          href="/public?login=success&page=api-keys"
-                          className="text-gray-600 hover:text-gray-800 underline"
-                        >
-                          Virtual Keys page
-                        </a>
+                        <Trans
+                          i18nKey="pages.allModelsTab.accessInfoTeam"
+                          values={{
+                            teamName:
+                              typeof currentTeam !== "string" ? currentTeam.team_alias || currentTeam.team_id : "",
+                          }}
+                          components={{
+                            a: (
+                              <a
+                                href="/public?login=success&page=api-keys"
+                                className="text-gray-600 hover:text-gray-800 underline"
+                              />
+                            ),
+                          }}
+                        />
                       </span>
                     )}
                   </div>
@@ -379,7 +393,7 @@ const AllModelsTab = ({
                     <div className="relative w-64">
                       <input
                         type="text"
-                        placeholder="Search model names..."
+                        placeholder={t("pages.allModelsTab.searchPlaceholder")}
                         data-testid="model-search-input"
                         className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         value={modelNameSearch}
@@ -413,7 +427,7 @@ const AllModelsTab = ({
                           d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
                         />
                       </svg>
-                      Filters
+                      {t("pages.allModelsTab.filters")}
                     </button>
 
                     {/* Reset Filters Button */}
@@ -429,7 +443,7 @@ const AllModelsTab = ({
                           d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                         />
                       </svg>
-                      Reset Filters
+                      {t("pages.allModelsTab.resetFilters")}
                     </button>
                   </div>
 
@@ -437,7 +451,7 @@ const AllModelsTab = ({
                   <Button
                     icon={<SettingOutlined />}
                     onClick={() => setIsModelSettingsModalVisible(true)}
-                    title="Model Settings"
+                    title={t("pages.allModelsTab.modelSettings")}
                   />
                 </div>
 
@@ -450,11 +464,11 @@ const AllModelsTab = ({
                         className="w-full"
                         value={selectedModelGroup ?? "all"}
                         onChange={(value) => setSelectedModelGroup(value === "all" ? "all" : value)}
-                        placeholder="Filter by Public Model Name"
+                        placeholder={t("pages.allModelsTab.filterByPublicModelName")}
                         showSearch
                         options={[
-                          { value: "all", label: "All Models" },
-                          { value: "wildcard", label: "Wildcard Models (*)" },
+                          { value: "all", label: t("pages.allModelsTab.allModels") },
+                          { value: "wildcard", label: t("pages.allModelsTab.wildcardModels") },
                           ...availableModelGroups.map((group, idx) => ({
                             value: group,
                             label: group,
@@ -469,10 +483,10 @@ const AllModelsTab = ({
                         className="w-full"
                         value={selectedModelAccessGroupFilter ?? "all"}
                         onChange={(value) => setSelectedModelAccessGroupFilter(value === "all" ? null : value)}
-                        placeholder="Filter by Model Access Group"
+                        placeholder={t("pages.allModelsTab.filterByModelAccessGroup")}
                         showSearch
                         options={[
-                          { value: "all", label: "All Model Access Groups" },
+                          { value: "all", label: t("pages.allModelsTab.allModelAccessGroups") },
                           ...availableModelAccessGroups.map((accessGroup, idx) => ({
                             value: accessGroup,
                             label: accessGroup,
@@ -490,8 +504,12 @@ const AllModelsTab = ({
                   ) : (
                     <span data-testid="models-results-count" className="text-sm text-gray-700">
                       {paginationMeta.total_count > 0
-                        ? `Showing ${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
-                        : "Showing 0 results"}
+                        ? t("pages.allModelsTab.showingResults", {
+                            from: (currentPage - 1) * pageSize + 1,
+                            to: Math.min(currentPage * pageSize, paginationMeta.total_count),
+                            total: paginationMeta.total_count,
+                          })
+                        : t("pages.allModelsTab.showingZeroResults")}
                     </span>
                   )}
 
@@ -510,7 +528,7 @@ const AllModelsTab = ({
                           currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
                         }`}
                       >
-                        Previous
+                        {t("common.previous")}
                       </button>
                     )}
 
@@ -530,7 +548,7 @@ const AllModelsTab = ({
                             : "hover:bg-gray-50"
                         }`}
                       >
-                        Next
+                        {t("common.next")}
                       </button>
                     )}
                   </div>
@@ -569,28 +587,28 @@ const AllModelsTab = ({
 
       <DeleteResourceModal
         isOpen={!!deleteModalModelId}
-        title="Delete Model"
-        alertMessage="This action cannot be undone."
-        message="Are you sure you want to delete this model?"
-        resourceInformationTitle="Model Information"
+        title={t("pages.allModelsTab.deleteModelTitle")}
+        alertMessage={t("pages.allModelsTab.deleteAlertMessage")}
+        message={t("pages.allModelsTab.deleteMessage")}
+        resourceInformationTitle={t("pages.allModelsTab.modelInformation")}
         resourceInformation={
           modelToDelete
             ? [
                 {
-                  label: "Model Name",
-                  value: modelToDelete.model_name || "Not Set",
+                  label: t("pages.allModelsTab.modelName"),
+                  value: modelToDelete.model_name || t("pages.allModelsTab.notSet"),
                 },
                 {
-                  label: "LiteLLM Model Name",
-                  value: modelToDelete.litellm_model_name || "Not Set",
+                  label: t("pages.allModelsTab.litellmModelName"),
+                  value: modelToDelete.litellm_model_name || t("pages.allModelsTab.notSet"),
                 },
                 {
-                  label: "Provider",
-                  value: modelToDelete.provider || "Not Set",
+                  label: t("pages.allModelsTab.provider"),
+                  value: modelToDelete.provider || t("pages.allModelsTab.notSet"),
                 },
                 {
-                  label: "Created By",
-                  value: modelToDelete.model_info?.created_by || "Not Set",
+                  label: t("pages.allModelsTab.createdBy"),
+                  value: modelToDelete.model_info?.created_by || t("pages.allModelsTab.notSet"),
                 },
               ]
             : []

@@ -1,6 +1,7 @@
 import React from "react";
 import { Button, Dropdown, MenuProps } from "antd";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon, XIcon } from "@heroicons/react/outline";
+import { useTranslation } from "react-i18next";
 
 export type SortState = "asc" | "desc" | false;
 
@@ -21,6 +22,8 @@ interface TableHeaderSortDropdownProps {
 }
 
 export const TableHeaderSortDropdown: React.FC<TableHeaderSortDropdownProps> = ({ sortState, onSortChange }) => {
+  const { t } = useTranslation();
+
   const handleMenuClick: MenuProps["onClick"] = ({ key }) => {
     if (key === "asc") {
       onSortChange("asc");
@@ -34,17 +37,17 @@ export const TableHeaderSortDropdown: React.FC<TableHeaderSortDropdownProps> = (
   const menuItems: MenuProps["items"] = [
     {
       key: "asc",
-      label: "Ascending",
+      label: t("commonComponents.tableHeaderSortDropdown.ascending"),
       icon: <ChevronUpIcon className="h-4 w-4" />,
     },
     {
       key: "desc",
-      label: "Descending",
+      label: t("commonComponents.tableHeaderSortDropdown.descending"),
       icon: <ChevronDownIcon className="h-4 w-4" />,
     },
     {
       key: "reset",
-      label: "Reset",
+      label: t("common.reset"),
       icon: <XIcon className="h-4 w-4" />,
     },
   ];

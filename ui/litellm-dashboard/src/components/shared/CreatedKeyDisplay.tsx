@@ -1,34 +1,30 @@
 import React, { useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { Button } from "antd";
+import { Trans, useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 
 interface CreatedKeyDisplayProps {
   apiKey: string;
 }
 
-/**
- * Shared component for displaying a newly-created virtual key.
- * Used on the Virtual Keys page and in the Add Agent wizard.
- */
 const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
     setCopied(true);
-    MessageManager.success("Key copied to clipboard");
+    MessageManager.success(t("shared.createdKeyDisplay.copiedToClipboard"));
     setTimeout(() => setCopied(false), 2000);
   };
 
   return (
     <div>
       <p className="mb-2">
-        Please save this secret key somewhere safe and accessible. For security reasons,{" "}
-        <b>you will not be able to view it again</b> through your LiteLLM account. If you lose this secret key, you will
-        need to generate a new one.
+        <Trans i18nKey="shared.createdKeyDisplay.saveWarning" components={{ b: <b /> }} />
       </p>
 
-      <p className="text-sm text-gray-600 mt-3 mb-1">Virtual Key:</p>
+      <p className="text-sm text-gray-600 mt-3 mb-1">{t("shared.createdKeyDisplay.virtualKeyLabel")}</p>
       <div
         style={{
           background: "#f8f8f8",
@@ -42,7 +38,7 @@ const CreatedKeyDisplay: React.FC<CreatedKeyDisplayProps> = ({ apiKey }) => {
 
       <CopyToClipboard text={apiKey} onCopy={handleCopy}>
         <Button type="primary" style={{ marginTop: 12 }}>
-          {copied ? "Copied!" : "Copy Virtual Key"}
+          {copied ? t("common.copied") : t("shared.createdKeyDisplay.copyButton")}
         </Button>
       </CopyToClipboard>
     </div>

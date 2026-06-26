@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 interface VariableWarningProps {
   extractedVariables: string[];
@@ -6,6 +7,7 @@ interface VariableWarningProps {
 }
 
 const VariableWarning: React.FC<VariableWarningProps> = ({ extractedVariables, variables }) => {
+  const { t } = useTranslation();
   const missingVariables = extractedVariables.filter(
     (varName) => !variables[varName] || variables[varName].trim() === "",
   );
@@ -19,9 +21,11 @@ const VariableWarning: React.FC<VariableWarningProps> = ({ extractedVariables, v
       <div className="flex items-start gap-2">
         <span className="text-yellow-600 text-sm">⚠️</span>
         <div className="flex-1">
-          <p className="text-sm text-yellow-800 font-medium mb-1">Please fill in all template variables above</p>
+          <p className="text-sm text-yellow-800 font-medium mb-1">{t("promptsPage.variableWarning.title")}</p>
           <p className="text-xs text-yellow-700">
-            Missing: {missingVariables.map((varName) => `{{${varName}}}`).join(", ")}
+            {t("promptsPage.variableWarning.missing", {
+              list: missingVariables.map((varName) => `{{${varName}}}`).join(", "),
+            })}
           </p>
         </div>
       </div>

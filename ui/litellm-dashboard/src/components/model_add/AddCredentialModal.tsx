@@ -2,6 +2,7 @@ import { TextInput } from "@tremor/react";
 import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "antd";
 import type { UploadProps } from "antd/es/upload";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
@@ -16,6 +17,7 @@ interface AddCredentialsModalProps {
 }
 
 const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
 
@@ -32,7 +34,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
 
   return (
     <Modal
-      title="Add New Credential"
+      title={t("modelAdd.addCredentialModal.title")}
       open={open}
       onCancel={() => {
         onCancel();
@@ -44,19 +46,19 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
       <Form form={form} onFinish={handleSubmit} layout="vertical">
         {/* Credential Name */}
         <Form.Item
-          label="Credential Name:"
+          label={t("modelAdd.addCredentialModal.credentialNameLabel")}
           name="credential_name"
-          rules={[{ required: true, message: "Credential name is required" }]}
+          rules={[{ required: true, message: t("modelAdd.addCredentialModal.credentialNameRequired") }]}
         >
-          <TextInput placeholder="Enter a friendly name for these credentials" />
+          <TextInput placeholder={t("modelAdd.addCredentialModal.credentialNamePlaceholder")} />
         </Form.Item>
 
         {/* Provider Selection */}
         <Form.Item
-          rules={[{ required: true, message: "Required" }]}
-          label="Provider:"
+          rules={[{ required: true, message: t("common.required") }]}
+          label={t("modelAdd.addCredentialModal.providerLabel")}
           name="custom_llm_provider"
-          tooltip="Helper to auto-populate provider specific fields"
+          tooltip={t("modelAdd.addCredentialModal.providerTooltip")}
         >
           <AntdSelect
             showSearch
@@ -94,8 +96,8 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
-          <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
+          <Tooltip title={t("modelAdd.addCredentialModal.needHelpTooltip")}>
+            <Link href="https://github.com/BerriAI/litellm/issues">{t("modelAdd.addCredentialModal.needHelp")}</Link>
           </Tooltip>
 
           <div>
@@ -106,9 +108,9 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
               }}
               style={{ marginRight: 10 }}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
-            <Button htmlType="submit">{"Add Credential"}</Button>
+            <Button htmlType="submit">{t("modelAdd.addCredentialModal.addCredential")}</Button>
           </div>
         </div>
       </Form>

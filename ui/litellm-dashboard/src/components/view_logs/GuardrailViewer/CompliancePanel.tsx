@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Tooltip } from "antd";
+import { useTranslation } from "react-i18next";
 import {
   checkEuAiActCompliance,
   checkGdprCompliance,
@@ -54,6 +55,7 @@ const ComplianceCard = ({
   loading: boolean;
   error: string | null;
 }) => {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -85,12 +87,12 @@ const ComplianceCard = ({
                   : "bg-red-100 text-red-700 border border-red-200"
               }`}
             >
-              {data.compliant ? "COMPLIANT" : "NON-COMPLIANT"}
+              {data.compliant ? t("viewLogs.compliancePanel.compliant") : t("viewLogs.compliancePanel.nonCompliant")}
             </span>
           )}
           {error && (
             <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-500 border border-gray-200">
-              UNAVAILABLE
+              {t("viewLogs.compliancePanel.unavailable")}
             </span>
           )}
           <svg
@@ -107,7 +109,7 @@ const ComplianceCard = ({
 
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-3">
-          {loading && <p className="text-sm text-gray-500">Checking compliance...</p>}
+          {loading && <p className="text-sm text-gray-500">{t("viewLogs.compliancePanel.checkingCompliance")}</p>}
           {error && <p className="text-sm text-red-600">{error}</p>}
           {data && (
             <div className="space-y-2">
@@ -134,6 +136,7 @@ const ComplianceCard = ({
 // -- Main Component --
 
 const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry }) => {
+  const { t } = useTranslation();
   const [euAiActData, setEuAiActData] = useState<ComplianceResponse | null>(null);
   const [gdprData, setGdprData] = useState<ComplianceResponse | null>(null);
   const [euAiActLoading, setEuAiActLoading] = useState(false);
@@ -156,20 +159,22 @@ const CompliancePanel: React.FC<CompliancePanelProps> = ({ accessToken, logEntry
     setEuAiActError(null);
     checkEuAiActCompliance(accessToken, payload)
       .then(setEuAiActData)
-      .catch((err) => setEuAiActError(err.message || "Failed to check EU AI Act compliance"))
+      .catch((err) => setEuAiActError(err.message || t("viewLogs.compliancePanel.euAiActCheckFailed")))
       .finally(() => setEuAiActLoading(false));
 
     setGdprLoading(true);
     setGdprError(null);
     checkGdprCompliance(accessToken, payload)
       .then(setGdprData)
-      .catch((err) => setGdprError(err.message || "Failed to check GDPR compliance"))
+      .catch((err) => setGdprError(err.message || t("viewLogs.compliancePanel.gdprCheckFailed")))
       .finally(() => setGdprLoading(false));
   }, [accessToken, logEntry]);
 
   return (
     <div>
-      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Regulatory Compliance</h4>
+      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
+        {t("viewLogs.compliancePanel.regulatoryCompliance")}
+      </h4>
       <div className="space-y-3">
         <ComplianceCard title="EU AI Act" data={euAiActData} loading={euAiActLoading} error={euAiActError} />
         <ComplianceCard title="GDPR" data={gdprData} loading={gdprLoading} error={gdprError} />

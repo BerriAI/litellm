@@ -2,12 +2,14 @@ import React from "react";
 import { MessageType } from "@/components/chat_ui/types";
 import { shouldShowAttachedImage } from "./ResponsesImageUtils";
 import { FilePdfOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 interface ResponsesImageRendererProps {
   message: MessageType;
 }
 
 const ResponsesImageRenderer: React.FC<ResponsesImageRendererProps> = ({ message }) => {
+  const { t } = useTranslation();
   if (!shouldShowAttachedImage(message)) {
     return null;
   }
@@ -23,7 +25,7 @@ const ResponsesImageRenderer: React.FC<ResponsesImageRendererProps> = ({ message
       ) : (
         <img
           src={message.imagePreviewUrl}
-          alt="User uploaded image"
+          alt={t("playground.chatImageRenderer.uploadedImageAlt")}
           className="max-w-64 rounded-md border border-gray-200 shadow-sm"
           style={{ maxHeight: "200px" }}
         />

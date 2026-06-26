@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from "react";
 import { Table, Select, InputNumber, Button, Radio } from "antd";
 import { DeleteOutlined, PlusOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { PricingCalculatorProps, ModelEntry } from "./types";
 import MultiCostResults from "./multi_cost_results";
 import { useMultiCostEstimate } from "./use_multi_cost_estimate";
@@ -19,6 +20,7 @@ const createDefaultEntry = (): ModelEntry => ({
 });
 
 const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, models }) => {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<ModelEntry[]>([createDefaultEntry()]);
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("month");
   const { debouncedFetchForEntry, removeEntry, getMultiModelResult } = useMultiCostEstimate(accessToken);
@@ -65,14 +67,14 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
 
   const columns = [
     {
-      title: "Model",
+      title: t("costTracking.pricingCalculator.colModel"),
       dataIndex: "model",
       key: "model",
       width: "35%",
       render: (_: string, record: ModelEntry) => (
         <Select
           showSearch
-          placeholder="Select a model"
+          placeholder={t("costTracking.pricingCalculator.modelPlaceholder")}
           value={record.model || undefined}
           onChange={(value) => handleEntryChange(record.id, "model", value)}
           optionFilterProp="label"
@@ -91,7 +93,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
       ),
     },
     {
-      title: "Input Tokens",
+      title: t("costTracking.pricingCalculator.colInputTokens"),
       dataIndex: "input_tokens",
       key: "input_tokens",
       width: "18%",
@@ -107,7 +109,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
       ),
     },
     {
-      title: "Output Tokens",
+      title: t("costTracking.pricingCalculator.colOutputTokens"),
       dataIndex: "output_tokens",
       key: "output_tokens",
       width: "18%",
@@ -123,7 +125,11 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
       ),
     },
     {
-      title: `Requests/${timePeriod === "day" ? "Day" : "Month"}`,
+      title: t(
+        timePeriod === "day"
+          ? "costTracking.pricingCalculator.colRequestsPerDay"
+          : "costTracking.pricingCalculator.colRequestsPerMonth",
+      ),
       dataIndex: timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
       key: "num_requests",
       width: "20%",
@@ -172,8 +178,8 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
           optionType="button"
           buttonStyle="solid"
         >
-          <Radio.Button value="day">Per Day</Radio.Button>
-          <Radio.Button value="month">Per Month</Radio.Button>
+          <Radio.Button value="day">{t("costTracking.pricingCalculator.perDay")}</Radio.Button>
+          <Radio.Button value="month">{t("costTracking.pricingCalculator.perMonth")}</Radio.Button>
         </Radio.Group>
       </div>
 
@@ -185,7 +191,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
         size="small"
         footer={() => (
           <Button type="dashed" onClick={handleAddEntry} icon={<PlusOutlined />} className="w-full">
-            Add Another Model
+            {t("costTracking.pricingCalculator.addAnotherModel")}
           </Button>
         )}
       />

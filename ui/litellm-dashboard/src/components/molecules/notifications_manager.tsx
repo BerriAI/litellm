@@ -3,6 +3,7 @@ import { notification as staticNotification } from "antd";
 import type { NotificationInstance } from "antd/es/notification/interface";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { ArgsProps } from "antd/es/notification";
+import i18n from "@/lib/i18n";
 
 let notificationInstance: NotificationInstance | null = null;
 
@@ -146,24 +147,42 @@ const CLOUDZERO_MATCH = [
   "cloudzero settings not found",
 ];
 
-function titleFor(status?: number, desc?: string): string {
+type ErrorCategory =
+  | "authenticationError"
+  | "accessDenied"
+  | "serviceUnavailable"
+  | "budgetExceeded"
+  | "featureUnavailable"
+  | "routingError"
+  | "alreadyExists"
+  | "contentBlocked"
+  | "validationError"
+  | "integrationError"
+  | "notFound"
+  | "rateLimitExceeded"
+  | "serverError"
+  | "requestError"
+  | "info"
+  | "error";
+
+function categoryFor(status?: number, desc?: string): ErrorCategory {
   const d = (desc || "").toLowerCase();
 
-  if (AUTH_MATCH.some((s) => d.includes(s))) return "Authentication Error";
-  if (FORBIDDEN_MATCH.some((s) => d.includes(s))) return "Access Denied";
-  if (DB_MATCH?.some?.((s: string) => d.includes(s)) || status === 503) return "Service Unavailable";
-  if (BUDGET_MATCH?.some?.((s: string) => d.includes(s))) return "Budget Exceeded";
-  if (ENTERPRISE_MATCH?.some?.((s: string) => d.includes(s))) return "Feature Unavailable";
-  if (ROUTER_MATCH?.some?.((s: string) => d.includes(s))) return "Routing Error";
+  if (AUTH_MATCH.some((s) => d.includes(s))) return "authenticationError";
+  if (FORBIDDEN_MATCH.some((s) => d.includes(s))) return "accessDenied";
+  if (DB_MATCH?.some?.((s: string) => d.includes(s)) || status === 503) return "serviceUnavailable";
+  if (BUDGET_MATCH?.some?.((s: string) => d.includes(s))) return "budgetExceeded";
+  if (ENTERPRISE_MATCH?.some?.((s: string) => d.includes(s))) return "featureUnavailable";
+  if (ROUTER_MATCH?.some?.((s: string) => d.includes(s))) return "routingError";
 
-  if (EXISTS_MATCH.some((s) => d.includes(s))) return "Already Exists";
-  if (GUARDRAIL_MATCH.some((s) => d.includes(s))) return "Content Blocked";
+  if (EXISTS_MATCH.some((s) => d.includes(s))) return "alreadyExists";
+  if (GUARDRAIL_MATCH.some((s) => d.includes(s))) return "contentBlocked";
 
-  if (FILE_UPLOAD_MATCH.some((s) => d.includes(s))) return "Validation Error";
-  if (CLOUDZERO_MATCH.some((s) => d.includes(s))) return "Integration Error";
+  if (FILE_UPLOAD_MATCH.some((s) => d.includes(s))) return "validationError";
+  if (CLOUDZERO_MATCH.some((s) => d.includes(s))) return "integrationError";
 
-  if (VALIDATION_MATCH.some((s) => d.includes(s))) return "Validation Error";
-  if (status === 404 || d.includes("not found") || NOT_FOUND_MATCH.some((s) => d.includes(s))) return "Not Found";
+  if (VALIDATION_MATCH.some((s) => d.includes(s))) return "validationError";
+  if (status === 404 || d.includes("not found") || NOT_FOUND_MATCH.some((s) => d.includes(s))) return "notFound";
   if (
     status === 429 ||
     d.includes("rate limit") ||
@@ -171,13 +190,13 @@ function titleFor(status?: number, desc?: string): string {
     d.includes("rpm") ||
     RATE_LIMIT_EXTRA?.some?.((s: string) => d.includes(s))
   )
-    return "Rate Limit Exceeded";
-  if (status && status >= 500) return "Server Error";
-  if (status === 401) return "Authentication Error";
-  if (status === 403) return "Access Denied";
-  if (d.includes("enterprise") || d.includes("premium")) return "Info";
-  if (status && status >= 400) return "Request Error";
-  return "Error";
+    return "rateLimitExceeded";
+  if (status && status >= 500) return "serverError";
+  if (status === 401) return "authenticationError";
+  if (status === 403) return "accessDenied";
+  if (d.includes("enterprise") || d.includes("premium")) return "info";
+  if (status && status >= 400) return "requestError";
+  return "error";
 }
 
 const SUCCESS_MATCH = [
@@ -221,10 +240,14 @@ const CONFIG_WARN_MATCH = [
 function classifyGeneralMessage(desc?: string): { kind: "success" | "info" | "warning"; title: string } | null {
   const d = (desc || "").toLowerCase();
 
-  if (SUCCESS_MATCH.some((s) => d.includes(s))) return { kind: "success", title: "Success" };
-  if (DEPRECATION_FEATURE_WARN_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Feature Notice" };
-  if (CONFIG_WARN_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Configuration Warning" };
-  if (INFO_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Rate Limit" }; // show as warning for visibility
+  if (SUCCESS_MATCH.some((s) => d.includes(s)))
+    return { kind: "success", title: i18n.t("molecules.notificationsManager.success") };
+  if (DEPRECATION_FEATURE_WARN_MATCH.some((s) => d.includes(s)))
+    return { kind: "warning", title: i18n.t("molecules.notificationsManager.featureNotice") };
+  if (CONFIG_WARN_MATCH.some((s) => d.includes(s)))
+    return { kind: "warning", title: i18n.t("molecules.notificationsManager.configurationWarning") };
+  if (INFO_MATCH.some((s) => d.includes(s)))
+    return { kind: "warning", title: i18n.t("molecules.notificationsManager.rateLimit") };
 
   return null;
 }
@@ -260,7 +283,7 @@ function looksErrorPayload(input: any, status?: number): boolean {
 
 const NotificationManager = {
   error(input: string | NotificationConfig) {
-    const cfg = normalize(input, "Error");
+    const cfg = normalize(input, i18n.t("molecules.notificationsManager.error"));
     getNotification().error({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
@@ -270,7 +293,7 @@ const NotificationManager = {
   },
 
   warning(input: string | NotificationConfig) {
-    const cfg = normalize(input, "Warning");
+    const cfg = normalize(input, i18n.t("molecules.notificationsManager.warning"));
     getNotification().warning({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
@@ -280,7 +303,7 @@ const NotificationManager = {
   },
 
   info(input: string | NotificationConfig) {
-    const cfg = normalize(input, "Info");
+    const cfg = normalize(input, i18n.t("molecules.notificationsManager.info"));
     getNotification().info({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
@@ -293,14 +316,14 @@ const NotificationManager = {
     if (React.isValidElement(input)) {
       getNotification().success({
         ...COMMON_NOTIFICATION_PROPS,
-        message: "Success",
+        message: i18n.t("molecules.notificationsManager.success"),
         description: input,
         placement: defaultPlacement(),
         duration: 3.5,
       });
       return;
     }
-    const cfg = normalize(input as string | NotificationConfig, "Success");
+    const cfg = normalize(input as string | NotificationConfig, i18n.t("molecules.notificationsManager.success"));
     getNotification().success({
       ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
@@ -315,31 +338,31 @@ const NotificationManager = {
     const base = { ...(extra ?? {}), description, placement: extra?.placement ?? defaultPlacement() };
 
     if (looksErrorPayload(input, status)) {
-      const title = titleFor(status, description);
-      const payload = { ...base, message: title };
+      const category = categoryFor(status, description);
+      const payload = { ...base, message: i18n.t(`molecules.notificationsManager.${category}`) };
 
       if (
-        title === "Rate Limit Exceeded" ||
-        title === "Info" ||
-        title === "Budget Exceeded" ||
-        title === "Feature Unavailable" ||
-        title === "Content Blocked" ||
-        title === "Integration Error"
+        category === "rateLimitExceeded" ||
+        category === "info" ||
+        category === "budgetExceeded" ||
+        category === "featureUnavailable" ||
+        category === "contentBlocked" ||
+        category === "integrationError"
       ) {
         getNotification().warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 7 });
         return;
       }
-      if (title === "Server Error") {
+      if (category === "serverError") {
         getNotification().error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 8 });
         return;
       }
       if (
-        title === "Request Error" ||
-        title === "Authentication Error" ||
-        title === "Access Denied" ||
-        title === "Not Found" ||
-        title === "Error" ||
-        title === "Already Exists"
+        category === "requestError" ||
+        category === "authenticationError" ||
+        category === "accessDenied" ||
+        category === "notFound" ||
+        category === "error" ||
+        category === "alreadyExists"
       ) {
         getNotification().error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
         return;
@@ -350,7 +373,7 @@ const NotificationManager = {
 
     // Non-error: success/info/warning classifier
     const cls = classifyGeneralMessage(description);
-    const payload = { ...base, message: cls?.title ?? "Info" };
+    const payload = { ...base, message: cls?.title ?? i18n.t("molecules.notificationsManager.info") };
 
     if (cls?.kind === "success") {
       getNotification().success({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 3.5 });

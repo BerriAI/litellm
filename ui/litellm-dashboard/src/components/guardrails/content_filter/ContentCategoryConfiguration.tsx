@@ -2,6 +2,7 @@ import React from "react";
 import { Card, Typography, Select, Table, Tag, Collapse, Button } from "antd";
 import { DeleteOutlined, PlusOutlined, FileTextOutlined } from "@ant-design/icons";
 import { getCategoryYaml } from "../../networking";
+import { useTranslation } from "react-i18next";
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -42,6 +43,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   pendingSelection,
   onPendingSelectionChange,
 }) => {
+  const { t } = useTranslation();
   // Use controlled state if parent provides it, otherwise use local state
   const [localSelectedCategoryName, setLocalSelectedCategoryName] = React.useState<string>("");
   const selectedCategoryName = pendingSelection !== undefined ? pendingSelection : localSelectedCategoryName;
@@ -166,7 +168,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
   const columns = [
     {
-      title: "Category",
+      title: t("guardrails.contentCategoryConfiguration.colCategory"),
       dataIndex: "display_name",
       key: "display_name",
       render: (text: string, record: SelectedCategory) => {
@@ -182,7 +184,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       },
     },
     {
-      title: "Action",
+      title: t("guardrails.contentCategoryConfiguration.colAction"),
       dataIndex: "action",
       key: "action",
       width: 150,
@@ -202,7 +204,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       ),
     },
     {
-      title: "Severity Threshold",
+      title: t("guardrails.contentCategoryConfiguration.colSeverityThreshold"),
       dataIndex: "severity_threshold",
       key: "severity_threshold",
       width: 180,
@@ -212,9 +214,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           onChange={(value) => onCategoryUpdate(record.id, "severity_threshold", value)}
           style={{ width: "100%" }}
         >
-          <Option value="low">Low</Option>
-          <Option value="medium">Medium</Option>
-          <Option value="high">High</Option>
+          <Option value="low">{t("guardrails.contentCategoryConfiguration.severityLow")}</Option>
+          <Option value="medium">{t("guardrails.contentCategoryConfiguration.severityMedium")}</Option>
+          <Option value="high">{t("guardrails.contentCategoryConfiguration.severityHigh")}</Option>
         </Select>
       ),
     },
@@ -224,7 +226,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       width: 80,
       render: (_: any, record: SelectedCategory) => (
         <Button icon={<DeleteOutlined />} onClick={() => onCategoryRemove(record.id)} size="small">
-          Remove
+          {t("common.remove")}
         </Button>
       ),
     },
@@ -241,10 +243,10 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}
         >
           <Title level={5} style={{ margin: 0 }}>
-            Blocked topics
+            {t("guardrails.contentCategoryConfiguration.title")}
           </Title>
           <Text type="secondary" style={{ fontSize: 12, fontWeight: 400 }}>
-            Select topics to block using keyword and semantic analysis
+            {t("guardrails.contentCategoryConfiguration.subtitle")}
           </Text>
         </div>
       }
@@ -252,7 +254,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     >
       <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
         <Select
-          placeholder="Select a content category"
+          placeholder={t("guardrails.contentCategoryConfiguration.selectPlaceholder")}
           value={selectedCategoryName || undefined}
           onChange={setSelectedCategoryName}
           style={{ flex: 1 }}
@@ -272,7 +274,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           ))}
         </Select>
         <Button type="primary" onClick={handleAddCategory} disabled={!selectedCategoryName} icon={<PlusOutlined />}>
-          Add
+          {t("common.add")}
         </Button>
       </div>
 
@@ -288,7 +290,8 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           }}
         >
           <div style={{ marginBottom: 8, fontWeight: 500, fontSize: "14px" }}>
-            Preview: {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
+            {t("guardrails.contentCategoryConfiguration.previewLabel")}:{" "}
+            {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
             {categoryFileTypes[selectedCategoryName] && (
               <span style={{ marginLeft: 8, fontSize: "12px", color: "#888", fontWeight: 400 }}>
                 ({categoryFileTypes[selectedCategoryName]?.toUpperCase()})
@@ -296,7 +299,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             )}
           </div>
           {loadingPreviewYaml ? (
-            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
+            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
+              {t("guardrails.contentCategoryConfiguration.loadingContent")}
+            </div>
           ) : previewYaml ? (
             <pre
               style={{
@@ -318,7 +323,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             </pre>
           ) : (
             <div style={{ padding: "8px", textAlign: "center", color: "#888", fontSize: "12px" }}>
-              Unable to load category content
+              {t("guardrails.contentCategoryConfiguration.unableToLoadContent")}
             </div>
           )}
         </div>
@@ -355,12 +360,17 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <FileTextOutlined />
                       <span>
-                        View {fileTypeLabel} for {category.display_name}
+                        {t("guardrails.contentCategoryConfiguration.viewFileFor", {
+                          fileType: fileTypeLabel,
+                          name: category.display_name,
+                        })}
                       </span>
                     </div>
                   ),
                   children: loadingYaml[category.category] ? (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
+                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
+                      {t("guardrails.contentCategoryConfiguration.loadingContent")}
+                    </div>
                   ) : categoryYaml[category.category] ? (
                     <pre
                       style={{
@@ -378,7 +388,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                     </pre>
                   ) : (
                     <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      Content will load when expanded
+                      {t("guardrails.contentCategoryConfiguration.contentWillLoad")}
                     </div>
                   ),
                 };
@@ -396,7 +406,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             borderRadius: "4px",
           }}
         >
-          No blocked topics selected. Add topics to detect and block harmful content.
+          {t("guardrails.contentCategoryConfiguration.noTopicsSelected")}
         </div>
       )}
     </Card>

@@ -4,6 +4,7 @@
  */
 
 import { Collapse, Typography } from "antd";
+import { useTranslation } from "react-i18next";
 import { LogEntry } from "../columns";
 import { parseToolsFromLog } from "./utils";
 import { ToolItem } from "./ToolItem";
@@ -15,6 +16,7 @@ interface ToolsSectionProps {
 }
 
 export function ToolsSection({ log }: ToolsSectionProps) {
+  const { t } = useTranslation();
   const tools = parseToolsFromLog(log);
 
   // Don't render if no tools
@@ -40,9 +42,9 @@ export function ToolsSection({ log }: ToolsSectionProps) {
             key: "1",
             label: (
               <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <h3 className="text-lg font-medium text-gray-900">Tools</h3>
+                <h3 className="text-lg font-medium text-gray-900">{t("viewLogs.toolsSection.title")}</h3>
                 <Text type="secondary" style={{ fontSize: 14 }}>
-                  {totalTools} provided, {calledTools} called
+                  {t("viewLogs.toolsSection.summary", { total: totalTools, called: calledTools })}
                 </Text>
                 <Text type="secondary" style={{ fontSize: 14 }}>
                   • {toolNamePreview}

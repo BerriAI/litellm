@@ -1,5 +1,6 @@
 import React from "react";
 import { Alert, Tag, Typography } from "antd";
+import { useTranslation, Trans } from "react-i18next";
 
 const { Text } = Typography;
 
@@ -15,34 +16,37 @@ interface ImpactPreviewAlertProps {
 }
 
 const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult }) => {
+  const { t } = useTranslation();
+
   return (
     <Alert
       type={impactResult.affected_keys_count === -1 ? "warning" : "info"}
       showIcon
       className="mb-4"
-      message="Impact Preview"
+      message={t("policies.impactPreviewAlert.message")}
       description={
         impactResult.affected_keys_count === -1 ? (
           <Text>
-            Global scope — this will affect <strong>all keys and teams</strong>.
+            <Trans i18nKey="policies.impactPreviewAlert.globalScopeDesc" components={{ strong: <strong /> }} />
           </Text>
         ) : (
           <div>
-            <Text>
-              This attachment would affect{" "}
-              <strong>
-                {impactResult.affected_keys_count} key{impactResult.affected_keys_count !== 1 ? "s" : ""}
-              </strong>{" "}
-              and{" "}
-              <strong>
-                {impactResult.affected_teams_count} team{impactResult.affected_teams_count !== 1 ? "s" : ""}
-              </strong>
-              .
+            <Text data-testid="impact-summary">
+              <Trans
+                i18nKey="policies.impactPreviewAlert.attachmentAffects"
+                values={{
+                  keysCount: impactResult.affected_keys_count,
+                  keysWord: t("policies.impactPreviewAlert.keyWord", { count: impactResult.affected_keys_count }),
+                  teamsCount: impactResult.affected_teams_count,
+                  teamsWord: t("policies.impactPreviewAlert.teamWord", { count: impactResult.affected_teams_count }),
+                }}
+                components={[<strong key="keys" />, <strong key="teams" />]}
+              />
             </Text>
             {impactResult.sample_keys.length > 0 && (
               <div className="mt-1">
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Keys:{" "}
+                  {t("policies.impactPreviewAlert.keysLabel")}{" "}
                 </Text>
                 {impactResult.sample_keys.slice(0, 5).map((k: string) => (
                   <Tag key={k} style={{ fontSize: 11 }}>
@@ -51,7 +55,7 @@ const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult })
                 ))}
                 {impactResult.affected_keys_count > 5 && (
                   <Text type="secondary" style={{ fontSize: 11 }}>
-                    and {impactResult.affected_keys_count - 5} more...
+                    {t("policies.impactPreviewAlert.andMore", { count: impactResult.affected_keys_count - 5 })}
                   </Text>
                 )}
               </div>
@@ -59,16 +63,16 @@ const ImpactPreviewAlert: React.FC<ImpactPreviewAlertProps> = ({ impactResult })
             {impactResult.sample_teams.length > 0 && (
               <div className="mt-1">
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Teams:{" "}
+                  {t("policies.impactPreviewAlert.teamsLabel")}{" "}
                 </Text>
-                {impactResult.sample_teams.slice(0, 5).map((t: string) => (
-                  <Tag key={t} style={{ fontSize: 11 }}>
-                    {t}
+                {impactResult.sample_teams.slice(0, 5).map((teamName: string) => (
+                  <Tag key={teamName} style={{ fontSize: 11 }}>
+                    {teamName}
                   </Tag>
                 ))}
                 {impactResult.affected_teams_count > 5 && (
                   <Text type="secondary" style={{ fontSize: 11 }}>
-                    and {impactResult.affected_teams_count - 5} more...
+                    {t("policies.impactPreviewAlert.andMore", { count: impactResult.affected_teams_count - 5 })}
                   </Text>
                 )}
               </div>

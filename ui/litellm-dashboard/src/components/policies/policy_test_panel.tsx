@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Form, Select, Alert, Tag, Empty, Typography } from "antd";
 import { Button } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 import { resolvePoliciesCall, teamListCall, keyListCall, modelAvailableCall } from "../networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -22,6 +23,7 @@ interface ResolveResult {
 }
 
 const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<ResolveResult | null>(null);
@@ -99,46 +101,43 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
     <div>
       <div className="bg-white border rounded-lg p-6 mb-6">
         <div className="mb-5">
-          <h3 className="text-base font-semibold mb-1">Policy Simulator</h3>
-          <Text type="secondary">
-            Simulate a request to see which policies and guardrails would apply. Select a team, key, model, or tags
-            below and click &quot;Simulate&quot; to see the results.
-          </Text>
+          <h3 className="text-base font-semibold mb-1">{t("policies.policyTestPanel.title")}</h3>
+          <Text type="secondary">{t("policies.policyTestPanel.subtitle")}</Text>
         </div>
 
         <Form form={form} layout="vertical">
           <div className="grid grid-cols-2 gap-4">
-            <Form.Item name="team_alias" label="Team Alias" className="mb-3">
+            <Form.Item name="team_alias" label={t("policies.policyTestPanel.teamAliasLabel")} className="mb-3">
               <Select
                 showSearch
                 allowClear
-                placeholder="Select or type a team alias"
-                options={availableTeams.map((t) => ({ label: t, value: t }))}
+                placeholder={t("policies.policyTestPanel.teamAliasPlaceholder")}
+                options={availableTeams.map((team) => ({ label: team, value: team }))}
                 filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
               />
             </Form.Item>
-            <Form.Item name="key_alias" label="Key Alias" className="mb-3">
+            <Form.Item name="key_alias" label={t("policies.policyTestPanel.keyAliasLabel")} className="mb-3">
               <Select
                 showSearch
                 allowClear
-                placeholder="Select or type a key alias"
+                placeholder={t("policies.policyTestPanel.keyAliasPlaceholder")}
                 options={availableKeys.map((k) => ({ label: k, value: k }))}
                 filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
               />
             </Form.Item>
-            <Form.Item name="model" label="Model" className="mb-3">
+            <Form.Item name="model" label={t("policies.policyTestPanel.modelLabel")} className="mb-3">
               <Select
                 showSearch
                 allowClear
-                placeholder="Select or type a model"
+                placeholder={t("policies.policyTestPanel.modelPlaceholder")}
                 options={availableModels.map((m) => ({ label: m, value: m }))}
                 filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
               />
             </Form.Item>
-            <Form.Item name="tags" label="Tags" className="mb-3">
+            <Form.Item name="tags" label={t("policies.policyTestPanel.tagsLabel")} className="mb-3">
               <Select
                 mode="tags"
-                placeholder="Type a tag and press Enter"
+                placeholder={t("policies.policyTestPanel.tagsPlaceholder")}
                 tokenSeparators={[",", " "]}
                 notFoundContent={null}
                 suffixIcon={null}
@@ -148,10 +147,10 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
           </div>
           <div className="flex space-x-2">
             <Button onClick={handleTest} loading={isLoading} disabled={!accessToken}>
-              Simulate
+              {t("policies.policyTestPanel.simulate")}
             </Button>
             <Button variant="secondary" onClick={handleReset}>
-              Reset
+              {t("common.reset")}
             </Button>
           </div>
         </Form>
@@ -175,22 +174,19 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
               />
             </svg>
           </div>
-          <p className="text-sm font-medium text-gray-600 mb-1">No simulation run yet</p>
-          <p className="text-xs text-gray-400">
-            Fill in one or more fields above and click &quot;Simulate&quot; to see which policies and guardrails would
-            apply to that request.
-          </p>
+          <p className="text-sm font-medium text-gray-600 mb-1">{t("policies.policyTestPanel.noSimulationYet")}</p>
+          <p className="text-xs text-gray-400">{t("policies.policyTestPanel.noSimulationHint")}</p>
         </div>
       )}
 
       {hasSearched && result && (
         <div className="bg-white border rounded-lg p-6">
           {result.matched_policies.length === 0 ? (
-            <Empty description="No policies matched this context" />
+            <Empty description={t("policies.policyTestPanel.noPoliciesMatched")} />
           ) : (
             <>
               <div className="mb-4">
-                <p className="text-sm font-semibold mb-2">Effective Guardrails</p>
+                <p className="text-sm font-semibold mb-2">{t("policies.policyTestPanel.effectiveGuardrails")}</p>
                 <div className="flex flex-wrap gap-1">
                   {result.effective_guardrails.length > 0 ? (
                     result.effective_guardrails.map((g) => (
@@ -199,19 +195,19 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
                       </Tag>
                     ))
                   ) : (
-                    <span className="text-gray-400 text-sm">None</span>
+                    <span className="text-gray-400 text-sm">{t("common.none")}</span>
                   )}
                 </div>
               </div>
 
               <div>
-                <p className="text-sm font-semibold mb-2">Matched Policies</p>
+                <p className="text-sm font-semibold mb-2">{t("policies.policyTestPanel.matchedPolicies")}</p>
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b">
-                      <th className="text-left py-2 pr-4">Policy</th>
-                      <th className="text-left py-2 pr-4">Matched Via</th>
-                      <th className="text-left py-2">Guardrails Added</th>
+                      <th className="text-left py-2 pr-4">{t("policies.policyTestPanel.colPolicy")}</th>
+                      <th className="text-left py-2 pr-4">{t("policies.policyTestPanel.colMatchedVia")}</th>
+                      <th className="text-left py-2">{t("policies.policyTestPanel.colGuardrailsAdded")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -231,7 +227,7 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
                               ))}
                             </div>
                           ) : (
-                            <span className="text-gray-400">None</span>
+                            <span className="text-gray-400">{t("common.none")}</span>
                           )}
                         </td>
                       </tr>
@@ -245,7 +241,12 @@ const PolicyTestPanel: React.FC<PolicyTestPanelProps> = ({ accessToken }) => {
       )}
 
       {hasSearched && !result && !isLoading && (
-        <Alert message="Error" description="Failed to resolve policies. Check the proxy logs." type="error" showIcon />
+        <Alert
+          message={t("common.error")}
+          description={t("policies.policyTestPanel.resolveFailed")}
+          type="error"
+          showIcon
+        />
       )}
     </div>
   );

@@ -6,7 +6,9 @@ import {
   SaveOutlined,
 } from "@ant-design/icons";
 import { Button, Input, Select, Switch } from "antd";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 interface GuardrailConfigProps {
   guardrailName: string;
@@ -14,19 +16,47 @@ interface GuardrailConfigProps {
   provider: string;
 }
 
-const versions = [
+const versionsBase = [
   {
     id: "v3",
-    label: "v3 (current)",
     date: "2026-02-18",
     author: "admin@company.com",
     changes: "Adjusted sensitivity for medical terms",
   },
-  { id: "v2", label: "v2", date: "2026-02-10", author: "admin@company.com", changes: "Added custom categories list" },
-  { id: "v1", label: "v1", date: "2026-01-28", author: "admin@company.com", changes: "Initial configuration" },
+  { id: "v2", date: "2026-02-10", author: "admin@company.com", changes: "Added custom categories list" },
+  { id: "v1", date: "2026-01-28", author: "admin@company.com", changes: "Initial configuration" },
+];
+
+const getVersions = (t: TFunction, currentId: string) =>
+  versionsBase.map((v) => ({
+    ...v,
+    label: v.id === currentId ? `${v.id} (${t("guardrailsMonitor.guardrailConfig.current")})` : v.id,
+  }));
+
+const getActionOptions = (t: TFunction) => [
+  { value: "block", label: t("guardrailsMonitor.guardrailConfig.actionBlock") },
+  { value: "flag", label: t("guardrailsMonitor.guardrailConfig.actionFlag") },
+  { value: "log", label: t("guardrailsMonitor.guardrailConfig.actionLog") },
+  { value: "fallback", label: t("guardrailsMonitor.guardrailConfig.actionFallback") },
+];
+
+const getProviderOptions = (t: TFunction) => [
+  { value: "bedrock", label: t("guardrailsMonitor.guardrailConfig.providerBedrock") },
+  { value: "google", label: t("guardrailsMonitor.guardrailConfig.providerGoogle") },
+  { value: "litellm", label: t("guardrailsMonitor.guardrailConfig.providerLiteLLM") },
+  { value: "custom", label: t("guardrailsMonitor.guardrailConfig.providerCustom") },
+];
+
+const getGuardrailTypeOptions = (t: TFunction) => [
+  { value: "Content Safety", label: t("guardrailsMonitor.guardrailConfig.typeContentSafety") },
+  { value: "PII", label: t("guardrailsMonitor.guardrailConfig.typePII") },
+  { value: "Topic", label: t("guardrailsMonitor.guardrailConfig.typeTopic") },
+  { value: "prompt_injection", label: t("guardrailsMonitor.guardrailConfig.typePromptInjection") },
+  { value: "custom", label: t("guardrailsMonitor.guardrailConfig.typeCustom") },
 ];
 
 export function GuardrailConfig({ guardrailName, guardrailType, provider }: GuardrailConfigProps) {
+  const { t } = useTranslation();
   const [action, setAction] = useState("block");
   const [enabled, setEnabled] = useState(true);
   const [customCode, setCustomCode] = useState("");
@@ -34,6 +64,11 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
   const [rerunStatus, setRerunStatus] = useState<"idle" | "running" | "success" | "error">("idle");
   const [version, setVersion] = useState("v3");
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+
+  const versions = useMemo(() => getVersions(t, version), [t, version]);
+  const actionOptions = useMemo(() => getActionOptions(t), [t]);
+  const providerOptions = useMemo(() => getProviderOptions(t), [t]);
+  const guardrailTypeOptions = useMemo(() => getGuardrailTypeOptions(t), [t]);
 
   const handleRerun = () => {
     setRerunStatus("running");
@@ -49,7 +84,9 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
       <div className="bg-white border border-gray-200 rounded-lg p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="text-sm font-medium text-gray-700">Version:</span>
+            <span className="text-sm font-medium text-gray-700">
+              {t("guardrailsMonitor.guardrailConfig.versionLabel")}
+            </span>
             <Select
               value={version}
               onChange={setVersion}
@@ -57,13 +94,17 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
               style={{ width: 140 }}
             />
             <Button type="link" size="small" onClick={() => setShowVersionHistory(!showVersionHistory)}>
-              {showVersionHistory ? "Hide history" : "View history"}
+              {showVersionHistory
+                ? t("guardrailsMonitor.guardrailConfig.hideHistory")
+                : t("guardrailsMonitor.guardrailConfig.viewHistory")}
             </Button>
           </div>
           <div className="flex items-center gap-2">
-            <Button icon={<RollbackOutlined />}>Revert</Button>
+            <Button icon={<RollbackOutlined />}>{t("guardrailsMonitor.guardrailConfig.revert")}</Button>
             <Button type="primary" icon={<SaveOutlined />}>
-              Save as v{parseInt(version.replace("v", ""), 10) + 1}
+              {t("guardrailsMonitor.guardrailConfig.saveAsVersion", {
+                version: parseInt(version.replace("v", ""), 10) + 1,
+              })}
             </Button>
           </div>
         </div>
@@ -97,62 +138,45 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
 
       {/* Parameters */}
       <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-1">Parameters</h3>
-        <p className="text-xs text-gray-500 mb-5">Configure {guardrailName} behavior</p>
+        <h3 className="text-base font-semibold text-gray-900 mb-1">
+          {t("guardrailsMonitor.guardrailConfig.parametersTitle")}
+        </h3>
+        <p className="text-xs text-gray-500 mb-5">
+          {t("guardrailsMonitor.guardrailConfig.parametersDesc", { name: guardrailName })}
+        </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Action on Failure</label>
-            <Select
-              value={action}
-              onChange={setAction}
-              style={{ width: "100%" }}
-              options={[
-                { value: "block", label: "Block Request" },
-                { value: "flag", label: "Flag for Review" },
-                { value: "log", label: "Log Only" },
-                { value: "fallback", label: "Use Fallback Response" },
-              ]}
-            />
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              {t("guardrailsMonitor.guardrailConfig.actionOnFailure")}
+            </label>
+            <Select value={action} onChange={setAction} style={{ width: "100%" }} options={actionOptions} />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Provider</label>
-            <Select
-              style={{ width: "100%" }}
-              defaultValue={provider}
-              options={[
-                { value: "bedrock", label: "AWS Bedrock Guardrails" },
-                { value: "google", label: "Google Cloud AI Safety" },
-                { value: "litellm", label: "LiteLLM Built-in" },
-                { value: "custom", label: "Custom Code" },
-              ]}
-            />
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              {t("guardrailsMonitor.guardrailConfig.providerLabel")}
+            </label>
+            <Select style={{ width: "100%" }} defaultValue={provider} options={providerOptions} />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Guardrail Type</label>
-            <Select
-              style={{ width: "100%" }}
-              defaultValue={guardrailType}
-              options={[
-                { value: "Content Safety", label: "Content Safety" },
-                { value: "PII", label: "PII Detection" },
-                { value: "Topic", label: "Topic Restriction" },
-                { value: "prompt_injection", label: "Prompt Injection" },
-                { value: "custom", label: "Custom" },
-              ]}
-            />
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              {t("guardrailsMonitor.guardrailConfig.guardrailTypeLabel")}
+            </label>
+            <Select style={{ width: "100%" }} defaultValue={guardrailType} options={guardrailTypeOptions} />
           </div>
 
           <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Categories (comma-separated)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              {t("guardrailsMonitor.guardrailConfig.categoriesLabel")}
+            </label>
             <Input defaultValue="violence, hate_speech, sexual_content, self_harm, illegal_activity" />
           </div>
 
           <div className="md:col-span-2 flex items-center gap-3">
             <Switch checked={enabled} onChange={setEnabled} />
-            <span className="text-sm text-gray-700">Guardrail enabled in production</span>
+            <span className="text-sm text-gray-700">{t("guardrailsMonitor.guardrailConfig.enabledInProduction")}</span>
           </div>
         </div>
       </div>
@@ -163,9 +187,9 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
           <div>
             <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
               <CodeOutlined className="text-gray-500" />
-              Custom Code Override
+              {t("guardrailsMonitor.guardrailConfig.customCodeTitle")}
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">Replace the built-in guardrail with custom evaluation code</p>
+            <p className="text-xs text-gray-500 mt-0.5">{t("guardrailsMonitor.guardrailConfig.customCodeDesc")}</p>
           </div>
           <Switch checked={useCustomCode} onChange={setUseCustomCode} />
         </div>
@@ -188,10 +212,10 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
 
       {/* Re-run on Failing Logs */}
       <div className="bg-white border border-gray-200 rounded-lg p-6">
-        <h3 className="text-base font-semibold text-gray-900 mb-1">Test Configuration</h3>
-        <p className="text-xs text-gray-500 mb-4">
-          Re-run this guardrail on recent failing logs to validate your changes
-        </p>
+        <h3 className="text-base font-semibold text-gray-900 mb-1">
+          {t("guardrailsMonitor.guardrailConfig.testConfigTitle")}
+        </h3>
+        <p className="text-xs text-gray-500 mb-4">{t("guardrailsMonitor.guardrailConfig.testConfigDesc")}</p>
 
         <div className="flex items-center gap-3">
           <Button
@@ -200,16 +224,20 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
             loading={rerunStatus === "running"}
             onClick={handleRerun}
           >
-            {rerunStatus === "running" ? "Running on 10 samples..." : "Re-run on failing logs"}
+            {rerunStatus === "running"
+              ? t("guardrailsMonitor.guardrailConfig.runningOnSamples")
+              : t("guardrailsMonitor.guardrailConfig.rerunOnFailingLogs")}
           </Button>
 
           {rerunStatus === "success" && (
             <span className="text-sm text-green-600 flex items-center gap-2">
-              <CheckCircleOutlined /> 7/10 would now pass with new config
+              <CheckCircleOutlined /> {t("guardrailsMonitor.guardrailConfig.rerunSuccess")}
             </span>
           )}
 
-          {rerunStatus === "error" && <span className="text-sm text-red-600">Error running tests</span>}
+          {rerunStatus === "error" && (
+            <span className="text-sm text-red-600">{t("guardrailsMonitor.guardrailConfig.rerunError")}</span>
+          )}
         </div>
       </div>
     </div>

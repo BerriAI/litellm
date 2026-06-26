@@ -2,7 +2,8 @@
  * Utility functions for working with navigation pages
  */
 
-import { menuGroups } from "./leftnav";
+import type { TFunction } from "i18next";
+import { getMenuGroups } from "./leftnav";
 import { pageDescriptions, PageMetadata } from "./page_metadata";
 import { internalUserRoles } from "@/utils/roles";
 
@@ -29,10 +30,10 @@ const isPageAccessibleToInternalUsers = (pageRoles?: string[]): boolean => {
  * Pages restricted to admin-only roles are excluded because internal users
  * cannot see them regardless of the UI visibility setting.
  */
-export const getAvailablePages = (): PageMetadata[] => {
+export const getAvailablePages = (t: TFunction): PageMetadata[] => {
   const pages: PageMetadata[] = [];
 
-  menuGroups.forEach((group) => {
+  getMenuGroups(t).forEach((group) => {
     group.items.forEach((item) => {
       // Add top-level items (skip parent containers like 'tools', 'experimental', 'settings')
       // Also skip items that internal users cannot access

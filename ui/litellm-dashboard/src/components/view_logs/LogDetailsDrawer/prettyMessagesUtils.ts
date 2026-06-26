@@ -2,38 +2,39 @@
  * Utility functions for parsing and formatting messages for pretty view
  */
 
+import type { TFunction } from "i18next";
 import { ParsedMessage, ParsedMessages, RoleStyle } from "./prettyMessagesTypes";
 
 /**
  * Role color styles for message cards - minimal, professional design
  * Color only used for labels and left border accent
  */
-export const ROLE_STYLES: Record<string, RoleStyle> = {
+export const getRoleStyles = (t: TFunction): Record<string, RoleStyle> => ({
   system: {
     background: "transparent",
     borderColor: "#8c8c8c",
-    label: "SYSTEM",
+    label: t("viewLogs.prettyMessagesUtils.roleSystem"),
     labelColor: "#8c8c8c",
   },
   user: {
     background: "transparent",
     borderColor: "#1677ff",
-    label: "USER",
+    label: t("viewLogs.prettyMessagesUtils.roleUser"),
     labelColor: "#1677ff",
   },
   assistant: {
     background: "transparent",
     borderColor: "#52c41a",
-    label: "ASSISTANT",
+    label: t("viewLogs.prettyMessagesUtils.roleAssistant"),
     labelColor: "#52c41a",
   },
   tool: {
     background: "transparent",
     borderColor: "#fa8c16",
-    label: "TOOL RESULT",
+    label: t("viewLogs.prettyMessagesUtils.roleTool"),
     labelColor: "#fa8c16",
   },
-};
+});
 
 /**
  * Parse request messages and response message from log data

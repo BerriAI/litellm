@@ -3,6 +3,7 @@ import { LoadingOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { Select, Space, Typography } from "antd";
 import { useMemo, useState, type UIEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 
@@ -22,12 +23,13 @@ const DEBOUNCE_MS = 300;
 export const PaginatedModelSelect = ({
   value,
   onChange,
-  placeholder = "Select a model",
+  placeholder,
   style,
   pageSize = 50,
   allowClear = true,
   disabled = false,
 }: PaginatedModelSelectProps) => {
+  const { t } = useTranslation();
   const [searchInput, setSearchInput] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useDebouncedState("", {
     wait: DEBOUNCE_MS,
@@ -73,16 +75,16 @@ export const PaginatedModelSelect = ({
         {modelName ? (
           <Space direction="vertical">
             <Space direction="horizontal">
-              <Text strong>Model name:</Text>
+              <Text strong>{t("modelSelect.paginatedModelSelect.modelNameLabel")}</Text>
               <Text ellipsis>{modelName}</Text>
             </Space>
             <Text ellipsis type="secondary">
-              Model ID: {modelId}
+              {t("modelSelect.paginatedModelSelect.modelIdLabel")} {modelId}
             </Text>
           </Space>
         ) : (
           <Text ellipsis type="secondary">
-            Model ID: {modelId}
+            {t("modelSelect.paginatedModelSelect.modelIdLabel")} {modelId}
           </Text>
         )}
       </>
@@ -112,7 +114,7 @@ export const PaginatedModelSelect = ({
     <Select
       value={value || undefined}
       onChange={handleChange}
-      placeholder={placeholder}
+      placeholder={placeholder ?? t("modelSelect.paginatedModelSelect.placeholder")}
       style={{ width: "100%", ...style }}
       allowClear={allowClear}
       disabled={disabled}
@@ -122,7 +124,7 @@ export const PaginatedModelSelect = ({
       searchValue={searchInput}
       onPopupScroll={handlePopupScroll}
       loading={isLoading}
-      notFoundContent={isLoading ? <LoadingOutlined spin /> : "No models found"}
+      notFoundContent={isLoading ? <LoadingOutlined spin /> : t("modelSelect.paginatedModelSelect.noModelsFound")}
       options={options}
       optionRender={optionRender}
       popupRender={(menu) => (

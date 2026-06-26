@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Input, Popover, Tag } from "antd";
 import { EditOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 const { TextArea } = Input;
 
@@ -13,6 +14,7 @@ interface VariableTextAreaProps {
 }
 
 const VariableTextArea: React.FC<VariableTextAreaProps> = ({ value, onChange, placeholder, rows = 4, className }) => {
+  const { t } = useTranslation();
   const [editingVariable, setEditingVariable] = useState<{
     oldName: string;
     start: number;
@@ -86,19 +88,19 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({ value, onChange, pl
       {/* Variable Management - Clear and Functional */}
       {variables.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2 items-center">
-          <span className="text-xs text-gray-500 mr-1">Detected variables:</span>
+          <span className="text-xs text-gray-500 mr-1">{t("promptsPage.variableTextarea.detectedVariables")}</span>
           {variables.map((variable, index) => (
             <Popover
               key={`${variable.start}-${index}`}
               content={
                 <div className="p-2" style={{ minWidth: "200px" }}>
-                  <div className="text-xs text-gray-500 mb-2">Edit variable name</div>
+                  <div className="text-xs text-gray-500 mb-2">{t("promptsPage.variableTextarea.editVariableName")}</div>
                   <Input
                     size="small"
                     value={newVariableName}
                     onChange={(e) => setNewVariableName(e.target.value)}
                     onPressEnter={handleVariableEdit}
-                    placeholder="Variable name"
+                    placeholder={t("promptsPage.variableTextarea.variableNamePlaceholder")}
                     autoFocus
                   />
                   <div className="flex gap-2 mt-2">
@@ -106,7 +108,7 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({ value, onChange, pl
                       onClick={handleVariableEdit}
                       className="text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
                     >
-                      Save
+                      {t("common.save")}
                     </button>
                     <button
                       onClick={() => {
@@ -115,7 +117,7 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({ value, onChange, pl
                       }}
                       className="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
                     >
-                      Cancel
+                      {t("common.cancel")}
                     </button>
                   </div>
                 </div>

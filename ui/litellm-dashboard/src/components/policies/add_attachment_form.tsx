@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
 import { Button } from "@tremor/react";
+import { useTranslation, Trans } from "react-i18next";
 import { Policy } from "./types";
 import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -27,6 +28,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   policies,
   createAttachment,
 }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [scopeType, setScopeType] = useState<"global" | "specific">("global");
@@ -158,11 +160,11 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
 
       if (successCount > 0 && failed.length === 0) {
-        NotificationsManager.success(
-          successCount === 1 ? "Attachment created successfully" : `${successCount} attachments created successfully`,
-        );
+        NotificationsManager.success(t("policies.addAttachmentForm.attachmentCreatedSuccess", { count: successCount }));
       } else if (successCount > 0 && failed.length > 0) {
-        NotificationsManager.fromBackend(`${successCount} attachments created, ${failed.length} failed`);
+        NotificationsManager.fromBackend(
+          t("policies.addAttachmentForm.attachmentsPartialSuccess", { successCount, failedCount: failed.length }),
+        );
       } else {
         throw new Error(failed[0]?.reason instanceof Error ? failed[0].reason.message : "Failed to create attachments");
       }
@@ -173,7 +175,9 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     } catch (error) {
       console.error("Failed to create attachment:", error);
       NotificationsManager.fromBackend(
-        "Failed to create attachment: " + (error instanceof Error ? error.message : String(error)),
+        t("policies.addAttachmentForm.createAttachmentFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
       );
     } finally {
       setIsSubmitting(false);
@@ -186,7 +190,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   }));
 
   return (
-    <Modal title="Create Policy Attachment" open={visible} onCancel={handleClose} footer={null} width={600}>
+    <Modal
+      title={t("policies.addAttachmentForm.modalTitle")}
+      open={visible}
+      onCancel={handleClose}
+      footer={null}
+      width={600}
+    >
       <Form
         form={form}
         layout="vertical"
@@ -196,12 +206,12 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
       >
         <Form.Item
           name="policy_names"
-          label="Policies"
-          rules={[{ required: true, message: "Please select at least one policy" }]}
+          label={t("policies.addAttachmentForm.policiesLabel")}
+          rules={[{ required: true, message: t("policies.addAttachmentForm.policiesRequired") }]}
         >
           <Select
             mode="multiple"
-            placeholder="Select policies to attach"
+            placeholder={t("policies.addAttachmentForm.policiesPlaceholder")}
             options={policyOptions}
             showSearch
             filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
@@ -210,13 +220,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
         </Form.Item>
 
         <Divider orientation="left">
-          <Text strong>Scope</Text>
+          <Text strong>{t("policies.addAttachmentForm.scopeDivider")}</Text>
         </Divider>
 
-        <Form.Item label="Scope Type">
+        <Form.Item label={t("policies.addAttachmentForm.scopeTypeLabel")}>
           <Radio.Group value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
-            <Radio value="specific">Specific (teams, keys, models, or tags)</Radio>
-            <Radio value="global">Global (applies to all requests)</Radio>
+            <Radio value="specific">{t("policies.addAttachmentForm.scopeSpecific")}</Radio>
+            <Radio value="global">{t("policies.addAttachmentForm.scopeGlobal")}</Radio>
           </Radio.Group>
         </Form.Item>
 
@@ -224,12 +234,12 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
           <>
             <Form.Item
               name="teams"
-              label="Teams"
-              tooltip="Select team aliases or enter custom patterns. Supports wildcards (e.g., healthcare-*)"
+              label={t("policies.addAttachmentForm.teamsLabel")}
+              tooltip={t("policies.addAttachmentForm.teamsTooltip")}
             >
               <Select
                 mode="tags"
-                placeholder={isLoadingTeams ? "Loading teams..." : "Select or enter team aliases"}
+                placeholder={isLoadingTeams ? t("common.loading") : t("policies.addAttachmentForm.teamsPlaceholder")}
                 loading={isLoadingTeams}
                 options={availableTeams.map((team) => ({
                   label: team,
@@ -244,12 +254,12 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
 
             <Form.Item
               name="keys"
-              label="Keys"
-              tooltip="Select key aliases or enter custom patterns. Supports wildcards (e.g., dev-*)"
+              label={t("policies.addAttachmentForm.keysLabel")}
+              tooltip={t("policies.addAttachmentForm.keysTooltip")}
             >
               <Select
                 mode="tags"
-                placeholder={isLoadingKeys ? "Loading keys..." : "Select or enter key aliases"}
+                placeholder={isLoadingKeys ? t("common.loading") : t("policies.addAttachmentForm.keysPlaceholder")}
                 loading={isLoadingKeys}
                 options={availableKeys.map((key) => ({
                   label: key,
@@ -264,14 +274,12 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
 
             <Form.Item
               name="models"
-              label="Models"
-              tooltip="Model names this attachment applies to. Supports wildcards (e.g., gpt-4*). Leave empty to apply to all models."
+              label={t("policies.addAttachmentForm.modelsLabel")}
+              tooltip={t("policies.addAttachmentForm.modelsTooltip")}
             >
               <Select
                 mode="tags"
-                placeholder={
-                  isLoadingModels ? "Loading models..." : "Select or enter model names (e.g., gpt-4, bedrock/*)"
-                }
+                placeholder={isLoadingModels ? t("common.loading") : t("policies.addAttachmentForm.modelsPlaceholder")}
                 loading={isLoadingModels}
                 options={availableModels.map((model) => ({
                   label: model,
@@ -286,19 +294,17 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
 
             <Form.Item
               name="tags"
-              label="Tags"
-              tooltip="Match against tags set in key or team metadata. Use exact values (e.g., healthcare) or wildcard patterns (e.g., health-*) where * matches any suffix."
+              label={t("policies.addAttachmentForm.tagsLabel")}
+              tooltip={t("policies.addAttachmentForm.tagsTooltip")}
               extra={
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request body.
-                  Use <code>*</code> as a suffix wildcard (e.g., <code>prod-*</code> matches <code>prod-us</code>,{" "}
-                  <code>prod-eu</code>).
+                  <Trans i18nKey="policies.addAttachmentForm.tagsExtra" components={{ code: <code /> }} />
                 </Text>
               }
             >
               <Select
                 mode="tags"
-                placeholder="Type a tag and press Enter (e.g. healthcare, prod-*)"
+                placeholder={t("policies.addAttachmentForm.tagsPlaceholder")}
                 tokenSeparators={[",", " "]}
                 notFoundContent={null}
                 suffixIcon={null}
@@ -313,15 +319,15 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
 
         <div className="flex justify-end space-x-2 mt-4">
           <Button variant="secondary" onClick={handleClose}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           {scopeType === "specific" && (
             <Button variant="secondary" onClick={handlePreviewImpact} loading={isEstimating}>
-              Estimate Impact
+              {t("policies.addAttachmentForm.estimateImpact")}
             </Button>
           )}
           <Button onClick={handleSubmit} loading={isSubmitting}>
-            Create Attachment
+            {t("policies.addAttachmentForm.createAttachment")}
           </Button>
         </div>
       </Form>

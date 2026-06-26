@@ -8,6 +8,7 @@ import ComplianceUI from "@/app/(dashboard)/playground/components/complianceUI/C
 import { TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchProxySettings } from "@/utils/proxyUtils";
+import { useTranslation } from "react-i18next";
 
 interface ProxySettings {
   PROXY_BASE_URL?: string;
@@ -15,6 +16,7 @@ interface ProxySettings {
 }
 
 export default function PlaygroundPage() {
+  const { t } = useTranslation();
   const { accessToken, userRole, userId, disabledPersonalKeyCreation, token } = useAuthorized();
   const [proxySettings, setProxySettings] = useState<ProxySettings | undefined>(undefined);
 
@@ -38,10 +40,10 @@ export default function PlaygroundPage() {
     <div className="h-full w-full flex flex-col">
       <TabGroup className="w-full" style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         <TabList className="mb-0">
-          <Tab>Chat</Tab>
-          <Tab>Compare</Tab>
-          <Tab>Compliance</Tab>
-          <Tab>Agent Builder (Experimental)</Tab>
+          <Tab>{t("pages.playgroundPage.tabChat")}</Tab>
+          <Tab>{t("pages.playgroundPage.tabCompare")}</Tab>
+          <Tab>{t("pages.playgroundPage.tabCompliance")}</Tab>
+          <Tab>{t("pages.playgroundPage.tabAgentBuilder")}</Tab>
         </TabList>
         <TabPanels className="h-full">
           <TabPanel className="h-full">

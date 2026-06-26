@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Spin } from "antd";
+import { useTranslation } from "react-i18next";
 import { fetchOpenAPIRegistry } from "../networking";
 
 export interface OpenAPIKeyTool {
@@ -29,6 +30,7 @@ interface OpenAPIQuickPickerProps {
 }
 
 const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, selectedName, onSelect }) => {
+  const { t } = useTranslation();
   const [apis, setApis] = useState<OpenAPIRegistryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [imgErrors, setImgErrors] = useState<Set<string>>(new Set());
@@ -49,7 +51,7 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, se
   if (loading) {
     return (
       <div className="mb-4">
-        <span className="text-sm font-medium text-gray-700">Popular APIs</span>
+        <span className="text-sm font-medium text-gray-700">{t("mcpTools.openAPIQuickPicker.popularApis")}</span>
         <div className="flex justify-center py-6">
           <Spin size="small" />
         </div>
@@ -61,7 +63,9 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, se
 
   return (
     <div className="mb-4">
-      <span className="text-sm font-medium text-gray-700 block mb-2">Popular APIs</span>
+      <span className="text-sm font-medium text-gray-700 block mb-2">
+        {t("mcpTools.openAPIQuickPicker.popularApis")}
+      </span>
 
       <div className="grid grid-cols-5 gap-2">
         {apis.map((api) => {
@@ -98,9 +102,7 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, se
         })}
       </div>
 
-      <p className="text-xs text-gray-400 mt-2">
-        Select an API to pre-fill the spec URL and OAuth 2.0 settings, or enter your own spec URL below.
-      </p>
+      <p className="text-xs text-gray-400 mt-2">{t("mcpTools.openAPIQuickPicker.selectHint")}</p>
     </div>
   );
 };

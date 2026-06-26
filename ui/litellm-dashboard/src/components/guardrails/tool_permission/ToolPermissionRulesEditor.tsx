@@ -2,6 +2,7 @@ import React from "react";
 import { Card, Text } from "@tremor/react";
 import { Button, Divider, Empty, Input, Select, Space, Tooltip } from "antd";
 import { InfoCircleOutlined, PlusOutlined, DeleteOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 export type ToolPermissionDecision = "allow" | "deny";
 export type ToolPermissionDefaultAction = "allow" | "deny";
@@ -42,6 +43,7 @@ const ensureConfig = (config?: ToolPermissionConfig): ToolPermissionConfig => ({
 });
 
 const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ value, onChange, disabled = false }) => {
+  const { t } = useTranslation();
   const config = ensureConfig(value);
 
   const updateConfig = (partial: Partial<ToolPermissionConfig>) => {
@@ -119,14 +121,14 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
           size="small"
           onClick={() => updateRule(index, { allowed_param_patterns: { "": "" } })}
         >
-          + Restrict tool arguments (optional)
+          {t("guardrails.toolPermissionRulesEditor.restrictArgs")}
         </Button>
       );
     }
 
     return (
       <div className="space-y-2">
-        <Text className="text-sm text-gray-600">Argument constraints (dot or array paths)</Text>
+        <Text className="text-sm text-gray-600">{t("guardrails.toolPermissionRulesEditor.argConstraints")}</Text>
         {entries.map(([path, pattern], patternIndex) => (
           <Space key={`${rule.id || index}-${patternIndex}`} align="start">
             <Input
@@ -165,7 +167,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
             })
           }
         >
-          + Add another constraint
+          {t("guardrails.toolPermissionRulesEditor.addConstraint")}
         </Button>
       </div>
     );
@@ -175,11 +177,8 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
     <Card>
       <div className="flex items-center justify-between">
         <div>
-          <Text className="text-lg font-semibold">LiteLLM Tool Permission Guardrail</Text>
-          <Text className="text-sm text-gray-500">
-            Provide regex patterns (e.g., ^mcp__github_.*$) for tool names or types and optionally constrain payload
-            fields.
-          </Text>
+          <Text className="text-lg font-semibold">{t("guardrails.toolPermissionRulesEditor.title")}</Text>
+          <Text className="text-sm text-gray-500">{t("guardrails.toolPermissionRulesEditor.subtitle")}</Text>
         </div>
         {!disabled && (
           <Button
@@ -188,7 +187,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
             onClick={addRule}
             className="!bg-blue-600 !text-white hover:!bg-blue-500"
           >
-            Add Rule
+            {t("guardrails.toolPermissionRulesEditor.addRule")}
           </Button>
         )}
       </div>
@@ -196,13 +195,15 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
       <Divider />
 
       {config.rules.length === 0 ? (
-        <Empty description="No tool rules added yet" />
+        <Empty description={t("guardrails.toolPermissionRulesEditor.noRules")} />
       ) : (
         <div className="space-y-4">
           {config.rules.map((rule, index) => (
             <Card key={rule.id || index} className="bg-gray-50">
               <div className="flex items-center justify-between mb-3">
-                <Text className="font-semibold">Rule {index + 1}</Text>
+                <Text className="font-semibold">
+                  {t("guardrails.toolPermissionRulesEditor.ruleLabel", { index: index + 1 })}
+                </Text>
                 <Button
                   icon={<DeleteOutlined />}
                   danger
@@ -210,12 +211,12 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
                   disabled={disabled}
                   onClick={() => removeRule(index)}
                 >
-                  Remove
+                  {t("common.remove")}
                 </Button>
               </div>
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
-                  <Text className="text-sm font-medium">Rule ID</Text>
+                  <Text className="text-sm font-medium">{t("guardrails.toolPermissionRulesEditor.ruleId")}</Text>
                   <Input
                     disabled={disabled}
                     placeholder="unique_rule_id"
@@ -224,7 +225,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
                   />
                 </div>
                 <div>
-                  <Text className="text-sm font-medium">Tool Name (optional)</Text>
+                  <Text className="text-sm font-medium">{t("guardrails.toolPermissionRulesEditor.toolName")}</Text>
                   <Input
                     disabled={disabled}
                     placeholder="^mcp__github_.*$"
@@ -240,7 +241,7 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 mt-4">
                 <div>
-                  <Text className="text-sm font-medium">Tool Type (optional)</Text>
+                  <Text className="text-sm font-medium">{t("guardrails.toolPermissionRulesEditor.toolType")}</Text>
                   <Input
                     disabled={disabled}
                     placeholder="^function$"
@@ -255,15 +256,15 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
               </div>
 
               <div className="mt-4 flex flex-col gap-2">
-                <Text className="text-sm font-medium">Decision</Text>
+                <Text className="text-sm font-medium">{t("guardrails.toolPermissionRulesEditor.decision")}</Text>
                 <Select
                   disabled={disabled}
                   value={rule.decision}
                   style={{ width: 200 }}
                   onChange={(value) => updateRule(index, { decision: value as ToolPermissionDecision })}
                 >
-                  <Select.Option value="allow">Allow</Select.Option>
-                  <Select.Option value="deny">Deny</Select.Option>
+                  <Select.Option value="allow">{t("guardrails.toolPermissionRulesEditor.allow")}</Select.Option>
+                  <Select.Option value="deny">{t("guardrails.toolPermissionRulesEditor.deny")}</Select.Option>
                 </Select>
               </div>
 
@@ -277,20 +278,20 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
 
       <div className="grid gap-4 md:grid-cols-2">
         <div>
-          <Text className="text-sm font-medium">Default action</Text>
+          <Text className="text-sm font-medium">{t("guardrails.toolPermissionRulesEditor.defaultAction")}</Text>
           <Select
             disabled={disabled}
             value={config.default_action}
             onChange={(value) => updateConfig({ default_action: value as ToolPermissionDefaultAction })}
           >
-            <Select.Option value="allow">Allow</Select.Option>
-            <Select.Option value="deny">Deny</Select.Option>
+            <Select.Option value="allow">{t("guardrails.toolPermissionRulesEditor.allow")}</Select.Option>
+            <Select.Option value="deny">{t("guardrails.toolPermissionRulesEditor.deny")}</Select.Option>
           </Select>
         </div>
         <div>
           <Text className="text-sm font-medium flex items-center gap-1">
-            On disallowed action
-            <Tooltip title="Block returns an error when a forbidden tool is invoked. Rewrite strips the tool call but lets the rest of the response continue.">
+            {t("guardrails.toolPermissionRulesEditor.onDisallowedAction")}
+            <Tooltip title={t("guardrails.toolPermissionRulesEditor.onDisallowedTooltip")}>
               <InfoCircleOutlined />
             </Tooltip>
           </Text>
@@ -299,18 +300,18 @@ const ToolPermissionRulesEditor: React.FC<ToolPermissionRulesEditorProps> = ({ v
             value={config.on_disallowed_action}
             onChange={(value) => updateConfig({ on_disallowed_action: value as ToolPermissionOnDisallowedAction })}
           >
-            <Select.Option value="block">Block</Select.Option>
-            <Select.Option value="rewrite">Rewrite</Select.Option>
+            <Select.Option value="block">{t("guardrails.toolPermissionRulesEditor.block")}</Select.Option>
+            <Select.Option value="rewrite">{t("guardrails.toolPermissionRulesEditor.rewrite")}</Select.Option>
           </Select>
         </div>
       </div>
 
       <div className="mt-4">
-        <Text className="text-sm font-medium">Violation message (optional)</Text>
+        <Text className="text-sm font-medium">{t("guardrails.toolPermissionRulesEditor.violationMessage")}</Text>
         <Input.TextArea
           disabled={disabled}
           rows={3}
-          placeholder="This violates our org policy..."
+          placeholder={t("guardrails.toolPermissionRulesEditor.violationMessagePlaceholder")}
           value={config.violation_message_template}
           onChange={(e) => updateConfig({ violation_message_template: e.target.value })}
         />

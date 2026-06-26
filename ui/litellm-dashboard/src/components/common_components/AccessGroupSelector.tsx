@@ -2,6 +2,7 @@ import React from "react";
 import { Select, Skeleton } from "antd";
 import { TeamOutlined } from "@ant-design/icons";
 import { Text } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 import { useAccessGroups, AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 export interface AccessGroupSelectorProps {
@@ -28,14 +29,15 @@ export interface AccessGroupSelectorProps {
 const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
   value,
   onChange,
-  placeholder = "Select access groups",
+  placeholder,
   disabled = false,
   style,
   className,
   showLabel = false,
-  labelText = "Access Group",
+  labelText,
   allowClear = true,
 }) => {
+  const { t } = useTranslation();
   const { data: accessGroups, isLoading, isError } = useAccessGroups();
 
   // ── Loading skeleton ─────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
       <div>
         {showLabel && (
           <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-            <TeamOutlined className="mr-2" /> {labelText}
+            <TeamOutlined className="mr-2" /> {labelText ?? t("commonComponents.accessGroupSelector.labelText")}
           </Text>
         )}
         <Skeleton.Input active block style={{ height: 32, ...style }} />
@@ -70,13 +72,13 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
     <div>
       {showLabel && (
         <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-          <TeamOutlined className="mr-2" /> {labelText}
+          <TeamOutlined className="mr-2" /> {labelText ?? t("commonComponents.accessGroupSelector.labelText")}
         </Text>
       )}
       <Select
         mode="multiple"
         value={value}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t("commonComponents.accessGroupSelector.placeholder")}
         onChange={onChange}
         disabled={disabled}
         allowClear={allowClear}
@@ -84,7 +86,11 @@ const AccessGroupSelector: React.FC<AccessGroupSelectorProps> = ({
         style={{ width: "100%", ...style }}
         className={`rounded-md ${className ?? ""}`}
         notFoundContent={
-          isError ? <span className="text-red-500">Failed to load access groups</span> : "No access groups found"
+          isError ? (
+            <span className="text-red-500">{t("commonComponents.accessGroupSelector.loadFailed")}</span>
+          ) : (
+            t("commonComponents.accessGroupSelector.notFound")
+          )
         }
         filterOption={(input, option) => {
           const searchText = options.find((opt) => opt.value === option?.value)?.searchText ?? "";

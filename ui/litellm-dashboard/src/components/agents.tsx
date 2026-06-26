@@ -22,6 +22,7 @@ import { Agent, AgentKeyInfo } from "./agents/types";
 import { Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { useTranslation } from "react-i18next";
 
 interface AgentsPanelProps {
   accessToken: string | null;
@@ -34,6 +35,7 @@ interface AgentsResponse {
 }
 
 const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
+  const { t } = useTranslation();
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
   const [keyInfoMap, setKeyInfoMap] = useState<Record<string, AgentKeyInfo>>({});
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -126,11 +128,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     setIsDeleting(true);
     try {
       await deleteAgentCall(accessToken, agentToDelete.id);
-      NotificationsManager.success(`Agent "${agentToDelete.name}" deleted successfully`);
+      NotificationsManager.success(t("agents.deleteSuccess", { name: agentToDelete.name }));
       fetchAgents();
     } catch (error) {
       console.error("Error deleting agent:", error);
-      NotificationsManager.fromBackend("Failed to delete agent");
+      NotificationsManager.fromBackend(t("agents.deleteFailed"));
     } finally {
       setIsDeleting(false);
       setAgentToDelete(null);
@@ -152,14 +154,11 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex flex-col gap-2 mb-4">
-        <h1 className="text-2xl font-bold">Agents</h1>
-        <p className="text-sm text-gray-600">
-          List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents
-          public.
-        </p>
+        <h1 className="text-2xl font-bold">{t("agents.title")}</h1>
+        <p className="text-sm text-gray-600">{t("agents.subtitle")}</p>
         <Alert
-          message="Why do agents need keys?"
-          description="Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from the Virtual Keys page."
+          message={t("agents.alertMessage")}
+          description={t("agents.alertDescription")}
           type="info"
           showIcon
           className="mb-3"
@@ -167,13 +166,13 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
         <div className="mt-2 flex items-center gap-4">
           {isAdmin && (
             <Button onClick={handleAddAgent} disabled={!accessToken}>
-              + Add New Agent
+              {t("agents.addNewAgent")}
             </Button>
           )}
-          <Tooltip title="When enabled, only agents with reachable URLs are shown">
+          <Tooltip title={t("agents.healthCheckTooltip")}>
             <div className="flex items-center gap-2">
               <CheckCircleOutlined className={healthCheckEnabled ? "text-green-500" : "text-gray-400"} />
-              <span className="text-sm text-gray-600">Health Check</span>
+              <span className="text-sm text-gray-600">{t("agents.healthCheck")}</span>
               <Switch
                 size="small"
                 checked={healthCheckEnabled}
@@ -200,22 +199,20 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Agent Name</TableHeaderCell>
-                  <TableHeaderCell>Agent ID</TableHeaderCell>
-                  <TableHeaderCell>Spend (USD)</TableHeaderCell>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Created</TableHeaderCell>
-                  <TableHeaderCell>Status</TableHeaderCell>
-                  {isAdmin && <TableHeaderCell>Actions</TableHeaderCell>}
+                  <TableHeaderCell>{t("agents.colAgentName")}</TableHeaderCell>
+                  <TableHeaderCell>{t("agents.colAgentId")}</TableHeaderCell>
+                  <TableHeaderCell>{t("agents.colSpend")}</TableHeaderCell>
+                  <TableHeaderCell>{t("agents.colModel")}</TableHeaderCell>
+                  <TableHeaderCell>{t("agents.colCreated")}</TableHeaderCell>
+                  <TableHeaderCell>{t("common.status")}</TableHeaderCell>
+                  {isAdmin && <TableHeaderCell>{t("common.actions")}</TableHeaderCell>}
                 </TableRow>
               </TableHead>
               <TableBody>
                 {sortedAgents.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={columnCount}>
-                      <Text className="text-center">
-                        No agents found. Click &quot;+ Add New Agent&quot; to create one.
-                      </Text>
+                      <Text className="text-center">{t("agents.noAgentsFound")}</Text>
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -241,17 +238,19 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                       </TableCell>
                       <TableCell>
                         <Badge size="xs" color="blue">
-                          {agent.litellm_params?.model || "N/A"}
+                          {agent.litellm_params?.model || t("common.unknown")}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Text>{agent.created_at ? new Date(agent.created_at).toLocaleDateString() : "N/A"}</Text>
+                        <Text>
+                          {agent.created_at ? new Date(agent.created_at).toLocaleDateString() : t("common.unknown")}
+                        </Text>
                       </TableCell>
                       <TableCell>
                         {keyInfoMap[agent.agent_id]?.has_key ? (
-                          <Badge color="green">Active</Badge>
+                          <Badge color="green">{t("common.active")}</Badge>
                         ) : (
-                          <Badge color="yellow">Needs Setup</Badge>
+                          <Badge color="yellow">{t("agents.needsSetup")}</Badge>
                         )}
                       </TableCell>
                       {isAdmin && (
@@ -281,16 +280,16 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
 
       {agentToDelete && (
         <Modal
-          title="Delete Agent"
+          title={t("agents.deleteModalTitle")}
           open={agentToDelete !== null}
           onOk={handleDeleteConfirm}
           onCancel={handleDeleteCancel}
           confirmLoading={isDeleting}
-          okText="Delete"
+          okText={t("common.delete")}
           okButtonProps={{ danger: true }}
         >
-          <p>Are you sure you want to delete agent: {agentToDelete.name}?</p>
-          <p>This action cannot be undone.</p>
+          <p>{t("agents.deleteConfirm", { name: agentToDelete.name })}</p>
+          <p>{t("agents.deleteCannotUndo")}</p>
         </Modal>
       )}
     </div>

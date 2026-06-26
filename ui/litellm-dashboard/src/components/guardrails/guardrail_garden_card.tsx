@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { CheckCircleFilled } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 
@@ -39,6 +40,7 @@ const LogoWithFallback: React.FC<{ src: string; name: string }> = ({ src, name }
 };
 
 const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> = ({ card, onClick }) => {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -75,7 +77,7 @@ const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> 
         <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 4 }}>
           <CheckCircleFilled style={{ color: "#16a34a", fontSize: 12 }} />
           <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 500 }}>
-            F1: {card.eval.f1}% &middot; {card.eval.testCases} test cases
+            {t("guardrails.guardrailGardenCard.evalBadge", { f1: card.eval.f1, testCases: card.eval.testCases })}
           </span>
         </div>
       )}

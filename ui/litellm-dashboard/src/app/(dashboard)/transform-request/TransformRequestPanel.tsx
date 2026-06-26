@@ -4,6 +4,7 @@ import { CopyOutlined } from "@ant-design/icons";
 import { Title } from "@tremor/react";
 import { transformRequestCall } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import { Trans, useTranslation } from "react-i18next";
 interface TransformRequestPanelProps {
   accessToken: string | null;
 }
@@ -15,6 +16,7 @@ interface TransformResponse {
 }
 
 const TransformRequestPanel: React.FC<TransformRequestPanelProps> = ({ accessToken }) => {
+  const { t } = useTranslation();
   const [originalRequestJSON, setOriginalRequestJSON] = useState(`{
   "model": "openai/gpt-4o",
   "messages": [
@@ -72,7 +74,7 @@ ${formattedBody}
       try {
         requestBody = JSON.parse(originalRequestJSON);
       } catch (e) {
-        NotificationsManager.fromBackend("Invalid JSON in request body");
+        NotificationsManager.fromBackend(t("transformRequest.invalidJson"));
         setIsLoading(false);
         return;
       }
@@ -85,7 +87,7 @@ ${formattedBody}
 
       // Make the API call using fetch
       if (!accessToken) {
-        NotificationsManager.fromBackend("No access token found");
+        NotificationsManager.fromBackend(t("transformRequest.noAccessToken"));
         setIsLoading(false);
         return;
       }
@@ -103,17 +105,17 @@ ${formattedBody}
 
         // Update state with the formatted curl command
         setTransformedResponse(formattedCurl);
-        NotificationsManager.success("Request transformed successfully");
+        NotificationsManager.success(t("transformRequest.transformedSuccess"));
       } else {
         // Handle the case where the API returns a different format
         // Try to extract the parts from a string response if needed
         const rawText = typeof data === "string" ? data : JSON.stringify(data);
         setTransformedResponse(rawText);
-        NotificationsManager.info("Transformed request received in unexpected format");
+        NotificationsManager.info(t("transformRequest.unexpectedFormat"));
       }
     } catch (err) {
       console.error("Error transforming request:", err);
-      NotificationsManager.fromBackend("Failed to transform request");
+      NotificationsManager.fromBackend(t("transformRequest.transformFailed"));
     } finally {
       setIsLoading(false);
     }
@@ -129,8 +131,8 @@ ${formattedBody}
 
   return (
     <div className="w-full m-2" style={{ overflow: "hidden" }}>
-      <Title>Playground</Title>
-      <p className="text-sm text-gray-500">See how LiteLLM transforms your request for the specified provider.</p>
+      <Title>{t("transformRequest.title")}</Title>
+      <p className="text-sm text-gray-500">{t("transformRequest.subtitle")}</p>
       <div
         style={{
           display: "flex",
@@ -156,10 +158,10 @@ ${formattedBody}
           }}
         >
           <div style={{ marginBottom: "24px" }}>
-            <h2 style={{ fontSize: "24px", fontWeight: "bold", margin: "0 0 4px 0" }}>Original Request</h2>
-            <p style={{ color: "#666", margin: 0 }}>
-              The request you would send to LiteLLM /chat/completions endpoint.
-            </p>
+            <h2 style={{ fontSize: "24px", fontWeight: "bold", margin: "0 0 4px 0" }}>
+              {t("transformRequest.originalRequestTitle")}
+            </h2>
+            <p style={{ color: "#666", margin: 0 }}>{t("transformRequest.originalRequestDesc")}</p>
           </div>
 
           <textarea
@@ -179,7 +181,7 @@ ${formattedBody}
             value={originalRequestJSON}
             onChange={(e) => setOriginalRequestJSON(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Press Cmd/Ctrl + Enter to transform"
+            placeholder={t("transformRequest.keyboardShortcutHint")}
           />
 
           <div
@@ -200,7 +202,7 @@ ${formattedBody}
               onClick={handleTransform}
               loading={isLoading}
             >
-              <span>Transform</span>
+              <span>{t("transformRequest.transformButton")}</span>
               <span>→</span>
             </Button>
           </div>
@@ -221,11 +223,13 @@ ${formattedBody}
           }}
         >
           <div style={{ marginBottom: "24px" }}>
-            <h2 style={{ fontSize: "24px", fontWeight: "bold", margin: "0 0 4px 0" }}>Transformed Request</h2>
-            <p style={{ color: "#666", margin: 0 }}>How LiteLLM transforms your request for the specified provider.</p>
+            <h2 style={{ fontSize: "24px", fontWeight: "bold", margin: "0 0 4px 0" }}>
+              {t("transformRequest.transformedRequestTitle")}
+            </h2>
+            <p style={{ color: "#666", margin: 0 }}>{t("transformRequest.transformedRequestDesc")}</p>
             <br />
             <p style={{ color: "#666", margin: 0 }} className="text-xs">
-              Note: Sensitive headers are not shown.
+              {t("transformRequest.sensitiveHeadersNote")}
             </p>
           </div>
 
@@ -278,7 +282,7 @@ ${formattedBody}
               size="small"
               onClick={() => {
                 navigator.clipboard.writeText(transformedResponse || "");
-                NotificationsManager.success("Copied to clipboard");
+                NotificationsManager.success(t("common.copied"));
               }}
             />
           </div>
@@ -286,11 +290,12 @@ ${formattedBody}
       </div>
       <div className="mt-4 text-right w-full">
         <p className="text-sm text-gray-500">
-          Found an error? File an issue{" "}
-          <a href="https://github.com/BerriAI/litellm/issues" target="_blank" rel="noopener noreferrer">
-            here
-          </a>
-          .
+          <Trans
+            i18nKey="transformRequest.foundAnError"
+            components={{
+              a: <a href="https://github.com/BerriAI/litellm/issues" target="_blank" rel="noopener noreferrer" />,
+            }}
+          />
         </p>
       </div>
     </div>

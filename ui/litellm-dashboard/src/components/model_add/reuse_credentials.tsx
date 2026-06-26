@@ -1,6 +1,7 @@
 import React from "react";
 import { Form, Button, Tooltip, Typography, Modal } from "antd";
 import { TextInput } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 import { CredentialItem } from "../networking";
 const { Title, Link } = Typography;
 
@@ -19,6 +20,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   existingCredential,
   setIsCredentialModalOpen,
 }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
 
   console.log(`existingCredential in add credentials tab: ${JSON.stringify(existingCredential)}`);
@@ -31,7 +33,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
 
   return (
     <Modal
-      title="Reuse Credentials"
+      title={t("modelAdd.reuseCredentials.title")}
       open={isVisible}
       onCancel={() => {
         onCancel();
@@ -43,12 +45,12 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
       <Form form={form} onFinish={handleSubmit} layout="vertical">
         {/* Credential Name */}
         <Form.Item
-          label="Credential Name:"
+          label={t("modelAdd.reuseCredentials.credentialNameLabel")}
           name="credential_name"
-          rules={[{ required: true, message: "Credential name is required" }]}
+          rules={[{ required: true, message: t("modelAdd.reuseCredentials.credentialNameRequired") }]}
           initialValue={existingCredential?.credential_name}
         >
-          <TextInput placeholder="Enter a friendly name for these credentials" />
+          <TextInput placeholder={t("modelAdd.reuseCredentials.credentialNamePlaceholder")} />
         </Form.Item>
 
         {/* Display Credential Values of existingCredential, don't allow user to edit. Credential values is a dictionary */}
@@ -60,8 +62,8 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
-          <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
+          <Tooltip title={t("modelAdd.reuseCredentials.needHelpTooltip")}>
+            <Link href="https://github.com/BerriAI/litellm/issues">{t("modelAdd.reuseCredentials.needHelp")}</Link>
           </Tooltip>
 
           <div>
@@ -72,9 +74,9 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
               }}
               style={{ marginRight: 10 }}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
-            <Button htmlType="submit">Reuse Credentials</Button>
+            <Button htmlType="submit">{t("modelAdd.reuseCredentials.reuseCredentials")}</Button>
           </div>
         </div>
       </Form>

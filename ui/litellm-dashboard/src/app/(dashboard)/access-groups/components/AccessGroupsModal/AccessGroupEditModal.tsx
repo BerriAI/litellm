@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { Modal, Form } from "antd";
+import { useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 import { AccessGroupBaseForm, AccessGroupFormValues } from "./AccessGroupBaseForm";
 import { useEditAccessGroup, AccessGroupUpdateParams } from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
@@ -13,6 +14,7 @@ interface AccessGroupEditModalProps {
 }
 
 export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess }: AccessGroupEditModalProps) {
+  const { t } = useTranslation();
   const [form] = Form.useForm<AccessGroupFormValues>();
   const editMutation = useEditAccessGroup();
 
@@ -45,7 +47,7 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
           { accessGroupId: accessGroup.access_group_id, params },
           {
             onSuccess: () => {
-              MessageManager.success("Access group updated successfully");
+              MessageManager.success(t("accessGroups.accessGroupEditModal.updateSuccess"));
               onSuccess?.();
               onCancel();
             },
@@ -59,13 +61,13 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
 
   return (
     <Modal
-      title="Edit Access Group"
+      title={t("accessGroups.accessGroupEditModal.title")}
       open={visible}
       onOk={handleOk}
       onCancel={onCancel}
       width={700}
-      okText="Save Changes"
-      cancelText="Cancel"
+      okText={t("accessGroups.accessGroupEditModal.okText")}
+      cancelText={t("common.cancel")}
       confirmLoading={editMutation.isPending}
       destroyOnHidden
     >

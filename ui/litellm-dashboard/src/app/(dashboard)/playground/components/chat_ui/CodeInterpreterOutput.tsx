@@ -10,6 +10,7 @@ import {
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { useTranslation } from "react-i18next";
 
 interface ContainerFileCitation {
   type: "container_file_citation";
@@ -33,6 +34,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
   annotations = [],
   accessToken,
 }) => {
+  const { t } = useTranslation();
   const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const [loadingImages, setLoadingImages] = useState<Record<string, boolean>>({});
   const proxyBaseUrl = getProxyBaseUrl();
@@ -144,7 +146,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
               key: "code",
               label: (
                 <span className="flex items-center gap-2 text-sm text-gray-600">
-                  <CodeOutlined /> Python Code Executed
+                  <CodeOutlined /> {t("playground.codeInterpreterOutput.pythonCodeExecuted")}
                 </span>
               ),
               children: (
@@ -173,13 +175,13 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
           {loadingImages[annotation.file_id] ? (
             <div className="flex items-center justify-center p-8 bg-gray-50">
               <Spin indicator={<LoadingOutlined spin />} />
-              <span className="ml-2 text-sm text-gray-500">Loading image...</span>
+              <span className="ml-2 text-sm text-gray-500">{t("playground.codeInterpreterOutput.loadingImage")}</span>
             </div>
           ) : imageUrls[annotation.file_id] ? (
             <div>
               <img
                 src={imageUrls[annotation.file_id]}
-                alt={annotation.filename || "Generated chart"}
+                alt={annotation.filename || t("playground.codeInterpreterOutput.generatedChart")}
                 className="max-w-full"
                 style={{ maxHeight: "400px" }}
               />
@@ -191,13 +193,13 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
                   onClick={() => handleDownload(annotation)}
                   className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1"
                 >
-                  <DownloadOutlined /> Download
+                  <DownloadOutlined /> {t("common.download")}
                 </button>
               </div>
             </div>
           ) : (
             <div className="flex items-center justify-center p-4 bg-gray-50">
-              <span className="text-sm text-gray-400">Image not available</span>
+              <span className="text-sm text-gray-400">{t("playground.codeInterpreterOutput.imageNotAvailable")}</span>
             </div>
           )}
         </div>

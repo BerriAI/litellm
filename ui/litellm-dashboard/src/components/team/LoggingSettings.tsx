@@ -5,6 +5,7 @@ import { Select, Tooltip, Divider } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, Card, TextInput } from "@tremor/react";
 import { PlusIcon, TrashIcon, CogIcon, BanIcon } from "@heroicons/react/outline";
+import { useTranslation } from "react-i18next";
 import { callbackInfo, callback_map, mapDisplayToInternalNames } from "../callback_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import NumericalInput from "../shared/numerical_input";
@@ -30,6 +31,8 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
   disabledCallbacks = [],
   onDisabledCallbacksChange,
 }) => {
+  const { t } = useTranslation();
+
   // Get callbacks that support team and key logging
   const supportedCallbacks = Object.entries(callbackInfo)
     .filter(([_, info]) => info.supports_key_team_logging)
@@ -111,7 +114,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           <div className="w-3 h-3 bg-blue-100 rounded-full flex items-center justify-center">
             <div className="w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
           </div>
-          <span className="text-sm font-medium text-gray-700">Integration Parameters</span>
+          <span className="text-sm font-medium text-gray-700">
+            {t("teamPage.loggingSettings.integrationParametersTitle")}
+          </span>
         </div>
         <div className="grid grid-cols-1 gap-4">
           {Object.entries(dynamicParams).map(([paramName, paramType]) => (
@@ -123,16 +128,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                 </Tooltip>
                 {paramType === "password" && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                    Sensitive
+                    {t("teamPage.loggingSettings.sensitiveBadge")}
                   </span>
                 )}
                 {paramType === "number" && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-yellow-100 text-yellow-800">
-                    Number
+                    {t("teamPage.loggingSettings.numberBadge")}
                   </span>
                 )}
               </label>
-              {paramType === "number" && <span className="text-xs text-gray-500">Value must be between 0 and 1</span>}
+              {paramType === "number" && (
+                <span className="text-xs text-gray-500">{t("teamPage.loggingSettings.numberRangeHint")}</span>
+              )}
               {paramType === "number" ? (
                 <NumericalInput
                   step={0.01}
@@ -162,17 +169,21 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
       <div className="space-y-4">
         <div className="flex items-center space-x-2">
           <BanIcon className="w-5 h-5 text-red-500" />
-          <span className="text-base font-semibold text-gray-800">Disabled Callbacks</span>
-          <Tooltip title="Select callbacks to disable for this key. Disabled callbacks will not receive any logging data.">
+          <span className="text-base font-semibold text-gray-800">
+            {t("teamPage.loggingSettings.disabledCallbacksTitle")}
+          </span>
+          <Tooltip title={t("teamPage.loggingSettings.disabledCallbacksTooltip")}>
             <InfoCircleOutlined className="text-gray-400 cursor-help" />
           </Tooltip>
         </div>
 
         <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-700">Disabled Callbacks</label>
+          <label className="text-sm font-medium text-gray-700">
+            {t("teamPage.loggingSettings.disabledCallbacksLabel")}
+          </label>
           <Select
             mode="multiple"
-            placeholder="Select callbacks to disable"
+            placeholder={t("teamPage.loggingSettings.disabledCallbacksPlaceholder")}
             value={disabledCallbacks}
             onChange={handleDisabledCallbacksChange}
             style={{ width: "100%" }}
@@ -211,9 +222,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
               );
             })}
           </Select>
-          <div className="text-xs text-gray-500">
-            Select callbacks that should be disabled for this key. These callbacks will not receive any logging data.
-          </div>
+          <div className="text-xs text-gray-500">{t("teamPage.loggingSettings.disabledCallbacksHelp")}</div>
         </div>
       </div>
 
@@ -223,8 +232,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
       <div className="flex justify-between items-center">
         <div className="flex items-center space-x-2">
           <CogIcon className="w-5 h-5 text-blue-500" />
-          <span className="text-base font-semibold text-gray-800">Logging Integrations</span>
-          <Tooltip title="Configure callback logging integrations for this team.">
+          <span className="text-base font-semibold text-gray-800">
+            {t("teamPage.loggingSettings.loggingIntegrationsTitle")}
+          </span>
+          <Tooltip title={t("teamPage.loggingSettings.loggingIntegrationsTooltip")}>
             <InfoCircleOutlined className="text-gray-400 cursor-help" />
           </Tooltip>
         </div>
@@ -236,7 +247,7 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
           className="hover:border-blue-400 hover:text-blue-500"
           type="button"
         >
-          Add Integration
+          {t("teamPage.loggingSettings.addIntegrationButton")}
         </Button>
       </div>
 
@@ -257,7 +268,10 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center space-x-2">
                   {logoUrl && <img src={logoUrl} alt={callbackDisplayName} className="w-5 h-5 object-contain" />}
-                  <span className="text-sm font-medium">{callbackDisplayName || "New Integration"} Configuration</span>
+                  <span className="text-sm font-medium">
+                    {callbackDisplayName || t("teamPage.loggingSettings.newIntegrationFallback")}{" "}
+                    {t("teamPage.loggingSettings.configurationSuffix")}
+                  </span>
                 </div>
                 <Button
                   variant="light"
@@ -268,16 +282,18 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   className="hover:bg-red-50"
                   type="button"
                 >
-                  Remove
+                  {t("teamPage.loggingSettings.removeButton")}
                 </Button>
               </div>
               <div className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-gray-700">Integration Type</label>
+                    <label className="text-sm font-medium text-gray-700">
+                      {t("teamPage.loggingSettings.integrationTypeLabel")}
+                    </label>
                     <Select
                       value={callbackDisplayName}
-                      placeholder="Select integration"
+                      placeholder={t("teamPage.loggingSettings.selectIntegrationPlaceholder")}
                       onChange={(value) => updateLoggingConfig(index, "callback_name", value)}
                       className="w-full"
                       optionLabelProp="label"
@@ -318,7 +334,9 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-gray-700">Event Type</label>
+                    <label className="text-sm font-medium text-gray-700">
+                      {t("teamPage.loggingSettings.eventTypeLabel")}
+                    </label>
                     <Select
                       value={config.callback_type}
                       onChange={(value) => updateLoggingConfig(index, "callback_type", value)}
@@ -327,19 +345,19 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
                       <Option value="success">
                         <div className="flex items-center space-x-2">
                           <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                          <span>Success Only</span>
+                          <span>{t("teamPage.loggingSettings.successOnly")}</span>
                         </div>
                       </Option>
                       <Option value="failure">
                         <div className="flex items-center space-x-2">
                           <div className="w-2 h-2 bg-red-500 rounded-full"></div>
-                          <span>Failure Only</span>
+                          <span>{t("teamPage.loggingSettings.failureOnly")}</span>
                         </div>
                       </Option>
                       <Option value="success_and_failure">
                         <div className="flex items-center space-x-2">
                           <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                          <span>Success & Failure</span>
+                          <span>{t("teamPage.loggingSettings.successAndFailure")}</span>
                         </div>
                       </Option>
                     </Select>
@@ -356,8 +374,8 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
       {value.length === 0 && (
         <div className="text-center py-12 text-gray-500 border-2 border-dashed border-gray-200 rounded-lg bg-gray-50/50">
           <CogIcon className="w-12 h-12 text-gray-300 mb-3 mx-auto" />
-          <div className="text-base font-medium mb-1">No logging integrations configured</div>
-          <div className="text-sm text-gray-400">Click "Add Integration" to configure logging for this team</div>
+          <div className="text-base font-medium mb-1">{t("teamPage.loggingSettings.emptyTitle")}</div>
+          <div className="text-sm text-gray-400">{t("teamPage.loggingSettings.emptySubtitle")}</div>
         </div>
       )}
     </div>

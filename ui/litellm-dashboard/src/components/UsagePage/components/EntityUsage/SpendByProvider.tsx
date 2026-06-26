@@ -1,4 +1,5 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { useTranslation } from "react-i18next";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import {
   Card,
@@ -35,6 +36,7 @@ interface SpendByProviderProps {
 }
 
 const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChanging, providerSpend }) => {
+  const { t } = useTranslation();
   const [includeZeroSpend, setIncludeZeroSpend] = useState(false);
   const [includeUnknown, setIncludeUnknown] = useState(false);
 
@@ -58,16 +60,16 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
   return (
     <Card className="h-full">
       <div className="flex justify-between items-center mb-4">
-        <Title>Spend by Provider</Title>
+        <Title>{t("usagePage.spendByProvider.title")}</Title>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <label className="text-sm text-gray-700">Show Zero Spend</label>
+            <label className="text-sm text-gray-700">{t("usagePage.spendByProvider.showZeroSpend")}</label>
             <Switch checked={includeZeroSpend} onChange={setIncludeZeroSpend} />
           </div>
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1">
-              <label className="text-sm text-gray-700">Show Unknown</label>
-              <Tooltip title="Requests that failed to route to a provider">
+              <label className="text-sm text-gray-700">{t("usagePage.spendByProvider.showUnknown")}</label>
+              <Tooltip title={t("usagePage.spendByProvider.unknownTooltip")}>
                 <InfoCircleOutlined className="text-gray-400 hover:text-gray-600" />
               </Tooltip>
             </div>
@@ -93,11 +95,13 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
             <Table>
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Provider</TableHeaderCell>
-                  <TableHeaderCell>Spend</TableHeaderCell>
-                  <TableHeaderCell className="text-green-600">Successful</TableHeaderCell>
-                  <TableHeaderCell className="text-red-600">Failed</TableHeaderCell>
-                  <TableHeaderCell>Tokens</TableHeaderCell>
+                  <TableHeaderCell>{t("usagePage.spendByProvider.colProvider")}</TableHeaderCell>
+                  <TableHeaderCell>{t("usagePage.spendByProvider.colSpend")}</TableHeaderCell>
+                  <TableHeaderCell className="text-green-600">
+                    {t("usagePage.spendByProvider.colSuccessful")}
+                  </TableHeaderCell>
+                  <TableHeaderCell className="text-red-600">{t("usagePage.spendByProvider.colFailed")}</TableHeaderCell>
+                  <TableHeaderCell>{t("usagePage.spendByProvider.colTokens")}</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>

@@ -4,6 +4,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Typography } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { ParsedMessage } from "./prettyMessagesTypes";
@@ -19,6 +20,7 @@ interface OutputCardProps {
 }
 
 export function OutputCard({ message, completionTokens, outputCost }: OutputCardProps) {
+  const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const handleCopy = () => {
@@ -26,7 +28,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
 
     const content = message.content || "";
     navigator.clipboard.writeText(content);
-    MessageManager.success("Output copied");
+    MessageManager.success(t("viewLogs.outputCard.outputCopied"));
   };
 
   if (!message) {
@@ -56,7 +58,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
         >
           <div style={{ padding: "12px 16px" }}>
             <Text type="secondary" style={{ fontSize: 13, fontStyle: "italic" }}>
-              No response data available
+              {t("viewLogs.outputCard.noResponseData")}
             </Text>
           </div>
         </div>

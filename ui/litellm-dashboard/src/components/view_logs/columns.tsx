@@ -3,6 +3,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { Badge, Button } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
+import i18n from "@/lib/i18n";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { TimeCell } from "./time_cell";
@@ -110,19 +111,19 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: sortProps
       ? () => (
           <SortableHeader
-            label="Time"
+            label={i18n.t("viewLogs.columns.colTime")}
             field="startTime"
             sortBy={sortProps.sortBy}
             sortOrder={sortProps.sortOrder}
             onSortChange={sortProps.onSortChange}
           />
         )
-      : "Time",
+      : i18n.t("viewLogs.columns.colTime"),
     accessorKey: "startTime",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
-    header: "Type",
+    header: i18n.t("viewLogs.columns.colType"),
     id: "type",
     cell: (info: any) => {
       const row = info.row.original;
@@ -166,7 +167,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Status",
+    header: i18n.t("viewLogs.columns.colStatus"),
     accessorKey: "metadata.status",
     cell: (info: any) => {
       const status = info.getValue() || "Success";
@@ -178,13 +179,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
             isSuccess ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
           }`}
         >
-          {isSuccess ? "Success" : "Failure"}
+          {isSuccess ? i18n.t("viewLogs.columns.statusSuccess") : i18n.t("viewLogs.columns.statusFailure")}
         </span>
       );
     },
   },
   {
-    header: "Session ID",
+    header: i18n.t("viewLogs.columns.colSessionId"),
     accessorKey: "session_id",
     cell: (info: any) => {
       const value = String(info.getValue() || "");
@@ -205,7 +206,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   },
 
   {
-    header: "Request ID",
+    header: i18n.t("viewLogs.columns.colRequestId"),
     accessorKey: "request_id",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "")}>
@@ -217,14 +218,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: sortProps
       ? () => (
           <SortableHeader
-            label="Cost"
+            label={i18n.t("viewLogs.columns.colCost")}
             field="spend"
             sortBy={sortProps.sortBy}
             sortOrder={sortProps.sortOrder}
             onSortChange={sortProps.onSortChange}
           />
         )
-      : "Cost",
+      : i18n.t("viewLogs.columns.colCost"),
     accessorKey: "spend",
     cell: (info: any) => {
       const row = info.row.original;
@@ -238,7 +239,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
           </Tooltip>
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-amber-600">
-              incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
+              {i18n.t("viewLogs.columns.mcpCostNote", { spend: getSpendString(mcpSpend), count: mcpCount })}
             </span>
           )}
         </div>
@@ -249,14 +250,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: sortProps
       ? () => (
           <SortableHeader
-            label="Duration (s)"
+            label={i18n.t("viewLogs.columns.colDuration")}
             field="request_duration_ms"
             sortBy={sortProps.sortBy}
             sortOrder={sortProps.sortOrder}
             onSortChange={sortProps.onSortChange}
           />
         )
-      : "Duration (s)",
+      : i18n.t("viewLogs.columns.colDuration"),
     accessorKey: "request_duration_ms",
     cell: (info: any) => {
       const ms = info.getValue();
@@ -273,14 +274,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: sortProps
       ? () => (
           <SortableHeader
-            label="TTFT (s)"
+            label={i18n.t("viewLogs.columns.colTtft")}
             field="ttft_ms"
             sortBy={sortProps.sortBy}
             sortOrder={sortProps.sortOrder}
             onSortChange={sortProps.onSortChange}
           />
         )
-      : "TTFT (s)",
+      : i18n.t("viewLogs.columns.colTtft"),
     accessorKey: "completionStartTime",
     cell: (info: any) => {
       const row = info.row.original;
@@ -299,7 +300,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Team Name",
+    header: i18n.t("viewLogs.columns.colTeamName"),
     accessorKey: "metadata.user_api_key_team_alias",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
@@ -308,7 +309,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     ),
   },
   {
-    header: "Key Hash",
+    header: i18n.t("viewLogs.columns.colKeyHash"),
     accessorKey: "metadata.user_api_key",
     cell: (info: any) => {
       const value = String(info.getValue() || "-");
@@ -327,7 +328,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Key Alias",
+    header: i18n.t("viewLogs.columns.colKeyAlias"),
     accessorKey: "metadata.user_api_key_alias",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
@@ -339,14 +340,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: sortProps
       ? () => (
           <SortableHeader
-            label="Model"
+            label={i18n.t("viewLogs.columns.colModel")}
             field="model"
             sortBy={sortProps.sortBy}
             sortOrder={sortProps.sortOrder}
             onSortChange={sortProps.onSortChange}
           />
         )
-      : "Model",
+      : i18n.t("viewLogs.columns.colModel"),
     accessorKey: "model",
     cell: (info: any) => {
       const row = info.row.original;
@@ -376,14 +377,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: sortProps
       ? () => (
           <SortableHeader
-            label="Tokens"
+            label={i18n.t("viewLogs.columns.colTokens")}
             field="total_tokens"
             sortBy={sortProps.sortBy}
             sortOrder={sortProps.sortOrder}
             onSortChange={sortProps.onSortChange}
           />
         )
-      : "Tokens",
+      : i18n.t("viewLogs.columns.colTokens"),
     accessorKey: "total_tokens",
     cell: (info: any) => {
       const row = info.row.original;
@@ -398,7 +399,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Internal User",
+    header: i18n.t("viewLogs.columns.colInternalUser"),
     accessorKey: "user",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
@@ -407,7 +408,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     ),
   },
   {
-    header: "End User",
+    header: i18n.t("viewLogs.columns.colEndUser"),
     accessorKey: "end_user",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
@@ -417,7 +418,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   },
 
   {
-    header: "Tags",
+    header: i18n.t("viewLogs.columns.colTags"),
     accessorKey: "request_tags",
     cell: (info: any) => {
       const tags = info.getValue();
@@ -483,11 +484,11 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
     <div className="grid grid-cols-2 gap-4 mt-4">
       <div className="rounded-lg border border-gray-200 bg-gray-50">
         <div className="flex justify-between items-center p-3 border-b border-gray-200">
-          <h3 className="text-sm font-medium">Request</h3>
+          <h3 className="text-sm font-medium">{i18n.t("viewLogs.requestResponsePanel.request")}</h3>
           <button
             onClick={() => copyToClipboard(requestStr)}
             className="p-1 hover:bg-gray-200 rounded"
-            title="Copy request"
+            title={i18n.t("viewLogs.requestResponsePanel.copyRequest")}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -510,11 +511,11 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
 
       <div className="rounded-lg border border-gray-200 bg-gray-50">
         <div className="flex justify-between items-center p-3 border-b border-gray-200">
-          <h3 className="text-sm font-medium">Response</h3>
+          <h3 className="text-sm font-medium">{i18n.t("viewLogs.requestResponsePanel.response")}</h3>
           <button
             onClick={() => copyToClipboard(responseStr)}
             className="p-1 hover:bg-gray-200 rounded"
-            title="Copy response"
+            title={i18n.t("viewLogs.requestResponsePanel.copyResponse")}
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -550,7 +551,8 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
   return (
     <div>
       <button onClick={() => setIsExpanded(!isExpanded)} className="text-blue-500 hover:text-blue-700 text-xs">
-        {isExpanded ? "Hide JSON" : "Show JSON"} ({Object.keys(jsonData).length} fields)
+        {isExpanded ? i18n.t("viewLogs.columns.hideJson") : i18n.t("viewLogs.columns.showJson")}{" "}
+        {i18n.t("viewLogs.columns.fieldCount", { count: Object.keys(jsonData).length })}
       </button>
       {isExpanded && (
         <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>
@@ -596,7 +598,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
           <button
             onClick={toggleHandler}
             style={{ cursor: "pointer" }}
-            aria-label={localExpanded ? "Collapse row" : "Expand row"}
+            aria-label={localExpanded ? i18n.t("viewLogs.columns.collapseRow") : i18n.t("viewLogs.columns.expandRow")}
             className="w-6 h-6 flex items-center justify-center focus:outline-none"
           >
             <svg
@@ -617,31 +619,31 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     },
   },
   {
-    header: "Timestamp",
+    header: i18n.t("viewLogs.columns.colTime"),
     accessorKey: "updated_at",
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
-    header: "Table Name",
+    header: i18n.t("viewLogs.columns.colTableName"),
     accessorKey: "table_name",
     cell: (info: any) => {
       const tableName = info.getValue();
       let displayValue = tableName;
       switch (tableName) {
         case "LiteLLM_VerificationToken":
-          displayValue = "Keys";
+          displayValue = i18n.t("viewLogs.columns.auditTableKeys");
           break;
         case "LiteLLM_TeamTable":
-          displayValue = "Teams";
+          displayValue = i18n.t("viewLogs.columns.auditTableTeams");
           break;
         case "LiteLLM_OrganizationTable":
-          displayValue = "Organizations";
+          displayValue = i18n.t("viewLogs.columns.auditTableOrganizations");
           break;
         case "LiteLLM_UserTable":
-          displayValue = "Users";
+          displayValue = i18n.t("viewLogs.columns.auditTableUsers");
           break;
         case "LiteLLM_ProxyModelTable":
-          displayValue = "Models";
+          displayValue = i18n.t("viewLogs.columns.auditTableModels");
           break;
         default:
           displayValue = tableName;
@@ -650,12 +652,12 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     },
   },
   {
-    header: "Action",
+    header: i18n.t("viewLogs.columns.colAction"),
     accessorKey: "action",
     cell: (info: any) => <span>{getActionBadge(info.getValue())}</span>,
   },
   {
-    header: "Changed By",
+    header: i18n.t("viewLogs.columns.colChangedBy"),
     accessorKey: "changed_by",
     cell: (info: any) => {
       const changedBy = info.row.original.changed_by;
@@ -677,7 +679,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
     },
   },
   {
-    header: "Affected Item ID",
+    header: i18n.t("viewLogs.columns.colAffectedItemId"),
     accessorKey: "object_id",
     cell: (props) => {
       const ObjectIdDisplay = () => {
@@ -697,7 +699,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
         };
 
         return (
-          <Tooltip title={copied ? "Copied!" : String(objectId)}>
+          <Tooltip title={copied ? i18n.t("viewLogs.columns.copied") : String(objectId)}>
             <span className="max-w-[20ch] truncate block cursor-pointer hover:text-blue-600" onClick={handleCopy}>
               {String(objectId)}
             </span>

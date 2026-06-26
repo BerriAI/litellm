@@ -4,6 +4,7 @@ import React from "react";
 import { Form, Select, InputNumber, Input, Tooltip } from "antd";
 import { PlusOutlined, QuestionCircleOutlined } from "@ant-design/icons";
 import { Button } from "antd";
+import { useTranslation, Trans } from "react-i18next";
 
 interface LLMJudgeFieldsProps {
   availableModels: string[];
@@ -11,6 +12,7 @@ interface LLMJudgeFieldsProps {
 }
 
 const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }) => {
+  const { t } = useTranslation();
   return (
     <>
       <div
@@ -24,25 +26,24 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
           color: "#389e0d",
         }}
       >
-        After each LLM response, the <strong>Judge Model</strong> scores it 0–100 against your criteria. If the weighted
-        average falls below the threshold, the response is blocked (or logged).
+        <Trans i18nKey="guardrails.lLMJudgeFields.description" components={{ strong: <strong /> }} />
       </div>
 
       <Form.Item
         name="judge_model"
         label={
           <span>
-            Judge Model&nbsp;
-            <Tooltip title="The LLM that reads each response and grades it. Pick a capable model — it never sees end-user data beyond what the LLM returned.">
+            {t("guardrails.lLMJudgeFields.judgeModelLabel")}&nbsp;
+            <Tooltip title={t("guardrails.lLMJudgeFields.judgeModelTooltip")}>
               <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
             </Tooltip>
           </span>
         }
-        rules={[{ required: true, message: "Select a judge model" }]}
+        rules={[{ required: true, message: t("guardrails.lLMJudgeFields.judgeModelRequired") }]}
       >
         <Select
           showSearch
-          placeholder="Select a model"
+          placeholder={t("guardrails.lLMJudgeFields.judgeModelPlaceholder")}
           options={availableModels.map((m) => ({ label: m, value: m }))}
         />
       </Form.Item>
@@ -51,8 +52,8 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
         name="overall_threshold"
         label={
           <span>
-            Minimum Score to Pass&nbsp;
-            <Tooltip title="0–100. If the weighted average of criterion scores falls below this, the guardrail triggers. 80 is a good default.">
+            {t("guardrails.lLMJudgeFields.minScoreLabel")}&nbsp;
+            <Tooltip title={t("guardrails.lLMJudgeFields.minScoreTooltip")}>
               <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
             </Tooltip>
           </span>
@@ -66,8 +67,8 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
         name="on_failure"
         label={
           <span>
-            On Failure&nbsp;
-            <Tooltip title="Block: return HTTP 422 when the score is too low. Log: record the result but let the response through.">
+            {t("guardrails.lLMJudgeFields.onFailureLabel")}&nbsp;
+            <Tooltip title={t("guardrails.lLMJudgeFields.onFailureTooltip")}>
               <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
             </Tooltip>
           </span>
@@ -75,16 +76,16 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
         initialValue="block"
       >
         <Select>
-          <Select.Option value="block">Block (return 422)</Select.Option>
-          <Select.Option value="log">Log only</Select.Option>
+          <Select.Option value="block">{t("guardrails.lLMJudgeFields.onFailureBlock")}</Select.Option>
+          <Select.Option value="log">{t("guardrails.lLMJudgeFields.onFailureLog")}</Select.Option>
         </Select>
       </Form.Item>
 
       <Form.Item
         label={
           <span>
-            Evaluation Criteria&nbsp;
-            <Tooltip title="Each criterion is something the judge checks. Weights must add up to 100%.">
+            {t("guardrails.lLMJudgeFields.criteriaLabel")}&nbsp;
+            <Tooltip title={t("guardrails.lLMJudgeFields.criteriaTooltip")}>
               <QuestionCircleOutlined style={{ color: "#8c8c8c" }} />
             </Tooltip>
           </span>
@@ -107,22 +108,23 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                     <Form.Item
                       {...restField}
                       name={[name, "name"]}
-                      rules={[{ required: true, message: "Enter criterion name" }]}
+                      rules={[{ required: true, message: t("guardrails.lLMJudgeFields.criterionNameRequired") }]}
                       style={{ flex: 2, marginBottom: 8 }}
                     >
-                      <Input placeholder="Criterion name (e.g. Policy accuracy)" />
+                      <Input placeholder={t("guardrails.lLMJudgeFields.criterionNamePlaceholder")} />
                     </Form.Item>
                     <Form.Item
                       {...restField}
                       name={[name, "weight"]}
                       label={
-                        <Tooltip title="How much this criterion counts toward the final score. All weights must add up to 100%.">
+                        <Tooltip title={t("guardrails.lLMJudgeFields.weightTooltip")}>
                           <span style={{ fontSize: 12, color: "#595959" }}>
-                            Weight <QuestionCircleOutlined style={{ color: "#bfbfbf" }} />
+                            {t("guardrails.lLMJudgeFields.weightLabel")}{" "}
+                            <QuestionCircleOutlined style={{ color: "#bfbfbf" }} />
                           </span>
                         </Tooltip>
                       }
-                      rules={[{ required: true, message: "Enter weight" }]}
+                      rules={[{ required: true, message: t("guardrails.lLMJudgeFields.weightRequired") }]}
                       style={{ flex: 1, marginBottom: 8 }}
                     >
                       <InputNumber min={0} max={100} addonAfter="%" style={{ width: "100%" }} placeholder="e.g. 50" />
@@ -136,10 +138,10 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                   <Form.Item
                     {...restField}
                     name={[name, "description"]}
-                    rules={[{ required: true, message: "Describe what to check" }]}
+                    rules={[{ required: true, message: t("guardrails.lLMJudgeFields.criterionDescRequired") }]}
                     style={{ marginBottom: 8 }}
                   >
-                    <Input placeholder="What should the judge check for this criterion?" />
+                    <Input placeholder={t("guardrails.lLMJudgeFields.criterionDescPlaceholder")} />
                   </Form.Item>
                 </div>
               ))}
@@ -150,7 +152,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                 onClick={() => add({ name: "", weight: 0, description: "" })}
                 icon={<PlusOutlined />}
               >
-                Add Criterion
+                {t("guardrails.lLMJudgeFields.addCriterion")}
               </Button>
               {fields.length > 0 && (
                 <Form.Item shouldUpdate noStyle>
@@ -160,7 +162,8 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, form }
                     const weightOk = weightTotal === 100;
                     return (
                       <div style={{ marginTop: 6, fontSize: 12, color: weightOk ? "#52c41a" : "#faad14" }}>
-                        Weights total: {weightTotal}%{weightOk ? " ✓" : " — must add up to 100%"}
+                        {t("guardrails.lLMJudgeFields.weightsTotal", { weightTotal })}
+                        {weightOk ? " ✓" : ` — ${t("guardrails.lLMJudgeFields.weightsMustSum")}`}
                       </div>
                     );
                   }}

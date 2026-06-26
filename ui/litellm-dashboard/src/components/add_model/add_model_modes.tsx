@@ -1,24 +1,24 @@
-// Define the available test modes
-export const TEST_MODES = [
-  { value: "chat", label: "Chat - /chat/completions" },
-  { value: "completion", label: "Completion - /completions" },
-  { value: "embedding", label: "Embedding - /embeddings" },
-  { value: "audio_speech", label: "Audio Speech - /audio/speech" },
-  { value: "audio_transcription", label: "Audio Transcription - /audio/transcriptions" },
-  { value: "image_generation", label: "Image Generation - /images/generations" },
-  { value: "video_generation", label: "Video Generation - /videos" },
-  { value: "rerank", label: "Rerank - /rerank" },
-  { value: "realtime", label: "Realtime - /realtime" },
-  { value: "batch", label: "Batch - /batch" },
-  { value: "ocr", label: "OCR - /ocr" },
+import type { TFunction } from "i18next";
+
+export const getTestModes = (t: TFunction) => [
+  { value: "chat", label: t("addModel.addModelModes.chatLabel") },
+  { value: "completion", label: t("addModel.addModelModes.completionLabel") },
+  { value: "embedding", label: t("addModel.addModelModes.embeddingLabel") },
+  { value: "audio_speech", label: t("addModel.addModelModes.audioSpeechLabel") },
+  { value: "audio_transcription", label: t("addModel.addModelModes.audioTranscriptionLabel") },
+  { value: "image_generation", label: t("addModel.addModelModes.imageGenerationLabel") },
+  { value: "video_generation", label: t("addModel.addModelModes.videoGenerationLabel") },
+  { value: "rerank", label: t("addModel.addModelModes.rerankLabel") },
+  { value: "realtime", label: t("addModel.addModelModes.realtimeLabel") },
+  { value: "batch", label: t("addModel.addModelModes.batchLabel") },
+  { value: "ocr", label: t("addModel.addModelModes.ocrLabel") },
 ];
 
-// Define the available auto router routing strategies
-export const AUTO_ROUTER_MODES = [
-  { value: "simple-shuffle", label: "Simple Shuffle - Random selection from available models" },
-  { value: "least-busy", label: "Least Busy - Route to model with lowest current load" },
-  { value: "latency-based", label: "Latency Based - Route to model with best response time" },
-  { value: "cost-based", label: "Cost Based - Route to most cost-effective model" },
-  { value: "usage-based", label: "Usage Based - Route based on historical usage patterns" },
-  { value: "custom", label: "Custom - Use custom routing logic defined in config" },
+export const getAutoRouterModes = (t: TFunction) => [
+  { value: "simple-shuffle", label: t("addModel.addModelModes.simpleShuffleLabel") },
+  { value: "least-busy", label: t("addModel.addModelModes.leastBusyLabel") },
+  { value: "latency-based", label: t("addModel.addModelModes.latencyBasedLabel") },
+  { value: "cost-based", label: t("addModel.addModelModes.costBasedLabel") },
+  { value: "usage-based", label: t("addModel.addModelModes.usageBasedLabel") },
+  { value: "custom", label: t("addModel.addModelModes.customLabel") },
 ];

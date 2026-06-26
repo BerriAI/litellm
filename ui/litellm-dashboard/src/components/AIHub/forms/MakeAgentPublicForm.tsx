@@ -4,6 +4,7 @@ import { Text, Title, Badge } from "@tremor/react";
 import { makeAgentsPublicCall } from "../../networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { AgentHubData } from "@/components/AIHub/AgentHubTableColumns";
+import { useTranslation, Trans } from "react-i18next";
 
 const { Step } = Steps;
 
@@ -22,6 +23,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   agentHubData,
   onSuccess,
 }) => {
+  const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -37,7 +39,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const handleNext = () => {
     if (currentStep === 0) {
       if (selectedAgents.size === 0) {
-        NotificationsManager.fromBackend("Please select at least one agent to make public");
+        NotificationsManager.fromBackend(t("aiHub.makeAgentPublicForm.selectAtLeastOne"));
         return;
       }
       setCurrentStep(1);
@@ -83,7 +85,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   const handleSubmit = async () => {
     if (selectedAgents.size === 0) {
-      NotificationsManager.fromBackend("Please select at least one agent to make public");
+      NotificationsManager.fromBackend(t("aiHub.makeAgentPublicForm.selectAtLeastOne"));
       return;
     }
 
@@ -94,12 +96,12 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
       // Make batch API call for all agents
       await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
 
-      NotificationsManager.success(`Successfully made ${agentIdsToMakePublic.length} agent(s) public!`);
+      NotificationsManager.success(t("aiHub.makeAgentPublicForm.successCount", { count: agentIdsToMakePublic.length }));
       handleClose();
       onSuccess();
     } catch (error) {
       console.error("Error making agents public:", error);
-      NotificationsManager.fromBackend("Failed to make agents public. Please try again.");
+      NotificationsManager.fromBackend(t("aiHub.makeAgentPublicForm.failedToMakePublic"));
     } finally {
       setLoading(false);
     }
@@ -113,7 +115,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <Title>Select Agents to Make Public</Title>
+          <Title>{t("aiHub.makeAgentPublicForm.selectTitle")}</Title>
           <div className="flex items-center space-x-2">
             <Checkbox
               checked={allAgentsSelected}
@@ -121,21 +123,18 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
               onChange={(e) => handleSelectAll(e.target.checked)}
               disabled={agentHubData.length === 0}
             >
-              Select All {agentHubData.length > 0 && `(${agentHubData.length})`}
+              {t("aiHub.makeAgentPublicForm.selectAll")} {agentHubData.length > 0 && `(${agentHubData.length})`}
             </Checkbox>
           </div>
         </div>
 
-        <Text className="text-sm text-gray-600">
-          Select the agents you want to be visible on the public model hub. Users will still require a valid Virtual Key
-          to use these agents.
-        </Text>
+        <Text className="text-sm text-gray-600">{t("aiHub.makeAgentPublicForm.selectDescription")}</Text>
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
           <div className="space-y-3">
             {agentHubData.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
-                <Text>No agents available.</Text>
+                <Text>{t("aiHub.makeAgentPublicForm.noAgents")}</Text>
               </div>
             ) : (
               agentHubData.map((agent) => {
@@ -162,7 +161,9 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
                             </Badge>
                           ))}
                           {agent.skills.length > 3 && (
-                            <Text className="text-xs text-gray-500">+{agent.skills.length - 3} more</Text>
+                            <Text className="text-xs text-gray-500">
+                              {t("aiHub.makeAgentPublicForm.moreSkills", { count: agent.skills.length - 3 })}
+                            </Text>
                           )}
                         </div>
                       )}
@@ -177,7 +178,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
         {selectedAgents.size > 0 && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <Text className="text-sm text-blue-800">
-              <strong>{selectedAgents.size}</strong> agent{selectedAgents.size !== 1 ? "s" : ""} selected
+              {t("aiHub.makeAgentPublicForm.selectedCount", { count: selectedAgents.size })}
             </Text>
           </div>
         )}
@@ -188,17 +189,17 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const renderStep2Content = () => {
     return (
       <div className="space-y-4">
-        <Title>Confirm Making Agents Public</Title>
+        <Title>{t("aiHub.makeAgentPublicForm.confirmTitle")}</Title>
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong> Once you make these agents public, anyone who can go to the{" "}
-            <code>/ui/model_hub_table</code> will be able to know they exist on the proxy.
+            <strong>{t("common.warning")}:</strong>{" "}
+            <Trans i18nKey="aiHub.makeAgentPublicForm.warningText" components={{ code: <code key="code" /> }} />
           </Text>
         </div>
 
         <div className="space-y-3">
-          <Text className="font-medium">Agents to be made public:</Text>
+          <Text className="font-medium">{t("aiHub.makeAgentPublicForm.agentsToBeMadePublic")}</Text>
           <div className="max-h-48 overflow-y-auto border rounded-lg p-3">
             <div className="space-y-2">
               {Array.from(selectedAgents).map((agentId) => {
@@ -225,8 +226,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <Text className="text-sm text-blue-800">
-            Total: <strong>{selectedAgents.size}</strong> agent{selectedAgents.size !== 1 ? "s" : ""} will be made
-            public
+            {t("aiHub.makeAgentPublicForm.totalCount", { count: selectedAgents.size })}
           </Text>
         </div>
       </div>
@@ -248,19 +248,19 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
     return (
       <div className="flex justify-between mt-6">
         <Button onClick={currentStep === 0 ? handleClose : handlePrevious}>
-          {currentStep === 0 ? "Cancel" : "Previous"}
+          {currentStep === 0 ? t("common.cancel") : t("common.previous")}
         </Button>
 
         <div className="flex space-x-2">
           {currentStep === 0 && (
             <Button onClick={handleNext} disabled={selectedAgents.size === 0}>
-              Next
+              {t("common.next")}
             </Button>
           )}
 
           {currentStep === 1 && (
             <Button onClick={handleSubmit} loading={loading}>
-              Make Public
+              {t("aiHub.makeAgentPublicForm.makePublic")}
             </Button>
           )}
         </div>
@@ -270,7 +270,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
 
   return (
     <Modal
-      title="Make Agents Public"
+      title={t("aiHub.makeAgentPublicForm.modalTitle")}
       open={visible}
       onCancel={handleClose}
       footer={null}
@@ -279,8 +279,8 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
     >
       <Form form={form} layout="vertical">
         <Steps current={currentStep} className="mb-6">
-          <Step title="Select Agents" />
-          <Step title="Confirm" />
+          <Step title={t("aiHub.makeAgentPublicForm.stepSelectAgents")} />
+          <Step title={t("aiHub.makeAgentPublicForm.stepConfirm")} />
         </Steps>
 
         {renderStepContent()}

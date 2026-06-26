@@ -1,5 +1,6 @@
 import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
@@ -27,6 +28,7 @@ interface SpendLogsTableProps {
 }
 
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
+  const { t } = useTranslation();
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
@@ -237,15 +239,15 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
         <TabList>
-          <Tab>Request Logs</Tab>
-          <Tab>Audit Logs</Tab>
-          <Tab>Deleted Keys</Tab>
-          <Tab>Deleted Teams</Tab>
+          <Tab>{t("viewLogs.index.tabRequestLogs")}</Tab>
+          <Tab>{t("viewLogs.index.tabAuditLogs")}</Tab>
+          <Tab>{t("viewLogs.index.tabDeletedKeys")}</Tab>
+          <Tab>{t("viewLogs.index.tabDeletedTeams")}</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
-              <h1 className="text-xl font-semibold">Request Logs</h1>
+              <h1 className="text-xl font-semibold">{t("viewLogs.index.requestLogsTitle")}</h1>
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
@@ -253,12 +255,12 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                 keyData={selectedKeyInfo}
                 teams={allTeams ?? []}
                 onClose={() => setSelectedKeyIdInfoView(null)}
-                backButtonText="Back to Logs"
+                backButtonText={t("viewLogs.index.backToLogs")}
               />
             ) : (
               <>
                 <FilterComponent
-                  options={getLogFilterOptions(accessToken)}
+                  options={getLogFilterOptions(accessToken, t)}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
                 />

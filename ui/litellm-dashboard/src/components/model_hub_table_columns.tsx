@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import i18n from "@/lib/i18n";
 
 interface ModelHubData {
   model_group: string;
@@ -55,7 +56,7 @@ export const modelHubColumns = (
 ): ColumnDef<ModelHubData>[] => {
   const allColumns: ColumnDef<ModelHubData>[] = [
     {
-      header: "Public Model Name",
+      header: i18n.t("modelHubTableColumns.publicModelName"),
       accessorKey: "model_group",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -66,7 +67,7 @@ export const modelHubColumns = (
           <div className="space-y-1">
             <div className="flex items-center space-x-2">
               <Text className="font-medium text-sm">{model.model_group}</Text>
-              <Tooltip title="Copy model name">
+              <Tooltip title={i18n.t("modelHubTableColumns.copyModelName")}>
                 <CopyOutlined
                   onClick={() => copyToClipboard(model.model_group)}
                   className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
@@ -82,7 +83,7 @@ export const modelHubColumns = (
       },
     },
     {
-      header: "Provider",
+      header: i18n.t("modelHubTableColumns.provider"),
       accessorKey: "providers",
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -109,7 +110,7 @@ export const modelHubColumns = (
       },
     },
     {
-      header: "Mode",
+      header: i18n.t("modelHubTableColumns.mode"),
       accessorKey: "mode",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -129,7 +130,7 @@ export const modelHubColumns = (
       },
     },
     {
-      header: "Tokens",
+      header: i18n.t("modelHubTableColumns.tokens"),
       accessorKey: "max_input_tokens",
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -154,7 +155,7 @@ export const modelHubColumns = (
       },
     },
     {
-      header: "Cost/1M",
+      header: i18n.t("modelHubTableColumns.costPerMillion"),
       accessorKey: "input_cost_per_token",
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -176,7 +177,7 @@ export const modelHubColumns = (
       },
     },
     {
-      header: "Features",
+      header: i18n.t("modelHubTableColumns.features"),
       accessorKey: "capabilities",
       enableSorting: false,
       cell: ({ row }) => {
@@ -200,7 +201,7 @@ export const modelHubColumns = (
       },
     },
     {
-      header: "Public",
+      header: i18n.t("modelHubTableColumns.public"),
       accessorKey: "is_public_model_group",
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -213,11 +214,11 @@ export const modelHubColumns = (
 
         return model.is_public_model_group === true ? (
           <Badge color="green" size="xs">
-            Yes
+            {i18n.t("common.yes")}
           </Badge>
         ) : (
           <Badge color="gray" size="xs">
-            No
+            {i18n.t("common.no")}
           </Badge>
         );
       },
@@ -226,7 +227,7 @@ export const modelHubColumns = (
       },
     },
     {
-      header: "Details",
+      header: i18n.t("common.details"),
       id: "details",
       enableSorting: false,
       cell: ({ row }) => {
@@ -234,8 +235,8 @@ export const modelHubColumns = (
 
         return (
           <Button size="xs" variant="secondary" onClick={() => showModal(model)} icon={InfoCircleOutlined}>
-            <span className="hidden lg:inline">Details</span>
-            <span className="lg:hidden">Info</span>
+            <span className="hidden lg:inline">{i18n.t("common.details")}</span>
+            <span className="lg:hidden">{i18n.t("modelHubTableColumns.infoShort")}</span>
           </Button>
         );
       },
