@@ -164,19 +164,17 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
         """
-        Returns True only when thinking mode is actually active for this request:
-          - model supports reasoning (capability check)
-          - user explicitly passed thinking={"type": "enabled"} (opt-in check)
+        Returns True only when the request explicitly carries
+        `thinking: {"type": "enabled"}` — the same opt-in signal the
+        upstream DeepSeek anthropic-compat endpoint enforces.
 
-        Mirrors `DeepSeekChatConfig._thinking_mode_active` so behaviour is
-        symmetric across the two DeepSeek endpoints.
+        Unlike the chat-side `DeepSeekChatConfig._thinking_mode_active`,
+        we do NOT gate on `supports_reasoning(model, custom_llm_provider)`.
+        The anthropic-compat endpoint accepts the native anthropic message
+        shape (where `thinking` is always opt-in), so any request that
+        actually turns thinking on is one we must backfill for.
         """
-        return (
-            litellm.utils.supports_reasoning(
-                model=model, custom_llm_provider="deepseek"
-            )
-            and (optional_params.get("thinking") or {}).get("type") == "enabled"
-        )
+        return (optional_params.get("thinking") or {}).get("type") == "enabled"
 
     def transform_anthropic_messages_request(
         self,
