@@ -169,7 +169,10 @@ class HeadroomGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         print(
             f"[headroom] apply_guardrail called: input_type={input_type} "
-            f"has_structured_messages={inputs.get('structured_messages') is not None}",
+            f"has_structured_messages={inputs.get('structured_messages') is not None} "
+            f"request_data_keys={list(request_data.keys())[:10]} "
+            f"has_metadata={'metadata' in request_data} "
+            f"has_litellm_metadata={'litellm_metadata' in request_data}",
             flush=True,
         )
         if input_type != "request":
