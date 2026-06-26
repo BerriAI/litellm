@@ -89,4 +89,10 @@ class CerebrasConfig(OpenAIGPTConfig):
                 optional_params["max_tokens"] = value
             elif param in supported_openai_params:
                 optional_params[param] = value
+
+        # Cerebras does not support tools and response_format together.
+        # Drop response_format when tools are present to avoid a 400.
+        if "tools" in optional_params and "response_format" in optional_params:
+            optional_params.pop("response_format")
+
         return optional_params
