@@ -54,6 +54,7 @@ from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -382,6 +383,16 @@ class PrometheusLogger(CustomLogger):
                 "Latency overhead (milliseconds) added by LiteLLM processing",
                 labelnames=self.get_labels_for_metric(
                     "litellm_overhead_latency_metric"
+                ),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_total_overhead_latency_metric = self._histogram_factory(
+                "litellm_total_overhead_latency_metric",
+                "Total internal latency (seconds) added by LiteLLM, including "
+                "pre/post-call guardrails (excludes the LLM API call)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_total_overhead_latency_metric"
                 ),
                 buckets=self.latency_buckets,
             )
@@ -1087,6 +1098,26 @@ class PrometheusLogger(CustomLogger):
 
         self._cached_metric_labels[metric_name] = filtered_labels
         return filtered_labels
+
+    @staticmethod
+    def _get_guardrail_overhead_seconds(
+        standard_logging_payload: StandardLoggingPayload,
+    ) -> float:
+        """Total pre/post-call guardrail execution time (seconds) on the payload.
+
+        Pre-call and post-call guardrails run sequentially around the LLM call,
+        so their durations are additive overhead. During-call (moderation)
+        guardrails run concurrently with the LLM call and are excluded to avoid
+        over-counting.
+        """
+        total = 0.0
+        for info in standard_logging_payload.get("guardrail_information") or []:
+            mode = info.get("guardrail_mode")
+            mode_value = getattr(mode, "value", mode)
+            if mode_value == GuardrailEventHooks.during_call.value:
+                continue
+            total += float(info.get("duration") or 0.0)
+        return total
 
     def _track_end_user_metric_series(
         self,
@@ -2611,6 +2642,26 @@ class PrometheusLogger(CustomLogger):
                 )
                 self.litellm_overhead_latency_metric.labels(**_labels).observe(
                     litellm_overhead_time_ms / 1000
+                )  # set as seconds
+
+                # Total internal overhead = SDK overhead + pre/post-call guardrails.
+                # litellm_overhead_time_ms only covers the SDK wrapper window and
+                # excludes proxy guardrails (during-call runs concurrently with the
+                # LLM call and is excluded by the helper).
+                total_overhead_labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_total_overhead_latency_metric"
+                    ),
+                    enum_values=enum_values,
+                    label_context=label_context,
+                )
+                guardrail_overhead_seconds = self._get_guardrail_overhead_seconds(
+                    standard_logging_payload
+                )
+                self.litellm_total_overhead_latency_metric.labels(
+                    **total_overhead_labels
+                ).observe(
+                    (litellm_overhead_time_ms / 1000) + guardrail_overhead_seconds
                 )  # set as seconds
 
             if remaining_requests:
