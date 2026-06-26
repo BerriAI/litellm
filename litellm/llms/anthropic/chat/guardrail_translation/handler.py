@@ -149,6 +149,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            original_structured_messages = structured_messages
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
             # Include model information if available
@@ -178,7 +179,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             guardrailed_structured_messages = guardrailed_inputs.get(
                 "structured_messages"
             )
-            if guardrailed_structured_messages is not None:
+            if (
+                guardrailed_structured_messages is not None
+                and guardrailed_structured_messages is not original_structured_messages
+            ):
                 from litellm.litellm_core_utils.prompt_templates.factory import (
                     anthropic_messages_pt,
                 )

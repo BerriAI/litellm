@@ -124,6 +124,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if model:
                 inputs["model"] = model
 
+            original_structured_messages = inputs.get("structured_messages")
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -140,7 +141,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrailed_structured_messages = guardrailed_inputs.get(
                 "structured_messages"
             )
-            if guardrailed_structured_messages is not None:
+            if (
+                guardrailed_structured_messages is not None
+                and guardrailed_structured_messages is not original_structured_messages
+            ):
                 data["messages"] = guardrailed_structured_messages
             else:
                 # Step 3: Map guardrail responses back to original message structure
