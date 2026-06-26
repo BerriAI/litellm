@@ -33,6 +33,7 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.secret_managers.main import get_secret_str
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
     MCP_HEALTH_CHECK_TIMEOUT,
@@ -339,6 +340,23 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     else:
         # Already a dictionary
         return data
+
+
+def _resolve_static_header_env_ref(key: str, value: str) -> str:
+    """Resolve an ``os.environ/NAME`` static header to its environment value.
+
+    Non-references pass through untouched; an unset env var keeps the literal so
+    the misconfiguration stays visible instead of being silently dropped.
+    """
+    if not value.startswith("os.environ/"):
+        return value
+    secret = get_secret_str(value)
+    if secret is not None:
+        return secret
+    verbose_logger.warning(
+        f"MCP static_header {key!r}: env var {value!r} not set; keeping literal value"
+    )
+    return value
 
 
 def _deserialize_json_list(data: Any) -> Optional[List[Dict[str, Any]]]:
@@ -1075,6 +1093,11 @@ class MCPServerManager:
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
         )
+        if static_headers_dict:
+            static_headers_dict = {
+                key: _resolve_static_header_env_ref(key, value)
+                for key, value in static_headers_dict.items()
+            }
         env_vars_list = self._resolve_env_vars_list(
             mcp_server,
             env_vars_are_encrypted=(
