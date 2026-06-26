@@ -1046,9 +1046,9 @@ def _gemini_convert_messages_with_history(
                                 if invocation.get("tool_type"):
                                     tr_dict["toolType"] = invocation["tool_type"]
                                 tr_part: Dict[str, Any] = {"toolResponse": tr_dict}
-                                if "thought_signature" in invocation:
+                                if "response_thought_signature" in invocation:
                                     tr_part["thoughtSignature"] = invocation[
-                                        "thought_signature"
+                                        "response_thought_signature"
                                     ]
                                 assistant_content.append(tr_part)  # type: ignore
 

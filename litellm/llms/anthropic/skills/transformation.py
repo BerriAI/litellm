@@ -38,10 +38,12 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
 
         # Get API key from litellm_params if available
         api_key = None
+        api_base = None
         if litellm_params is not None:
             api_key = litellm_params.api_key
+            api_base = litellm_params.api_base
 
-        auth_header = AnthropicModelInfo.get_auth_header(api_key)
+        auth_header = AnthropicModelInfo.get_auth_header(api_key, api_base)
         if auth_header is None:
             raise ValueError(
                 "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is required for Skills API"

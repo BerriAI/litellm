@@ -364,6 +364,7 @@ class AnthropicChatCompletion(BaseLLM):
             messages=messages,
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
+            api_base=api_base,
         )
 
         config = ProviderConfigManager.get_provider_chat_config(
