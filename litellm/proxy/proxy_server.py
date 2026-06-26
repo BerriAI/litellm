@@ -269,6 +269,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
+    expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
@@ -673,21 +674,7 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global \
-        master_key, \
-        user_config_file_path, \
-        otel_logging, \
-        user_custom_auth, \
-        user_custom_auth_path, \
-        user_custom_key_generate, \
-        user_custom_key_update, \
-        user_custom_sso, \
-        user_custom_ui_sso_sign_in_handler, \
-        use_background_health_checks, \
-        use_shared_health_check, \
-        health_check_interval, \
-        health_check_concurrency, \
-        prisma_client
+    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client
 
     # Set all variables to None
     master_key = None
@@ -707,12 +694,7 @@ def cleanup_router_config_variables():
 
 
 async def proxy_shutdown_event():
-    global \
-        prisma_client, \
-        master_key, \
-        user_custom_auth, \
-        user_custom_key_generate, \
-        user_custom_key_update
+    global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
@@ -782,22 +764,7 @@ async def _initialize_shared_aiohttp_session():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global \
-        prisma_client, \
-        master_key, \
-        use_background_health_checks, \
-        llm_router, \
-        llm_model_list, \
-        general_settings, \
-        proxy_budget_rescheduler_min_time, \
-        proxy_budget_rescheduler_max_time, \
-        litellm_proxy_admin_name, \
-        db_writer_client, \
-        store_model_in_db, \
-        premium_user, \
-        _license_check, \
-        proxy_batch_polling_interval, \
-        shared_aiohttp_session
+    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -1978,9 +1945,9 @@ redis_usage_cache: Optional[RedisCache] = (
     None  # redis cache used for tracking spend, tpm/rpm limits
 )
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[
-    str
-] = []  # Models that should use native provider background mode instead of polling
+native_background_mode: List[str] = (
+    []
+)  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -3287,9 +3254,13 @@ def _write_health_state_to_router_cache(
 
             exception_status = getattr(original_exception, "status_code", 500)
 
-            if llm_router.health_check_ignore_transient_errors and exception_status in (
-                429,
-                408,
+            if (
+                llm_router.health_check_ignore_transient_errors
+                and exception_status
+                in (
+                    429,
+                    408,
+                )
             ):
                 continue
 
@@ -4195,35 +4166,7 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global \
-            master_key, \
-            user_config_file_path, \
-            otel_logging, \
-            user_custom_auth, \
-            user_custom_auth_path, \
-            user_custom_key_generate, \
-            user_custom_key_update, \
-            user_custom_sso, \
-            user_custom_ui_sso_sign_in_handler, \
-            use_background_health_checks, \
-            use_shared_health_check, \
-            health_check_interval, \
-            health_check_concurrency, \
-            use_queue, \
-            proxy_budget_rescheduler_max_time, \
-            proxy_budget_rescheduler_min_time, \
-            ui_access_mode, \
-            litellm_master_key_hash, \
-            proxy_batch_write_at, \
-            disable_spend_logs, \
-            prompt_injection_detection_obj, \
-            redis_usage_cache, \
-            store_model_in_db, \
-            premium_user, \
-            open_telemetry_logger, \
-            health_check_details, \
-            proxy_batch_polling_interval, \
-            config_passthrough_endpoints
+        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -4500,10 +4443,7 @@ class ProxyConfig:
                     pass
                 elif key == "responses":
                     # Initialize global polling via cache settings
-                    global \
-                        polling_via_cache_enabled, \
-                        native_background_mode, \
-                        polling_cache_ttl
+                    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
                     background_mode = value.get("background_mode", {})
                     polling_via_cache_enabled = background_mode.get(
                         "polling_via_cache", False
@@ -5138,7 +5078,8 @@ class ProxyConfig:
                 ### LOAD FROM GOOGLE KMS ###
                 load_google_kms(use_google_kms=True)
             elif (
-                key_management_system == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
+                key_management_system
+                == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
             ):
                 from litellm.secret_managers.aws_secret_manager_v2 import (
                     AWSSecretsManagerV2,
@@ -6689,10 +6630,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
+            guardrails_in_db: List[Guardrail] = (
+                await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -7004,23 +6945,7 @@ async def initialize(
     use_queue=False,
     config=None,
 ):
-    global \
-        user_model, \
-        user_api_base, \
-        user_debug, \
-        user_detailed_debug, \
-        user_user_max_tokens, \
-        user_request_timeout, \
-        user_temperature, \
-        user_telemetry, \
-        user_headers, \
-        experimental, \
-        llm_model_list, \
-        llm_router, \
-        general_settings, \
-        master_key, \
-        user_custom_auth, \
-        prisma_client
+    global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
     from litellm.proxy.common_utils.banner import show_banner
 
     show_banner()
@@ -8832,13 +8757,7 @@ async def model_list(
                     Hiding is presentation-only: a hidden model can still be
                     called directly.
     """
-    global \
-        llm_model_list, \
-        general_settings, \
-        llm_router, \
-        prisma_client, \
-        user_api_key_cache, \
-        proxy_logging_obj
+    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
     settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
@@ -9015,13 +8934,7 @@ async def model_info(
     scoping, health filtering, paused deployments) drives both endpoints; the
     listing's public id must resolve to the same internal deployment here.
     """
-    global \
-        llm_model_list, \
-        general_settings, \
-        llm_router, \
-        prisma_client, \
-        user_api_key_cache, \
-        proxy_logging_obj
+    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
     settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
@@ -9172,9 +9085,9 @@ async def chat_completion(
             hasattr(user_api_key_dict, "organization_alias")
             and user_api_key_dict.organization_alias is not None
         ):
-            data["metadata"]["user_api_key_org_alias"] = (
-                user_api_key_dict.organization_alias
-            )
+            data["metadata"][
+                "user_api_key_org_alias"
+            ] = user_api_key_dict.organization_alias
         if (
             hasattr(user_api_key_dict, "agent_id")
             and user_api_key_dict.agent_id is not None
@@ -9356,9 +9269,9 @@ async def completion(
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -9572,12 +9485,9 @@ async def embeddings(
                     litellm_params = deployment.get("litellm_params", {}) or {}
                     litellm_model = litellm_params.get("model", "")
                     # Check if this provider supports token arrays
-                    supports_token_arrays = (
-                        litellm_model in litellm.open_ai_embedding_models
-                        or any(
-                            litellm_model.startswith(provider)
-                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
-                        )
+                    supports_token_arrays = litellm_model in litellm.open_ai_embedding_models or any(
+                        litellm_model.startswith(provider)
+                        for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
                     )
                     if not supports_token_arrays:
                         # non-openai/azure embedding model called with token input - decode tokens
@@ -9610,9 +9520,9 @@ async def embeddings(
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -12570,12 +12480,7 @@ async def model_info_v2(
     }
     ```
     """
-    global \
-        llm_model_list, \
-        general_settings, \
-        user_config_file_path, \
-        proxy_config, \
-        llm_router
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_router is None or not llm_router.model_list:
@@ -13331,13 +13236,7 @@ async def model_info_v1(
 
     ```
     """
-    global \
-        llm_model_list, \
-        general_settings, \
-        user_config_file_path, \
-        proxy_config, \
-        llm_router, \
-        user_model
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router, user_model
 
     # Unit tests call this handler directly; FastAPI normally resolves Query defaults.
     if not isinstance(include_team_models, bool):
@@ -13429,6 +13328,8 @@ async def model_info_v1(
     all_models: List[dict] = copy.deepcopy(llm_router.model_list)
     alias_models = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
+
+    all_models = expand_wildcard_deployments_for_model_info(all_models)
 
     allowed_model_names = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
@@ -13679,12 +13580,7 @@ async def model_group_info(
             }
     ```
     """
-    global \
-        llm_model_list, \
-        general_settings, \
-        user_config_file_path, \
-        proxy_config, \
-        llm_router
+    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_model_list is None or llm_router is None or not llm_model_list:
@@ -15076,14 +14972,7 @@ async def update_config(
     untouched — this endpoint never persists pre-existing YAML values to DB as
     a side effect of an unrelated update.
     """
-    global \
-        llm_router, \
-        llm_model_list, \
-        general_settings, \
-        proxy_config, \
-        proxy_logging_obj, \
-        master_key, \
-        prisma_client
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
@@ -15595,9 +15484,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
@@ -15785,9 +15674,9 @@ async def delete_callback(
 
         # Remove callback from success_callback list
         success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})["success_callback"] = (
-            success_callbacks
-        )
+        config.setdefault("litellm_settings", {})[
+            "success_callback"
+        ] = success_callbacks
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
@@ -15831,13 +15720,7 @@ async def get_config():
     # return the callbacks and the env variables for the callback
 
     """
-    global \
-        llm_router, \
-        llm_model_list, \
-        general_settings, \
-        proxy_config, \
-        proxy_logging_obj, \
-        master_key
+    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
         all_available_callbacks = AllCallbacks()
 

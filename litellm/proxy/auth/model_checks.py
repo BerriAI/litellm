@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
-from typing import Dict, List, Optional, Set
+import copy
+from typing import Any, Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -339,6 +340,55 @@ def get_known_models_from_wildcard(
                 model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
+
+
+def expand_wildcard_deployments_for_model_info(
+    deployments: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Expand wildcard deployments into one row per known provider model.
+
+    PR #30025 changed /model/info to read from llm_router.model_list (correct,
+    so team-scoped rows are included). This function restores wildcard expansion
+    on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
+    becomes one entry per known openai model, matching /v1/models behaviour.
+    """
+    expanded: List[Dict[str, Any]] = []
+    for deployment in deployments:
+        model_name = deployment.get("model_name") or ""
+        litellm_params_dict = deployment.get("litellm_params") or {}
+        litellm_model = litellm_params_dict.get("model") or ""
+
+        # Determine the wildcard pattern to expand
+        if _check_wildcard_routing(model_name) and "/" in model_name:
+            wildcard_pattern = model_name
+        elif _check_wildcard_routing(litellm_model):
+            wildcard_pattern = litellm_model
+        elif _check_wildcard_routing(model_name):
+            wildcard_pattern = model_name
+        else:
+            expanded.append(deployment)
+            continue
+
+        litellm_params = (
+            LiteLLM_Params(**litellm_params_dict) if litellm_params_dict else None
+        )
+        expanded_names = get_known_models_from_wildcard(
+            wildcard_model=wildcard_pattern,
+            litellm_params=litellm_params,
+        )
+        if not expanded_names:
+            expanded.append(deployment)
+            continue
+
+        for name in expanded_names:
+            row = copy.deepcopy(deployment)
+            row["model_name"] = name
+            params = row.get("litellm_params")
+            if isinstance(params, dict):
+                params["model"] = name
+            expanded.append(row)
+
+    return expanded
 
 
 def _get_wildcard_models(
