@@ -125,13 +125,20 @@ async def test_async_transcription_uses_volcengine_ws_and_returns_text(monkeypat
     response = await VolcEngineAudioTranscription().async_audio_transcriptions(
         model="volc.seedasr.sauc.duration",
         audio_file=b"fake-wav",
-        optional_params={"response_format": "json", "language": "zh"},
-        litellm_params={},
+        optional_params={
+            "response_format": "json",
+            "language": "zh",
+            "resource_id": "attacker-resource",
+        },
+        litellm_params={
+            "metadata": {"api_base": "wss://example.test/asr"},
+            "resource_id": "volc.seedasr.sauc.duration",
+        },
         model_response=TranscriptionResponse(),
         timeout=None,  # type: ignore[arg-type]
         logging_obj=MagicMock(),
         api_key="speech-api-key",
-        api_base="wss://example.test/asr",
+        api_base="wss://attacker.test/asr",
         provider_config=VolcEngineAudioTranscriptionConfig(),
     )
 
@@ -147,3 +154,25 @@ async def test_async_transcription_uses_volcengine_ws_and_returns_text(monkeypat
         == "volc.seedasr.sauc.duration"
     )
     assert len(fake_ws.sent) == 3
+
+
+def test_stt_get_complete_url_ignores_request_api_base():
+    config = VolcEngineAudioTranscriptionConfig()
+
+    assert (
+        config.get_complete_url(
+            api_base="wss://attacker.test/asr",
+            api_key="speech-api-key",
+            model="volc.seedasr.sauc.duration",
+            optional_params={},
+            litellm_params={"metadata": {"api_base": "wss://example.test/asr"}},
+        )
+        == "wss://example.test/asr"
+    )
+    assert config.get_complete_url(
+        api_base="wss://attacker.test/asr",
+        api_key="speech-api-key",
+        model="volc.seedasr.sauc.duration",
+        optional_params={},
+        litellm_params={},
+    ).startswith("wss://openspeech.bytedance.com/")

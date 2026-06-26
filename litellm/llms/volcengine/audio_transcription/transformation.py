@@ -7,7 +7,10 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.volcengine.common_utils import VolcEngineError
+from litellm.llms.volcengine.common_utils import (
+    VolcEngineError,
+    get_volcengine_configured_ws_api_base,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
@@ -52,10 +55,10 @@ class VolcEngineAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        resolved = api_base or litellm_params.get("api_base")
-        if isinstance(resolved, str) and resolved.startswith(("ws://", "wss://")):
-            return resolved
-        return VOLCENGINE_STT_DEFAULT_API_BASE
+        return get_volcengine_configured_ws_api_base(
+            litellm_params=litellm_params,
+            default_api_base=VOLCENGINE_STT_DEFAULT_API_BASE,
+        )
 
     def transform_audio_transcription_request(
         self,

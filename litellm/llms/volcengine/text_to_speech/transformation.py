@@ -15,6 +15,7 @@ from litellm.llms.base_llm.text_to_speech.transformation import (
 from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from litellm.llms.volcengine.common_utils import (
     VolcEngineError,
+    get_volcengine_configured_ws_api_base,
     get_volcengine_speech_api_key,
 )
 from litellm.llms.volcengine.text_to_speech.protocol import (
@@ -107,10 +108,10 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
         api_base: str | None,
         litellm_params: dict,
     ) -> str:
-        resolved = api_base or litellm_params.get("api_base")
-        if isinstance(resolved, str) and resolved.startswith(("ws://", "wss://")):
-            return resolved
-        return VOLCENGINE_TTS_DEFAULT_API_BASE
+        return get_volcengine_configured_ws_api_base(
+            litellm_params=litellm_params,
+            default_api_base=VOLCENGINE_TTS_DEFAULT_API_BASE,
+        )
 
     def transform_text_to_speech_request(
         self,
@@ -158,16 +159,14 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
         endpoint = self.get_complete_url(
             model=model,
             api_base=api_base,
-            litellm_params={**litellm_params_dict, "api_base": api_base},
+            litellm_params=litellm_params_dict,
         )
         resolved_api_key = api_key or litellm_params_dict.get("api_key")
         voice_name = voice if isinstance(voice, str) else VOLCENGINE_TTS_DEFAULT_VOICE
         resolved_optional_params = {**optional_params}
-        if (
-            "resource_id" not in resolved_optional_params
-            and litellm_params_dict.get("resource_id") is not None
-        ):
-            resolved_optional_params["resource_id"] = litellm_params_dict["resource_id"]
+        resource_id = litellm_params_dict.get("resource_id") or pick_tts_resource_id(
+            model
+        )
         if aspeech:
             return self._async_dispatch(
                 model=model,
@@ -178,6 +177,7 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
                 timeout=timeout,
                 api_base=endpoint,
                 api_key=resolved_api_key,
+                resource_id=resource_id,
             )
         return run_async_function(
             self._async_dispatch,
@@ -189,6 +189,7 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
             timeout=timeout,
             api_base=endpoint,
             api_key=resolved_api_key,
+            resource_id=resource_id,
         )
 
     async def _async_dispatch(
@@ -201,6 +202,7 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
         timeout: Union[float, httpx.Timeout],
         api_base: str,
         api_key: str | None,
+        resource_id: str,
     ) -> HttpxBinaryResponseContent:
         response_format = optional_params.get("response_format") or "pcm"
         if response_format not in {"pcm", "wav"}:
@@ -216,7 +218,6 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
             )
 
         speech_api_key = get_volcengine_speech_api_key(api_key)
-        resource_id = optional_params.get("resource_id") or pick_tts_resource_id(model)
         logging_obj.pre_call(
             input=input,
             api_key="",

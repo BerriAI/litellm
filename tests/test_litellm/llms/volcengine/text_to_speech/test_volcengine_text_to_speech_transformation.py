@@ -152,13 +152,19 @@ async def test_tts_dispatch_uses_volcengine_ws_and_returns_pcm(monkeypatch):
         model="seed-tts-2.0",
         input="你好",
         voice=VOLCENGINE_TTS_DEFAULT_VOICE,
-        optional_params={"response_format": "pcm"},
-        litellm_params_dict={"resource_id": "seed-tts-2.0-configured"},
+        optional_params={
+            "response_format": "pcm",
+            "resource_id": "attacker-resource",
+        },
+        litellm_params_dict={
+            "metadata": {"api_base": "wss://example.test/tts"},
+            "resource_id": "seed-tts-2.0-configured",
+        },
         logging_obj=MagicMock(),
         timeout=1,
         extra_headers=None,
         aspeech=True,
-        api_base="wss://example.test/tts",
+        api_base="wss://attacker.test/tts",
         api_key="speech-api-key",
     )
 
@@ -195,7 +201,10 @@ async def test_tts_dispatch_maps_official_2_0_model_name(monkeypatch):
         model="seed-tts-2.0-expressive",
         input="你好",
         voice=VOLCENGINE_TTS_DEFAULT_VOICE,
-        optional_params={"response_format": "pcm"},
+        optional_params={
+            "response_format": "pcm",
+            "resource_id": "attacker-resource",
+        },
         litellm_params_dict={},
         logging_obj=MagicMock(),
         timeout=1,
@@ -210,3 +219,21 @@ async def test_tts_dispatch_maps_official_2_0_model_name(monkeypatch):
     )
     start_session_payload = json.loads(decode_event_frame(fake_ws.sent[1]).payload)
     assert start_session_payload["req_params"]["model"] == "seed-tts-2.0-expressive"
+
+
+def test_tts_get_complete_url_ignores_request_api_base():
+    config = VolcEngineTextToSpeechConfig()
+
+    assert (
+        config.get_complete_url(
+            model="seed-tts-2.0",
+            api_base="wss://attacker.test/tts",
+            litellm_params={"metadata": {"api_base": "wss://example.test/tts"}},
+        )
+        == "wss://example.test/tts"
+    )
+    assert config.get_complete_url(
+        model="seed-tts-2.0",
+        api_base="wss://attacker.test/tts",
+        litellm_params={},
+    ).startswith("wss://openspeech.bytedance.com/")

@@ -123,11 +123,7 @@ class VolcEngineAudioTranscription:
             litellm_params=litellm_params,
         )
         speech_api_key = get_volcengine_speech_api_key(api_key)
-        resource_id = (
-            optional_params.get("resource_id")
-            or litellm_params.get("resource_id")
-            or pick_stt_resource_id(model)
-        )
+        resource_id = litellm_params.get("resource_id") or pick_stt_resource_id(model)
 
         logging_obj.pre_call(
             input=get_audio_file_name(audio_file),

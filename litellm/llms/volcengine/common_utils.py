@@ -79,3 +79,27 @@ def get_volcengine_speech_api_key(api_key: str | None) -> str:
             ),
         )
     return resolved_key
+
+
+def get_volcengine_configured_ws_api_base(
+    litellm_params: dict | None, default_api_base: str
+) -> str:
+    """Resolve Volcengine speech WebSocket endpoints from trusted config data."""
+    if litellm_params is None:
+        return default_api_base
+
+    metadata = litellm_params.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_api_base = metadata.get("api_base")
+        if _is_volcengine_ws_api_base(metadata_api_base):
+            return metadata_api_base
+
+    configured_api_base = litellm_params.get("api_base")
+    if _is_volcengine_ws_api_base(configured_api_base):
+        return configured_api_base
+
+    return default_api_base
+
+
+def _is_volcengine_ws_api_base(value: object) -> bool:
+    return isinstance(value, str) and value.startswith(("ws://", "wss://"))
