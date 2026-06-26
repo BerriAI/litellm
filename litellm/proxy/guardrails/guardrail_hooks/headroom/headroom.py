@@ -167,17 +167,26 @@ class HeadroomGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
+        verbose_proxy_logger.info(
+            "Headroom guardrail apply_guardrail called: input_type=%s has_structured_messages=%s",
+            input_type,
+            inputs.get("structured_messages") is not None,
+        )
         if input_type != "request":
+            verbose_proxy_logger.info("Headroom: skipping (response type)")
             return inputs
 
         if self._should_bypass(request_data):
-            verbose_proxy_logger.debug(
+            verbose_proxy_logger.info(
                 "Headroom: %s header set; skipping compression", BYPASS_HEADER
             )
             return inputs
 
         structured_messages = inputs.get("structured_messages")
         if not _is_object_list(structured_messages) or not structured_messages:
+            verbose_proxy_logger.info(
+                "Headroom: no structured_messages in inputs; skipping compression"
+            )
             return inputs
 
         messages = [m for m in structured_messages if _is_str_object_dict(m)]
