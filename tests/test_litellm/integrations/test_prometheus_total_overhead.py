@@ -7,6 +7,8 @@ durations. During-call (moderation) guardrails run concurrently with the LLM
 call and are excluded so they don't inflate the overhead.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 from prometheus_client import REGISTRY
 
@@ -59,6 +61,119 @@ def test_get_guardrail_overhead_seconds_accepts_plain_string_mode():
     )
     # only pre_call counts; during_call excluded
     assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.2) < 1e-6
+
+
+def test_get_guardrail_overhead_seconds_excludes_list_mode_with_during_call():
+    """A list-typed guardrail_mode containing during_call must be excluded.
+
+    guardrail_mode is typed Optional[Union[GuardrailEventHooks,
+    List[GuardrailEventHooks], GuardrailMode]]; a list mixing in during_call is
+    not additive (concurrent) overhead and must not be counted.
+    """
+    payload = StandardLoggingPayload(
+        guardrail_information=[
+            {
+                "guardrail_mode": [
+                    GuardrailEventHooks.pre_call,
+                    GuardrailEventHooks.during_call,
+                ],
+                "duration": 0.3,
+            },
+            {"guardrail_mode": GuardrailEventHooks.post_call, "duration": 0.05},
+        ],
+    )
+    # the list entry mixes in during_call -> excluded; only the post_call counts
+    assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.05) < 1e-6
+
+
+def test_get_guardrail_overhead_seconds_counts_pure_pre_post_list_mode():
+    """A list-typed mode containing only additive (pre/post) phases is counted."""
+    payload = StandardLoggingPayload(
+        guardrail_information=[
+            {"guardrail_mode": [GuardrailEventHooks.pre_call], "duration": 0.1},
+            {"guardrail_mode": ["post_call"], "duration": 0.2},
+        ],
+    )
+    assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.3) < 1e-6
+
+
+def test_get_guardrail_overhead_seconds_excludes_logging_only_and_mcp():
+    """logging_only and MCP-specific modes do not block the response -> excluded."""
+    payload = StandardLoggingPayload(
+        guardrail_information=[
+            {"guardrail_mode": GuardrailEventHooks.logging_only, "duration": 0.4},
+            {"guardrail_mode": GuardrailEventHooks.pre_mcp_call, "duration": 0.3},
+            {"guardrail_mode": GuardrailEventHooks.during_mcp_call, "duration": 0.2},
+            {"guardrail_mode": GuardrailEventHooks.post_call, "duration": 0.05},
+        ],
+    )
+    # only the post_call guardrail is additive, user-visible overhead
+    assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.05) < 1e-6
+
+
+def _patch_label_factory(monkeypatch):
+    monkeypatch.setattr(
+        "litellm.integrations.prometheus.prometheus_label_factory",
+        lambda **kwargs: {},
+    )
+
+
+def test_total_overhead_recorded_when_only_guardrails_no_sdk_overhead(monkeypatch):
+    """Guardrail-only overhead is recorded even when SDK overhead is absent."""
+    _patch_label_factory(monkeypatch)
+    logger = PrometheusLogger()
+    mock_metric = MagicMock()
+    logger.litellm_total_overhead_latency_metric = mock_metric
+
+    payload = StandardLoggingPayload(
+        hidden_params={},  # no litellm_overhead_time_ms
+        guardrail_information=[
+            {"guardrail_mode": GuardrailEventHooks.post_call, "duration": 0.2}
+        ],
+    )
+    logger._set_total_overhead_metric(
+        payload, enum_values=MagicMock(), label_context=MagicMock()
+    )
+
+    mock_metric.labels.return_value.observe.assert_called_once()
+    observed = mock_metric.labels.return_value.observe.call_args[0][0]
+    assert abs(observed - 0.2) < 1e-6
+
+
+def test_total_overhead_recorded_when_sdk_overhead_is_zero(monkeypatch):
+    """SDK overhead of exactly 0 (walrus-falsy) must not suppress the metric."""
+    _patch_label_factory(monkeypatch)
+    logger = PrometheusLogger()
+    mock_metric = MagicMock()
+    logger.litellm_total_overhead_latency_metric = mock_metric
+
+    payload = StandardLoggingPayload(
+        hidden_params={"litellm_overhead_time_ms": 0.0},
+        guardrail_information=[
+            {"guardrail_mode": GuardrailEventHooks.pre_call, "duration": 0.1}
+        ],
+    )
+    logger._set_total_overhead_metric(
+        payload, enum_values=MagicMock(), label_context=MagicMock()
+    )
+
+    observed = mock_metric.labels.return_value.observe.call_args[0][0]
+    assert abs(observed - 0.1) < 1e-6
+
+
+def test_total_overhead_skipped_when_no_overhead_and_no_guardrails(monkeypatch):
+    """Nothing to record -> the metric is not touched."""
+    _patch_label_factory(monkeypatch)
+    logger = PrometheusLogger()
+    mock_metric = MagicMock()
+    logger.litellm_total_overhead_latency_metric = mock_metric
+
+    payload = StandardLoggingPayload(hidden_params={})
+    logger._set_total_overhead_metric(
+        payload, enum_values=MagicMock(), label_context=MagicMock()
+    )
+
+    mock_metric.labels.assert_not_called()
 
 
 def test_total_overhead_metric_is_registered():
