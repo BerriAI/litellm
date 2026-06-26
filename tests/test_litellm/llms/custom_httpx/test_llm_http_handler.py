@@ -1170,3 +1170,193 @@ def test_async_compact_handler_sends_json_when_not_signed():
     )
     assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
     assert "data" not in kwargs
+
+
+async def _post_timeout_for_anthropic_messages(
+    litellm_params: GenericLiteLLMParams,
+    stream: bool,
+):
+    """Drive async_anthropic_messages_handler with the network mocked and return
+    the timeout passed to the per-request .post call (the value that populates
+    aiohttp's sock_read), or None if .post was never reached."""
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-sonnet-4-20250514", "messages": []}
+    )
+    mock_config.sign_request = Mock(return_value=({"x-api-key": "test-key"}, None))
+    mock_config.get_complete_url = Mock(
+        return_value="https://api.anthropic.com/v1/messages"
+    )
+    mock_config.max_retry_on_anthropic_messages_http_error = 1
+    mock_config.transform_anthropic_messages_response = Mock(return_value={"ok": True})
+    mock_config.get_async_streaming_response_iterator = Mock(return_value=iter([]))
+
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = Mock()
+
+    captured = {"post_kwargs": None}
+
+    def fake_get_client(*args, **kwargs):
+        client = AsyncMock()
+
+        async def fake_post(**post_kwargs):
+            captured["post_kwargs"] = post_kwargs
+            return mock_response
+
+        client.post = fake_post
+        return client
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.pre_call = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = stream
+    mock_logging_obj.dynamic_success_callbacks = []
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        side_effect=fake_get_client,
+    ):
+        await handler.async_anthropic_messages_handler(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=mock_config,
+            anthropic_messages_optional_request_params={},
+            custom_llm_provider="anthropic",
+            litellm_params=litellm_params,
+            logging_obj=mock_logging_obj,
+            client=None,
+            stream=stream,
+            kwargs={},
+        )
+
+    post_kwargs = captured["post_kwargs"]
+    return post_kwargs.get("timeout") if post_kwargs is not None else None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_honors_configured_timeout():
+    """Regression: /v1/messages must honor litellm_params.timeout instead of the
+    hardcoded 600s default. The per-request .post timeout is what reaches
+    aiohttp's sock_read, so the configured value must land there."""
+    timeout = await _post_timeout_for_anthropic_messages(
+        litellm_params=GenericLiteLLMParams(timeout=1800),
+        stream=False,
+    )
+    assert timeout == 1800.0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_uses_stream_timeout_when_streaming():
+    """stream_timeout wins over timeout when stream=True."""
+    timeout = await _post_timeout_for_anthropic_messages(
+        litellm_params=GenericLiteLLMParams(timeout=1800, stream_timeout=300),
+        stream=True,
+    )
+    assert timeout == 300.0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_ignores_stream_timeout_when_not_streaming():
+    """stream_timeout must not apply to non-streaming calls; timeout is used."""
+    timeout = await _post_timeout_for_anthropic_messages(
+        litellm_params=GenericLiteLLMParams(timeout=1800, stream_timeout=300),
+        stream=False,
+    )
+    assert timeout == 1800.0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_falls_back_to_timeout_when_streaming_without_stream_timeout():
+    """stream=True but only timeout set -> timeout is used for the stream."""
+    timeout = await _post_timeout_for_anthropic_messages(
+        litellm_params=GenericLiteLLMParams(timeout=1800),
+        stream=True,
+    )
+    assert timeout == 1800.0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_no_explicit_timeout_when_unset():
+    """When neither timeout nor stream_timeout is configured, no explicit timeout
+    is forced; .post gets None so the client default path is left untouched."""
+    timeout = await _post_timeout_for_anthropic_messages(
+        litellm_params=GenericLiteLLMParams(),
+        stream=False,
+    )
+    assert timeout is None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_coerces_string_stream_timeout():
+    """Numeric-string stream_timeout (e.g. from YAML) is coerced to float."""
+    timeout = await _post_timeout_for_anthropic_messages(
+        litellm_params=GenericLiteLLMParams(stream_timeout="300"),
+        stream=True,
+    )
+    assert timeout == 300.0
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_zero_timeout_treated_as_unset():
+    """A non-positive timeout must not force an immediate-fail 0s read timeout;
+    it falls back to None so the client default applies."""
+    timeout = await _post_timeout_for_anthropic_messages(
+        litellm_params=GenericLiteLLMParams(timeout=0),
+        stream=False,
+    )
+    assert timeout is None
+
+
+def test_resolve_anthropic_messages_timeout_selection_and_coercion():
+    """Unit-level coverage of the resolver: stream selection, float coercion,
+    non-positive -> None, and unset -> None."""
+    resolve = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout
+
+    assert resolve(GenericLiteLLMParams(timeout=1800), stream=False) == 1800.0
+    assert (
+        resolve(GenericLiteLLMParams(timeout=1800, stream_timeout=300), stream=True)
+        == 300.0
+    )
+    assert (
+        resolve(GenericLiteLLMParams(timeout=1800, stream_timeout=300), stream=False)
+        == 1800.0
+    )
+    assert resolve(GenericLiteLLMParams(stream_timeout="300"), stream=True) == 300.0
+    assert resolve(GenericLiteLLMParams(timeout=0), stream=False) is None
+    assert resolve(GenericLiteLLMParams(), stream=False) is None
+
+
+def test_resolve_anthropic_messages_timeout_passes_httpx_timeout_through():
+    """An httpx.Timeout is forwarded untouched, not collapsed to a float."""
+    explicit = httpx.Timeout(timeout=1800.0, connect=5.0)
+    resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
+        GenericLiteLLMParams(timeout=explicit), stream=False
+    )
+    assert resolved is explicit
+
+
+def test_resolve_anthropic_messages_timeout_does_not_read_env(monkeypatch):
+    """Security regression: a client-supplied os.environ/ timeout string must NOT
+    resolve a server environment variable. Request-time secret resolution would let
+    a caller exfiltrate env-backed secrets via the float() error message; config-time
+    resolution (router.set_model_list / proxy load_config) already handles the
+    legitimate os.environ/ form before the request. The string is coerced as-is and
+    raises with the literal input, never the secret value."""
+    secret = "sk-ant-super-secret-value"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
+
+    with pytest.raises(ValueError) as exc_info:
+        BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
+            GenericLiteLLMParams(timeout="os.environ/ANTHROPIC_API_KEY"),
+            stream=False,
+        )
+
+    assert secret not in str(exc_info.value)
+    assert "os.environ/ANTHROPIC_API_KEY" in str(exc_info.value)
