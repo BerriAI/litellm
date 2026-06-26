@@ -353,6 +353,31 @@ class TestLangfuseOtelIntegration:
             == "123e4567e89b12d3a456426614174000"
         )
 
+    def test_existing_trace_id_takes_precedence_over_trace_id(self):
+        """``existing_trace_id`` continues an existing trace and must win over
+        ``trace_id`` for the OTEL trace identity, matching the vanilla Langfuse
+        precedence so trace continuation does not regress on the OTEL path."""
+        existing = "fedcba9876543210fedcba9876543210"
+        span = _export_langfuse_generation_span(
+            {"trace_id": "global_20260225143025_ord2468", "existing_trace_id": existing}
+        )
+        assert format(span.context.trace_id, "032x") == existing
+
+    def test_generation_name_preserved_with_custom_trace_id(self):
+        """Applying a custom trace context must not drop generation attributes:
+        the generation name still reaches the span (as both attribute and span
+        name) while the custom trace id drives the trace identity."""
+        import hashlib
+
+        trace_id = "order-42-trace"
+        expected = hashlib.sha256(trace_id.encode("utf-8")).digest()[:16].hex()
+        span = _export_langfuse_generation_span(
+            {"trace_id": trace_id}, generation_name="my-gen"
+        )
+        assert span.attributes.get("langfuse.generation.name") == "my-gen"
+        assert span.name == "my-gen"
+        assert format(span.context.trace_id, "032x") == expected
+
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
