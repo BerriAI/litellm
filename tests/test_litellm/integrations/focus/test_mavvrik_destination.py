@@ -479,10 +479,11 @@ async def test_export_window_passes_max_rows_as_limit(monkeypatch):
 
     # Mock the engine internals so _export_window runs through our new code path
     db_mock = MagicMock()
-    db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())  # empty → no upload
+    db_mock.get_usage_data = AsyncMock(return_value=pl.DataFrame())  # empty deliver
 
     engine_mock = MagicMock()
     engine_mock._database = db_mock
+    engine_mock._destination.deliver = AsyncMock()
     logger._engine = engine_mock
 
     window = FocusTimeWindow(
