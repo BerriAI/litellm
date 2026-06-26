@@ -4250,8 +4250,8 @@ _FIREWORKS_MODELS = [
         "accounts/fireworks/models/glm-5p2",
         1.4e-06,
         4.4e-06,
-        2.6e-07,
-        1048576,
+        1.4e-07,
+        1048575,
         131072,
         False,
         True,
@@ -4272,6 +4272,16 @@ _FIREWORKS_MODELS = [
         8.8e-06,
         5.2e-07,
         202800,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/glm-5p2-fast",
+        2.1e-06,
+        6.6e-06,
+        2.1e-07,
+        1048575,
         131072,
         False,
         True,
@@ -4404,6 +4414,7 @@ _FIREWORKS_SHORT_FORMS = [
 
 _FIREWORKS_ROUTER_SHORT_FORMS = [
     "glm-5p1-fast",
+    "glm-5p2-fast",
     "kimi-k2p6-fast",
     "kimi-k2p7-code-fast",
 ]
