@@ -1,0 +1,13 @@
+services:
+  headroom-guardrail:
+    build: .
+    ports:
+      - "8100:8100"
+    environment:
+      # LLM provider key headroom uses internally to compress
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # Optional: lock down the guardrail endpoint
+      - GUARDRAIL_API_KEY=${GUARDRAIL_API_KEY:-}
+      # Model headroom uses for compression (falls back to gpt-4o-mini)
+      - HEADROOM_DEFAULT_MODEL=${HEADROOM_DEFAULT_MODEL:-gpt-4o-mini}
+    restart: unless-stopped

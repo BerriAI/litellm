@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: headroom-guardrail
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: HEADROOM_DEFAULT_MODEL
+        value: gpt-4o-mini
+      - key: GUARDRAIL_API_KEY
+        generateValue: true
+    healthCheckPath: /health
