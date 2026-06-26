@@ -1061,6 +1061,8 @@ jobs:
             TEST_FILES=$(printf "%s\n%s\n" \
               "$(circleci tests glob "tests/ocr_tests/**/test_*.py")" \
               "tests/test_litellm/ocr/test_rust_bridge.py")
+            echo "LITELLM_USE_RUST=${LITELLM_USE_RUST:-<unset>}"
+            uv run --no-sync python -c 'import importlib, os; rust_bridge = importlib.import_module("litellm.rust_bridge.ocr"); print("LITELLM_USE_RUST={!r}".format(os.getenv("LITELLM_USE_RUST"))); print("rust_ocr_enabled={}".format(rust_bridge.rust_ocr_enabled()))'
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
