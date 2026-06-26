@@ -4338,6 +4338,42 @@ def _complete_gradient_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
     )
 
 
+def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    acompletion = ctx.acompletion
+    client = ctx.client
+    headers = ctx.headers
+    litellm_params = ctx.litellm_params
+    logging = ctx.logging
+    messages = ctx.messages
+    model = ctx.model
+    model_response = ctx.model_response
+    optional_params = ctx.optional_params
+    stream = ctx.stream
+    timeout = ctx.timeout
+
+    api_key = ctx.api_key or litellm.gdc_key or get_secret_str("GDC_API_KEY") or litellm.api_key or ""
+    api_base = ctx.api_base or litellm.api_base or getattr(litellm, "gdc_api_base", None) or get_secret_str("GDC_API_BASE") or ""
+
+    return base_llm_http_handler.completion(
+        model=model,
+        messages=messages,
+        headers=headers,
+        model_response=model_response,
+        api_key=api_key,
+        api_base=api_base,
+        acompletion=acompletion,
+        logging_obj=logging,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        timeout=timeout,  # type: ignore
+        client=client,
+        custom_llm_provider=LlmProviders.GDC,
+        encoding=_get_encoding(),
+        stream=stream,
+        provider_config=gdc_transformation,
+    )
+
+
 def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
@@ -5536,32 +5572,7 @@ def completion(  # type: ignore
             response = _complete_gradient_ai(_dispatch_ctx)
 
         elif custom_llm_provider == "gdc":
-            api_key = (
-                api_key
-                or litellm.gdc_key
-                or get_secret_str("GDC_API_KEY")
-                or litellm.api_key
-            )
-
-            response = base_llm_http_handler.completion(
-                model=model,
-                messages=messages,
-                headers=headers,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                timeout=timeout,  # type: ignore
-                client=client,
-                custom_llm_provider=custom_llm_provider,
-                encoding=_get_encoding(),
-                stream=stream,
-                provider_config=gdc_transformation,
-            )
-
+            response = _complete_gdc(_dispatch_ctx)
         elif custom_llm_provider == "bytez":
             response = _complete_bytez(_dispatch_ctx)
         elif custom_llm_provider == "lemonade":

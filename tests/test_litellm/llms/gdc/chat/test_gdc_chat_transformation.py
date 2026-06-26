@@ -12,7 +12,7 @@ TEST_API_KEY = '{"type": "service_account", "project_id": "test-project"}'
 TEST_MODEL = "gdc/gemini-2.5-flash"
 TEST_API_BASE = "https://gdc-endpoint.com"
 TEST_PROJECT = "test-project"
-
+TEST_LOCATION = "test-location"
 
 class TestGDCGeminiConfig:
     def test_get_complete_url(self):
@@ -23,10 +23,10 @@ class TestGDCGeminiConfig:
             api_base=TEST_API_BASE,
             api_key=None,
             model=TEST_MODEL,
-            optional_params={"vertex_project": TEST_PROJECT},
+            optional_params={"vertex_project": TEST_PROJECT,  "vertex_location":TEST_LOCATION},
             litellm_params={},
         )
-        assert url == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_PROJECT}/chat/completions"
+        assert url == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_LOCATION}/chat/completions"
 
     def test_get_complete_url_missing_api_base(self):
         config = GDCGeminiConfig()
@@ -35,7 +35,7 @@ class TestGDCGeminiConfig:
                 api_base=None,
                 api_key=None,
                 model=TEST_MODEL,
-                optional_params={"vertex_project": TEST_PROJECT},
+                optional_params={"vertex_project": TEST_PROJECT,  "vertex_location":TEST_LOCATION},
                 litellm_params={},
             )
 
@@ -69,7 +69,7 @@ class TestGDCGeminiConfig:
             headers=headers,
             model=TEST_MODEL,
             messages=[],
-            optional_params={"vertex_project": TEST_PROJECT},
+            optional_params={"vertex_project": TEST_PROJECT,  "vertex_location":TEST_LOCATION},
             litellm_params={},
             api_key=TEST_API_KEY,
             api_base=TEST_API_BASE,
@@ -92,7 +92,7 @@ class TestGDCGeminiConfig:
         data = config.transform_request(
             model=TEST_MODEL,
             messages=messages,
-            optional_params={"vertex_project": TEST_PROJECT},
+            optional_params={"vertex_project": TEST_PROJECT,  "vertex_location":TEST_LOCATION},
             litellm_params={"ssl_verify": True},
             headers=headers,
         )

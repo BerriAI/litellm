@@ -3518,13 +3518,21 @@ class PreProcessNonDefaultParams:
                 continue
             elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
                 continue
-            elif (
-                k.startswith("vertex_")
-                and custom_llm_provider != "vertex_ai"
-                and custom_llm_provider != "vertex_ai_beta"
-                and custom_llm_provider != "gdc"
-            ):  # allow dynamically setting vertex ai init logic
-                continue
+            elif k.startswith("vertex_"):
+                provider_config = None
+                if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
+                    pass
+                try:
+                    # Model not needed here because vertex param supporting configs are not model specific
+                    provider_config = ProviderConfigManager.get_provider_chat_config(
+                        model="", provider=str(custom_llm_provider)
+                    )
+                except Exception:  # noqa: BLE001
+                    continue
+                if provider_config is not None and getattr(provider_config, "supports_vertex_params", False):
+                    pass
+                else:
+                    continue
             passed_params[k] = v
 
         # filter out those parameters that were passed with non-default values
@@ -7675,6 +7683,7 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langflow_config(),
                 False,
             ),
+            LlmProviders.GDC: (lambda: litellm.GDCGeminiConfig(), False),
         }
 
     @staticmethod

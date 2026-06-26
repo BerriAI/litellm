@@ -1788,6 +1788,7 @@ if TYPE_CHECKING:
     from .llms.nvidia_nim.embed import (
         NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig,
     )
+    from .llms.gdc.chat.transformation import GDCGeminiConfig as GDCGeminiConfig
 
     # Type stubs for lazy-loaded config instances
     openaiOSeriesConfig: OpenAIOSeriesConfig
