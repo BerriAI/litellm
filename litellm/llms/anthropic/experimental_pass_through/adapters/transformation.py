@@ -697,7 +697,6 @@ class LiteLLMAnthropicMessagesAdapter:
                     role="assistant",
                     content=assistant_content,
                 )
-                    ),
                 if len(thinking_blocks) > 0 and is_anthropic_backend:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
                 if len(tool_calls) > 0:
