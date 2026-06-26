@@ -97,7 +97,7 @@ def load_rust_ocr() -> RustOcr | None:
         import litellm_python_bridge
     except ImportError:
         return None
-    return cast(RustOcr, litellm_python_bridge.ocr)
+    return cast(RustOcr, getattr(litellm_python_bridge, "ocr", None))
 
 
 def load_rust_aocr() -> RustAocr | None:
