@@ -10,6 +10,7 @@ import pytest
 from litellm.llms.tinyfish.search.transformation import (
     TinyfishSearchConfig,
     _append_domain_filters,
+    _default_missing_result_fields,
 )
 
 MOCK_TINYFISH_RESPONSE = {
@@ -681,3 +682,21 @@ class TestAppendDomainFilters:
     def test_multiple_domains(self):
         result = _append_domain_filters("query", ["a.com", "b.com", "c.com"])
         assert result == "(query) (site:a.com OR site:b.com OR site:c.com)"
+
+
+class TestDefaultMissingResultFields:
+    def test_non_dict_raw_json_is_noop(self):
+        # raw_json could be a string/list/None if TinyFish ever returns a
+        # non-envelope shape; the helper just returns without mutating.
+        for payload in ("not a dict", ["list"], None, 42):
+            _default_missing_result_fields(payload)  # must not raise
+
+    def test_non_dict_results_item_skipped(self):
+        # If `results` contains a non-dict entry (string, int, etc.), the helper
+        # skips it; SearchResponse.model_validate will reject it later.
+        raw_json = {"results": ["string item", 42, {"title": "ok"}]}
+        _default_missing_result_fields(raw_json)
+        # Only the dict item gets defaulted; the others are unchanged.
+        assert raw_json["results"][0] == "string item"
+        assert raw_json["results"][1] == 42
+        assert raw_json["results"][2] == {"title": "ok", "url": "", "snippet": ""}
