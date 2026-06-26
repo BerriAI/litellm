@@ -479,6 +479,24 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     assert bridge.calls[0]["api_key"] == "sk-from-vault"
 
 
+def test_run_rust_ocr_prefers_explicit_key_over_resolver():
+    bridge = RecordingBridge()
+    litellm.use_litellm_rust(True, ocr=bridge)
+
+    def _resolver(name: str) -> str | None:
+        raise AssertionError(f"resolver should not be called for {name}")
+
+    ocr_main._run_rust_ocr(
+        prepared_request=build_prepared_request(
+            api_key="sk-explicit",
+            timeout=None,
+        ),
+        resolve_api_key=_resolver,
+    )
+
+    assert bridge.calls[0]["api_key"] == "sk-explicit"
+
+
 def test_run_rust_ocr_uses_provider_api_key_env_var():
     bridge = RecordingBridge()
     resolver_calls = []
