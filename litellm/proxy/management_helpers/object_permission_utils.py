@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import SpecialMCPServerNames
+from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerNames
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -257,7 +257,7 @@ async def _resolve_mcp_server_identifiers_to_ids(
 
 
 def _rewrite_object_permission_mcp_servers(
-    object_permission: dict,
+    object_permission: ObjectPermissionDict,
     identifier_to_server_ids: Dict[str, Set[str]],
 ) -> None:
     mcp_servers = object_permission.get("mcp_servers")
@@ -274,7 +274,7 @@ def _rewrite_object_permission_mcp_servers(
 
 
 def _rewrite_object_permission_mcp_tool_permissions(
-    object_permission: dict,
+    object_permission: ObjectPermissionDict,
     identifier_to_server_ids: Dict[str, Set[str]],
 ) -> None:
     mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
@@ -295,7 +295,7 @@ def _rewrite_object_permission_mcp_tool_permissions(
 
 
 def _rewrite_object_permission_mcp_identifiers(
-    object_permission: Optional[dict],
+    object_permission: Optional[ObjectPermissionDict],
     identifier_to_server_ids: Dict[str, Set[str]],
 ) -> None:
     if not object_permission or not isinstance(object_permission, dict):
@@ -383,7 +383,7 @@ async def _get_team_allowed_mcp_servers(
 
 
 def _extract_requested_mcp_server_ids(
-    object_permission: Optional[dict],
+    object_permission: Optional[ObjectPermissionDict],
 ) -> Set[str]:
     """
     Extract all MCP server IDs referenced in a key's object_permission dict.
@@ -409,7 +409,7 @@ def _extract_requested_mcp_server_ids(
 
 
 def _extract_requested_mcp_access_groups(
-    object_permission: Optional[dict],
+    object_permission: Optional[ObjectPermissionDict],
 ) -> Set[str]:
     """Extract MCP access groups from a key's object_permission dict."""
     if not object_permission or not isinstance(object_permission, dict):
@@ -422,7 +422,7 @@ def _extract_requested_mcp_access_groups(
 
 
 def _extract_requested_mcp_toolsets(
-    object_permission: Optional[dict],
+    object_permission: Optional[ObjectPermissionDict],
 ) -> Set[str]:
     """Extract MCP toolset IDs from a key's object_permission dict."""
     if not object_permission or not isinstance(object_permission, dict):
@@ -435,11 +435,11 @@ def _extract_requested_mcp_toolsets(
 
 
 async def validate_key_mcp_servers_against_team(
-    object_permission: Optional[dict],
+    object_permission: Optional[ObjectPermissionDict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: Optional[PrismaClient] = None,
     is_proxy_admin: bool = False,
-) -> Optional[dict]:
+) -> Optional[ObjectPermissionDict]:
     """
     Validate that MCP servers requested on a key are within the allowed scope.
 
@@ -609,7 +609,9 @@ def _validate_requested_toolsets(
     )
 
 
-def _extract_requested_vector_stores(object_permission: Optional[dict]) -> set[str]:
+def _extract_requested_vector_stores(
+    object_permission: Optional[ObjectPermissionDict],
+) -> set[str]:
     """Return vector_store IDs from a key's object_permission dict."""
     if not object_permission or not isinstance(object_permission, dict):
         return set()
@@ -620,7 +622,7 @@ def _extract_requested_vector_stores(object_permission: Optional[dict]) -> set[s
 
 
 async def validate_key_vector_stores_against_team(
-    object_permission: Optional[dict],
+    object_permission: Optional[ObjectPermissionDict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     is_proxy_admin: bool = False,
 ) -> None:
@@ -647,7 +649,9 @@ async def validate_key_vector_stores_against_team(
     )
 
 
-def _extract_requested_search_tools(object_permission: Optional[dict]) -> List[str]:
+def _extract_requested_search_tools(
+    object_permission: Optional[ObjectPermissionDict],
+) -> list[str]:
     """Return search_tool_name values from a key's object_permission dict."""
     if not object_permission or not isinstance(object_permission, dict):
         return []
@@ -658,7 +662,7 @@ def _extract_requested_search_tools(object_permission: Optional[dict]) -> List[s
 
 
 async def validate_key_search_tools_against_team(
-    object_permission: Optional[dict],
+    object_permission: Optional[ObjectPermissionDict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     is_proxy_admin: bool = False,
 ) -> None:
