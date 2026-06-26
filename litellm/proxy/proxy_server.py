@@ -9028,7 +9028,7 @@ async def audio_speech(
             custom_headers.update(callback_headers)
 
         # Determine media type based on model type
-        media_type = "audio/mpeg"  # Default for OpenAI TTS
+        media_type = hidden_params.get("content_type") or "audio/mpeg"
         request_model = data.get("model", "")
         if request_model:
             request_model_lower = request_model.lower()

@@ -579,7 +579,9 @@ class RealTimeStreaming:
         await self.websocket.send_text(event_str)
         return True
 
-    def _cache_session_configuration_request(self, transformed_message: str) -> None:
+    def _cache_session_configuration_request(
+        self, transformed_message: Union[str, bytes]
+    ) -> None:
         """Store setup payload once sent to backend.
 
         Updates the cached setup on every successful setup send so follow-up
@@ -588,11 +590,13 @@ class RealTimeStreaming:
         the cache used by downstream readers (``transform_session_created_event``,
         ``return_new_content_delta_events`` modality lookup, ...).
         """
+        if isinstance(transformed_message, bytes):
+            return
         try:
             message_obj = json.loads(transformed_message)
             if "setup" in message_obj:
                 self.session_configuration_request = transformed_message
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
             return
 
     def _make_disable_auto_response_message(self) -> str:
@@ -972,13 +976,6 @@ class RealTimeStreaming:
                 except TypeError:
                     raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
 
-                if isinstance(raw_response, bytes):
-                    try:
-                        raw_response = raw_response.decode("utf-8")
-                    except UnicodeDecodeError:
-                        verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
-                        continue
-
                 if self.provider_config:
                     try:
                         await self._handle_provider_config_message(raw_response)
@@ -986,6 +983,15 @@ class RealTimeStreaming:
                         verbose_logger.exception(f"Error processing backend message, skipping: {e}")
                         continue
                 else:
+                    if isinstance(raw_response, bytes):
+                        try:
+                            raw_response = raw_response.decode("utf-8")
+                        except UnicodeDecodeError:
+                            verbose_logger.warning(
+                                "Received non-UTF-8 binary frame from backend, skipping."
+                            )
+                            continue
+
                     event = self._parse_backend_event(raw_response)
                     if event is None:
                         await self.websocket.send_text(raw_response)

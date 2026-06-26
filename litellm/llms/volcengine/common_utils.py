@@ -2,11 +2,10 @@
 Common utilities for Volcengine LLM provider
 """
 
-from typing import Optional
-
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str
 
 
 class VolcEngineError(BaseLLMException):
@@ -14,14 +13,16 @@ class VolcEngineError(BaseLLMException):
     Custom exception class for Volcengine provider errors.
     """
 
-    def __init__(self, status_code: int, message: str, headers: Optional[httpx.Headers] = None):
+    def __init__(
+        self, status_code: int, message: str, headers: httpx.Headers | None = None
+    ):
         self.status_code = status_code
         self.message = message
         self.headers = headers or httpx.Headers()
         super().__init__(status_code=status_code, message=message, headers=dict(self.headers))
 
 
-def get_volcengine_base_url(api_base: Optional[str] = None) -> str:
+def get_volcengine_base_url(api_base: str | None = None) -> str:
     """
     Get the base URL for Volcengine API calls.
 
@@ -36,7 +37,7 @@ def get_volcengine_base_url(api_base: Optional[str] = None) -> str:
     return "https://ark.cn-beijing.volces.com"
 
 
-def get_volcengine_headers(api_key: str, extra_headers: Optional[dict] = None) -> dict:
+def get_volcengine_headers(api_key: str, extra_headers: dict | None = None) -> dict:
     """
     Get headers for Volcengine API calls.
 
@@ -56,3 +57,25 @@ def get_volcengine_headers(api_key: str, extra_headers: Optional[dict] = None) -
         headers.update(extra_headers)
 
     return headers
+
+
+def get_volcengine_speech_api_key(api_key: str | None) -> str:
+    resolved_key = api_key or get_secret_str("VOLCENGINE_SPEECH_KEY")
+    if not resolved_key or not resolved_key.strip():
+        raise VolcEngineError(
+            status_code=401,
+            message=(
+                "Volcengine Speech key is required. Set VOLCENGINE_SPEECH_KEY "
+                "as a Speech API Key."
+            ),
+        )
+    resolved_key = resolved_key.strip()
+    if ":" in resolved_key:
+        raise VolcEngineError(
+            status_code=401,
+            message=(
+                "Volcengine Speech key must be a single Speech API Key. "
+                "Legacy '<appId>:<accessKey>' credentials are not supported."
+            ),
+        )
+    return resolved_key

@@ -336,8 +336,8 @@ async def _arealtime(
             websocket=websocket,
             logging_obj=litellm_logging_obj,
             provider_config=provider_config,
-            api_base=api_base,
-            api_key=api_key,
+            api_base=dynamic_api_base or litellm_params.api_base or api_base,
+            api_key=dynamic_api_key or litellm_params.api_key or api_key,
             client=client,
             timeout=timeout,
             headers=headers,
@@ -538,7 +538,33 @@ async def _realtime_health_check(
             query_params={"model": model},
         )
     elif custom_llm_provider == "xai":
-        url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
+        url = xai_realtime._construct_url(
+            api_base=api_base or "https://api.x.ai/v1", query_params={"model": model}
+        )
+    elif custom_llm_provider == LlmProviders.VOLCENGINE.value:
+        volcengine_realtime_config = ProviderConfigManager.get_provider_realtime_config(
+            model=model,
+            provider=LlmProviders.VOLCENGINE,
+        )
+        if volcengine_realtime_config is None:
+            raise ValueError(f"Unsupported model: {model}")
+        url = volcengine_realtime_config.get_complete_url(
+            api_base=api_base, model=model, api_key=api_key
+        )
+        ssl_context = get_shared_realtime_ssl_context()
+        headers = volcengine_realtime_config.validate_environment(
+            headers={}, model=model, api_key=api_key
+        )
+        async with websockets.connect(  # type: ignore
+            url,
+            additional_headers=headers,
+            max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+            ssl=ssl_context,
+        ) as ws:
+            setup = volcengine_realtime_config.session_configuration_request(model)
+            if setup is not None:
+                await ws.send(setup)
+            return True
     elif custom_llm_provider == "vertex_ai":
         vertex_location = litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
         resolved_location = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)

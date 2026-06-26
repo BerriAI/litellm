@@ -5351,7 +5351,15 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_creation_input_token_cost_above_200k_tokens", None
                 ),
-                cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
+                cache_read_input_token_cost=_model_info.get(
+                    "cache_read_input_token_cost", None
+                ),
+                cache_read_input_token_cost_above_32k_tokens=_model_info.get(
+                    "cache_read_input_token_cost_above_32k_tokens", None
+                ),
+                cache_read_input_token_cost_above_128k_tokens=_model_info.get(
+                    "cache_read_input_token_cost_above_128k_tokens", None
+                ),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None
                 ),
@@ -5372,9 +5380,18 @@ def _get_model_info_helper(
                 cache_creation_input_token_cost_above_1hr=_model_info.get(
                     "cache_creation_input_token_cost_above_1hr", None
                 ),
-                input_cost_per_character=_model_info.get("input_cost_per_character", None),
-                input_cost_per_token_above_128k_tokens=_model_info.get("input_cost_per_token_above_128k_tokens", None),
-                input_cost_per_token_above_200k_tokens=_model_info.get("input_cost_per_token_above_200k_tokens", None),
+                input_cost_per_character=_model_info.get(
+                    "input_cost_per_character", None
+                ),
+                input_cost_per_token_above_32k_tokens=_model_info.get(
+                    "input_cost_per_token_above_32k_tokens", None
+                ),
+                input_cost_per_token_above_128k_tokens=_model_info.get(
+                    "input_cost_per_token_above_128k_tokens", None
+                ),
+                input_cost_per_token_above_200k_tokens=_model_info.get(
+                    "input_cost_per_token_above_200k_tokens", None
+                ),
                 input_cost_per_token_above_200k_tokens_priority=_model_info.get(
                     "input_cost_per_token_above_200k_tokens_priority", None
                 ),
@@ -5401,9 +5418,18 @@ def _get_model_info_helper(
                 regional_processing_uplift_multiplier_us=_model_info.get(
                     "regional_processing_uplift_multiplier_us", None
                 ),
-                output_cost_per_audio_token=_model_info.get("output_cost_per_audio_token", None),
-                output_cost_per_character=_model_info.get("output_cost_per_character", None),
-                output_cost_per_reasoning_token=_model_info.get("output_cost_per_reasoning_token", None),
+                output_cost_per_audio_token=_model_info.get(
+                    "output_cost_per_audio_token", None
+                ),
+                output_cost_per_character=_model_info.get(
+                    "output_cost_per_character", None
+                ),
+                output_cost_per_reasoning_token=_model_info.get(
+                    "output_cost_per_reasoning_token", None
+                ),
+                output_cost_per_token_above_32k_tokens=_model_info.get(
+                    "output_cost_per_token_above_32k_tokens", None
+                ),
                 output_cost_per_token_above_128k_tokens=_model_info.get(
                     "output_cost_per_token_above_128k_tokens", None
                 ),
@@ -8059,6 +8085,12 @@ class ProviderConfigManager:
             )
 
             return SonioxAudioTranscriptionConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.audio_transcription.transformation import (
+                VolcEngineAudioTranscriptionConfig,
+            )
+
+            return VolcEngineAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8614,6 +8646,12 @@ class ProviderConfigManager:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
             return GeminiRealtimeConfig()
+        if LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.realtime.transformation import (
+                VolcEngineRealtimeConfig,
+            )
+
+            return VolcEngineRealtimeConfig()
         return None
 
     @staticmethod
@@ -8871,6 +8909,12 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.text_to_speech.transformation import (
+                VolcEngineTextToSpeechConfig,
+            )
+
+            return VolcEngineTextToSpeechConfig()
         return None
 
     @staticmethod

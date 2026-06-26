@@ -347,6 +347,87 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_transcription_cost_uses_input_second_pricing_when_output_is_zero():
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 10.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="volc.bigasr.sauc.duration",
+        custom_llm_provider="volcengine",
+        call_type="atranscription",
+    )
+
+    expected_cost = 10.0 * 0.00018125
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
+def test_volcengine_seedasr_cost_uses_input_second_pricing_when_output_is_zero():
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 10.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model="volc.seedasr.sauc.duration",
+        custom_llm_provider="volcengine",
+        call_type="atranscription",
+    )
+
+    expected_cost = 10.0 * 4.02777778e-05
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
+def test_volcengine_tts_cost_uses_character_pricing():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="seed-tts-2.0",
+        custom_llm_provider="volcengine",
+        prompt_characters=4,
+        completion_characters=0,
+        call_type="speech",
+    )
+
+    assert pytest.approx(prompt_cost, rel=1e-6) == 4 * 4.35e-05
+    assert completion_cost == 0
+
+
+def test_volcengine_doubao_seed_2_cost_uses_length_tiers():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="doubao-seed-2-0-lite-260215",
+        custom_llm_provider="volcengine",
+        prompt_tokens=33000,
+        completion_tokens=100,
+    )
+
+    assert pytest.approx(prompt_cost, rel=1e-6) == 33000 * 1.305e-07
+    assert pytest.approx(completion_cost, rel=1e-6) == 100 * 7.83e-07
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="doubao-seed-2-0-lite-260215",
+        custom_llm_provider="volcengine",
+        prompt_tokens=129000,
+        completion_tokens=100,
+    )
+
+    assert pytest.approx(prompt_cost, rel=1e-6) == 129000 * 2.61e-07
+    assert pytest.approx(completion_cost, rel=1e-6) == 100 * 1.566e-06
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
