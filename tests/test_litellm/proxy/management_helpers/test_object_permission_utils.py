@@ -18,6 +18,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
+    validate_key_vector_stores_against_team,
 )
 
 
@@ -890,3 +891,122 @@ async def test_validate_search_tools_raises_when_not_subset():
             team_obj=_make_team_obj_search(search_tools=["t1"]),
         )
     assert exc.value.status_code == 403
+
+
+# ---- Personal-key non-admin gates on toolsets / vector_stores / search_tools ----
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_personal_non_admin_cannot_assign_mcp_toolsets(
+    mock_access_groups, mock_allow_all
+):
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_toolsets": ["ts-private"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "ts-private" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_personal_admin_can_assign_mcp_toolsets(
+    mock_access_groups, mock_allow_all
+):
+    await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_toolsets": ["ts-private"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_personal_non_admin_cannot_assign_vector_stores():
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_vector_stores_against_team(
+            object_permission={"vector_stores": ["vs-private"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "vs-private" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_personal_admin_can_assign_vector_stores():
+    await validate_key_vector_stores_against_team(
+        object_permission={"vector_stores": ["vs-private"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_key_vector_stores_unrestricted_at_create():
+    """Team-scoped keys retain their existing trust model at create time."""
+    team_obj = _make_team_obj_search()
+    await validate_key_vector_stores_against_team(
+        object_permission={"vector_stores": ["vs-anything"]},
+        team_obj=team_obj,
+        is_proxy_admin=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_personal_non_admin_cannot_assign_search_tools():
+    with pytest.raises(HTTPException) as exc:
+        await validate_key_search_tools_against_team(
+            object_permission={"search_tools": ["st-private"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc.value.status_code == 403
+    assert "st-private" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_personal_admin_can_assign_search_tools():
+    await validate_key_search_tools_against_team(
+        object_permission={"search_tools": ["st-private"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_object_permission_passes_for_personal_non_admin():
+    """An empty / absent object_permission must not be blocked."""
+    await validate_key_vector_stores_against_team(
+        object_permission=None,
+        team_obj=None,
+        is_proxy_admin=False,
+    )
+    await validate_key_vector_stores_against_team(
+        object_permission={"vector_stores": []},
+        team_obj=None,
+        is_proxy_admin=False,
+    )
+    await validate_key_search_tools_against_team(
+        object_permission=None,
+        team_obj=None,
+        is_proxy_admin=False,
+    )

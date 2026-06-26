@@ -167,9 +167,15 @@ class TeamMemberPermissionChecks:
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
             return
 
-        # Personal (non-team) keys are out of scope for team-member gating.
         if team_table is None:
-            return
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Key is not in a team. Access groups cannot be assigned to "
+                    "personal keys by non-admin callers. Disallowed access groups: "
+                    f"{sorted(access_group_ids)}."
+                ),
+            )
 
         team_member_object = _get_user_in_team(team_table=team_table, user_id=user_api_key_dict.user_id)
 
