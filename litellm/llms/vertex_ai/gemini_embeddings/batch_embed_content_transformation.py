@@ -4,6 +4,7 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
+from collections.abc import Mapping
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from pydantic import TypeAdapter, ValidationError
@@ -317,7 +318,7 @@ def _parse_usage_metadata(raw_usage_metadata: object) -> Optional[UsageMetadata]
         return None
 
 
-def _flatten_input(input: GeminiEmbeddingInput) -> Tuple[str, ...]:
+def _flatten_input(input: GeminiEmbeddingInput) -> tuple[str, ...]:
     if isinstance(input, str):
         return (input,)
     return tuple(
@@ -327,7 +328,10 @@ def _flatten_input(input: GeminiEmbeddingInput) -> Tuple[str, ...]:
     )
 
 
-def _is_image_element(element: str) -> bool:
+def _is_image_element(
+    element: str,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> bool:
     if element.startswith("data:") and ";base64," in element:
         try:
             mime_type, _ = _parse_data_url(element)
@@ -339,11 +343,21 @@ def _is_image_element(element: str) -> bool:
             return _infer_mime_type_from_gcs_url(element) in _IMAGE_MIME_TYPES
         except ValueError:
             return False
+    if _is_file_reference(element):
+        file_info = resolved_files.get(element)
+        return file_info is not None and file_info.get("mime_type") in _IMAGE_MIME_TYPES
     return False
 
 
-def _count_input_images(input: GeminiEmbeddingInput) -> int:
-    return sum(1 for element in _flatten_input(input) if _is_image_element(element))
+def _count_input_images(
+    input: GeminiEmbeddingInput,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> int:
+    return sum(
+        1
+        for element in _flatten_input(input)
+        if _is_image_element(element, resolved_files)
+    )
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
@@ -364,6 +378,7 @@ def _usage_from_embed_content_response(
     input: GeminiEmbeddingInput,
     model: str,
     raw_usage_metadata: object,
+    resolved_files: Mapping[str, Mapping[str, str]],
 ) -> Usage:
     usage_metadata = _parse_usage_metadata(raw_usage_metadata)
     if usage_metadata is None:
@@ -378,7 +393,7 @@ def _usage_from_embed_content_response(
     text_tokens = _tokens_for_modality(details, "TEXT")
     audio_tokens = _tokens_for_modality(details, "AUDIO")
     video_tokens = _tokens_for_modality(details, "VIDEO")
-    image_count = _count_input_images(input)
+    image_count = _count_input_images(input, resolved_files)
 
     video_length_seconds = (
         video_tokens / _VIDEO_TOKENS_PER_SECOND if video_tokens > 0 else 0.0
@@ -408,6 +423,7 @@ def process_embed_content_response(
     model_response: EmbeddingResponse,
     model: str,
     response_json: dict,
+    resolved_files: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EmbeddingResponse:
     """
     Process Gemini embedContent response (single embedding for multimodal input).
@@ -417,6 +433,8 @@ def process_embed_content_response(
         model_response: EmbeddingResponse to populate
         model: Model name
         response_json: Raw JSON response from embedContent endpoint
+        resolved_files: Mapping of file references (files/abc) to {mime_type, uri},
+            used to bill resolved image references at the per-image rate
 
     Returns:
         EmbeddingResponse with single embedding
@@ -440,6 +458,7 @@ def process_embed_content_response(
         input=input,
         model=model,
         raw_usage_metadata=response_json.get("usageMetadata"),
+        resolved_files=resolved_files or {},
     )
 
     return model_response
