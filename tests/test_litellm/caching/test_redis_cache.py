@@ -3,7 +3,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -92,6 +91,42 @@ async def test_redis_cache_async_increment_default_does_not_bump_existing_ttl(
         await redis_cache.async_increment(key="rate_limit:window", value=1)
 
     mock_redis_instance.expire.assert_not_awaited()
+
+
+@pytest.mark.parametrize("namespace", [None, "litellm"])
+@pytest.mark.asyncio
+async def test_async_delete_cache_applies_namespace(
+    namespace, monkeypatch, redis_no_ping
+):
+    """async_delete_cache must prefix keys with the namespace, matching every
+    other cache operation. Without this, Redis NOPERM errors occur when an
+    ACL restricts DEL to the litellm:* pattern."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_instance = AsyncMock()
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_delete_cache(key="3997c4abcdef")
+
+    expected_key = "litellm:3997c4abcdef" if namespace else "3997c4abcdef"
+    mock_redis_instance.delete.assert_awaited_once_with(expected_key)
+
+
+@pytest.mark.parametrize("namespace", [None, "litellm"])
+def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
+    """delete_cache must prefix keys with the namespace, matching every other
+    cache operation."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+    mock_redis_client = MagicMock()
+    redis_cache.redis_client = mock_redis_client
+
+    redis_cache.delete_cache(key="3997c4abcdef")
+
+    expected_key = "litellm:3997c4abcdef" if namespace else "3997c4abcdef"
+    mock_redis_client.delete.assert_called_once_with(expected_key)
 
 
 @pytest.mark.asyncio
