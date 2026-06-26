@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     extract_and_raise_litellm_exception,
 )
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openrouter.common_utils import OpenRouterException
 
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
@@ -152,9 +153,9 @@ class TestExceptionCheckers:
             result = ExceptionCheckers.is_azure_content_policy_violation_error(
                 error_str
             )
-            assert (
-                result is True
-            ), f"Should detect policy violation in uppercase: {error_str}"
+            assert result is True, (
+                f"Should detect policy violation in uppercase: {error_str}"
+            )
 
     def test_is_azure_content_policy_violation_error_with_non_policy_errors(self):
         """Test that non-policy violation errors are not detected as policy violations"""
@@ -174,9 +175,9 @@ class TestExceptionCheckers:
             result = ExceptionCheckers.is_azure_content_policy_violation_error(
                 error_str
             )
-            assert (
-                result is False
-            ), f"Should NOT detect policy violation in: {error_str}"
+            assert result is False, (
+                f"Should NOT detect policy violation in: {error_str}"
+            )
 
     def test_is_azure_content_policy_violation_error_with_partial_matches(self):
         """Test that partial keyword matches work correctly"""
@@ -206,9 +207,9 @@ class TestExceptionCheckers:
             result = ExceptionCheckers.is_azure_content_policy_violation_error(
                 error_str
             )
-            assert (
-                result is False
-            ), f"Should NOT detect policy violation in: {error_str}"
+            assert result is False, (
+                f"Should NOT detect policy violation in: {error_str}"
+            )
 
 
 gemini_context_window_test_cases = [
@@ -286,6 +287,26 @@ def test_lemonade_context_window_error_mapping():
     assert excinfo.value.status_code == 400
     assert excinfo.value.llm_provider == "lemonade"
     assert excinfo.value.model == model
+
+
+def test_openrouter_502_maps_to_bad_gateway_error():
+    original_exception = OpenRouterException(
+        status_code=502,
+        message="OpenRouter returned a non-JSON response",
+        headers={"content-type": "text/plain"},
+    )
+
+    with pytest.raises(litellm.BadGatewayError) as excinfo:
+        exception_type(
+            model="openrouter/z-ai/glm-5.1",
+            original_exception=original_exception,
+            custom_llm_provider="openrouter",
+        )
+
+    assert excinfo.value.status_code == 502
+    assert excinfo.value.llm_provider == "openrouter"
+    assert excinfo.value.model == "openrouter/z-ai/glm-5.1"
+    assert "OpenRouter returned a non-JSON response" in str(excinfo.value)
 
 
 @pytest.mark.parametrize(

@@ -2212,6 +2212,14 @@ def _map_openrouter_exception(
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
             )
+        elif original_exception.status_code == 502:
+            raise BadGatewayError(
+                message=f"BadGatewayError: {exception_provider} - {error_str}",
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=getattr(original_exception, "response", None),
+                litellm_debug_info=extra_information,
+            )
         elif original_exception.status_code == 503:
             raise ServiceUnavailableError(
                 message=f"ServiceUnavailableError: {exception_provider} - {error_str}",
