@@ -346,7 +346,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _tool_name(tool: Dict[str, Any]) -> Optional[str]:
+    def _tool_name(tool: dict[str, Any]) -> Optional[str]:
         """Effective tool name, handling OpenAI ``function`` wrapper shape."""
         fn = tool.get("function")
         if tool.get("type") == "function" and isinstance(fn, dict):
@@ -355,7 +355,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @classmethod
     def _sync_forced_tool_choice(
-        cls, tool_choice: Any, converted_tools: List[Dict[str, Any]]
+        cls, tool_choice: Any, converted_tools: list[dict[str, Any]]
     ) -> Any:
         """Repoint a forced ``tool_choice`` at ``litellm_web_search`` when it
         names a web-search tool that was just converted away.

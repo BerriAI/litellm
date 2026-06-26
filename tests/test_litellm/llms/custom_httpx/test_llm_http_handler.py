@@ -1170,3 +1170,86 @@ def test_async_compact_handler_sends_json_when_not_signed():
     )
     assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
     assert "data" not in kwargs
+
+
+def _anthropic_dict_response():
+    return {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "the answer"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+def _logging_obj_with_converted_stream(converted: bool):
+    logging_obj = Mock()
+    logging_obj.model_call_details = (
+        {"websearch_interception_converted_stream": True} if converted else {}
+    )
+    return logging_obj
+
+
+def test_maybe_websearch_fake_stream_wrap_wraps_dict_when_converted():
+    """Regression (#27721): after the websearch agentic loop, a dict response
+    on a request that originally asked for streaming must be re-wrapped as SSE.
+
+    Without this, the proxy returned application/json on a stream=true request
+    and clients (e.g. Claude Code) showed truncated output.
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+
+    handler = BaseLLMHTTPHandler()
+    response = _anthropic_dict_response()
+
+    result = handler._maybe_websearch_fake_stream_wrap(
+        response, _logging_obj_with_converted_stream(converted=True)
+    )
+
+    assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+    assert hasattr(result, "__aiter__")
+
+
+def test_maybe_websearch_fake_stream_wrap_noop_when_flag_unset():
+    """Without the converted-stream flag the dict passes through untouched, so
+    genuine non-streaming requests are not turned into SSE."""
+    handler = BaseLLMHTTPHandler()
+    response = _anthropic_dict_response()
+
+    result = handler._maybe_websearch_fake_stream_wrap(
+        response, _logging_obj_with_converted_stream(converted=False)
+    )
+
+    assert result is response
+
+
+def test_maybe_websearch_fake_stream_wrap_noop_when_already_streaming():
+    """An already-streaming response (async iterator) must not be double-wrapped."""
+
+    class _AsyncIter:
+        def __aiter__(self):
+            return self
+
+    handler = BaseLLMHTTPHandler()
+    streaming_response = _AsyncIter()
+
+    result = handler._maybe_websearch_fake_stream_wrap(
+        streaming_response, _logging_obj_with_converted_stream(converted=True)
+    )
+
+    assert result is streaming_response
+
+
+def test_maybe_websearch_fake_stream_wrap_noop_when_logging_obj_none():
+    """No logging object means no recorded stream intent — return as-is."""
+    handler = BaseLLMHTTPHandler()
+    response = _anthropic_dict_response()
+
+    result = handler._maybe_websearch_fake_stream_wrap(response, None)
+
+    assert result is response
