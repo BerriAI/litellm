@@ -745,6 +745,7 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
         authorization_url="https://provider.com/oauth/authorize",
         token_url="https://provider.com/oauth/token",
         scopes=["read", "write"],
+        delegate_auth_to_upstream=True,
     )
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
@@ -760,8 +761,8 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
     )
 
     # token_endpoint and registration_endpoint stay on the relay, so they must
-    # reflect the forwarded HTTPS origin. authorization_endpoint now passes
-    # through to the configured upstream provider URL.
+    # reflect the forwarded HTTPS origin. With delegate_auth_to_upstream set,
+    # authorization_endpoint passes through to the configured upstream URL.
     assert response["authorization_endpoint"] == "https://provider.com/oauth/authorize"
     assert response["token_endpoint"].startswith("https://litellm.example.com/")
     assert response["registration_endpoint"].startswith("https://litellm.example.com/")
@@ -1540,6 +1541,7 @@ def _create_oauth2_server(
     client_id="test_client_id",
     client_secret="test_client_secret",
     available_on_public_internet=True,
+    delegate_auth_to_upstream=False,
 ):
     """Helper to create a mock OAuth2 MCPServer."""
     from litellm.proxy._types import MCPTransport
@@ -1559,6 +1561,7 @@ def _create_oauth2_server(
         token_url="https://provider.com/oauth/token",
         scopes=["read", "write"],
         available_on_public_internet=available_on_public_internet,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
     )
 
 
@@ -1894,7 +1897,7 @@ async def test_discovery_root_includes_server_name_prefix():
         pytest.skip("MCP discoverable endpoints not available")
 
     global_mcp_server_manager.registry.clear()
-    oauth2_server = _create_oauth2_server()
+    oauth2_server = _create_oauth2_server(delegate_auth_to_upstream=True)
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
@@ -1908,9 +1911,10 @@ async def test_discovery_root_includes_server_name_prefix():
             mcp_server_name=None,
         )
 
-        # Should resolve to the single server. authorization_endpoint passes
-        # through to the configured upstream URL; the relay token/register
-        # endpoints still carry the resolved server name prefix.
+        # Should resolve to the single server. With delegate_auth_to_upstream
+        # set, authorization_endpoint passes through to the configured upstream
+        # URL; the relay token/register endpoints still carry the resolved
+        # server name prefix.
         assert response["authorization_endpoint"] == "https://provider.com/oauth/authorize"
         assert "/test_oauth/token" in response["token_endpoint"]
         assert "/test_oauth/register" in response["registration_endpoint"]
@@ -2663,6 +2667,7 @@ def _make_oauth2_server(
     authorization_url=None,
     registration_url=None,
     scopes=None,
+    delegate_auth_to_upstream=True,
 ):
     from litellm.proxy._types import MCPTransport
     from litellm.types.mcp import MCPAuth
@@ -2682,6 +2687,7 @@ def _make_oauth2_server(
         registration_url=registration_url,
         token_url="https://provider.example/token",
         scopes=scopes,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
     )
 
 
@@ -2692,6 +2698,7 @@ async def _posted_token_data(
     scope=None,
     refresh_token=None,
     server_scopes=None,
+    delegate_auth_to_upstream=True,
     base_url: str = "https://litellm.example.com/",
 ):
     """Run ``exchange_token_with_server`` against a mocked upstream and return
@@ -2702,7 +2709,11 @@ async def _posted_token_data(
         exchange_token_with_server,
     )
 
-    server = _make_oauth2_server(server_id="scope_srv", scopes=server_scopes)
+    server = _make_oauth2_server(
+        server_id="scope_srv",
+        scopes=server_scopes,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
+    )
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = base_url
     mock_request.headers = {}
@@ -2756,6 +2767,20 @@ async def test_token_exchange_forwards_client_redirect_uri(client_redirect_uri, 
         redirect_uri=client_redirect_uri,
     )
     assert data["redirect_uri"] == expected_redirect_uri
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_ignores_client_redirect_uri_without_delegation():
+    """Relay mode (delegate_auth_to_upstream off): the provider only ever saw
+    the proxy callback during /authorize, so the code exchange must replay that
+    callback and NOT the client-supplied redirect_uri, even when the client
+    sends one. Forwarding the loopback here would trip invalid_grant."""
+    data = await _posted_token_data(
+        grant_type="authorization_code",
+        redirect_uri="http://localhost:6274/oauth/callback",
+        delegate_auth_to_upstream=False,
+    )
+    assert data["redirect_uri"] == "https://litellm.example.com/callback"
 
 
 @pytest.mark.asyncio
@@ -2846,6 +2871,52 @@ async def test_discovery_advertises_explicitly_configured_endpoints():
     assert response["authorization_endpoint"] == "https://login.example/tenant/authorize"
     assert response["registration_endpoint"] == "https://login.example/tenant/register"
     assert response["token_endpoint"] == "https://litellm.example.com/entra_mcp/token"
+
+
+@pytest.mark.asyncio
+async def test_discovery_without_delegation_stays_on_relay():
+    """A server that does NOT opt into delegate_auth_to_upstream keeps the old
+    relay-mode discovery: authorization_endpoint and registration_endpoint
+    point back at the gateway even when url / authorization_url /
+    registration_url are configured, and no upstream fetch is attempted. This
+    is the backwards-compatibility guarantee for existing relay deployments."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server = _make_oauth2_server(
+        server_id="relay_mcp",
+        url="https://upstream.example.com/mcp",
+        authorization_url="https://login.example/tenant/authorize",
+        registration_url="https://login.example/tenant/register",
+        delegate_auth_to_upstream=False,
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            side_effect=AssertionError("must not fetch upstream without delegation"),
+        ):
+            response = await _build_oauth_authorization_server_response(
+                request=mock_request, mcp_server_name="relay_mcp"
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert response["authorization_endpoint"] == "https://litellm.example.com/relay_mcp/authorize"
+    assert response["registration_endpoint"] == "https://litellm.example.com/relay_mcp/register"
+    assert response["token_endpoint"] == "https://litellm.example.com/relay_mcp/token"
 
 
 @pytest.mark.asyncio

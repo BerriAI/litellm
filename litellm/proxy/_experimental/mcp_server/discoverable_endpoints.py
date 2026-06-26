@@ -446,8 +446,14 @@ async def exchange_token_with_server(
                 detail="code is required for authorization_code grant",
             )
         proxy_base_url = get_request_base_url(request)
+        # Replay the client's own redirect_uri only when this server delegates
+        # auth to the upstream — the client then ran /authorize directly against
+        # the provider with that URI. In relay mode the provider only ever saw
+        # the proxy callback, so the code exchange must send that same URI back.
         effective_redirect_uri = (
-            redirect_uri if redirect_uri else f"{proxy_base_url}/callback"
+            redirect_uri
+            if redirect_uri and mcp_server.delegate_auth_to_upstream
+            else f"{proxy_base_url}/callback"
         )
         token_data = {
             "grant_type": "authorization_code",
@@ -1208,12 +1214,15 @@ async def _build_oauth_authorization_server_response(
 ) -> dict:
     """Build OAuth authorization-server metadata for MCP discovery.
 
+    For servers that opt into ``delegate_auth_to_upstream``,
     ``authorization_endpoint`` and ``registration_endpoint`` follow a 3-tier
     priority: explicit ``mcp_server`` config, then upstream-discovered metadata
     (so browser auth and dynamic registration go straight to the real
-    provider), then the LiteLLM relay. ``token_endpoint`` ALWAYS stays on the
-    relay: the relay strips the ``resource`` parameter from upstream token
-    requests, which some IdPs validate against their own domain and reject.
+    provider), then the LiteLLM relay. Without that opt-in the gateway keeps
+    advertising its own relay endpoints, so existing relay-mode deployments are
+    unchanged. ``token_endpoint`` ALWAYS stays on the relay: the relay strips
+    the ``resource`` parameter from upstream token requests, which some IdPs
+    validate against their own domain and reject.
     """
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -1233,14 +1242,25 @@ async def _build_oauth_authorization_server_response(
             mcp_server_name, client_ip=client_ip
         )
 
+    # Upstream endpoints are advertised only for servers that explicitly
+    # delegate auth to the upstream provider; otherwise discovery keeps
+    # advertising the relay so relay-mode deployments stay on the old flow.
+    delegated_server = (
+        mcp_server
+        if mcp_server is not None and mcp_server.delegate_auth_to_upstream
+        else None
+    )
+
     upstream_metadata: Optional[dict] = None
     if (
-        mcp_server is not None
-        and mcp_server.url
-        and not (mcp_server.authorization_url and mcp_server.registration_url)
+        delegated_server is not None
+        and delegated_server.url
+        and not (
+            delegated_server.authorization_url and delegated_server.registration_url
+        )
     ):
         upstream_metadata = await _fetch_upstream_authorization_server_metadata(
-            mcp_server
+            delegated_server
         )
 
     relay_authorization_endpoint = (
@@ -1260,13 +1280,13 @@ async def _build_oauth_authorization_server_response(
     )
 
     authorization_endpoint = _select_passthrough_endpoint(
-        configured=mcp_server.authorization_url if mcp_server else None,
+        configured=delegated_server.authorization_url if delegated_server else None,
         upstream_metadata=upstream_metadata,
         upstream_key="authorization_endpoint",
         relay=relay_authorization_endpoint,
     )
     registration_endpoint = _select_passthrough_endpoint(
-        configured=mcp_server.registration_url if mcp_server else None,
+        configured=delegated_server.registration_url if delegated_server else None,
         upstream_metadata=upstream_metadata,
         upstream_key="registration_endpoint",
         relay=relay_registration_endpoint,
