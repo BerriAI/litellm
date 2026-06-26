@@ -6,7 +6,8 @@ use crate::{CoreError, CoreResult};
 pub mod types;
 
 pub use types::{
-    CallLifecycleContext, CallLifecyclePhase, CallLifecyclePhaseTiming, CallLifecycleTiming,
+    CallLifecycleContext, CallLifecyclePhase, CallLifecyclePhaseTiming, CallLifecycleRequest,
+    CallLifecycleTiming,
 };
 
 pub trait CallLifecycleHooks<InitialReq, ProviderReq, Resp>: Send + Sync {
@@ -78,6 +79,22 @@ pub struct CallLifecycle<'a> {
 impl<'a> CallLifecycle<'a> {
     pub fn new(observer: &'a dyn CallLifecycleObserver) -> Self {
         Self { observer }
+    }
+
+    pub async fn run_request<InitialReq, ProviderReq, Resp, Hooks, ProviderCall, ProviderFuture>(
+        &self,
+        request: InitialReq,
+        hooks: &Hooks,
+        provider_call: ProviderCall,
+    ) -> CoreResult<Resp>
+    where
+        InitialReq: CallLifecycleRequest,
+        Hooks: CallLifecycleHooks<InitialReq, ProviderReq, Resp>,
+        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
+        ProviderFuture: Future<Output = CoreResult<Resp>>,
+    {
+        let context = request.lifecycle_context();
+        self.run(context, request, hooks, provider_call).await
     }
 
     pub async fn run<InitialReq, ProviderReq, Resp, Hooks, ProviderCall, ProviderFuture>(
@@ -219,6 +236,14 @@ mod tests {
         events: Mutex<Vec<&'static str>>,
     }
 
+    struct RecordingRequest(String);
+
+    impl CallLifecycleRequest for RecordingRequest {
+        fn lifecycle_context(&self) -> CallLifecycleContext {
+            CallLifecycleContext::new("ocr", "mistral-ocr-latest", "mistral", "call_1")
+        }
+    }
+
     impl RecordingHooks {
         fn events(&self) -> Vec<&'static str> {
             self.events.lock().unwrap().clone()
@@ -278,6 +303,57 @@ mod tests {
         }
     }
 
+    impl CallLifecycleHooks<RecordingRequest, String, String> for RecordingHooks {
+        type PreCallFuture<'a> = BoxFuture<'a, CoreResult<RecordingRequest>>;
+        type DuringCallFuture<'a> = BoxFuture<'a, CoreResult<String>>;
+        type SuccessFuture<'a> = BoxFuture<'a, ()>;
+        type FailureFuture<'a> = BoxFuture<'a, ()>;
+
+        fn async_pre_call_hook<'a>(
+            &'a self,
+            _context: &'a CallLifecycleContext,
+            request: RecordingRequest,
+        ) -> Self::PreCallFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("pre_call");
+                Ok(RecordingRequest(format!("{}:pre", request.0)))
+            })
+        }
+
+        fn async_during_call_hook<'a>(
+            &'a self,
+            _context: &'a CallLifecycleContext,
+            request: RecordingRequest,
+        ) -> Self::DuringCallFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("during_call");
+                Ok(format!("{}:during", request.0))
+            })
+        }
+
+        fn async_log_success_event<'a>(
+            &'a self,
+            _context: &'a CallLifecycleContext,
+            _response: &'a String,
+            _timing: &'a CallLifecycleTiming,
+        ) -> Self::SuccessFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("success");
+            })
+        }
+
+        fn async_log_failure_event<'a>(
+            &'a self,
+            _context: &'a CallLifecycleContext,
+            _error: &'a CoreError,
+            _timing: &'a CallLifecycleTiming,
+        ) -> Self::FailureFuture<'a> {
+            Box::pin(async move {
+                self.events.lock().unwrap().push("failure");
+            })
+        }
+    }
+
     #[tokio::test]
     async fn lifecycle_runs_hooks_around_provider_call() {
         let hooks = RecordingHooks::default();
@@ -315,5 +391,24 @@ mod tests {
 
         assert_eq!(error, CoreError::Network("provider down".to_string()));
         assert_eq!(hooks.events(), vec!["pre_call", "during_call", "failure"]);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_can_run_any_request_with_embedded_context() {
+        let hooks = RecordingHooks::default();
+        let response = CallLifecycle::default()
+            .run_request(
+                RecordingRequest("request".to_string()),
+                &hooks,
+                |request| async move {
+                    assert_eq!(request, "request:pre:during");
+                    Ok("response".to_string())
+                },
+            )
+            .await
+            .expect("call succeeds");
+
+        assert_eq!(response, "response");
+        assert_eq!(hooks.events(), vec!["pre_call", "during_call", "success"]);
     }
 }

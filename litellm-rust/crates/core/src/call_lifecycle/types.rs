@@ -24,6 +24,10 @@ impl CallLifecycleContext {
     }
 }
 
+pub trait CallLifecycleRequest {
+    fn lifecycle_context(&self) -> CallLifecycleContext;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallLifecyclePhase {
     PreCall,
