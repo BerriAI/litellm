@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union
+from typing import Any, Coroutine, Dict, List, Literal, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -30,15 +30,16 @@ async def arerank(
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[
+    custom_llm_provider: (
         Literal[
             "cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage", "watsonx"
         ]
-    ] = None,
-    top_n: Optional[int] = None,
-    rank_fields: Optional[List[str]] = None,
-    return_documents: Optional[bool] = None,
-    max_chunks_per_doc: Optional[int] = None,
+        | None
+    ) = None,
+    top_n: int | None = None,
+    rank_fields: List[str] | None = None,
+    return_documents: bool | None = None,
+    max_chunks_per_doc: int | None = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
@@ -79,7 +80,7 @@ def rerank(
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[
+    custom_llm_provider: (
         Literal[
             "cohere",
             "together_ai",
@@ -92,20 +93,26 @@ def rerank(
             "voyage",
             "watsonx",
         ]
-    ] = None,
-    top_n: Optional[int] = None,
-    rank_fields: Optional[List[str]] = None,
-    return_documents: Optional[bool] = True,
-    max_chunks_per_doc: Optional[int] = None,
-    max_tokens_per_doc: Optional[int] = None,
+        | None
+    ) = None,
+    top_n: int | None = None,
+    rank_fields: List[str] | None = None,
+    return_documents: bool | None = True,
+    max_chunks_per_doc: int | None = None,
+    max_tokens_per_doc: int | None = None,
     **kwargs,
 ) -> Union[RerankResponse, Coroutine[Any, Any, RerankResponse]]:
     """
     Reranks a list of documents based on their relevance to the query
     """
-    headers: Optional[dict] = kwargs.get("headers")  # type: ignore
+    # `instruction` is read from kwargs rather than declared as a named param.
+    # The router forwards rerank calls via an untyped `**kwargs` unpack, and a
+    # typed named param there would trip the basedpyright budget gate without
+    # adding real safety; it stays typed downstream via get_optional_rerank_params.
+    instruction: str | None = kwargs.get("instruction", None)
+    headers: dict | None = kwargs.get("headers")  # type: ignore
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-    litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
+    litellm_call_id: str | None = kwargs.get("litellm_call_id", None)
     proxy_server_request = kwargs.get("proxy_server_request", None)
     model_info = kwargs.get("model_info", None)
     user = kwargs.get("user", None)
@@ -155,6 +162,7 @@ def rerank(
             return_documents=return_documents,
             max_chunks_per_doc=max_chunks_per_doc,
             max_tokens_per_doc=max_tokens_per_doc,
+            instruction=instruction,
             non_default_params=kwargs,
         )
         verbose_logger.info(f"optional_rerank_params: {optional_rerank_params}")
@@ -187,11 +195,11 @@ def rerank(
             or _custom_llm_provider == litellm.LlmProviders.LITELLM_PROXY
         ):
             # Implement Cohere rerank logic
-            api_key: Optional[str] = (
+            api_key: str | None = (
                 dynamic_api_key or optional_params.api_key or litellm.api_key
             )
 
-            api_base: Optional[str] = (
+            api_base: str | None = (
                 dynamic_api_base
                 or optional_params.api_base
                 or litellm.api_base

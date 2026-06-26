@@ -785,7 +785,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         )
 
                         logging_obj.model_call_details["response_headers"] = headers
-                        stringified_response = response.model_dump()
+                        stringified_response = (
+                            provider_config.transform_parsed_response_dict(
+                                response.model_dump()
+                            )
+                        )
                         logging_obj.post_call(
                             input=messages,
                             api_key=api_key,
@@ -933,7 +937,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     timeout=timeout,
                     logging_obj=logging_obj,
                 )
-                stringified_response = response.model_dump()
+                stringified_response = provider_config.transform_parsed_response_dict(
+                    response.model_dump()
+                )
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,

@@ -5,7 +5,7 @@ Docs - https://cloud.ibm.com/apidocs/watsonx-ai#text-rerank
 """
 
 import uuid
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Union, cast
 
 import httpx
 
@@ -31,9 +31,9 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         base_url = self._get_base_url(api_base=api_base)
         endpoint = WatsonXAIEndpoint.RERANK.value
@@ -60,8 +60,8 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
     ) -> Dict:
         optional_params = optional_params or {}
 
@@ -73,11 +73,11 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         if "Authorization" in headers:
             return {**default_headers, **headers}
         token = cast(
-            Optional[str],
+            str | None,
             optional_params.pop("token", None) or get_secret_str("WATSONX_TOKEN"),
         )
         zen_api_key = cast(
-            Optional[str],
+            str | None,
             optional_params.pop("zen_api_key", None)
             or get_secret_str("WATSONX_ZENAPIKEY"),
         )
@@ -93,17 +93,18 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         """
         Map Cohere rerank params to IBM watsonx.ai rerank params
@@ -143,7 +144,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         """
         Transform request to IBM watsonx.ai rerank format
@@ -162,7 +163,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -179,7 +180,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
                 headers=raw_response.headers,
             )
 
-        _results: Optional[List[dict]] = raw_response_json.get("results")
+        _results: List[dict] | None = raw_response_json.get("results")
         if _results is None:
             raise ValueError(f"No results found in the response={raw_response_json}")
 

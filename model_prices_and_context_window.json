@@ -583,6 +583,15 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 1536
     },
+    "amazon.titan-embed-g1-text-02": {
+        "input_cost_per_token": 1e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "embedding",
+        "output_cost_per_token": 0.0,
+        "output_vector_size": 1536
+    },
     "amazon.titan-embed-text-v2:0": {
         "input_cost_per_token": 2e-08,
         "litellm_provider": "bedrock",
@@ -22570,7 +22579,7 @@
         "input_cost_per_token_batches": 3.75e-07,
         "input_cost_per_token_priority": 1.5e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -22618,7 +22627,7 @@
         "input_cost_per_token_batches": 3.75e-07,
         "input_cost_per_token_priority": 1.5e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -22664,7 +22673,7 @@
         "input_cost_per_token_flex": 1e-07,
         "input_cost_per_token_batches": 1e-07,
         "litellm_provider": "openai",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -22709,7 +22718,7 @@
         "input_cost_per_token_flex": 1e-07,
         "input_cost_per_token_batches": 1e-07,
         "litellm_provider": "openai",
-        "max_input_tokens": 272000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -22750,9 +22759,9 @@
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 272000,
-        "max_tokens": 272000,
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
@@ -22786,9 +22795,9 @@
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 272000,
-        "max_tokens": 272000,
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "responses",
         "output_cost_per_token": 0.00012,
         "output_cost_per_token_batches": 6e-05,
@@ -30087,6 +30096,22 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "openrouter/z-ai/glm-5.1": {
+        "input_cost_per_token": 1.05e-06,
+        "output_cost_per_token": 3.5e-06,
+        "cache_read_input_token_cost": 5.25e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 202752,
+        "max_output_tokens": 65535,
+        "max_tokens": 65535,
+        "mode": "chat",
+        "source": "https://openrouter.ai/z-ai/glm-5.1",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "openrouter/minimax/minimax-m2.1": {
         "input_cost_per_token": 2.7e-07,
         "output_cost_per_token": 1.2e-06,
@@ -31586,13 +31611,13 @@
         "output_cost_per_token": 0.0
     },
     "sambanova/MiniMax-M2.7": {
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_token": 6e-07,
         "litellm_provider": "sambanova",
-        "max_input_tokens": 204800,
+        "max_input_tokens": 196608,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 2.4e-06,
         "source": "https://cloud.sambanova.ai/plans/pricing",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -31609,6 +31634,7 @@
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/DeepSeek-R1-Distill-Llama-70B": {
+        "deprecation_date": "2026-03-20",
         "input_cost_per_token": 7e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 131072,
@@ -31619,6 +31645,7 @@
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/DeepSeek-V3-0324": {
+        "deprecation_date": "2026-04-14",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "sambanova",
         "max_input_tokens": 32768,
@@ -31649,6 +31676,7 @@
         "supports_vision": true
     },
     "sambanova/Llama-4-Scout-17B-16E-Instruct": {
+        "deprecation_date": "2025-06-19",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 8192,
@@ -31665,6 +31693,7 @@
         "supports_tool_choice": true
     },
     "sambanova/Meta-Llama-3.1-405B-Instruct": {
+        "deprecation_date": "2025-06-25",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "sambanova",
         "max_input_tokens": 16384,
@@ -31678,6 +31707,7 @@
         "supports_tool_choice": true
     },
     "sambanova/Meta-Llama-3.1-8B-Instruct": {
+        "deprecation_date": "2026-04-14",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 16384,
@@ -31691,6 +31721,7 @@
         "supports_tool_choice": true
     },
     "sambanova/Meta-Llama-3.2-1B-Instruct": {
+        "deprecation_date": "2025-06-25",
         "input_cost_per_token": 4e-08,
         "litellm_provider": "sambanova",
         "max_input_tokens": 16384,
@@ -31701,6 +31732,7 @@
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/Meta-Llama-3.2-3B-Instruct": {
+        "deprecation_date": "2025-06-25",
         "input_cost_per_token": 8e-08,
         "litellm_provider": "sambanova",
         "max_input_tokens": 4096,
@@ -31724,6 +31756,7 @@
         "supports_tool_choice": true
     },
     "sambanova/Meta-Llama-Guard-3-8B": {
+        "deprecation_date": "2025-06-25",
         "input_cost_per_token": 3e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 16384,
@@ -31734,6 +31767,7 @@
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/QwQ-32B": {
+        "deprecation_date": "2025-06-25",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 16384,
@@ -31744,6 +31778,7 @@
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/Qwen2-Audio-7B-Instruct": {
+        "deprecation_date": "2025-06-19",
         "input_cost_per_token": 5e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 4096,
@@ -31755,6 +31790,7 @@
         "supports_audio_input": true
     },
     "sambanova/Qwen3-32B": {
+        "deprecation_date": "2026-04-06",
         "input_cost_per_token": 4e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 8192,
@@ -31768,9 +31804,9 @@
         "supports_tool_choice": true
     },
     "sambanova/DeepSeek-V3.1": {
-        "max_tokens": 32768,
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 4.5e-06,
         "litellm_provider": "sambanova",
@@ -31784,13 +31820,36 @@
         "max_tokens": 131072,
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
+        "input_cost_per_token": 2.2e-07,
+        "output_cost_per_token": 5.9e-07,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "source": "https://cloud.sambanova.ai/plans/pricing"
+    },
+    "sambanova/DeepSeek-V3.2": {
+        "max_tokens": 32768,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 4.5e-06,
         "litellm_provider": "sambanova",
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_reasoning": true,
+        "source": "https://cloud.sambanova.ai/plans/pricing"
+    },
+    "sambanova/gemma-4-31B-it": {
+        "max_tokens": 131072,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "input_cost_per_token": 3.8e-07,
+        "output_cost_per_token": 1.15e-06,
+        "litellm_provider": "sambanova",
+        "mode": "chat",
+        "supports_vision": true,
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
       "snowflake/claude-3-5-sonnet": {
@@ -38121,6 +38180,21 @@
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
+    "zai/glm-5.1": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "output_cost_per_token": 4.4e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
     "zai/glm-5-code": {
         "cache_creation_input_token_cost": 0,
         "cache_read_input_token_cost": 3e-07,
@@ -38141,6 +38215,21 @@
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.2e-06,
+        "litellm_provider": "zai",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "source": "https://docs.z.ai/guides/overview/pricing"
+    },
+    "zai/glm-4.7-flash": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 0,
+        "input_cost_per_token": 0,
+        "output_cost_per_token": 0,
         "litellm_provider": "zai",
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
