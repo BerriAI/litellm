@@ -677,7 +677,16 @@ class MCPRequestHandler:
             if not team_set:
                 base = key_set  # no team restriction
             elif not key_set:
-                base = team_set  # key has no own perms → inherits team
+                # A key that grants no MCP servers of its own inherits the
+                # team's by default. With require_key_mcp_access_defined the
+                # team is a ceiling rather than a default, so the key must
+                # grant servers explicitly (or via an access group) to reach
+                # any — it inherits none.
+                base = (
+                    set()
+                    if general_settings.get("require_key_mcp_access_defined", False)
+                    else team_set
+                )
             else:
                 base = key_set & team_set  # both restrict → intersect
 
