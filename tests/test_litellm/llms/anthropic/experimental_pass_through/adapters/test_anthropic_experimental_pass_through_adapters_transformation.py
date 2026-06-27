@@ -3162,6 +3162,19 @@ def test_text_not_dropped_when_reasoning_content_shares_chunk():
             "Thinking content leaked into text_delta"
         )
 
+    # Assert that the thinking content was actually emitted as thinking_deltas
+    assert len(thinking_deltas) > 0, (
+        "Expected at least one thinking_delta for the reasoning_content chunk"
+    )
+
+    # The ". " prefix from chunk1's content field is lost by the translate
+    # function (pre-existing behavior, not addressed by this PR).  Assert
+    # it does NOT appear in text_deltas so the scope of the fix is clear.
+    assert ". " not in full_text, (
+        f"Shared-chunk text prefix should not survive into text_deltas; "
+        f"found in {full_text!r}"
+    )
+
 
 def test_content_block_type_for_mixed_reasoning_and_content():
     """
