@@ -119,11 +119,13 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Time",
     accessorKey: "startTime",
+    size: 200,
     cell: (info: any) => <TimeCell utcTime={info.getValue()} />,
   },
   {
     header: "Type",
     id: "type",
+    size: 90,
     cell: (info: any) => {
       const row = info.row.original;
       const sessionCount = row.session_total_count || 1;
@@ -168,6 +170,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Status",
     accessorKey: "metadata.status",
+    size: 100,
     cell: (info: any) => {
       const status = info.getValue() || "Success";
       const isSuccess = status.toLowerCase() !== "failure";
@@ -186,6 +189,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Session ID",
     accessorKey: "session_id",
+    size: 160,
     cell: (info: any) => {
       const value = String(info.getValue() || "");
       const onSessionClick = info.row.original.onSessionClick;
@@ -207,6 +211,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Request ID",
     accessorKey: "request_id",
+    size: 110,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "")}>
         <span className="font-mono text-xs max-w-[15ch] truncate block">{String(info.getValue() || "")}</span>
@@ -226,6 +231,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Cost",
     accessorKey: "spend",
+    size: 110,
     cell: (info: any) => {
       const row = info.row.original;
       const mcpCount = row.mcp_tool_call_count || 0;
@@ -258,6 +264,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Duration (s)",
     accessorKey: "request_duration_ms",
+    size: 90,
     cell: (info: any) => {
       const ms = info.getValue();
       if (ms == null) return <span>-</span>;
@@ -282,6 +289,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "TTFT (s)",
     accessorKey: "completionStartTime",
+    size: 80,
     cell: (info: any) => {
       const row = info.row.original;
       const completionStartTime = info.getValue();
@@ -301,6 +309,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Team Name",
     accessorKey: "metadata.user_api_key_team_alias",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -310,6 +319,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Key Hash",
     accessorKey: "metadata.user_api_key",
+    size: 110,
     cell: (info: any) => {
       const value = String(info.getValue() || "-");
       const onKeyHashClick = info.row.original.onKeyHashClick;
@@ -329,6 +339,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Key Alias",
     accessorKey: "metadata.user_api_key_alias",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -348,6 +359,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Model",
     accessorKey: "model",
+    size: 200,
     cell: (info: any) => {
       const row = info.row.original;
       const provider = row.custom_llm_provider;
@@ -385,6 +397,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Tokens",
     accessorKey: "total_tokens",
+    size: 140,
     cell: (info: any) => {
       const row = info.row.original;
       return (
@@ -400,6 +413,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Internal User",
     accessorKey: "user",
+    size: 150,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -409,6 +423,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "End User",
     accessorKey: "end_user",
+    size: 140,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>
         <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
@@ -419,6 +434,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Tags",
     accessorKey: "request_tags",
+    size: 150,
     cell: (info: any) => {
       const tags = info.getValue();
       if (!tags || Object.keys(tags).length === 0) return "-";
