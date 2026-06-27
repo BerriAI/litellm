@@ -71,9 +71,7 @@ _PROVIDER_EXCEPTION_NAMES = (
     "Watsonx",
     "XAI",
 )
-_PROVIDER_EXCEPTION_PREFIX = re.compile(
-    r"^\s*(?:" + "|".join(_PROVIDER_EXCEPTION_NAMES) + r")Exception\s*-\s*"
-)
+_PROVIDER_EXCEPTION_PREFIX = re.compile(r"^\s*(?:" + "|".join(_PROVIDER_EXCEPTION_NAMES) + r")Exception\s*-\s*")
 
 
 # HTTP status code -> Anthropic error type
@@ -173,9 +171,7 @@ class AnthropicExceptionMapping:
         """
         parsed = safe_json_loads(raw_message)
         if isinstance(parsed, dict):
-            return AnthropicExceptionMapping._extract_message_from_dict(
-                parsed, raw_message
-            )
+            return AnthropicExceptionMapping._extract_message_from_dict(parsed, raw_message)
         return raw_message
 
     @staticmethod
@@ -247,9 +243,7 @@ class AnthropicExceptionMapping:
         """
         # Strip LiteLLM/provider wrapper prefixes so an embedded upstream
         # Anthropic error body can be detected and passed through unchanged.
-        raw_message = AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(
-            raw_message
-        )
+        raw_message = AnthropicExceptionMapping._strip_litellm_wrapper_prefixes(raw_message)
 
         # Try to parse as JSON once.
         parsed: Optional[dict] = safe_json_loads(raw_message)

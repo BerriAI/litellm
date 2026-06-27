@@ -313,9 +313,7 @@ async def count_tokens(
 
     except HTTPException as e:
         if isinstance(e.detail, dict):
-            raw_message = str(
-                e.detail.get("error") or e.detail.get("message") or e.detail
-            )
+            raw_message = str(e.detail.get("error") or e.detail.get("message") or e.detail)
         else:
             raw_message = str(e.detail)
         return _anthropic_error_response(e.status_code, raw_message)
@@ -325,9 +323,7 @@ async def count_tokens(
         return _anthropic_error_response(status_code, raw_message)
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(
-                str(e)
-            )
+            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
         )
         return _anthropic_error_response(500, str(e))
 
