@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 import os
@@ -10,7 +11,6 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
-    List,
     Literal,
     Optional,
     Tuple,
@@ -20,7 +20,7 @@ from typing import (
 )
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
@@ -55,6 +55,11 @@ class Boto3CredentialsInfo(BaseModel):
     credentials: Credentials
     aws_region_name: str
     aws_bedrock_runtime_endpoint: Optional[str]
+
+
+class _WebIdentityTokenClaims(BaseModel):
+    aud: Optional[Union[str, list[str]]] = None
+    iss: Optional[str] = None
 
 
 class AwsAuthError(Exception):
@@ -210,32 +215,11 @@ class BaseAWSLLM:
         """
         Return a boto3.Credentials object
         """
-        ## CHECK IS  'os.environ/' passed in
-        params_to_check: List[Optional[str]] = [
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-            aws_region_name,
-            aws_session_name,
-            aws_profile_name,
-            aws_role_name,
-            aws_web_identity_token,
-            aws_sts_endpoint,
-            aws_external_id,
-        ]
-
-        # Iterate over parameters and update if needed
-        for i, param in enumerate(params_to_check):
-            if param and param.startswith("os.environ/"):
-                _v = get_secret(param)
-                if _v is not None and isinstance(_v, str):
-                    params_to_check[i] = _v
-            elif param is None:  # check if uppercase value in env
-                key = self.aws_authentication_params[i]
-                if key.upper() in os.environ:
-                    params_to_check[i] = os.getenv(key.upper())
-
-        # Assign updated values back to parameters
+        # Only config-sourced credentials are expanded against the environment.
+        # os.environ/<VAR> references in the model config are resolved at load time,
+        # so any reference still present at this point is caller-supplied input and is
+        # left as-is rather than expanded into a process environment variable. Each
+        # unset param falls back to its matching fixed AWS_* ambient env var.
         (
             aws_access_key_id,
             aws_secret_access_key,
@@ -247,7 +231,21 @@ class BaseAWSLLM:
             aws_web_identity_token,
             aws_sts_endpoint,
             aws_external_id,
-        ) = params_to_check
+        ) = tuple(
+            value if value is not None else os.getenv(env_var)
+            for value, env_var in (
+                (aws_access_key_id, "AWS_ACCESS_KEY_ID"),
+                (aws_secret_access_key, "AWS_SECRET_ACCESS_KEY"),
+                (aws_session_token, "AWS_SESSION_TOKEN"),
+                (aws_region_name, "AWS_REGION_NAME"),
+                (aws_session_name, "AWS_SESSION_NAME"),
+                (aws_profile_name, "AWS_PROFILE_NAME"),
+                (aws_role_name, "AWS_ROLE_NAME"),
+                (aws_web_identity_token, "AWS_WEB_IDENTITY_TOKEN"),
+                (aws_sts_endpoint, "AWS_STS_ENDPOINT"),
+                (aws_external_id, "AWS_EXTERNAL_ID"),
+            )
+        )
 
         verbose_logger.debug(
             "in get credentials\n"
@@ -825,6 +823,25 @@ class BaseAWSLLM:
 
         return False
 
+    @staticmethod
+    def _unverified_web_identity_audience(oidc_token: str) -> Optional[str]:
+        """Return the public ``aud``/``iss`` claims of a web identity JWT
+        without verifying its signature, so a rejected-token error can name
+        the audience LiteLLM actually sent. The signature is never read, so no
+        secret is exposed."""
+        segments = oidc_token.split(".")
+        if len(segments) != 3:
+            return None
+        payload = segments[1]
+        try:
+            decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+            claims = _WebIdentityTokenClaims.model_validate_json(decoded)
+        except (ValueError, ValidationError):
+            return None
+        if claims.aud is None and claims.iss is None:
+            return None
+        return f"aud={claims.aud!r}, iss={claims.iss!r}"
+
     @tracer.wrap()
     def _auth_with_web_identity_token(
         self,
@@ -845,6 +862,20 @@ class BaseAWSLLM:
             f"IN Web Identity Token: {aws_web_identity_token} | Role Name: {aws_role_name} | Session Name: {aws_session_name}"
         )
 
+        # get_secret() expands environment-variable references (an os.environ/<VAR>
+        # prefix, or a bare name matching an environment variable). Config-sourced
+        # references are expanded at load time, so such a reference reaching here is
+        # caller-supplied input; reject it rather than expanding a process-environment
+        # value for use as the token.
+        if (
+            aws_web_identity_token.startswith("os.environ/")
+            or aws_web_identity_token in os.environ
+        ):
+            raise AwsAuthError(
+                message="Invalid web identity token reference.",
+                status_code=400,
+            )
+
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -861,21 +892,79 @@ class BaseAWSLLM:
         with tracer.trace("boto3.client(sts)"):
             sts_client = boto3.client("sts", **sts_client_kwargs)
 
+        # The session policy is an IAM PERMISSION CEILING — effective
+        # permissions are the intersection of the role's identity policies
+        # and this policy. Any action not listed here is silently denied
+        # even when the IAM role grants it. So every Bedrock route we
+        # support needs a matching action statement, or it 403s on OIDC
+        # auth only (static creds + IRSA take other code paths).
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+        bedrock_session_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "BedrockLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock:InvokeModel",
+                        "bedrock:InvokeModelWithResponseStream",
+                        "bedrock:ApplyGuardrail",
+                        "bedrock:GetGuardrail",
+                        "bedrock:ListGuardrails",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
+                # Claude Platform on AWS (added by #27678 for the
+                # ``bedrock/claude_platform/<model>`` route) lives under
+                # a separate IAM action namespace; without these entries
+                # the OIDC path 403s on every claude_platform request
+                # even with a fully permissive identity policy (#30200).
+                {
+                    "Sid": "ClaudePlatformLiteLLM",
+                    "Effect": "Allow",
+                    "Action": [
+                        "aws-external-anthropic:CreateInference",
+                        "aws-external-anthropic:CreateBatchInference",
+                        "aws-external-anthropic:CancelBatchInference",
+                        "aws-external-anthropic:DeleteBatchInference",
+                        "aws-external-anthropic:CountTokens",
+                        "aws-external-anthropic:Get*",
+                        "aws-external-anthropic:List*",
+                    ],
+                    "Resource": "*",
+                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
+                },
+            ],
+        }
         assume_role_params = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": '{"Version":"2012-10-17","Statement":[{"Sid":"BedrockLiteLLM","Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream","bedrock:ApplyGuardrail","bedrock:GetGuardrail","bedrock:ListGuardrails"],"Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"true"}}}]}',
+            "Policy": json.dumps(bedrock_session_policy, separators=(",", ":")),
         }
 
         # Add ExternalId parameter if provided
         if aws_external_id is not None:
             assume_role_params["ExternalId"] = aws_external_id
 
-        sts_response = sts_client.assume_role_with_web_identity(**assume_role_params)
+        try:
+            sts_response = sts_client.assume_role_with_web_identity(
+                **assume_role_params
+            )
+        except sts_client.exceptions.InvalidIdentityTokenException as e:
+            audience = (
+                self._unverified_web_identity_audience(oidc_token)
+                if isinstance(oidc_token, str)
+                else None
+            )
+            detail = f" Token {audience}" if audience else ""
+            raise AwsAuthError(
+                status_code=401,
+                message=f"AWS STS rejected the web identity token: {e}.{detail}",
+            ) from e
 
         iam_creds_dict = {
             "aws_access_key_id": sts_response["Credentials"]["AccessKeyId"],

@@ -10,6 +10,7 @@ resource "random_password" "master_key" {
 # account gets accessor permission on it (see iam.tf).
 resource "google_secret_manager_secret" "master_key" {
   secret_id = "${local.name}-master-key"
+  labels    = local.labels
   replication {
     auto {}
   }
@@ -29,6 +30,7 @@ resource "google_secret_manager_secret" "license" {
   count = var.litellm_license == "" ? 0 : 1
 
   secret_id = "${local.name}-license"
+  labels    = local.labels
   replication {
     auto {}
   }
@@ -49,6 +51,7 @@ resource "google_secret_manager_secret" "ui_password" {
   count = var.ui_password == "" ? 0 : 1
 
   secret_id = "${local.name}-ui-password"
+  labels    = local.labels
   replication {
     auto {}
   }

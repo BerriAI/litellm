@@ -124,7 +124,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         return resolved_files
 
-    def batch_embeddings(  # noqa: PLR0915
+    def batch_embeddings(
         self,
         model: str,
         input: GeminiEmbeddingInput,
@@ -274,6 +274,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
+                resolved_files=resolved_files,
             )
         else:
             _predictions = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore
@@ -377,6 +378,7 @@ class GoogleBatchEmbeddings(VertexLLM):
                 model_response=model_response,
                 model=model,
                 response_json=_json_response,
+                resolved_files=resolved_files,
             )
         else:
             _predictions = VertexAIBatchEmbeddingsResponseObject(**_json_response)  # type: ignore

@@ -13,21 +13,21 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from litellm.proxy.common_utils.path_utils import safe_join
-
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.common_utils.path_utils import safe_join
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
 )
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
     ApplyGuardrailRequest,
@@ -373,7 +373,7 @@ async def create_guardrail(
             # Configuration error — roll back the DB write so the guardrail isn't orphaned
             if prisma_client is not None:
                 try:
-                    await prisma_client.db.litellm_guardrailstable.delete(
+                    await GuardrailsRepository(prisma_client).table.delete(
                         where={"guardrail_id": guardrail_id}
                     )
                 except Exception as rollback_err:
@@ -617,9 +617,7 @@ class GuardrailSubmissionItem(BaseModel):
     guardrail_name: str
     status: str  # pending_review | active | rejected
     team_id: Optional[str] = None
-    team_guardrail: bool = (
-        False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
-    )
+    team_guardrail: bool = False  # True when submitted via team (team_id set); use to distinguish team vs regular guardrails
     litellm_params: Optional[Dict[str, Any]] = None
     guardrail_info: Optional[Dict[str, Any]] = None
     submitted_by_user_id: Optional[str] = None
@@ -705,7 +703,7 @@ async def register_guardrail(
         )
 
     try:
-        existing = await prisma_client.db.litellm_guardrailstable.find_unique(
+        existing = await GuardrailsRepository(prisma_client).table.find_unique(
             where={"guardrail_name": request.guardrail_name}
         )
         if existing is not None:
@@ -732,7 +730,7 @@ async def register_guardrail(
     guardrail_info_str = safe_dumps(guardrail_info)
 
     try:
-        created = await prisma_client.db.litellm_guardrailstable.create(
+        created = await GuardrailsRepository(prisma_client).table.create(
             data={
                 "guardrail_name": request.guardrail_name,
                 "litellm_params": litellm_params_str,
@@ -874,7 +872,7 @@ async def list_guardrail_submissions(
             where_clause["team_id"] = {"in": visible_team_ids}
 
         # Single query: fetch team guardrails visible to the caller
-        all_team_rows = await prisma_client.db.litellm_guardrailstable.find_many(
+        all_team_rows = await GuardrailsRepository(prisma_client).table.find_many(
             where=where_clause,
             order={"created_at": "desc"},
         )
@@ -945,7 +943,7 @@ async def get_guardrail_submission(
     is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
     try:
-        row = await prisma_client.db.litellm_guardrailstable.find_unique(
+        row = await GuardrailsRepository(prisma_client).table.find_unique(
             where={"guardrail_id": guardrail_id}
         )
         if row is None:
@@ -986,7 +984,7 @@ async def approve_guardrail_submission(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        row = await prisma_client.db.litellm_guardrailstable.find_unique(
+        row = await GuardrailsRepository(prisma_client).table.find_unique(
             where={"guardrail_id": guardrail_id}
         )
         if row is None:
@@ -1000,7 +998,7 @@ async def approve_guardrail_submission(
             )
 
         now = datetime.now(timezone.utc)
-        await prisma_client.db.litellm_guardrailstable.update(
+        await GuardrailsRepository(prisma_client).table.update(
             where={"guardrail_id": guardrail_id},
             data={"status": "active", "reviewed_at": now, "updated_at": now},
         )
@@ -1072,7 +1070,7 @@ async def reject_guardrail_submission(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
-        row = await prisma_client.db.litellm_guardrailstable.find_unique(
+        row = await GuardrailsRepository(prisma_client).table.find_unique(
             where={"guardrail_id": guardrail_id}
         )
         if row is None:
@@ -1086,7 +1084,7 @@ async def reject_guardrail_submission(
             )
 
         now = datetime.now(timezone.utc)
-        await prisma_client.db.litellm_guardrailstable.update(
+        await GuardrailsRepository(prisma_client).table.update(
             where={"guardrail_id": guardrail_id},
             data={"status": "rejected", "reviewed_at": now, "updated_at": now},
         )
@@ -2288,10 +2286,10 @@ async def apply_guardrail(
     """
     import traceback
 
-    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.litellm_core_utils.thread_pool_executor import (
         executor as thread_pool_executor,
     )
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
     from litellm.proxy.proxy_server import (
         general_settings,
         proxy_config,
@@ -2322,16 +2320,17 @@ async def apply_guardrail(
             )
 
         request_processor = ProxyBaseLLMRequestProcessing(data=data)
-        data, litellm_logging_obj = (
-            await request_processor.common_processing_pre_call_logic(
-                request=fastapi_request,
-                general_settings=general_settings,
-                user_api_key_dict=user_api_key_dict,
-                version=version,
-                proxy_logging_obj=proxy_logging_obj,
-                proxy_config=proxy_config,
-                route_type="apply_guardrail",
-            )
+        (
+            data,
+            litellm_logging_obj,
+        ) = await request_processor.common_processing_pre_call_logic(
+            request=fastapi_request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="apply_guardrail",
         )
 
         if litellm_logging_obj is not None:

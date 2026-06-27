@@ -23,6 +23,7 @@ from typing import (
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_text_blocks_from_anthropic_messages,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -214,18 +215,25 @@ async def anthropic_messages(
     # already handles this in anthropic_messages_pt; sanitize the native
     # Anthropic Messages path here for the same guarantee.  See #22930.
     messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+    # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
+    # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
+    messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
 
     original_stream = stream or kwargs.get(
         "_websearch_interception_converted_stream", False
     )
 
-    # Execute pre-request hooks to allow CustomLoggers to modify request
+    # Execute pre-request hooks to allow CustomLoggers to modify request.
+    # tool_choice is forwarded explicitly (it is a named param, not in kwargs)
+    # so hooks that rename tools — e.g. websearch_interception converting
+    # web_search -> litellm_web_search — can keep a forced tool_choice in sync.
     request_kwargs = await _execute_pre_request_hooks(
         model=model,
         messages=messages,
         tools=tools,
         stream=stream,
         custom_llm_provider=custom_llm_provider,
+        tool_choice=tool_choice,
         **kwargs,
     )
 
@@ -397,6 +405,7 @@ def anthropic_messages_handler(
     # full-messages scan. Pop it so it never leaks into provider params.
     if not kwargs.pop("_litellm_messages_presanitized", False):
         messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+        messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -507,7 +516,10 @@ def anthropic_messages_handler(
     local_vars.update(kwargs)
     anthropic_messages_optional_request_params = (
         AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars
+            params=local_vars,
+            model=model,
+            drop_params=litellm_params.get("drop_params") is True,
+            custom_llm_provider=custom_llm_provider,
         )
     )
     if is_reasoning_auto_summary_enabled():

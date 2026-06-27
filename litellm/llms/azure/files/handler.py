@@ -45,7 +45,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
         openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
-        response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))  # type: ignore[arg-type]
+        response = await openai_client.files.create(
+            **self._prepare_create_file_data(create_file_data)
+        )  # type: ignore[arg-type]
         verbose_logger.debug("create_file_response=%s", response)
         return OpenAIFileObject(**response.model_dump())
 
@@ -86,7 +88,9 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
             return self.acreate_file(
                 create_file_data=create_file_data, openai_client=openai_client
             )
-        response = cast(Union[AzureOpenAI, OpenAI], openai_client).files.create(**self._prepare_create_file_data(create_file_data))  # type: ignore[arg-type]
+        response = cast(Union[AzureOpenAI, OpenAI], openai_client).files.create(
+            **self._prepare_create_file_data(create_file_data)
+        )  # type: ignore[arg-type]
         return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(

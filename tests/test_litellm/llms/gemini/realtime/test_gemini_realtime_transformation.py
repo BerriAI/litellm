@@ -235,10 +235,71 @@ def test_gemini_realtime_transformation_audio_delta():
 
     contains_audio_delta = False
     for response in responses:
-        if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA.value:
+        if (
+            response["type"]
+            == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DELTA.value
+        ):
             contains_audio_delta = True
             break
     assert contains_audio_delta, "Expected audio delta event"
+
+
+def test_gemini_output_audio_transcript_delta_uses_active_response_ids():
+    config = GeminiRealtimeConfig()
+
+    session_configuration_request = {
+        "setup": {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+        }
+    }
+    session_configuration_request_str = json.dumps(session_configuration_request)
+    event = {
+        "serverContent": {
+            "outputTranscription": {"text": "Hello from Gemini."},
+            "modelTurn": {
+                "parts": [
+                    {"inlineData": {"mimeType": "audio/pcm", "data": "my-audio-data"}}
+                ]
+            },
+        }
+    }
+
+    result = config.transform_realtime_response(
+        json.dumps(event),
+        "gemini-1.5-flash",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    responses = result["response"]
+    response_created = next(
+        response for response in responses if response["type"] == "response.created"
+    )
+    transcript_delta = next(
+        response
+        for response in responses
+        if response["type"] == "response.output_audio_transcript.delta"
+    )
+    audio_delta = next(
+        response
+        for response in responses
+        if response["type"] == "response.output_audio.delta"
+    )
+
+    assert transcript_delta["response_id"] == response_created["response"]["id"]
+    assert transcript_delta["response_id"] == audio_delta["response_id"]
+    assert transcript_delta["item_id"] == audio_delta["item_id"]
+    assert result["current_response_id"] == transcript_delta["response_id"]
+    assert result["current_output_item_id"] == transcript_delta["item_id"]
 
 
 def test_gemini_realtime_transformation_generation_complete():
@@ -278,7 +339,10 @@ def test_gemini_realtime_transformation_generation_complete():
 
     contains_audio_done_event = False
     for response in responses:
-        if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE.value:
+        if (
+            response["type"]
+            == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE.value
+        ):
             contains_audio_done_event = True
             break
     assert contains_audio_done_event, "Expected audio done event"
@@ -450,6 +514,75 @@ def test_gemini_session_update_defaults_to_audio_modality():
     assert len(messages) == 1
     setup_payload = json.loads(messages[0])["setup"]
     assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-2.5-flash-native-audio",
+        "gemini-3.1-flash-live-preview",
+        "gemini/gemini-3.1-flash-live-preview",
+    ],
+)
+def test_gemini_audio_only_live_models_coerce_text_modality_to_audio(model, patch_gemini_audio_cost_map_entries):
+    """Regression: TEXT-only responseModalities causes 1007 on audio-only Live models."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "modalities": ["text"],
+            "instructions": "You are a terse assistant.",
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        model,
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_gemini_audio_only_live_models_drop_text_from_text_audio_combo(patch_gemini_audio_cost_map_entries):
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "modalities": ["text", "audio"],
+            "instructions": "Be concise.",
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-3.1-flash-live-preview",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+
+
+def test_gemini_non_live_model_preserves_text_modality():
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "modalities": ["text"],
+            "instructions": "You are a terse assistant.",
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash",
+        session_configuration_request=None,
+    )
+
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
 
 
 def test_gemini_requires_session_configuration_feature_flag(monkeypatch):
@@ -735,7 +868,14 @@ def test_gemini_tool_call_emits_response_created_preamble():
     )
 
     responses = result["response"]
-    # Should have: response.created, output_item.added, function_call_arguments.delta, function_call_arguments.done, output_item.done, conversation.item.created, response.done
+    # Expected sequence:
+    #   0: response.created
+    #   1: response.output_item.added  (item status=in_progress)
+    #   2: conversation.item.added     (registers call_id in Pipecat's _pending_function_calls)
+    #   3: response.function_call_arguments.delta
+    #   4: response.function_call_arguments.done
+    #   5: response.output_item.done
+    #   6: response.done
     assert len(responses) >= 7
     assert responses[0]["type"] == "response.created"
     assert "response" in responses[0]
@@ -749,14 +889,14 @@ def test_gemini_tool_call_emits_response_created_preamble():
     assert responses[1]["type"] == "response.output_item.added"
     assert responses[1]["item"]["type"] == "function_call"
     assert responses[1]["item"]["status"] == "in_progress"
-    assert responses[2]["type"] == "response.function_call_arguments.delta"
-    assert responses[2]["call_id"] == "call_123"
-    assert responses[2]["delta"] == responses[3]["arguments"]
-    assert responses[3]["type"] == "response.function_call_arguments.done"
-    assert responses[4]["type"] == "response.output_item.done"
-    assert responses[4]["item"]["type"] == "function_call"
-    assert responses[4]["item"]["status"] == "completed"
-    assert responses[5]["type"] == "conversation.item.created"
+    assert responses[2]["type"] == "conversation.item.added"
+    assert responses[2]["item"]["type"] == "function_call"
+    assert responses[2]["item"]["call_id"] == "call_123"
+    assert responses[3]["type"] == "response.function_call_arguments.delta"
+    assert responses[3]["call_id"] == "call_123"
+    assert responses[3]["delta"] == responses[4]["arguments"]
+    assert responses[4]["type"] == "response.function_call_arguments.done"
+    assert responses[5]["type"] == "response.output_item.done"
     assert responses[5]["item"]["type"] == "function_call"
     assert responses[5]["item"]["status"] == "completed"
     assert responses[6]["type"] == "response.done"
@@ -930,6 +1070,12 @@ def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
                     "promptTokenCount": 17,
                     "responseTokenCount": 4,
                     "totalTokenCount": 21,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 17},
+                    ],
+                    "responseTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 4},
+                    ],
                 },
             }
         ),
@@ -953,6 +1099,8 @@ def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
     assert usage["input_tokens"] == 17
     assert usage["output_tokens"] == 4
     assert usage["total_tokens"] == 21
+    assert usage["input_token_details"]["text_tokens"] == 17
+    assert usage["output_token_details"]["text_tokens"] == 4
 
 
 def test_gemini_tool_call_response_done_falls_back_to_empty_usage():
@@ -1118,6 +1266,147 @@ def test_gemini_subsequent_session_update_forwards_tools_merged_with_original_se
     assert follow_up["generationConfig"]["responseModalities"] == ["AUDIO"]
     assert follow_up["model"] == "models/gemini-2.5-flash-native-audio"
     assert follow_up["inputAudioTranscription"] == {}
+
+
+def test_gemini_realtime_pipecat_ga_session_voice_and_tools(patch_gemini_audio_cost_map_entries):
+    """Pipecat OpenAIRealtimeSessionProperties: output_modalities, nested tools,
+    and audio.output.voice (e.g. Kore) must map into Gemini setup."""
+    config = GeminiRealtimeConfig()
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "output_modalities": ["audio"],
+            "instructions": "Follow system instructions.",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "terminate_call",
+                        "description": "End the call.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "turn_detection": {"type": "server_vad"},
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": "Kore",
+                },
+            },
+            "temperature": 0,
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+    # Native-audio Live rejects speechConfig on setup (see _finalize_gemini_live_setup).
+    assert "speechConfig" not in setup.get("generationConfig", {})
+    assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
+    assert (
+        setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is False
+    )
+
+
+def test_gemini_realtime_pipecat_semantic_vad_omits_realtime_input_config():
+    """Pipecat SemanticTurnDetection (semantic_vad) must not map to disabled VAD."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "output_modalities": ["audio"],
+            "instructions": "test",
+            "audio": {
+                "input": {"turn_detection": {"type": "semantic_vad"}},
+            },
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "terminate_call",
+                        "description": "End call.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        },
+    }
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    setup = json.loads(messages[0])["setup"]
+    assert "realtimeInputConfig" not in setup
+    assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
+
+
+def test_gemini_input_audio_buffer_commit_maps_to_audio_stream_end():
+    config = GeminiRealtimeConfig()
+    setup = {
+        "setup": {
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {"disabled": False},
+            }
+        }
+    }
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(setup),
+    )
+    assert len(messages) == 1
+    assert json.loads(messages[0]) == {"realtimeInput": {"audioStreamEnd": True}}
+
+
+def test_gemini_input_audio_buffer_end_maps_to_audio_stream_end():
+    config = GeminiRealtimeConfig()
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.end"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    assert len(messages) == 1
+    assert json.loads(messages[0]) == {"realtimeInput": {"audioStreamEnd": True}}
+
+
+def test_gemini_input_audio_buffer_clear_is_local_noop():
+    config = GeminiRealtimeConfig()
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.clear"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    assert messages == []
+
+
+def test_gemini_input_audio_buffer_commit_maps_to_activity_end_when_manual_vad():
+    config = GeminiRealtimeConfig()
+    setup = {
+        "setup": {
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {"disabled": True},
+            }
+        }
+    }
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.commit"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=json.dumps(setup),
+    )
+    assert len(messages) == 1
+    assert json.loads(messages[0]) == {"realtimeInput": {"activityEnd": True}}
 
 
 def test_gemini_subsequent_session_update_with_turn_detection_only_preserves_original_tools():
@@ -1407,6 +1696,12 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
                     "promptTokenCount": 5,
                     "responseTokenCount": 11,
                     "totalTokenCount": 16,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 5},
+                    ],
+                    "responseTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 11},
+                    ],
                 }
             }
         ),
@@ -1447,6 +1742,8 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
     assert usage["input_tokens"] == 5
     assert usage["output_tokens"] == 11
     assert usage["total_tokens"] == 16
+    assert usage["input_token_details"]["text_tokens"] == 5
+    assert usage["output_token_details"]["text_tokens"] == 11
     assert config._pending_usage_metadata is None
 
 
@@ -1504,3 +1801,210 @@ def test_gemini_in_frame_usage_metadata_clears_pending_buffer():
     assert usage["output_tokens"] == 2
     assert usage["total_tokens"] == 5
     assert config._pending_usage_metadata is None
+
+
+def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
+    """After a tool call, Gemini Live can emit a bare ``turnComplete`` (with
+    usage but no model content) before the follow-up answer stream. That bare
+    ``turnComplete`` may produce an extra ``response.done``; Pipecat is tolerant
+    of that because ``_process_completed_function_calls`` is idempotent (the
+    pending call queue is empty by the time the second ``response.done`` arrives).
+    The important thing is that the post-tool answer is correctly generated."""
+    config = GeminiRealtimeConfig()
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_post_tool_bare_turn_complete"
+
+    session_configuration_request = json.dumps(
+        {
+            "setup": {
+                "model": "gemini-2.5-flash-native-audio",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            }
+        }
+    )
+    base_input = {
+        "session_configuration_request": session_configuration_request,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_conversation_id": None,
+        "current_delta_chunks": [],
+        "current_item_chunks": [],
+        "current_delta_type": None,
+    }
+
+    tool_result = config.transform_realtime_response(
+        json.dumps(
+            {
+                "toolCall": {
+                    "functionCalls": [
+                        {
+                            "id": "call_post_tool",
+                            "name": "get_weather",
+                            "args": {"city": "Paris"},
+                        }
+                    ]
+                }
+            }
+        ),
+        "gemini-2.5-flash-native-audio",
+        logging_obj,
+        realtime_response_transform_input=base_input,
+    )
+    assert tool_result["response"][-1]["type"] == "response.done"
+
+    bare_turn_complete = config.transform_realtime_response(
+        json.dumps(
+            {
+                "serverContent": {"turnComplete": True},
+                "usageMetadata": {
+                    "promptTokenCount": 30,
+                    "responseTokenCount": 5,
+                    "totalTokenCount": 35,
+                },
+            }
+        ),
+        "gemini-2.5-flash-native-audio",
+        logging_obj,
+        realtime_response_transform_input={
+            **base_input,
+            "current_output_item_id": tool_result["current_output_item_id"],
+            "current_response_id": tool_result["current_response_id"],
+            "current_conversation_id": tool_result["current_conversation_id"],
+            "current_delta_chunks": tool_result["current_delta_chunks"],
+            "current_item_chunks": tool_result["current_item_chunks"],
+            "current_delta_type": tool_result["current_delta_type"],
+        },
+    )
+    # The bare turnComplete must not surface as a response.done because clients
+    # that use collect_until("response.done") would stop collecting prematurely
+    # before the real follow-up answer arrives.
+    assert bare_turn_complete["response"] == []
+
+    post_tool_answer = config.transform_realtime_response(
+        json.dumps(
+            {
+                "serverContent": {
+                    "outputTranscription": {"text": "The temperature is 72."},
+                    "modelTurn": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "audio/pcm",
+                                    "data": "audio-chunk",
+                                }
+                            }
+                        ]
+                    },
+                }
+            }
+        ),
+        "gemini-2.5-flash-native-audio",
+        logging_obj,
+        realtime_response_transform_input={
+            **base_input,
+            "current_output_item_id": bare_turn_complete["current_output_item_id"],
+            "current_response_id": bare_turn_complete["current_response_id"],
+            "current_conversation_id": bare_turn_complete["current_conversation_id"],
+            "current_delta_chunks": bare_turn_complete["current_delta_chunks"],
+            "current_item_chunks": bare_turn_complete["current_item_chunks"],
+            "current_delta_type": bare_turn_complete["current_delta_type"],
+        },
+    )
+    assert post_tool_answer["response"][0]["type"] == "response.created"
+    transcript_delta = next(
+        event
+        for event in post_tool_answer["response"]
+        if event["type"] == "response.output_audio_transcript.delta"
+    )
+    assert "72" in transcript_delta["delta"]
+
+    final_turn = config.transform_realtime_response(
+        json.dumps({"serverContent": {"turnComplete": True}}),
+        "gemini-2.5-flash-native-audio",
+        logging_obj,
+        realtime_response_transform_input={
+            **base_input,
+            "current_output_item_id": post_tool_answer["current_output_item_id"],
+            "current_response_id": post_tool_answer["current_response_id"],
+            "current_conversation_id": post_tool_answer["current_conversation_id"],
+            "current_delta_chunks": post_tool_answer["current_delta_chunks"],
+            "current_item_chunks": post_tool_answer["current_item_chunks"],
+            "current_delta_type": post_tool_answer["current_delta_type"],
+        },
+    )
+    response_done = next(
+        event
+        for event in final_turn["response"]
+        if event["type"] == "response.done"
+    )
+    assert response_done["response"]["status"] == "completed"
+
+
+@pytest.fixture(autouse=False)
+def patch_gemini_audio_cost_map_entries(monkeypatch):
+    """Inject gemini_native_audio / gemini_audio_only_live into the cost map.
+
+    litellm.model_cost is fetched from main branch at import time, so in CI
+    the fields may not exist yet. Patch locally so these tests are
+    self-contained.
+    """
+    native_audio_models = [
+        "gemini-2.5-flash-native-audio",
+        "gemini-2.5-flash-native-audio-latest",
+        "gemini/gemini-2.5-flash-native-audio-latest",
+    ]
+    flash_live_models = [
+        "gemini-3.1-flash-live-preview",
+        "gemini/gemini-3.1-flash-live-preview",
+    ]
+    for m in native_audio_models:
+        entry = dict(litellm.model_cost.get(m, {}))
+        entry["gemini_native_audio"] = True
+        monkeypatch.setitem(litellm.model_cost, m, entry)
+    for m in flash_live_models:
+        entry = dict(litellm.model_cost.get(m, {}))
+        entry["gemini_audio_only_live"] = True
+        monkeypatch.setitem(litellm.model_cost, m, entry)
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("gemini-3.1-flash-live-preview", True),
+        ("gemini/gemini-3.1-flash-live-preview", True),
+        ("gemini-2.5-flash-native-audio-latest", True),
+        ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-2.0-flash", False),
+        ("gemini-2.5-flash", False),
+    ],
+)
+def test_is_audio_only_live_model_uses_cost_map(
+    model, expected, patch_gemini_audio_cost_map_entries
+):
+    assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("gemini-2.5-flash-native-audio-latest", True),
+        ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-3.1-flash-live-preview", False),
+        ("gemini/gemini-3.1-flash-live-preview", False),
+        ("gemini-2.0-flash", False),
+    ],
+)
+def test_is_native_audio_model_uses_cost_map(
+    model, expected, patch_gemini_audio_cost_map_entries
+):
+    assert GeminiRealtimeConfig._is_native_audio_model(model) == expected
+
+
+def test_is_setup_message_and_is_content_message():
+    config = GeminiRealtimeConfig()
+    assert config.is_setup_message({"setup": {}}) is True
+    assert config.is_setup_message({"realtimeInput": {}}) is False
+    assert config.is_content_message({"realtimeInput": {}}) is True
+    assert config.is_content_message({"clientContent": {}}) is True
+    assert config.is_content_message({"toolResponse": {}}) is True
+    assert config.is_content_message({"setup": {}}) is False

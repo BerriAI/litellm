@@ -13,15 +13,16 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from typing import Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
+    BlockModelRequest,
     CommonProxyErrors,
     LiteLLM_ProxyModelTable,
     LiteLLM_TeamTable,
@@ -39,6 +40,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
+    _refresh_cached_team,
     team_model_add,
     team_model_delete,
 )
@@ -47,6 +49,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.table_repositories import ModelTableRepository
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     UpdateUsefulLinksRequest,
 )
@@ -85,7 +90,7 @@ async def get_db_model(
 ) -> Optional[Deployment]:
     db_model = cast(
         Optional[BaseModel],
-        await prisma_client.db.litellm_proxymodeltable.find_unique(
+        await ModelRepository(prisma_client).table.find_unique(
             where={"model_id": model_id}
         ),
     )
@@ -289,7 +294,7 @@ async def patch_model(
         update_data["updated_at"] = cast(str, get_utc_datetime())
 
         # Perform partial update
-        updated_model = await prisma_client.db.litellm_proxymodeltable.update(
+        updated_model = await ModelRepository(prisma_client).table.update(
             where={"model_id": model_id},
             data=update_data,
         )
@@ -327,6 +332,168 @@ async def patch_model(
         )
 
 
+async def _set_model_blocked_status(
+    data: BlockModelRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    blocked: bool,
+    action: Literal["blocked", "unblocked"],
+    litellm_changed_by: Optional[str],
+) -> Optional[LiteLLM_ProxyModelTable]:
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        llm_router,
+        prisma_client,
+        store_model_in_db,
+    )
+
+    try:
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        if store_model_in_db is not True:
+            raise ProxyException(
+                message="Model updates only supported for DB-stored models",
+                type=ProxyErrorTypes.validation_error.value,
+                code=status.HTTP_400_BAD_REQUEST,
+                param=None,
+            )
+
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise ProxyException(
+                message="Only proxy admins can change a model's blocked flag.",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param="blocked",
+            )
+
+        db_model = await get_db_model(
+            model_id=data.model_id,
+            prisma_client=prisma_client,
+        )
+
+        if db_model is None:
+            if (
+                llm_router
+                and llm_router.get_deployment(model_id=data.model_id) is not None
+            ):
+                raise ProxyException(
+                    message="Cannot edit config-based model. Store model in DB via /model/new first.",
+                    type=ProxyErrorTypes.validation_error.value,
+                    code=status.HTTP_400_BAD_REQUEST,
+                    param=None,
+                )
+            raise ProxyException(
+                message=f"Model {data.model_id} not found on proxy.",
+                type=ProxyErrorTypes.not_found_error,
+                code=status.HTTP_404_NOT_FOUND,
+                param=None,
+            )
+
+        updated_model = await ModelRepository(prisma_client).table.update(
+            where={"model_id": data.model_id},
+            data={
+                "blocked": blocked,
+                "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                "updated_at": cast(str, get_utc_datetime()),
+            },
+        )
+
+        await clear_cache()
+
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=data.model_id,
+                action=action,
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                before_value=db_model.model_dump_json(exclude_none=True),
+                after_value=(
+                    updated_model.model_dump_json(exclude_none=True)
+                    if isinstance(updated_model, BaseModel)
+                    else None
+                ),
+                litellm_changed_by=litellm_changed_by,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            )
+        )
+
+        return updated_model
+
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error in model {action}: {str(e)}")
+
+        if isinstance(e, (HTTPException, ProxyException)):
+            raise e
+
+        raise ProxyException(
+            message=f"Error updating model blocked status: {str(e)}",
+            type=ProxyErrorTypes.internal_server_error,
+            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            param=None,
+        )
+
+
+@router.post(
+    "/model/block",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def block_model(
+    data: BlockModelRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+) -> Optional[LiteLLM_ProxyModelTable]:
+    """
+    Block a DB-stored model deployment from serving requests.
+
+    Parameters:
+    - model_id: str - The model deployment id to block.
+    """
+    return await _set_model_blocked_status(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        blocked=True,
+        action="blocked",
+        litellm_changed_by=litellm_changed_by,
+    )
+
+
+@router.post(
+    "/model/unblock",
+    tags=["model management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def unblock_model(
+    data: BlockModelRequest,
+    http_request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+) -> Optional[LiteLLM_ProxyModelTable]:
+    """
+    Unblock a DB-stored model deployment so it can serve requests again.
+
+    Parameters:
+    - model_id: str - The model deployment id to unblock.
+    """
+    return await _set_model_blocked_status(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+        blocked=False,
+        action="unblocked",
+        litellm_changed_by=litellm_changed_by,
+    )
+
+
 ################################# Helper Functions #################################
 ####################################################################################
 ####################################################################################
@@ -351,7 +518,9 @@ async def _add_model_to_db(
     _data: dict = {
         "model_id": model_params.model_info.id,
         "model_name": model_params.model_name,
-        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),  # type: ignore
+        "litellm_params": model_params.litellm_params.model_dump_json(
+            exclude_none=True
+        ),  # type: ignore
         "model_info": model_params.model_info.model_dump_json(  # type: ignore
             exclude_none=True
         ),
@@ -361,7 +530,7 @@ async def _add_model_to_db(
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
     if should_create_model_in_db:
-        model_response = await prisma_client.db.litellm_proxymodeltable.create(
+        model_response = await ModelRepository(prisma_client).table.create(
             data=_data  # type: ignore
         )
     else:
@@ -490,9 +659,45 @@ def _get_public_model_name(
     patch_data: updateDeployment,
     db_model: Deployment,
 ) -> str:
-    """Determine the public model name from patch or existing model."""
-    if patch_data.model_name:
-        return patch_data.model_name
+    """Determine the public model name from patch or existing model.
+
+    The top-level ``model_name`` is the rename channel. For team-scoped rows
+    the DB ``model_name`` column holds an internal routing key
+    (``model_name_{team_id}_{uuid}``), and ``/model/info`` historically leaked
+    it into the dashboard edit form, so a non-rename save (e.g. a TPM tweak)
+    would PATCH the internal name and the update path would treat it as a
+    rename -- overwriting ``team_public_model_name`` and rewriting the team ACL
+    (see issue #28382).
+
+    Guard against that by ignoring an incoming ``model_name`` that matches the
+    internal shape, or is a no-op against the current DB column. Anything else
+    is a genuine rename and wins. We deliberately do NOT read
+    ``patch_data.model_info.team_public_model_name``: the dashboard passes the
+    existing ``model_info`` blob through untouched on a rename, so honoring it
+    would return the OLD public name and silently drop the rename.
+
+    Precedence (highest first):
+    1. patch_data.model_name -- a genuine rename: not internal-shape and not a
+       no-op against db_model.model_name.
+    2. db_model.model_info.team_public_model_name -- existing public name.
+    3. db_model.model_name -- last-resort fallback for legacy rows.
+    """
+    team_id = (patch_data.model_info.team_id if patch_data.model_info else None) or (
+        db_model.model_info.team_id if db_model.model_info else None
+    )
+
+    def _is_internal_shape(name: Optional[str]) -> bool:
+        if team_id is None or not name:
+            return False
+        return name.startswith(f"model_name_{team_id}_")
+
+    incoming = patch_data.model_name
+    if (
+        incoming
+        and not _is_internal_shape(incoming)
+        and incoming != db_model.model_name
+    ):
+        return incoming
 
     if db_model.model_info and db_model.model_info.team_public_model_name:
         return db_model.model_info.team_public_model_name
@@ -521,7 +726,7 @@ async def _setup_new_team_model_assignment(
 
 
 async def _get_team_deployments(
-    team_id: str, prisma_client: PrismaClient
+    team_id: str, prisma_client: PrismaClient, table: Optional[Any] = None
 ) -> List[LiteLLM_ProxyModelTable]:
     """
     Fetch all deployments for a given team_id from the database.
@@ -532,9 +737,13 @@ async def _get_team_deployments(
     Note: prisma-client-py 0.11.0 does not support JSON path filtering, so we filter
     by the model_name prefix (team models use "model_name_{team_id}_*") and confirm
     team_id in model_info with Python-side filtering.
+
+    Pass ``table`` (a transaction's proxy-model table) to run the read inside an
+    existing transaction.
     """
     prefix = f"model_name_{team_id}_"
-    response = await prisma_client.db.litellm_proxymodeltable.find_many(
+    table = table or ModelRepository(prisma_client).table
+    response = await table.find_many(
         where={
             "model_name": {"startswith": prefix},
         }
@@ -554,6 +763,134 @@ async def _get_team_deployments(
         if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
             result.append(row)
     return result
+
+
+async def delete_team_models(
+    team_ids: List[str],
+    prisma_client: PrismaClient,
+    llm_router: Optional[Any],
+) -> List[str]:
+    """
+    Delete every BYOK model owned by the given teams, from the DB and the router.
+
+    The DB rows are removed inside a single transaction, so deletion is atomic
+    across all team_ids. Each team's rows are deleted by the exact model_ids read
+    in the same transaction, which keeps the deleted set identical to the set
+    handed to the router. The router is synced only after the transaction commits,
+    so a rollback can never leave a deployment live in the router without its row.
+
+    Returns the model_ids that were deleted.
+    """
+    deleted_model_ids: List[str] = []
+    async with prisma_client.db.tx() as tx:
+        for team_id in team_ids:
+            rows = await _get_team_deployments(
+                team_id, prisma_client, table=tx.litellm_proxymodeltable
+            )
+            model_ids = [row.model_id for row in rows]
+            if model_ids:
+                await tx.litellm_proxymodeltable.delete_many(
+                    where={"model_id": {"in": model_ids}}
+                )
+                deleted_model_ids.extend(model_ids)
+
+    if llm_router is not None:
+        for model_id in deleted_model_ids:
+            llm_router.delete_deployment(id=model_id)
+
+    return deleted_model_ids
+
+
+async def _get_team_public_model_names(
+    team_id: str,
+    prisma_client: PrismaClient,
+) -> Set[str]:
+    """
+    Public model names currently backed by a deployment in the team.
+
+    Called on delete (after the deployment row is removed) so a public name that is
+    load-balanced across several deployments stays in team.models while a replica
+    still serves it.
+    """
+    deployments = await _get_team_deployments(team_id, prisma_client)
+    public_names: Set[str] = set()
+    for row in deployments:
+        model_info = row.model_info
+        if isinstance(model_info, str):
+            try:
+                model_info = json.loads(model_info)
+            except (TypeError, ValueError):
+                continue
+        if isinstance(model_info, dict):
+            public_name = model_info.get("team_public_model_name")
+            if public_name:
+                public_names.add(public_name)
+    return public_names
+
+
+async def _remove_unbacked_team_models(
+    model_params: Deployment,
+    prisma_client: PrismaClient,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> None:
+    """
+    Strip a deleted team model's public name(s) from team.models and refresh the cache.
+
+    Must be called after the deployment row is deleted: a public name is removed only
+    when no remaining team deployment still backs it, so a load-balanced replica isn't
+    revoked while siblings serve it, and concurrent deletes can't leave a ghost.
+    """
+    team_id = model_params.model_info.team_id
+    if team_id is None:
+        return
+
+    # BYOK models carry an internal `model_name_{team_id}_{uuid}` name that can never
+    # be a team alias value, so skip the full litellm_modeltable scan for them.
+    removed_model_aliases: List[Tuple[str, str]] = []
+    if not model_params.model_name.startswith(f"model_name_{team_id}_"):
+        removed_model_aliases = await delete_team_model_alias(
+            public_model_name=model_params.model_name,
+            prisma_client=prisma_client,
+        )
+    names_to_remove = {
+        alias
+        for alias_team_id, alias in removed_model_aliases
+        if alias_team_id == team_id
+    }
+    if model_params.model_info.team_public_model_name is not None:
+        names_to_remove.add(model_params.model_info.team_public_model_name)
+
+    if names_to_remove:
+        names_to_remove -= await _get_team_public_model_names(
+            team_id=team_id, prisma_client=prisma_client
+        )
+
+    if not names_to_remove:
+        return
+
+    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+    if existing_team_row is None:
+        return
+
+    updated_team_row = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": team_id},
+        data={
+            "models": [
+                model
+                for model in existing_team_row.models
+                if model not in names_to_remove
+            ]
+        },
+        include={"object_permission": True},  # type: ignore
+    )
+    await _refresh_cached_team(
+        team_row=updated_team_row,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def _update_existing_team_model_assignment(
@@ -699,7 +1036,7 @@ class ModelManagementAuthChecks:
                 detail={"error": CommonProxyErrors.not_premium_user.value},
             )
 
-        _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        _existing_team_row = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": model_params.model_info.team_id}
         )
 
@@ -728,16 +1065,29 @@ class ModelManagementAuthChecks:
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
+        allow_missing_team: bool = False,
     ) -> Literal[True]:
         ## Check team model auth
         if (
             model_params.model_info is not None
             and model_params.model_info.team_id is not None
         ):
-            team_obj_row = await prisma_client.db.litellm_teamtable.find_unique(
+            team_obj_row = await TeamRepository(prisma_client).table.find_unique(
                 where={"team_id": model_params.model_info.team_id}
             )
             if team_obj_row is None:
+                # The team was deleted. Callers that opt in (e.g. model deletion) may
+                # act on the orphaned model, but only as a proxy admin -- without the
+                # team there is no team-admin membership left to verify.
+                if allow_missing_team:
+                    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+                        return True
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "Only a proxy admin can delete a model whose team has been deleted."
+                        },
+                    )
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -795,7 +1145,9 @@ async def delete_model(
             llm_router,
             premium_user,
             prisma_client,
+            proxy_logging_obj,
             store_model_in_db,
+            user_api_key_cache,
         )
 
         if prisma_client is None:
@@ -806,7 +1158,7 @@ async def delete_model(
                 },
             )
 
-        model_in_db = await prisma_client.db.litellm_proxymodeltable.find_unique(
+        model_in_db = await ModelRepository(prisma_client).table.find_unique(
             where={"model_id": model_info.id}
         )
         if model_in_db is None:
@@ -821,36 +1173,8 @@ async def delete_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            allow_missing_team=True,
         )
-
-        # delete team model alias
-        if model_params.model_info.team_id is not None:
-            removed_model_aliases = await delete_team_model_alias(
-                public_model_name=model_params.model_name,
-                prisma_client=prisma_client,
-            )
-
-            valid_team_model_aliases = [
-                model
-                for team_id, model in removed_model_aliases
-                if team_id == model_params.model_info.team_id
-            ]
-
-            ## UPDATE TEAM TO NOT LIST MODEL ##
-            existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": model_params.model_info.team_id}
-            )
-            if existing_team_row is not None:
-                existing_team_row.models = [
-                    model
-                    for model in existing_team_row.models
-                    if model not in valid_team_model_aliases
-                ]
-
-                await prisma_client.db.litellm_teamtable.update(
-                    where={"team_id": model_params.model_info.team_id},
-                    data={"models": existing_team_row.models},
-                )
 
         # update DB
         if store_model_in_db is True:
@@ -859,7 +1183,7 @@ async def delete_model(
             - store keys separately
             """
             # encrypt litellm params #
-            result = await prisma_client.db.litellm_proxymodeltable.delete(
+            result = await ModelRepository(prisma_client).table.delete(
                 where={"model_id": model_info.id}
             )
 
@@ -872,6 +1196,15 @@ async def delete_model(
             ## DELETE FROM ROUTER ##
             if llm_router is not None:
                 llm_router.delete_deployment(id=model_info.id)
+
+            # Runs after the row delete so the sibling check sees post-delete state.
+            if model_params.model_info.team_id is not None:
+                await _remove_unbacked_team_models(
+                    model_params=model_params,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
@@ -928,7 +1261,7 @@ async def delete_team_model_alias(
     Returns:
     - List of team id + model alias pairs that were removed
     """
-    team_model_aliases = await prisma_client.db.litellm_modeltable.find_many(
+    team_model_aliases = await ModelTableRepository(prisma_client).table.find_many(
         include={"team": True}
     )
     tasks = []
@@ -945,7 +1278,7 @@ async def delete_team_model_alias(
                 removed_model_aliases.append((team_model_alias.team.team_id, key))
             del model_aliases[key]
             tasks.append(
-                prisma_client.db.litellm_modeltable.update(
+                ModelTableRepository(prisma_client).table.update(
                     where={"id": id},
                     data={"model_aliases": json.dumps(model_aliases)},
                 )
@@ -1164,11 +1497,9 @@ async def update_model(
         if _model_id is None:
             raise Exception("model_info.id not provided")
 
-        _existing_litellm_params = (
-            await prisma_client.db.litellm_proxymodeltable.find_unique(
-                where={"model_id": _model_id}
-            )
-        )
+        _existing_litellm_params = await ModelRepository(
+            prisma_client
+        ).table.find_unique(where={"model_id": _model_id})
 
         if _existing_litellm_params is None:
             if (
@@ -1229,7 +1560,7 @@ async def update_model(
                 "litellm_params": json.dumps(merged_dictionary),  # type: ignore
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             }
-            model_response = await prisma_client.db.litellm_proxymodeltable.update(
+            model_response = await ModelRepository(prisma_client).table.update(
                 where={"model_id": _model_id},
                 data=_data,  # type: ignore
             )

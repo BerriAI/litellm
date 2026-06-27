@@ -49,6 +49,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessag
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
     BedrockGuardrailOutput,
+    BedrockGuardrailQualifier,
     BedrockGuardrailResponse,
     BedrockRequest,
     BedrockTextContent,
@@ -74,11 +75,47 @@ from litellm.types.utils import (
 GUARDRAIL_NAME = "bedrock"
 _BEDROCK_DYNAMIC_BODY_DENYLIST = frozenset({"content", "source"})
 
+# Maps an OpenAI message content-block ``type`` to the Bedrock guardrail qualifier
+# it represents, so callers can drive contextual grounding by tagging their content.
+# The model response is qualified as ``guard_content`` directly by the OUTPUT builder;
+# the existing ``guarded_text`` marker is intentionally left unmapped here so its
+# guardrail-hook payload is unchanged by this feature.
+_CONTENT_TYPE_TO_QUALIFIER: Dict[str, BedrockGuardrailQualifier] = {
+    "grounding_source": "grounding_source",
+    "query": "query",
+}
+
+# Roles whose ``grounding_source`` blocks are trusted as reference material for the
+# contextual-grounding check. Only app-authored roles qualify: ``tool``/``function``
+# results and ``user`` content can carry caller- or externally-influenced text, which
+# must not be graded against as if it were the application's own source material.
+_GROUNDING_SOURCE_TRUSTED_ROLES = frozenset({"system", "developer"})
+
+
+class QualifiedTextBlock(NamedTuple):
+    """A piece of message text paired with its Bedrock grounding qualifier (if any)."""
+
+    text: str
+    qualifier: Optional[BedrockGuardrailQualifier]
+
 
 class GuardrailMessageFilterResult(NamedTuple):
     payload_messages: Optional[List[AllMessageValues]]
     original_messages: Optional[List[AllMessageValues]]
     target_indices: Optional[List[int]]
+
+
+class ApplyGuardrailMessageSelection(NamedTuple):
+    """Messages selected for an apply_guardrail scan + write-back metadata."""
+
+    filtered_messages: Optional[list[AllMessageValues]]
+    # Slice of the flat `texts` list actually scanned (offset, length),
+    # used to write masked content back to the right positions. None = whole list.
+    scanned_slice: Optional[tuple[int, int]]
+    # True when messages were selected by their original role.
+    scanned_role_subset: bool
+    # True when there is nothing to scan (e.g. no user-role message).
+    skip_scan: bool = False
 
 
 def _redact_pii_matches(response_json: dict) -> dict:
@@ -164,40 +201,70 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if messages is None:
             return bedrock_request
         for message in messages:
-            message_text_content: Optional[List[str]] = self.get_content_for_message(
-                message=message
-            )
-            if message_text_content is None:
+            blocks = self.get_content_items_for_message(message=message)
+            if blocks is None:
                 continue
-            for text_content in message_text_content:
-                bedrock_content_item = BedrockContentItem(
-                    text=BedrockTextContent(text=text_content)
+            for block in blocks:
+                # INPUT scans send plain text only. Grounding qualifiers are attached
+                # exclusively when assembling the OUTPUT request, so a caller cannot use
+                # a grounding_source/query tag to change how input-safety policies treat
+                # their content (which would be an input-guardrail bypass).
+                bedrock_request_content.append(
+                    BedrockContentItem(text=BedrockTextContent(text=block.text))
                 )
-                bedrock_request_content.append(bedrock_content_item)
 
         bedrock_request["content"] = bedrock_request_content
         return bedrock_request
 
     def _create_bedrock_output_content_request(
-        self, response: Union[Any, ModelResponse]
+        self,
+        response: Union[Any, ModelResponse],
+        messages: Optional[List[AllMessageValues]] = None,
     ) -> BedrockRequest:
         """
         Create a bedrock request for the output content - the LLM response.
+
+        Contextual grounding grades the response against the reference source and
+        the user query from the request. When the request tagged any
+        ``grounding_source``/``query`` blocks, they are emitted first and the
+        response is qualified as ``guard_content`` so Bedrock can score grounding.
+        Without such tags the payload is the legacy single response block.
         """
         bedrock_request: BedrockRequest = BedrockRequest(source="OUTPUT")
-        bedrock_request_content: List[BedrockContentItem] = []
-        if isinstance(response, litellm.ModelResponse):
-            for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    if choice.message.content and isinstance(
-                        choice.message.content, str
-                    ):
-                        bedrock_content_item = BedrockContentItem(
-                            text=BedrockTextContent(text=choice.message.content)
-                        )
-                        bedrock_request_content.append(bedrock_content_item)
-            bedrock_request["content"] = bedrock_request_content
+        grounding_blocks = self._collect_grounding_blocks(messages)
+        bedrock_request_content: List[BedrockContentItem] = [
+            self._build_content_item(block) for block in grounding_blocks
+        ]
+        has_grounding = len(bedrock_request_content) > 0
+        # Append the response (the content to guard) after any grounding blocks; assign
+        # unconditionally so harvested grounding blocks survive a non-ModelResponse input.
+        bedrock_request_content.extend(
+            self._build_response_content_items(response, has_grounding=has_grounding)
+        )
+        bedrock_request["content"] = bedrock_request_content
         return bedrock_request
+
+    def _build_response_content_items(
+        self, response: Union[Any, ModelResponse], has_grounding: bool
+    ) -> List[BedrockContentItem]:
+        """Build content item(s) from the model response. When the request supplied
+        grounding, the response is qualified ``guard_content`` so Bedrock can score it.
+        """
+        items: List[BedrockContentItem] = []
+        if not isinstance(response, litellm.ModelResponse):
+            return items
+        for choice in response.choices:
+            if (
+                isinstance(choice, litellm.Choices)
+                and isinstance(choice.message.content, str)
+                and choice.message.content
+            ):
+                block = QualifiedTextBlock(
+                    text=choice.message.content,
+                    qualifier="guard_content" if has_grounding else None,
+                )
+                items.append(self._build_content_item(block))
+        return items
 
     def convert_to_bedrock_format(
         self,
@@ -221,9 +288,67 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         elif source == "OUTPUT":
             bedrock_request = self._create_bedrock_output_content_request(
-                response=response
+                response=response, messages=messages
             )
         return bedrock_request
+
+    def get_content_items_for_message(
+        self, message: AllMessageValues
+    ) -> Optional[List[QualifiedTextBlock]]:
+        """
+        Flatten a message into text blocks, preserving any contextual-grounding
+        qualifier carried by the content-block ``type`` (grounding_source / query).
+        Untagged text keeps ``qualifier=None`` so the payload is unchanged for
+        callers that do not use grounding.
+        """
+        content = message.get("content")
+        if content is None:
+            return None
+        blocks: List[QualifiedTextBlock] = []
+        if isinstance(content, str):
+            blocks.append(QualifiedTextBlock(text=content, qualifier=None))
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and "text" in item:
+                    qualifier = _CONTENT_TYPE_TO_QUALIFIER.get(item.get("type", ""))
+                    blocks.append(
+                        QualifiedTextBlock(text=item["text"], qualifier=qualifier)
+                    )
+                elif isinstance(item, str):
+                    blocks.append(QualifiedTextBlock(text=item, qualifier=None))
+        return blocks
+
+    def _build_content_item(self, block: QualifiedTextBlock) -> BedrockContentItem:
+        """Build a Bedrock content item, attaching qualifiers only when present."""
+        text_content = BedrockTextContent(text=block.text)
+        if block.qualifier is not None:
+            text_content["qualifiers"] = [block.qualifier]
+        return BedrockContentItem(text=text_content)
+
+    def _collect_grounding_blocks(
+        self, messages: Optional[List[AllMessageValues]]
+    ) -> List[QualifiedTextBlock]:
+        """Harvest grounding_source/query blocks from the request for an OUTPUT scan.
+
+        ``grounding_source`` is honored only from app-authored roles (system /
+        developer). A grounding_source tag on a ``user``, ``tool`` or ``function``
+        message is ignored, so neither a forwarded end-user message nor a tool/function
+        result carrying externally-influenced content can supply fake evidence for the
+        contextual-grounding check to grade the response against. ``query`` is accepted
+        from any role (it is the user's question).
+        """
+        grounding: List[QualifiedTextBlock] = []
+        for message in messages or []:
+            role = message.get("role")
+            for block in self.get_content_items_for_message(message=message) or []:
+                if block.qualifier == "query":
+                    grounding.append(block)
+                elif (
+                    block.qualifier == "grounding_source"
+                    and role in _GROUNDING_SOURCE_TRUSTED_ROLES
+                ):
+                    grounding.append(block)
+        return grounding
 
     def _prepare_guardrail_messages_for_role(
         self,
@@ -257,6 +382,164 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if messages[index].get("role", None) == target_role:
                 return index
         return None
+
+    @staticmethod
+    def _count_message_texts(message: AllMessageValues) -> int:
+        """Count the text segments the guardrail translation layer extracts from a message."""
+        content = message.get("content")
+        if isinstance(content, str):
+            return 1
+        if isinstance(content, list):
+            return sum(
+                1
+                for item in content
+                if isinstance(item, dict) and item.get("text") is not None
+            )
+        return 0
+
+    def _locate_message_texts_slice(
+        self,
+        structured_messages: list[AllMessageValues],
+        target_index: int,
+        texts: list[str],
+    ) -> Optional[tuple[int, int]]:
+        """
+        Map one message's text segments to their (offset, length) slice in the
+        flat `texts` list built by the guardrail translation handler.
+
+        Returns None when the reconstruction does not line up with `texts`
+        (the caller must then avoid positional write-back).
+        """
+        offset = 0
+        total = 0
+        target_count = 0
+        for index, message in enumerate(structured_messages):
+            count = self._count_message_texts(message)
+            if index < target_index:
+                offset += count
+            elif index == target_index:
+                target_count = count
+            total += count
+        if total != len(texts) or target_count == 0:
+            return None
+        return offset, target_count
+
+    def _select_messages_for_apply_guardrail(
+        self,
+        texts: list[str],
+        inputs: "GenericGuardrailAPIInputs",
+        request_data: dict,
+        input_type: Literal["request", "response"],
+    ) -> ApplyGuardrailMessageSelection:
+        """
+        Decide which messages an apply_guardrail scan should cover.
+
+        With ``experimental_use_latest_role_message_only`` enabled, request
+        scans must select by the ORIGINAL message roles. The flat `texts` list
+        has no role information, and wrapping it in role="user" mock messages
+        makes the latest-user filter degenerate to "latest text of any role",
+        leaking tool/assistant content to the INPUT scan
+        (https://github.com/BerriAI/litellm/issues/23476).
+        """
+        mock_messages: list[AllMessageValues] = [
+            ChatCompletionUserMessage(role="user", content=text) for text in texts
+        ]
+
+        if self.experimental_use_latest_role_message_only is not True:
+            return ApplyGuardrailMessageSelection(
+                filtered_messages=mock_messages,
+                scanned_slice=None,
+                scanned_role_subset=False,
+            )
+
+        # Prefer inputs["structured_messages"]: it is built alongside `texts` by
+        # the translation handler and stays aligned with it even when
+        # skip_system_message_in_guardrail / skip_tool_message_in_guardrail drop
+        # messages. The fallback to request_data["messages"] is the *unfiltered*
+        # list, so it only lines up with `texts` when no skip flags are active.
+        # When a skip flag is set and we land on this fallback (direct
+        # apply_guardrail callers with no structured_messages),
+        # _locate_message_texts_slice will detect the length mismatch and return
+        # None, and the write-back guard below safely skips masking rather than
+        # corrupting positions.
+        structured_messages = cast(
+            Optional[list[AllMessageValues]],
+            inputs.get("structured_messages") or request_data.get("messages"),
+        )
+        if input_type != "request" or not structured_messages:
+            # No role information available (e.g. raw-text callers like
+            # /guardrails/apply_guardrail) — keep the legacy behavior of
+            # scanning the latest text only.
+            filter_result = self._prepare_guardrail_messages_for_role(
+                messages=mock_messages
+            )
+            return ApplyGuardrailMessageSelection(
+                filtered_messages=filter_result.payload_messages or mock_messages,
+                scanned_slice=None,
+                scanned_role_subset=False,
+            )
+
+        latest_user_index = self._find_latest_message_index(
+            structured_messages, target_role="user"
+        )
+        if latest_user_index is None:
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: no user-role message in request, skipping INPUT scan"
+            )
+            return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
+
+        selected_message = structured_messages[latest_user_index]
+        if self._count_message_texts(selected_message) == 0:
+            verbose_proxy_logger.debug(
+                "Bedrock Guardrail: latest user message has no text content, skipping INPUT scan"
+            )
+            return ApplyGuardrailMessageSelection(None, None, True, skip_scan=True)
+
+        return ApplyGuardrailMessageSelection(
+            filtered_messages=[selected_message],
+            scanned_slice=self._locate_message_texts_slice(
+                structured_messages=structured_messages,
+                target_index=latest_user_index,
+                texts=texts,
+            ),
+            scanned_role_subset=True,
+        )
+
+    def _merge_masked_texts(
+        self,
+        masked_texts: list,
+        texts: list,
+        scanned_slice: Optional[tuple[int, int]],
+        scanned_role_subset: bool,
+    ) -> list:
+        """
+        Reconcile the guardrail's masked output with the flat `texts` list.
+
+        - No masked output: keep the originals (guardrail allowed content as-is).
+        - A slice was scanned: write masked content back to those positions only,
+          keeping the list aligned with the caller's message↔text mappings.
+        - A role-selected subset was scanned but could not be mapped back to
+          flat-text positions (scanned_slice is None): keep the originals rather
+          than misapply masked content to the wrong message. Guarding on
+          scanned_slice rather than a length comparison also covers the case
+          where the masked subset happens to match len(texts) (e.g. both length
+          1).
+        - Otherwise (whole list scanned): use the masked output as-is.
+        """
+        if not masked_texts:
+            return texts
+        if scanned_slice is not None:
+            offset, length = scanned_slice
+            merged_texts = list(texts)
+            for masked_index, masked_text in enumerate(masked_texts[:length]):
+                merged_texts[offset + masked_index] = masked_text
+            return merged_texts
+        if scanned_role_subset:
+            verbose_proxy_logger.warning(
+                "Bedrock Guardrail: could not align masked texts with request texts, skipping masking write-back"
+            )
+            return texts
+        return masked_texts
 
     def _merge_filtered_messages(
         self,
@@ -1169,6 +1452,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             output_content_bedrock = await self.make_bedrock_api_request(
                 source="OUTPUT",
                 response=response,
+                messages=new_messages,
                 request_data=data,
                 logging_event_type=GuardrailEventHooks.post_call,
             )
@@ -1281,6 +1565,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 output_guardrail_response = await self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
+                    messages=request_data.get("messages"),
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
@@ -1414,28 +1699,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         return new_content, masking_index
 
-    def get_content_for_message(self, message: AllMessageValues) -> Optional[List[str]]:
-        """
-        Get the content for a message.
-
-        For bedrock guardrails we create a list of all the text content in the message.
-
-        If a message has a list of content items, we flatten the list and return a list of text content.
-        """
-        message_text_content = []
-        content = message.get("content")
-        if content is None:
-            return None
-        if isinstance(content, str):
-            message_text_content.append(content)
-        elif isinstance(content, list):
-            for item in content:
-                if isinstance(item, dict) and "text" in item:
-                    message_text_content.append(item["text"])
-                elif isinstance(item, str):
-                    message_text_content.append(item)
-        return message_text_content
-
     def _apply_masking_to_response(
         self,
         response: Union[ModelResponse, Any],
@@ -1547,15 +1810,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             masked_texts = []
 
-            mock_messages: List[AllMessageValues] = [
-                ChatCompletionUserMessage(role="user", content=text) for text in texts
-            ]
-
-            request_messages = mock_messages
-            filter_result = self._prepare_guardrail_messages_for_role(
-                messages=request_messages
+            selection = self._select_messages_for_apply_guardrail(
+                texts=texts,
+                inputs=inputs,
+                request_data=request_data,
+                input_type=input_type,
             )
-            filtered_messages = filter_result.payload_messages or mock_messages
+            if selection.skip_scan:
+                return inputs
+            filtered_messages = selection.filtered_messages
+            scanned_slice = selection.scanned_slice
+            scanned_role_subset = selection.scanned_role_subset
 
             # Bedrock will throw an error if there is no text to process
             if filtered_messages:
@@ -1623,10 +1888,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                                 masked_text = str(text_content)
                                 masked_texts.append(masked_text)
 
-            # If no output/outputs were provided, use the original texts
-            # This happens when the guardrail allows content without modification
-            if not masked_texts:
-                masked_texts = texts
+            # Reconcile masked output with the flat `texts` list (write back to
+            # the scanned slice only, or skip if it can't be aligned).
+            masked_texts = self._merge_masked_texts(
+                masked_texts=masked_texts,
+                texts=texts,
+                scanned_slice=scanned_slice,
+                scanned_role_subset=scanned_role_subset,
+            )
 
             verbose_proxy_logger.debug(
                 "Bedrock Guardrail: Successfully applied guardrail"

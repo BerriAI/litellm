@@ -79,6 +79,7 @@ def _get_spend_logs_metadata(
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
     cost_breakdown: Optional[CostBreakdown] = None,
+    litellm_call_id: Optional[str] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -109,6 +110,7 @@ def _get_spend_logs_metadata(
             attempted_retries=None,
             max_retries=None,
             cost_breakdown=None,
+            litellm_call_id=litellm_call_id,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -133,6 +135,7 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
+    clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
 
@@ -228,9 +231,7 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
-def get_logging_payload(  # noqa: PLR0915
-    kwargs, response_obj, start_time, end_time
-) -> SpendLogsPayload:
+def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
 
@@ -264,6 +265,13 @@ def get_logging_payload(  # noqa: PLR0915
             usage = dict(_usage)
         elif isinstance(_usage, dict):
             usage = _usage
+
+    # A request that failed mid-stream has no usable response_obj usage, but the
+    # streaming handler may have recovered the usage from the chunks already
+    # delivered. Honor that override so the partial usage lands in spend tracking.
+    _combined_usage = kwargs.get("combined_usage_object")
+    if not usage and isinstance(_combined_usage, litellm.Usage):
+        usage = _combined_usage.model_dump()
 
     id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(
@@ -377,6 +385,10 @@ def get_logging_payload(  # noqa: PLR0915
             standard_logging_payload.get("cost_breakdown", None)
             if standard_logging_payload is not None
             else None
+        ),
+        litellm_call_id=cast(
+            Optional[str],
+            kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
         ),
     )
 

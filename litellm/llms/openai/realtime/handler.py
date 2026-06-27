@@ -12,6 +12,7 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import (
+    RealtimeEventNormalizer,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
@@ -95,6 +96,14 @@ class OpenAIRealtime(OpenAIChatCompletion):
             url = url.copy_with(params=query_params)
         return str(url)
 
+    def _make_event_normalizer(self) -> Optional[RealtimeEventNormalizer]:
+        """Return a per-session GA event normalizer, or None for passthrough.
+
+        Subclasses (e.g. XAIRealtime) override this to supply a provider-specific
+        normalizer instance.
+        """
+        return None
+
     async def async_realtime(
         self,
         model: str,
@@ -157,8 +166,15 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
+                    model=model,
                     user_api_key_dict=user_api_key_dict,
                     request_data={"litellm_metadata": litellm_metadata or {}},
+                    force_transcription_model=(
+                        model
+                        if (query_params or {}).get("intent") == "transcription"
+                        else None
+                    ),
+                    event_normalizer=self._make_event_normalizer(),
                 )
                 await realtime_streaming.bidirectional_forward()
 

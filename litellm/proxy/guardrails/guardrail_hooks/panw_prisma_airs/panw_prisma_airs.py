@@ -261,7 +261,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             )
         return ""
 
-    async def _call_panw_api(  # noqa: PLR0915
+    async def _call_panw_api(
         self,
         content: str = "",
         is_response: bool = False,
@@ -1502,7 +1502,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             yield f"data: {json.dumps({'error': error_obj})}\n\n"
         except Exception as e:
             verbose_proxy_logger.error(f"PANW Prisma AIRS streaming error: {str(e)}")
-            yield f'data: {json.dumps({"error": {"message": "Security scan failed - streaming response blocked for safety", "type": "guardrail_scan_error", "code": 500, "guardrail": self.guardrail_name}})}\n\n'
+            yield f"data: {json.dumps({'error': {'message': 'Security scan failed - streaming response blocked for safety', 'type': 'guardrail_scan_error', 'code': 500, 'guardrail': self.guardrail_name}})}\n\n"
 
     async def _scan_tool_calls_for_guardrail(
         self,
@@ -1762,7 +1762,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return rd.get("name") if ("arguments" in rd or "mcp_arguments" in rd) else None
 
     @log_guardrail_information
-    async def apply_guardrail(  # noqa: PLR0915
+    async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,

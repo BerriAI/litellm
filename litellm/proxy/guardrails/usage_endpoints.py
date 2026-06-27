@@ -12,6 +12,14 @@ from pydantic import BaseModel
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import (
+    DailyGuardrailMetricsRepository,
+    DailyPolicyMetricsRepository,
+    GuardrailsRepository,
+    PolicyRepository,
+    SpendLogGuardrailIndexRepository,
+    SpendLogsRepository,
+)
 
 router = APIRouter()
 
@@ -272,10 +280,10 @@ async def guardrails_usage_overview(
 
     try:
         # Guardrails from DB
-        guardrails = await prisma_client.db.litellm_guardrailstable.find_many()
+        guardrails = await GuardrailsRepository(prisma_client).table.find_many()
 
         # Daily metrics in range
-        metrics = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
+        metrics = await DailyGuardrailMetricsRepository(prisma_client).table.find_many(
             where={"date": {"gte": start, "lte": end}}
         )
 
@@ -283,9 +291,9 @@ async def guardrails_usage_overview(
         start_prev = (
             datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)
         ).strftime("%Y-%m-%d")
-        metrics_prev = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
-            where={"date": {"gte": start_prev, "lt": start}}
-        )
+        metrics_prev = await DailyGuardrailMetricsRepository(
+            prisma_client
+        ).table.find_many(where={"date": {"gte": start_prev, "lt": start}})
 
         agg = _aggregate_daily_metrics(metrics, "guardrail_id")
         prev_agg = _prev_fail_rates(metrics_prev, "guardrail_id")
@@ -335,7 +343,7 @@ async def guardrails_usage_detail(
     end = end_date or now.strftime("%Y-%m-%d")
     start = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
-    guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+    guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
         where={"guardrail_id": guardrail_id}
     )
     if not guardrail:
@@ -349,13 +357,13 @@ async def guardrails_usage_detail(
     )
     metric_ids = [i for i in (logical_id, guardrail_id) if i]
 
-    metrics = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
+    metrics = await DailyGuardrailMetricsRepository(prisma_client).table.find_many(
         where={
             "guardrail_id": {"in": metric_ids},
             "date": {"gte": start, "lte": end},
         }
     )
-    metrics_prev = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
+    metrics_prev = await DailyGuardrailMetricsRepository(prisma_client).table.find_many(
         where={
             "guardrail_id": {"in": metric_ids},
             "date": {"lt": start},
@@ -574,7 +582,7 @@ async def guardrails_usage_logs(
         # Query by both so we match regardless of which was written.
         effective_guardrail_ids: List[str] = [guardrail_id] if guardrail_id else []
         if guardrail_id:
-            guardrail = await prisma_client.db.litellm_guardrailstable.find_unique(
+            guardrail = await GuardrailsRepository(prisma_client).table.find_unique(
                 where={"guardrail_id": guardrail_id}
             )
             if guardrail:
@@ -585,19 +593,23 @@ async def guardrails_usage_logs(
         where = _build_usage_logs_where(
             effective_guardrail_ids or None, policy_id, start_date, end_date
         )
-        index_rows = await prisma_client.db.litellm_spendlogguardrailindex.find_many(
+        index_rows = await SpendLogGuardrailIndexRepository(
+            prisma_client
+        ).table.find_many(
             where=where,
             order={"start_time": "desc"},
             skip=(page - 1) * page_size,
             take=page_size + 1,
         )
-        total = await prisma_client.db.litellm_spendlogguardrailindex.count(where=where)
+        total = await SpendLogGuardrailIndexRepository(prisma_client).table.count(
+            where=where
+        )
         request_ids = [r.request_id for r in index_rows[:page_size]]
         if not request_ids:
             return UsageLogsResponse(
                 logs=[], total=total, page=page, page_size=page_size
             )
-        spend_logs = await prisma_client.db.litellm_spendlogs.find_many(
+        spend_logs = await SpendLogsRepository(prisma_client).table.find_many(
             where={"request_id": {"in": request_ids}}
         )
         log_by_id = {s.request_id: s for s in spend_logs}
@@ -645,11 +657,13 @@ async def policies_usage_overview(
     start = start_date or (now - timedelta(days=7)).strftime("%Y-%m-%d")
 
     try:
-        policies = await prisma_client.db.litellm_policytable.find_many()
-        metrics = await prisma_client.db.litellm_dailypolicymetrics.find_many(
+        policies = await PolicyRepository(prisma_client).table.find_many()
+        metrics = await DailyPolicyMetricsRepository(prisma_client).table.find_many(
             where={"date": {"gte": start, "lte": end}}
         )
-        metrics_prev = await prisma_client.db.litellm_dailypolicymetrics.find_many(
+        metrics_prev = await DailyPolicyMetricsRepository(
+            prisma_client
+        ).table.find_many(
             where={
                 "date": {
                     "gte": (

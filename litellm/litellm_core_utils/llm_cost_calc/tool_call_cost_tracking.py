@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import litellm
 from litellm.constants import OPENAI_FILE_SEARCH_COST_PER_1K_CALLS
+from litellm.litellm_core_utils.llm_cost_calc.utils import _get_web_search_requests
 from litellm.types.llms.openai import (
     FileSearchTool,
     ResponsesAPIResponse,
@@ -16,6 +17,7 @@ from litellm.types.utils import (
     ModelInfo,
     ModelResponse,
     SearchContextCostPerQuery,
+    ServerToolUse,
     StandardBuiltInToolsParams,
     Usage,
 )
@@ -57,6 +59,7 @@ class StandardBuiltInToolCostTracking:
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
                 standard_built_in_tools_params=standard_built_in_tools_params,
+                response_object=response_object,
             )
 
         # Handle file search
@@ -82,6 +85,7 @@ class StandardBuiltInToolCostTracking:
         custom_llm_provider: Optional[str],
         usage: Optional[Usage],
         standard_built_in_tools_params: StandardBuiltInToolsParams,
+        response_object: object = None,
     ) -> float:
         """Handle web search cost calculation."""
         from litellm.llms import get_cost_for_web_search_request
@@ -90,17 +94,34 @@ class StandardBuiltInToolCostTracking:
             model=model, custom_llm_provider=custom_llm_provider
         )
 
+        # A provider-prefixed model (e.g. gemini/gemini-3.1-flash-lite) may not map under the
+        # request's custom_llm_provider. Re-resolve from the prefix and adopt that provider so the
+        # cost is routed and priced with the model_info that was actually resolved, instead of
+        # feeding a re-resolved model into the original provider's calculator.
+        if model_info is None and "/" in model:
+            model_info = StandardBuiltInToolCostTracking._safe_get_model_info(
+                model=model
+            )
+            if model_info is not None:
+                custom_llm_provider = model_info["litellm_provider"]
+
         if custom_llm_provider is None and model_info is not None:
             custom_llm_provider = model_info["litellm_provider"]
 
+        resolved_usage = (
+            StandardBuiltInToolCostTracking._usage_with_anthropic_web_search(
+                usage=usage, response_object=response_object
+            )
+        )
+
         if (
             model_info is not None
-            and usage is not None
+            and resolved_usage is not None
             and custom_llm_provider is not None
         ):
             result = get_cost_for_web_search_request(
                 custom_llm_provider=custom_llm_provider,
-                usage=usage,
+                usage=resolved_usage,
                 model_info=model_info,
             )
             if result is not None:
@@ -301,6 +322,33 @@ class StandardBuiltInToolCostTracking:
         return None
 
     @staticmethod
+    def _usage_with_anthropic_web_search(
+        usage: Usage | None, response_object: object
+    ) -> Usage | None:
+        """Return a Usage carrying server_tool_use.web_search_requests sourced from a
+        raw Anthropic /v1/messages response dict when the reconstructed Usage dropped
+        it (or was never supplied). The original Usage is returned unchanged when it
+        already exposes the field or the response is not an Anthropic dict."""
+        from litellm.llms.anthropic.cost_calculation import (
+            get_anthropic_web_search_requests_from_response,
+        )
+
+        if usage is not None and (
+            _get_web_search_requests(getattr(usage, "server_tool_use", None))
+            is not None
+        ):
+            return usage
+        web_search_requests = get_anthropic_web_search_requests_from_response(
+            response_object
+        )
+        if web_search_requests is None:
+            return usage
+        server_tool_use = ServerToolUse(web_search_requests=web_search_requests)
+        if usage is None:
+            return Usage(server_tool_use=server_tool_use)
+        return usage.model_copy(update={"server_tool_use": server_tool_use})
+
+    @staticmethod
     def response_object_includes_web_search_call(
         response_object: Any, usage: Optional[Usage] = None
     ) -> bool:
@@ -310,8 +358,15 @@ class StandardBuiltInToolCostTracking:
         This covers:
         - Chat Completion Response (ModelResponse)
         - ResponsesAPIResponse (streaming + non-streaming)
+        - Anthropic /v1/messages raw response dict
         """
+        from litellm.llms.anthropic.cost_calculation import (
+            get_anthropic_web_search_requests_from_response,
+        )
         from litellm.types.utils import PromptTokensDetailsWrapper
+
+        if get_anthropic_web_search_requests_from_response(response_object) is not None:
+            return True
 
         if isinstance(response_object, ModelResponse):
             # chat completions only include url_citation annotations when a web search call is made
@@ -339,8 +394,7 @@ class StandardBuiltInToolCostTracking:
                 # and _handle_web_search_cost() is never called.
                 if (
                     hasattr(usage, "server_tool_use")
-                    and usage.server_tool_use is not None
-                    and usage.server_tool_use.web_search_requests is not None
+                    and _get_web_search_requests(usage.server_tool_use) is not None
                 ):
                     return True
             return False
@@ -352,8 +406,7 @@ class StandardBuiltInToolCostTracking:
         elif usage is not None:
             if (
                 hasattr(usage, "server_tool_use")
-                and usage.server_tool_use is not None
-                and usage.server_tool_use.web_search_requests is not None
+                and _get_web_search_requests(usage.server_tool_use) is not None
             ):
                 return True
             elif (

@@ -404,7 +404,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         )
         return completion_response
 
-    def convert_to_model_response_object(  # noqa: PLR0915
+    def convert_to_model_response_object(
         self,
         completion_response: Union[List[Dict[str, Any]], Dict[str, Any]],
         model_response: ModelResponse,

@@ -19,7 +19,7 @@ from litellm.types.llms.vertex_ai import (
     VertexAICachedContentResponseObject,
 )
 
-from ..common_utils import VertexAIError
+from ..common_utils import VertexAIError, get_vertex_base_url
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     separate_cached_messages,
@@ -69,17 +69,13 @@ class ContextCachingEndpoints(VertexBase):
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
-            if vertex_location == "global":
-                url = f"https://aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
+            base_url = get_vertex_base_url(vertex_location)
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
         else:
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
-            if vertex_location == "global":
-                url = f"https://aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
+            base_url = get_vertex_base_url(vertex_location)
+            url = f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
 
         return self._check_custom_proxy(
             api_base=api_base,
@@ -337,6 +333,7 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
 
         tools = optional_params.pop("tools", None)
+        tool_choice = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -371,7 +368,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, model=model
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
@@ -402,6 +399,8 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         cached_content_request_body["tools"] = tools
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(
@@ -416,7 +415,9 @@ class ContextCachingEndpoints(VertexBase):
 
         try:
             response = client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+                url=url,
+                headers=headers,
+                json=cached_content_request_body,  # type: ignore
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -487,6 +488,7 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
 
         tools = optional_params.pop("tools", None)
+        tool_choice = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -518,7 +520,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, model=model
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,
@@ -550,6 +552,8 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         cached_content_request_body["tools"] = tools
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(
@@ -564,7 +568,9 @@ class ContextCachingEndpoints(VertexBase):
 
         try:
             response = await client.post(
-                url=url, headers=headers, json=cached_content_request_body  # type: ignore
+                url=url,
+                headers=headers,
+                json=cached_content_request_body,  # type: ignore
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:

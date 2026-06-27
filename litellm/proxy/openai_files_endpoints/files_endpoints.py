@@ -7,7 +7,7 @@
 
 import asyncio
 import traceback
-from typing import Any, Optional, cast, get_args
+from typing import Any, BinaryIO, Optional, Union, cast, get_args
 
 import httpx
 from fastapi import (
@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
@@ -37,22 +38,27 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.litellm_core_utils.cloud_storage_security import (
+    is_managed_cloud_storage_uri,
+)
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _is_base64_encoded_unified_file_id,
+    encode_file_id_with_model,
+    extract_file_creation_params,
+    get_credentials_for_model,
+    get_team_provider_credentials,
+    handle_model_based_routing,
+    prepare_data_with_credentials,
+    validate_managed_files_requirement,
+)
 from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
     OpenAIFileObject,
     OpenAIFilesPurpose,
-)
-
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    _is_base64_encoded_unified_file_id,
-    encode_file_id_with_model,
-    extract_file_creation_params,
-    get_credentials_for_model,
-    handle_model_based_routing,
-    prepare_data_with_credentials,
 )
 
 router = APIRouter()
@@ -91,16 +97,18 @@ def get_files_provider_config(
     return None
 
 
-def get_first_json_object(file_content_bytes: bytes) -> Optional[dict]:
+def get_first_json_object(file_source: Union[bytes, BinaryIO]) -> Optional[dict]:
     try:
-        # Decode the bytes to a string and split into lines
-        file_content = file_content_bytes.decode("utf-8")
-        first_line = file_content.splitlines()[0].strip()
-
-        # Parse the JSON object from the first line
-        json_object = json.loads(first_line)
-        return json_object
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        if isinstance(file_source, (bytes, bytearray)):
+            newline = file_source.find(b"\n")
+            raw = file_source if newline == -1 else file_source[:newline]
+            first_line = raw.decode("utf-8")
+        else:
+            file_source.seek(0)
+            first_line = file_source.readline().decode("utf-8")
+            file_source.seek(0)
+        return json.loads(first_line.strip())
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
         return None
 
 
@@ -262,7 +270,9 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)  # type: ignore
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
+        response = await litellm.acreate_file(
+            **_create_file_request, custom_llm_provider=custom_llm_provider
+        )  # type: ignore
 
     return response
 
@@ -282,7 +292,7 @@ async def route_create_file(
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def create_file(  # noqa: PLR0915
+async def create_file(
     request: Request,
     fastapi_response: Response,
     purpose: str = Form(...),
@@ -321,9 +331,15 @@ async def create_file(  # noqa: PLR0915
 
     data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        # Read the file content
-        file_content = await file.read()
+        # Batch uploads can be gigabytes. Starlette has already spooled the upload
+        # to disk, so stream from that handle instead of reading it into memory.
+        # Other uploads are small and stay in-memory bytes.
+        file_source: Union[bytes, BinaryIO]
+        if purpose == "batch":
+            await file.seek(0)
+            file_source = file.file
+        else:
+            file_source = await file.read()
         custom_llm_provider = (
             provider
             or get_custom_llm_provider_from_request_headers(request=request)
@@ -344,6 +360,11 @@ async def create_file(  # noqa: PLR0915
         target_storage = file_params.target_storage
         target_model_names_list = file_params.target_model_names
         model_param = file_params.model
+
+        validate_managed_files_requirement(
+            target_model_names=target_model_names_list, model=model_param
+        )
+
         # Prepare the data for forwarding
 
         # Replace with:
@@ -443,13 +464,13 @@ async def create_file(  # noqa: PLR0915
         )
 
         # Prepare the file data according to FileTypes
-        file_data = (file.filename, file_content, file.content_type)
+        file_data = (file.filename, file_source, file.content_type)
 
         ## check if model is a loadbalanced model
         router_model: Optional[str] = None
         is_router_model = False
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
-            json_obj = get_first_json_object(file_content_bytes=file_content)
+            json_obj = get_first_json_object(file_source)
             if json_obj:
                 router_model = get_model_from_json_obj(json_object=json_obj)
                 is_router_model = is_known_model(
@@ -582,7 +603,7 @@ async def create_file(  # noqa: PLR0915
     dependencies=[Depends(user_api_key_auth)],
     tags=["files"],
 )
-async def get_file_content(  # noqa: PLR0915
+async def get_file_content(
     request: Request,
     fastapi_response: Response,
     file_id: str,
@@ -666,7 +687,7 @@ async def get_file_content(  # noqa: PLR0915
                 managed_files_obj, "prisma_client", None
             ):
                 prisma_client = getattr(managed_files_obj, "prisma_client")
-                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                db_file = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
@@ -718,6 +739,15 @@ async def get_file_content(  # noqa: PLR0915
                     }
                 )
         else:
+            # A raw cloud-storage URI (s3://, gs://) supplied here would skip the
+            # managed-file owner/team check that only runs for unified ids, letting
+            # a caller read another tenant's object by its key. Such objects are only
+            # reachable through their managed unified id.
+            if is_managed_cloud_storage_uri(file_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Raw cloud storage file ids cannot be retrieved directly. Use the LiteLLM managed file id returned when the file was created.",
+                )
             # Check for model-based credential routing
             (
                 should_route,
@@ -996,7 +1026,9 @@ async def get_file(
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
             response = await litellm.afile_retrieve(
-                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                **data,  # type: ignore
             )
 
         ### ALERTING ###
@@ -1200,7 +1232,9 @@ async def delete_file(
         else:
             data.pop("file_id", None)
             response = await litellm.afile_delete(
-                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                **data,  # type: ignore
             )
 
         ### ALERTING ###
@@ -1344,14 +1378,20 @@ async def list_files(
                     status_code=400,
                     detail="target_model_names on list files must be a list of one model name. Example: ['gpt-4o']",
                 )
-            ## Use router to list fine-tuning jobs for that model
             if llm_router is None:
                 raise HTTPException(
                     status_code=500,
                     detail="LLM Router not initialized. Ensure models added to proxy.",
                 )
-            data["model"] = target_model_names_list[0]
-            response = await llm_router.afile_list(
+            credentials = get_credentials_for_model(
+                llm_router=llm_router,
+                model_id=target_model_names_list[0],
+                operation_context="file list",
+            )
+            prepare_data_with_credentials(data=data, credentials=credentials)
+            response = await litellm.afile_list(
+                custom_llm_provider=credentials["custom_llm_provider"],
+                purpose=purpose,
                 **data,
             )
         else:
@@ -1363,8 +1403,22 @@ async def list_files(
                 or "openai"
             )
 
+            # No model/target_model_names pinned: resolve upstream credentials from
+            # the team's deployment for this provider so the call is authenticated
+            # against the team's own account (e.g. the team's openai deployment).
+            team_credentials = get_team_provider_credentials(
+                llm_router=llm_router,
+                team_models=user_api_key_dict.team_models or [],
+                custom_llm_provider=custom_llm_provider,
+                team_id=user_api_key_dict.team_id,
+            )
+            if team_credentials is not None:
+                prepare_data_with_credentials(data=data, credentials=team_credentials)
+
             response = await litellm.afile_list(
-                custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                purpose=purpose,
+                **data,  # type: ignore
             )
 
         if response is None:

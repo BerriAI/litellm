@@ -35,9 +35,9 @@ class AnthropicResponsesStreamWrapper:
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: Dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
-        self._pending_tool_ids: Dict[str, str] = (
-            {}
-        )  # item_id -> call_id / name accumulator
+        self._pending_tool_ids: Dict[
+            str, str
+        ] = {}  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()
@@ -66,7 +66,7 @@ class AnthropicResponsesStreamWrapper:
         self._current_block_index += 1
         return self._current_block_index
 
-    def _process_event(self, event: Any) -> None:  # noqa: PLR0915
+    def _process_event(self, event: Any) -> None:
         """Convert one Responses API event into zero or more Anthropic chunks queued for emission."""
         event_type = getattr(event, "type", None)
         if event_type is None and isinstance(event, dict):
@@ -155,10 +155,24 @@ class AnthropicResponsesStreamWrapper:
                 event.get("delta", "") if isinstance(event, dict) else ""
             )
             block_idx = (
-                self._item_id_to_block_index.get(item_id, self._current_block_index)
+                self._item_id_to_block_index.get(item_id, -1)
                 if item_id
                 else self._current_block_index
             )
+            if block_idx < 0:
+                # Some providers (e.g. LMStudio) skip response.output_item.added,
+                # so no text block is open yet; synthesize content_block_start
+                # instead of emitting a delta with index -1
+                block_idx = self._next_block_index()
+                if item_id:
+                    self._item_id_to_block_index[item_id] = block_idx
+                self._chunk_queue.append(
+                    {
+                        "type": "content_block_start",
+                        "index": block_idx,
+                        "content_block": {"type": "text", "text": ""},
+                    }
+                )
             self._chunk_queue.append(
                 {
                     "type": "content_block_delta",

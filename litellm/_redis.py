@@ -311,7 +311,7 @@ def get_redis_url_from_environment():
     return f"{redis_protocol}://{auth_part}{os.environ['REDIS_HOST']}:{os.environ['REDIS_PORT']}"
 
 
-def _get_redis_client_logic(**env_overrides):  # noqa: PLR0915
+def _get_redis_client_logic(**env_overrides):
     """
     Common functionality across sync + async redis client implementations
     """
@@ -327,7 +327,9 @@ def _get_redis_client_logic(**env_overrides):  # noqa: PLR0915
         **env_overrides,
     }
 
-    _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
+    _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get(
+        "startup_nodes", None
+    ) or get_secret(  # type: ignore
         "REDIS_CLUSTER_NODES"
     )
 
@@ -338,7 +340,9 @@ def _get_redis_client_logic(**env_overrides):  # noqa: PLR0915
     elif _startup_nodes is None:
         redis_kwargs.pop("startup_nodes", None)
 
-    _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get("sentinel_nodes", None) or get_secret(  # type: ignore
+    _sentinel_nodes: Optional[Union[str, list]] = redis_kwargs.get(
+        "sentinel_nodes", None
+    ) or get_secret(  # type: ignore
         "REDIS_SENTINEL_NODES"
     )
 
@@ -567,7 +571,7 @@ def get_redis_client(**env_overrides):
     return redis.Redis(**redis_kwargs)
 
 
-def get_redis_async_client(  # noqa: PLR0915
+def get_redis_async_client(
     connection_pool: Optional[async_redis.BlockingConnectionPool] = None,
     **env_overrides,
 ) -> Union[async_redis.Redis, async_redis.RedisCluster]:
@@ -609,7 +613,8 @@ def get_redis_async_client(  # noqa: PLR0915
 
         # Create async RedisCluster with IAM token as password if available
         cluster_client = async_redis.RedisCluster(
-            startup_nodes=new_startup_nodes, **cluster_kwargs  # type: ignore
+            startup_nodes=new_startup_nodes,
+            **cluster_kwargs,  # type: ignore
         )
 
         return cluster_client

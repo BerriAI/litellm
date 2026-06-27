@@ -377,6 +377,17 @@ class BaseConfig(ABC):
     ) -> "ModelResponse":
         pass
 
+    def transform_parsed_response_dict(self, parsed_response: dict) -> dict:
+        """
+        Repair a parsed OpenAI-format response dict before generic conversion.
+
+        Providers routed through the OpenAI SDK handler bypass transform_response,
+        which calls convert_to_model_response_object directly on the SDK's parsed
+        output. Override this to normalize a malformed response (e.g. github_copilot
+        returning empty choices for Anthropic-native Claude responses).
+        """
+        return parsed_response
+
     @abstractmethod
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
@@ -441,6 +452,14 @@ class BaseConfig(ABC):
     def post_stream_processing(self, stream: Any) -> Any:
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
+
+    def apply_assembled_streaming_response_metadata(
+        self,
+        response: "ModelResponse",
+        chunks: List[Any],
+    ) -> None:
+        """Hook for providers to merge chunk metadata into assembled streaming responses."""
+        return None
 
     def calculate_additional_costs(
         self, model: str, prompt_tokens: int, completion_tokens: int

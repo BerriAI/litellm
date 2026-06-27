@@ -205,9 +205,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if provider_specific_fields:
                 tool_call_dict["provider_specific_fields"] = provider_specific_fields
                 # Also add to function's provider_specific_fields for consistency
-                tool_call_dict["function"][
-                    "provider_specific_fields"
-                ] = provider_specific_fields
+                tool_call_dict["function"]["provider_specific_fields"] = (
+                    provider_specific_fields
+                )
 
             msg = Message(
                 content=None,
@@ -301,7 +301,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     {
                         "type": "message",
                         "role": role,
-                        "content": self._convert_content_to_responses_format(content, cast(str, role)),  # type: ignore[arg-type]
+                        "content": self._convert_content_to_responses_format(
+                            content, cast(str, role)
+                        ),  # type: ignore[arg-type]
                     }
                 )
 
@@ -401,6 +403,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             input_items,
             instructions,
         ) = self.convert_chat_completion_messages_to_responses_api(messages)
+
+        # OpenAI's Responses API rejects an empty input. For a system-only
+        # request, carry the system message as a system-role input item instead
+        # of instructions, mirroring how non-string system content is already
+        # handled in convert_chat_completion_messages_to_responses_api.
+        if not input_items and instructions is not None:
+            input_items = [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": instructions}],
+                }
+            ]
+            instructions = None
 
         optional_params = self._extract_extra_body_params(optional_params)
 
@@ -679,7 +695,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         original_response = model_call_details.get("original_response")
         return cls._recover_output_items_from_raw_sse(original_response)
 
-    def transform_response(  # noqa: PLR0915
+    def transform_response(
         self,
         model: str,
         raw_response: "BaseModel",
@@ -1007,7 +1023,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         # If string is passed, map with optional summary based on flag/env var
         if reasoning_effort == "none":
-            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
+            return (
+                Reasoning(effort="none", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="none")
+            )  # type: ignore
         elif reasoning_effort == "high":
             return (
                 Reasoning(effort="high", summary="detailed")
@@ -1015,7 +1035,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else Reasoning(effort="high")
             )
         elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
+            return (
+                Reasoning(effort="xhigh", summary="detailed")
+                if auto_summary_enabled
+                else Reasoning(effort="xhigh")
+            )  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
             return (
                 Reasoning(effort="medium", summary="detailed")
@@ -1197,7 +1221,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return self.chunk_parser(json.loads(str_line))
 
     @staticmethod
-    def translate_responses_chunk_to_openai_stream(  # noqa: PLR0915
+    def translate_responses_chunk_to_openai_stream(
         parsed_chunk: Union[dict, BaseModel],
     ) -> "ModelResponseStream":
         """
@@ -1279,9 +1303,15 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         provider_specific_fields
                     )
 
+                from litellm.responses.litellm_completion_transformation.transformation import (
+                    LiteLLMCompletionResponsesConfig,
+                )
+
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
-                    id=output_item.get("call_id"),
+                    id=LiteLLMCompletionResponsesConfig._tool_call_id_from_responses_item(
+                        output_item.get("id"), output_item.get("call_id")
+                    ),
                     index=tool_call_index,
                     type="function",
                     function=function_chunk,

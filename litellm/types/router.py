@@ -110,9 +110,7 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = (
-        False  # used for proxy - to separate models which are stored in the db vs. config.
-    )
+    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
@@ -166,6 +164,13 @@ class CredentialLiteLLMParams(BaseModel):
     api_key: Optional[str] = None
     api_base: Optional[str] = None
     api_version: Optional[str] = None
+    ## AZURE OAUTH ##
+    # Without this field, ``get_deployment_credentials_with_provider``
+    # round-trips ``litellm_params`` through a strict Pydantic dump and
+    # silently drops the OAuth token before the files/batch/passthrough
+    # callers see it, breaking Azure deployments configured with
+    # ``azure_ad_token`` instead of a static ``api_key`` (#30235).
+    azure_ad_token: Optional[str] = None
     ## VERTEX AI ##
     vertex_project: Optional[str] = None
     vertex_location: Optional[str] = None
@@ -173,11 +178,16 @@ class CredentialLiteLLMParams(BaseModel):
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str] = None
 
+    ## OBJECT STORAGE (files / batches) ##
+    gcs_bucket_name: Optional[str] = None
+
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
     aws_bedrock_runtime_endpoint: Optional[str] = None
+    aws_bedrock_project_id: Optional[str] = None
+    s3_bucket_name: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
@@ -220,6 +230,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
     use_chat_completions_api: Optional[bool] = None
+    use_xai_oauth: Optional[bool] = Field(
+        default=False,
+        description="Use stored xAI OAuth credentials when no xAI API key is configured.",
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -360,6 +374,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
     aws_region_name: Optional[str]
+    aws_bedrock_project_id: Optional[str]
     ## AWS S3 VECTORS ##
     vector_bucket_name: Optional[str]
     index_name: Optional[str]
@@ -422,9 +437,7 @@ class Deployment(BaseModel):
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
 
-        for (
-            key
-        ) in (
+        for key in (
             SPECIAL_MODEL_INFO_PARAMS
         ):  # ensures custom pricing info is consistently in 'model_info'
             field = getattr(litellm_params, key, None)

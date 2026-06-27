@@ -678,7 +678,7 @@ def check_if_part_exists_in_parts(
     return False
 
 
-def _gemini_convert_messages_with_history(  # noqa: PLR0915
+def _gemini_convert_messages_with_history(
     messages: List[AllMessageValues],
     model: Optional[str] = None,
     litellm_params: Optional[dict] = None,
@@ -881,7 +881,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
                 if isinstance(messages[msg_i], BaseModel):
-                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[msg_i].model_dump()  # type: ignore
+                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[
+                        msg_i
+                    ].model_dump()  # type: ignore
                 else:
                     msg_dict = messages[msg_i]  # type: ignore
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
@@ -945,7 +947,12 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         and len(thought_signatures) > 0
                     ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
-                        assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
+                        assistant_content.append(
+                            PartType(
+                                text=assistant_text,
+                                thoughtSignature=thought_signatures[0],
+                            )
+                        )  # type: ignore
                     else:
                         assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
@@ -996,7 +1003,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             excluded_keys=["thoughtSignature"],
                         ):
                             assistant_content.append(gemini_tool_call_part)
-                    last_message_with_tool_calls = assistant_msg
+                    # Only record this as the active tool-call message when it actually
+                    # carries tool calls. The `if` guard above is also entered for a
+                    # text-only assistant message (`assistant_msg.get("tool_calls", [])
+                    # is not None` is True for an empty list), so without this check a
+                    # later assistant message with no tool calls would clobber the
+                    # reference. The following tool result would then be matched against
+                    # an assistant message that has no tool_calls, raising "Missing
+                    # corresponding tool call for tool response message".
+                    if (
+                        assistant_msg.get("tool_calls")
+                        or assistant_msg.get("function_call") is not None
+                    ):
+                        last_message_with_tool_calls = assistant_msg
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
                 _psf = assistant_msg.get("provider_specific_fields")
@@ -1027,9 +1046,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 if invocation.get("tool_type"):
                                     tr_dict["toolType"] = invocation["tool_type"]
                                 tr_part: Dict[str, Any] = {"toolResponse": tr_dict}
-                                if "thought_signature" in invocation:
+                                if "response_thought_signature" in invocation:
                                     tr_part["thoughtSignature"] = invocation[
-                                        "thought_signature"
+                                        "response_thought_signature"
                                     ]
                                 assistant_content.append(tr_part)  # type: ignore
 
@@ -1109,7 +1128,62 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
-def _transform_request_body(  # noqa: PLR0915
+def _has_google_maps_tool(tools: Optional[Any]) -> bool:
+    """Return True if any tool object in the list has a 'googleMaps' key."""
+    if not isinstance(tools, list):
+        return False
+    return any(
+        isinstance(t, dict) and VertexToolName.GOOGLE_MAPS.value in t for t in tools
+    )
+
+
+def _rewrite_mime_type_to_response_format(generation_config: GenerationConfig) -> None:
+    """
+    Convert response_mime_type + response_json_schema/response_schema to the newer
+    responseFormat structure when googleMaps is present in tools.
+
+    The Gemini API rejects the combination of googleMaps + response_mime_type:
+    'application/json' with the error:
+        "Google Maps tool with a response mime type: 'application/json' is unsupported"
+
+    The newer responseFormat field supports this combination on both the Gemini API
+    (generativelanguage.googleapis.com) and Vertex AI endpoints.
+
+    Before:
+        generationConfig: {
+            response_mime_type: "application/json",
+            response_json_schema: {...}
+        }
+
+    After:
+        generationConfig: {
+            responseFormat: {
+                "text": {"mimeType": "APPLICATION_JSON", "schema": {...}}
+            }
+        }
+    """
+    schema = generation_config.pop("response_json_schema", None)  # type: ignore[misc]
+    if schema is None:
+        schema = generation_config.pop("response_schema", None)  # type: ignore[misc]
+    generation_config.pop("response_mime_type", None)  # type: ignore[misc]
+
+    response_format: Dict[str, Any] = {"text": {"mimeType": "APPLICATION_JSON"}}
+    if schema is not None:
+        response_format["text"]["schema"] = schema
+    generation_config["responseFormat"] = response_format  # type: ignore[typeddict-unknown-key]
+
+
+def _rewrite_google_maps_response_format(data: RequestBody) -> None:
+    generation_config = cast(Optional[GenerationConfig], data.get("generationConfig"))
+    if (
+        isinstance(generation_config, dict)
+        and _has_google_maps_tool(data.get("tools"))
+        and generation_config.get("response_mime_type") == "application/json"
+    ):
+        _rewrite_mime_type_to_response_format(generation_config)
+
+
+def _transform_request_body(
     messages: List[AllMessageValues],
     model: str,
     optional_params: dict,
@@ -1134,7 +1208,8 @@ def _transform_request_body(  # noqa: PLR0915
         )
         if supports_response_schema is False:
             user_response_schema_message = response_schema_prompt(
-                model=model, response_schema=optional_params.get("response_schema")  # type: ignore
+                model=model,
+                response_schema=optional_params.get("response_schema"),  # type: ignore
             )
             messages.append({"role": "user", "content": user_response_schema_message})
             optional_params.pop("response_schema")
@@ -1234,6 +1309,7 @@ def _transform_request_body(  # noqa: PLR0915
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
         _pop_and_merge_extra_body(data, optional_params)
+        _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
 

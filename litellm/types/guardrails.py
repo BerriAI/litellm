@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
@@ -23,6 +23,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
+    OvalixGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
@@ -41,8 +44,17 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
+    RepelloAIGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
     VigilGuardGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
+    CiscoAIDefenseGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
+    HeadroomGuardrailConfigModel,
 )
 
 """
@@ -77,6 +89,7 @@ class SupportedGuardrailIntegrations(Enum):
     PILLAR = "pillar"
     GRAYSWAN = "grayswan"
     PANW_PRISMA_AIRS = "panw_prisma_airs"
+    CISCO_AI_DEFENSE = "cisco_ai_defense"
     AZURE_PROMPT_SHIELD = "azure/prompt_shield"
     AZURE_TEXT_MODERATIONS = "azure/text_moderations"
     MODEL_ARMOR = "model_armor"
@@ -97,6 +110,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    OVALIX = "ovalix"
     MICROSOFT_PURVIEW = "microsoft_purview"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
@@ -107,6 +121,8 @@ class SupportedGuardrailIntegrations(Enum):
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
+    REPELLOAI = "repelloai"
+    HEADROOM = "headroom"
 
 
 class Role(Enum):
@@ -203,6 +219,9 @@ class PiiEntityType(str, Enum):
     # UK
     UK_NHS = "UK_NHS"
     UK_NINO = "UK_NINO"
+    UK_PASSPORT = "UK_PASSPORT"
+    UK_POSTCODE = "UK_POSTCODE"
+    UK_VEHICLE_REGISTRATION = "UK_VEHICLE_REGISTRATION"
     # Spain
     ES_NIF = "ES_NIF"
     ES_NIE = "ES_NIE"
@@ -257,7 +276,13 @@ PII_ENTITY_CATEGORIES_MAP = {
         PiiEntityType.US_PASSPORT,
         PiiEntityType.US_SSN,
     ],
-    PiiEntityCategory.UK: [PiiEntityType.UK_NHS, PiiEntityType.UK_NINO],
+    PiiEntityCategory.UK: [
+        PiiEntityType.UK_NHS,
+        PiiEntityType.UK_NINO,
+        PiiEntityType.UK_PASSPORT,
+        PiiEntityType.UK_POSTCODE,
+        PiiEntityType.UK_VEHICLE_REGISTRATION,
+    ],
     PiiEntityCategory.SPAIN: [PiiEntityType.ES_NIF, PiiEntityType.ES_NIE],
     PiiEntityCategory.ITALY: [
         PiiEntityType.IT_FISCAL_CODE,
@@ -311,8 +336,7 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
     presidio_filter_scope: Optional[Literal["input", "output", "both"]] = Field(
         default=None,
         description=(
-            "Where to apply Presidio checks: 'input' (user -> model), "
-            "'output' (model -> user), or 'both' (default)."
+            "Where to apply Presidio checks: 'input' (user -> model), 'output' (model -> user), or 'both' (default)."
         ),
     )
     output_parse_pii: Optional[bool] = Field(
@@ -730,7 +754,12 @@ class BaseLitellmParams(
     )
     fail_on_error: Optional[bool] = Field(
         default=True,
-        description="Whether to fail the request if Model Armor encounters an error",
+        description=(
+            "Whether to fail the request if the guardrail encounters an error. "
+            "Implemented by guardrail='model_armor' and 'generic_guardrail_api'. "
+            "True (default) raises the error. False logs a critical error and lets the request proceed, "
+            "so only a valid guardrail response can block or modify it."
+        ),
     )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
@@ -742,7 +771,7 @@ class BaseLitellmParams(
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "NOTE: This is currently only implemented by guardrail='generic_guardrail_api'. "
+            "Implemented by guardrail='generic_guardrail_api', 'akto', 'vigil_guard', and 'repelloai'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
         ),
     )
@@ -771,6 +800,58 @@ class BaseLitellmParams(
         ),
     )
 
+    on_sensitive_data: Optional[Literal["block", "route"]] = Field(
+        default=None,
+        description=(
+            "Action to take when sensitive data is detected. "
+            "'block' raises an exception (default behavior). "
+            "'route' reroutes the request to the model specified in sensitive_data_route_to_model."
+        ),
+    )
+
+    sensitive_data_route_to_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. "
+            "This is typically an on-premise model for data privacy. "
+            "The routing decision persists for the entire session."
+        ),
+    )
+
+    sticky_session_routing: Optional[bool] = Field(
+        default=True,
+        description=(
+            "When True (default), after sensitive data is detected and routed, all subsequent "
+            "requests in the same session will continue routing to the same model."
+        ),
+    )
+
+    @field_validator(
+        "mode",
+        "default_action",
+        "on_disallowed_action",
+        "unreachable_fallback",
+        "on_sensitive_data",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def normalize_lowercase(cls, v):
+        """Normalize string and list fields to lowercase for ALL guardrail types."""
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [x.lower() if isinstance(x, str) else x for x in v]
+        return v
+
+    @model_validator(mode="after")
+    def validate_sensitive_data_routing(self) -> "BaseLitellmParams":
+        if self.on_sensitive_data == "route" and not self.sensitive_data_route_to_model:
+            raise ValueError(
+                "sensitive_data_route_to_model must be set when on_sensitive_data='route'"
+            )
+        return self
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -784,9 +865,12 @@ class Mode(BaseModel):
 
 
 class LitellmParams(
+    CiscoAIDefenseGuardrailConfigModel,
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
+    HeadroomGuardrailConfigModel,
+    RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
@@ -800,6 +884,7 @@ class LitellmParams(
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
+    OvalixGuardrailConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
@@ -810,23 +895,6 @@ class LitellmParams(
     mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
-
-    @field_validator(
-        "mode",
-        "default_action",
-        "on_disallowed_action",
-        "unreachable_fallback",
-        mode="before",
-        check_fields=False,
-    )
-    @classmethod
-    def normalize_lowercase(cls, v):
-        """Normalize string and list fields to lowercase for ALL guardrail types."""
-        if isinstance(v, str):
-            return v.lower()
-        if isinstance(v, list):
-            return [x.lower() if isinstance(x, str) else x for x in v]
-        return v
 
     @field_validator("timeout", mode="before", check_fields=False)
     @classmethod

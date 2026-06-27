@@ -12,7 +12,6 @@ import os
 import pytest
 import asyncio
 
-
 # Path to your service account JSON file
 SERVICE_ACCOUNT_FILE = "path/to/your/service-account.json"
 
@@ -95,6 +94,15 @@ async def call_spend_logs_endpoint():
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 
+def _is_vertex_quota_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "429" in message
+        or "Too Many Requests" in message
+        or "RESOURCE_EXHAUSTED" in message
+    )
+
+
 @pytest.mark.asyncio()
 async def test_basic_vertex_ai_pass_through_with_spendlog():
 
@@ -109,19 +117,30 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
     )
 
     model = GenerativeModel(model_name="gemini-3.1-flash-lite")
-    response = model.generate_content("hi")
+    try:
+        response = model.generate_content("hi")
+    except Exception as exc:
+        if _is_vertex_quota_error(exc):
+            pytest.skip("Vertex AI quota exhausted")
+        raise
 
     print("response", response)
 
-    # Poll for spend update instead of fixed sleep - spend logging is async/batched
-    max_wait = 120  # total seconds to wait
+    # Spend logging is async/batched and can lag under CI load, so poll instead of
+    # sleeping a fixed amount. A transient empty read is skipped, not counted as 0.0
+    # spend, which would spuriously fail the assertion on an otherwise-billed call.
+    max_wait = 240  # total seconds to wait
     poll_interval = 10  # seconds between checks
     elapsed = 0
     spend_after = spend_before
     while elapsed < max_wait:
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
-        spend_after = await call_spend_logs_endpoint() or 0.0
+        latest_spend = await call_spend_logs_endpoint()
+        if latest_spend is None:
+            print(f"spend logs unavailable (elapsed={elapsed}s), retrying")
+            continue
+        spend_after = latest_spend
         print(f"spend_after (elapsed={elapsed}s)", spend_after)
         if spend_after > spend_before:
             break

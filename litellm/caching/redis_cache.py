@@ -22,6 +22,7 @@ import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
     DEFAULT_REDIS_MAJOR_VERSION,
+    REDIS_CIRCUIT_BREAKER_ENABLED,
     REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
     REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
 )
@@ -114,15 +115,23 @@ class RedisCircuitBreaker:
     OPEN = "open"
     HALF_OPEN = "half_open"
 
-    def __init__(self, failure_threshold: int, recovery_timeout: int) -> None:
+    def __init__(
+        self,
+        failure_threshold: int,
+        recovery_timeout: int,
+        enabled: bool = True,
+    ) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
+        self.enabled = enabled
         self._failure_count = 0
         self._opened_at: Optional[float] = None
         self._state = self.CLOSED
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
+        if not self.enabled:
+            return False
         if self._state == self.HALF_OPEN:
             # Probe already in flight — fast-fail all concurrent requests.
             # Only the one call that caused the OPEN→HALF_OPEN transition
@@ -136,6 +145,8 @@ class RedisCircuitBreaker:
         return False
 
     def record_failure(self) -> None:
+        if not self.enabled:
+            return
         self._failure_count += 1
         self._opened_at = time.time()
         if self._failure_count >= self.failure_threshold:
@@ -149,6 +160,8 @@ class RedisCircuitBreaker:
             self._state = self.OPEN
 
     def record_success(self) -> None:
+        if not self.enabled:
+            return
         if self._state == self.HALF_OPEN:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
         self._failure_count = 0
@@ -243,6 +256,7 @@ class RedisCache(BaseCache):
         self._circuit_breaker = RedisCircuitBreaker(
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+            enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
         )
 
         self._setup_health_pings()
@@ -355,6 +369,8 @@ class RedisCache(BaseCache):
         """
         Make sure each key starts with the given namespace
         """
+        if key is None:
+            return key  # type: ignore[return-value]
         if self.namespace is not None and not key.startswith(self.namespace):
             key = self.namespace + ":" + key
 
@@ -419,6 +435,7 @@ class RedisCache(BaseCache):
         _redis_client = self.redis_client
         start_time = time.time()
         set_ttl = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
         try:
             start_time = time.time()
             result: int = _redis_client.incr(name=key, amount=value)  # type: ignore
@@ -482,6 +499,7 @@ class RedisCache(BaseCache):
                 )
                 return []
 
+            pattern = self.check_and_fix_namespace(key=pattern)
             async for key in _redis_client.scan_iter(match=pattern + "*", count=count):  # type: ignore
                 keys.append(key)
                 if len(keys) >= count:
@@ -522,6 +540,11 @@ class RedisCache(BaseCache):
         Register a Lua script with Redis asynchronously.
         Works with both standalone Redis and Redis Cluster.
 
+        The returned callable namespaces every key it is invoked with, so Lua
+        scripts hit the same prefixed keys as get/set/increment. Without this,
+        scripts would operate on raw keys while the rest of the cache uses the
+        namespace, leaving rate-limit and lock keys outside the configured prefix.
+
         Args:
             script (str): The Lua script to register
 
@@ -532,7 +555,15 @@ class RedisCache(BaseCache):
             _redis_client = self.init_async_client()
             # For standalone Redis
             if hasattr(_redis_client, "register_script"):
-                return _redis_client.register_script(script)  # type: ignore
+                registered_script = _redis_client.register_script(script)  # type: ignore
+
+                async def namespaced_script(
+                    keys: list[str], args: list[Any], client: Any = None
+                ) -> Any:
+                    keys = [self.check_and_fix_namespace(key=key) for key in keys]
+                    return await registered_script(keys=keys, args=args, client=client)
+
+                return namespaced_script
             # For Redis Cluster
             elif hasattr(_redis_client, "script_load"):
                 # Load the script and get its SHA
@@ -540,6 +571,7 @@ class RedisCache(BaseCache):
 
                 # Return a callable that uses evalsha
                 async def script_callable(keys: List[str], args: List[Any]) -> Any:
+                    keys = [self.check_and_fix_namespace(key=key) for key in keys]
                     return _redis_client.evalsha(script_sha, len(keys), *keys, *args)  # type: ignore
 
                 return script_callable
@@ -887,6 +919,43 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    @_redis_circuit_breaker_guard
+    async def async_set_max(
+        self,
+        key: str,
+        value: float,
+        ttl: int | None = None,
+    ) -> float | None:
+        """Atomically set ``key`` to ``value`` only when ``value`` is greater
+        than the stored value (or the key is unset), refreshing the TTL.
+
+        Monotonic by construction: it never lowers the stored value, so a repair
+        that writes an authoritative-but-slightly-stale total cannot clobber a
+        concurrent increment that has already pushed the counter higher. The
+        GET/compare/SET runs in a single Lua call, so it is also atomic across
+        racing callers and pods. Returns the resulting value.
+        """
+        _redis_client = self.init_async_client()
+        _used_ttl = self.get_ttl(ttl=ttl)
+        key = self.check_and_fix_namespace(key=key)
+        lua = (
+            "local cur = redis.call('GET', KEYS[1]) "
+            "if cur == false or tonumber(cur) < tonumber(ARGV[1]) then "
+            "redis.call('SET', KEYS[1], ARGV[1]) "
+            "if tonumber(ARGV[2]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+            "return ARGV[1] end "
+            "return cur"
+        )
+        result = cast(
+            "str | bytes | int | float | None",
+            await _redis_client.eval(lua, 1, key, str(value), str(int(_used_ttl or 0))),
+        )
+        if result is None:
+            return None
+        if isinstance(result, bytes):
+            result = result.decode()
+        return float(result)
+
     async def flush_cache_buffer(self):
         print_verbose(
             f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}"
@@ -1204,6 +1273,7 @@ class RedisCache(BaseCache):
     async def delete_cache_keys(self, keys):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
         _redis_client: Any = self.init_async_client()
+        keys = [self.check_and_fix_namespace(key=key) for key in keys]
         # keys is a list, unpack it so it gets passed as individual elements to delete
         await _redis_client.delete(*keys)
 
@@ -1269,10 +1339,12 @@ class RedisCache(BaseCache):
     async def async_delete_cache(self, key: str):
         # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `delete`
         _redis_client: Any = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         # keys is str
         return await _redis_client.delete(key)
 
     def delete_cache(self, key):
+        key = self.check_and_fix_namespace(key=key)
         self.redis_client.delete(key)
 
     async def _pipeline_increment_helper(
@@ -1379,6 +1451,7 @@ class RedisCache(BaseCache):
         try:
             # typed as Any, redis python lib has incomplete type stubs for RedisCluster and does not include `ttl`
             _redis_client: Any = self.init_async_client()
+            key = self.check_and_fix_namespace(key=key)
             ttl = await _redis_client.ttl(key)
             if ttl <= -1:  # -1 means the key does not exist, -2 key does not exist
                 return None
@@ -1407,6 +1480,7 @@ class RedisCache(BaseCache):
             int: The length of the list after the push operation
         """
         _redis_client: Any = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         start_time = time.time()
         try:
             response = await _redis_client.rpush(key, *values)
@@ -1446,7 +1520,8 @@ class RedisCache(BaseCache):
     ) -> List[int]:
         """Helper function for pipeline rpush operations"""
         for rpush_op in rpush_list:
-            pipe.rpush(rpush_op["key"], *rpush_op["values"])
+            key = self.check_and_fix_namespace(key=rpush_op["key"])
+            pipe.rpush(key, *rpush_op["values"])
         results = await pipe.execute()
         # Preserve positional correspondence — raise on per-command errors
         for r in results:
@@ -1533,6 +1608,7 @@ class RedisCache(BaseCache):
         **kwargs,
     ) -> Union[Any, List[Any]]:
         _redis_client: Any = self.init_async_client()
+        key = self.check_and_fix_namespace(key=key)
         start_time = time.time()
         print_verbose(f"LPOP from Redis list: key: {key}, count: {count}")
         try:
@@ -1605,17 +1681,19 @@ class RedisCache(BaseCache):
 
         if major_version >= 7:
             for lpop_op in lpop_list:
-                pipe.lpop(lpop_op["key"], lpop_op["count"])
+                key = self.check_and_fix_namespace(key=lpop_op["key"])
+                pipe.lpop(key, lpop_op["count"])
             raw_results = await pipe.execute()
         else:
             # For Redis < 7, LPOP doesn't support count param.
             # Issue `count` individual LPOP commands per key, all in one pipeline.
             counts: List[int] = []
             for lpop_op in lpop_list:
+                key = self.check_and_fix_namespace(key=lpop_op["key"])
                 count = lpop_op["count"] or 1
                 counts.append(count)
                 for _ in range(count):
-                    pipe.lpop(lpop_op["key"])
+                    pipe.lpop(key)
             flat_results = await pipe.execute()
 
             # Re-group the flat results back into per-key lists

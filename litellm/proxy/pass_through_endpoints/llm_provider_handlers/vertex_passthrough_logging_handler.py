@@ -219,9 +219,9 @@ class VertexPassthroughLoggingHandler:
             kwargs["response_cost"] = response_cost
             kwargs["model"] = "vertex_ai/search_api"
             logging_obj.model_call_details.setdefault("litellm_params", {})
-            logging_obj.model_call_details["litellm_params"][
-                "base_model"
-            ] = "vertex_ai/search_api"
+            logging_obj.model_call_details["litellm_params"]["base_model"] = (
+                "vertex_ai/search_api"
+            )
             logging_obj.model_call_details["response_cost"] = response_cost
 
             return {
@@ -645,7 +645,7 @@ class VertexPassthroughLoggingHandler:
         return kwargs
 
     @staticmethod
-    def batch_prediction_jobs_handler(  # noqa: PLR0915
+    def batch_prediction_jobs_handler(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,

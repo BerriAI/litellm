@@ -151,7 +151,9 @@ class ResponsesToCompletionBridgeHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-    def completion(self, *args, **kwargs) -> Union[
+    def completion(
+        self, *args, **kwargs
+    ) -> Union[
         Coroutine[Any, Any, Union["ModelResponse", "CustomStreamWrapper"]],
         "ModelResponse",
         "CustomStreamWrapper",
@@ -171,6 +173,8 @@ class ResponsesToCompletionBridgeHandler:
         model_response = validated_kwargs["model_response"]
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
+        if kwargs.get("stream") is True and "stream" not in optional_params:
+            optional_params = {**optional_params, "stream": True}
 
         request_data = self.transformation_handler.transform_request(
             model=model,
@@ -182,6 +186,14 @@ class ResponsesToCompletionBridgeHandler:
             client=kwargs.get("client"),
         )
 
+        # Pin the resolved provider so `responses()` doesn't re-run
+        # `get_llm_provider()` on the model string and strip a second
+        # provider prefix (see GitHub issue #28505).  request_data already
+        # carries `custom_llm_provider` via the spread of
+        # `sanitized_litellm_params`; overwriting it on the dict (rather
+        # than adding an explicit kwarg) avoids the duplicate-keyword
+        # TypeError that would otherwise fire on the real bridge path.
+        request_data["custom_llm_provider"] = custom_llm_provider
         result = responses(
             **request_data,
         )
@@ -255,6 +267,8 @@ class ResponsesToCompletionBridgeHandler:
         model_response = validated_kwargs["model_response"]
         logging_obj = validated_kwargs["logging_obj"]
         custom_llm_provider = validated_kwargs["custom_llm_provider"]
+        if kwargs.get("stream") is True and "stream" not in optional_params:
+            optional_params = {**optional_params, "stream": True}
 
         try:
             request_data = self.transformation_handler.transform_request(
@@ -268,6 +282,13 @@ class ResponsesToCompletionBridgeHandler:
         except Exception as e:
             raise e
 
+        # Pin the resolved provider so `aresponses()` doesn't re-run
+        # `get_llm_provider()` on the model string and strip a second
+        # provider prefix (see GitHub issue #28505).  Set on request_data
+        # rather than passed as a separate kwarg to avoid the duplicate-
+        # keyword TypeError when `sanitized_litellm_params` already
+        # carries `custom_llm_provider`.
+        request_data["custom_llm_provider"] = custom_llm_provider
         result = await aresponses(
             **request_data,
             aresponses=True,

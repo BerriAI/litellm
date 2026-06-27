@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
@@ -16,6 +17,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
 )
+from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.vector_stores import IndexCreateRequest
 
 router = APIRouter()
@@ -40,9 +42,9 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     Raises:
         HTTPException: If user doesn't have access to the vector store
     """
-    vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
-        await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
-    )
+    vector_store_to_run: Optional[
+        LiteLLM_ManagedVectorStore
+    ] = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
     if vector_store_to_run is not None:
         if user_api_key_dict is not None:
             await assert_user_can_access_vector_store(
@@ -587,11 +589,9 @@ async def index_create(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
     ## 1. check if index already exists
-    existing_index = (
-        await prisma_client.db.litellm_managedvectorstoreindextable.find_unique(
-            where={"index_name": index_create_request.index_name}
-        )
-    )
+    existing_index = await ManagedVectorStoreIndexRepository(
+        prisma_client
+    ).table.find_unique(where={"index_name": index_create_request.index_name})
 
     ## 2. set created_by and updated_by
 
@@ -605,7 +605,7 @@ async def index_create(
     index_data = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
-    new_index = await prisma_client.db.litellm_managedvectorstoreindextable.create(
+    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(
         data=jsonify_object(index_data)
     )
 

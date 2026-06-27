@@ -42,6 +42,9 @@ from litellm.constants import (
     HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -69,9 +72,9 @@ _AIOHTTP_SUPPORTS_SOCKET_FACTORY = (
 )
 
 
-def _build_aiohttp_keepalive_socket_factory() -> (
-    Optional[Callable[[Tuple[Any, ...]], socket.socket]]
-):
+def _build_aiohttp_keepalive_socket_factory() -> Optional[
+    Callable[[Tuple[Any, ...]], socket.socket]
+]:
     """
     Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
 
@@ -134,6 +137,18 @@ _DEFAULT_TIMEOUT = httpx.Timeout(
     timeout=COMPLETION_HTTP_FALLBACK_SECONDS,
     connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
+
+
+def _default_cached_client_timeout() -> httpx.Timeout:
+    """Timeout for cached default httpx clients; honors an explicit litellm.request_timeout."""
+    configured = get_configured_request_timeout()
+    if configured is None:
+        return _DEFAULT_TIMEOUT
+    return httpx.Timeout(
+        timeout=configured, connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+    )
+
+
 _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS = 5.0
 _STREAMING_ERROR_BODY_READ_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=50,
@@ -589,6 +604,7 @@ class AsyncHTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -599,7 +615,11 @@ class AsyncHTTPHandler:
         params.update(HTTPHandler.extract_query_params(url))
 
         response = await self.client.get(
-            url, params=params, headers=headers, follow_redirects=_follow_redirects  # type: ignore
+            url,
+            params=params,
+            headers=headers,  # type: ignore
+            follow_redirects=_follow_redirects,  # type: ignore
+            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
 
@@ -699,7 +719,14 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "PUT",
+                url,
+                data=request_data,
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                content=request_content,  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -760,7 +787,14 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "PATCH",
+                url,
+                data=request_data,
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                content=request_content,  # type: ignore
             )
             response = await self.client.send(req)
             response.raise_for_status()
@@ -821,7 +855,14 @@ class AsyncHTTPHandler:
             )
 
             req = self.client.build_request(
-                "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                "DELETE",
+                url,
+                data=request_data,
+                json=json,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                content=request_content,  # type: ignore
             )
             response = await self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -868,7 +909,13 @@ class AsyncHTTPHandler:
         request_data, request_content = _prepare_request_data_and_content(data, content)
 
         req = client.build_request(
-            "POST", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+            "POST",
+            url,
+            data=request_data,
+            json=json,
+            params=params,
+            headers=headers,
+            content=request_content,  # type: ignore
         )
         response = await client.send(req, stream=stream)
         response.raise_for_status()
@@ -1115,6 +1162,7 @@ class HTTPHandler:
         params: Optional[dict] = None,
         headers: Optional[dict] = None,
         follow_redirects: Optional[bool] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects = (
@@ -1128,6 +1176,7 @@ class HTTPHandler:
             params=params,
             headers=headers,
             follow_redirects=_follow_redirects,
+            timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
 
         return response
@@ -1178,7 +1227,14 @@ class HTTPHandler:
                 )
             else:
                 req = self.client.build_request(
-                    "POST", url, data=request_data, json=json, params=params, headers=headers, files=files, content=request_content  # type: ignore
+                    "POST",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    files=files,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1213,11 +1269,24 @@ class HTTPHandler:
 
             if timeout is not None:
                 req = self.client.build_request(
-                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "PATCH",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    content=request_content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PATCH", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "PATCH",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1252,11 +1321,24 @@ class HTTPHandler:
 
             if timeout is not None:
                 req = self.client.build_request(
-                    "PUT", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "PUT",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    content=request_content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "PUT", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "PUT",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             return response
@@ -1290,11 +1372,24 @@ class HTTPHandler:
 
             if timeout is not None:
                 req = self.client.build_request(
-                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, timeout=timeout, content=request_content  # type: ignore
+                    "DELETE",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                    content=request_content,  # type: ignore
                 )
             else:
                 req = self.client.build_request(
-                    "DELETE", url, data=request_data, json=json, params=params, headers=headers, content=request_content  # type: ignore
+                    "DELETE",
+                    url,
+                    data=request_data,
+                    json=json,
+                    params=params,
+                    headers=headers,
+                    content=request_content,  # type: ignore
                 )
             response = self.client.send(req, stream=stream)
             response.raise_for_status()
@@ -1372,7 +1467,7 @@ def get_async_httpx_client(
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=_DEFAULT_TIMEOUT,
+            timeout=_default_cached_client_timeout(),
             shared_session=shared_session,
         )
 
@@ -1421,7 +1516,7 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         }
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=_DEFAULT_TIMEOUT)
+        _new_client = HTTPHandler(timeout=_default_cached_client_timeout())
 
     cache.set_cache(
         key=_cache_key_name,

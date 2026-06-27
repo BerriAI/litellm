@@ -718,6 +718,24 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         return response
 
+    async def async_agentic_loop_cleanup_hook(
+        self,
+        plan: AgenticLoopPlan,
+        kwargs: dict,
+    ) -> None:
+        """
+        Release resources held for an agentic-loop iteration.
+
+        Runs in a ``finally`` around the follow-up provider call, so it fires
+        whether the rerun returns normally, hits a loop safety abort, or raises
+        an upstream error. Implementations must be idempotent because the
+        post-response hook may already have released the same resource on the
+        success path. Use ``plan.metadata`` to locate what to clean up.
+
+        Default does nothing.
+        """
+        return None
+
     async def async_should_run_chat_completion_agentic_loop(
         self,
         response: Any,
@@ -963,7 +981,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     verbose_logger.debug(
                         f"Incrementing callback failure metric for {callback_name}"
                     )
-                    callback_obj.increment_callback_logging_failure(callback_name=callback_name)  # type: ignore
+                    callback_obj.increment_callback_logging_failure(
+                        callback_name=callback_name
+                    )  # type: ignore
                     return
 
             verbose_logger.debug(

@@ -20,6 +20,7 @@ from litellm.types.utils import (
     ServerToolUse,
     Usage,
 )
+from litellm._logging import verbose_logger
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
@@ -78,6 +79,54 @@ class ChunkProcessor:
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params = chunk.get("_hidden_params", {})
         return model_response
+
+    @staticmethod
+    def apply_provider_assembled_streaming_metadata(
+        response: ModelResponse,
+        chunks: List[Any],
+        logging_obj: Optional[Any] = None,
+    ) -> None:
+        if not chunks:
+            return
+
+        model = getattr(response, "model", None)
+        if not model:
+            return
+
+        custom_llm_provider = None
+        if logging_obj is not None:
+            custom_llm_provider = logging_obj.model_call_details.get(
+                "custom_llm_provider"
+            )
+
+        try:
+            from litellm.litellm_core_utils.get_llm_provider_logic import (
+                get_llm_provider,
+            )
+            from litellm.types.utils import LlmProviders
+            from litellm.utils import ProviderConfigManager
+
+            if custom_llm_provider:
+                provider = LlmProviders(custom_llm_provider)
+            else:
+                _, provider_str, _, _ = get_llm_provider(model)
+                provider = LlmProviders(provider_str)
+
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model,
+                provider=provider,
+            )
+            if provider_config is not None:
+                provider_config.apply_assembled_streaming_response_metadata(
+                    response=response,
+                    chunks=chunks,
+                )
+        except Exception as e:
+            verbose_logger.debug(
+                "apply_provider_assembled_streaming_metadata failed for model=%s: %s",
+                model,
+                e,
+            )
 
     @staticmethod
     def _get_chunk_id(chunks: List[Dict[str, Any]]) -> str:
@@ -160,13 +209,13 @@ class ChunkProcessor:
         )
         return response
 
-    def get_combined_tool_content(  # noqa: PLR0915
+    def get_combined_tool_content(
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
-        tool_call_map: Dict[int, Dict[str, Any]] = (
-            {}
-        )  # Map to store tool calls by index
+        tool_call_map: Dict[
+            int, Dict[str, Any]
+        ] = {}  # Map to store tool calls by index
 
         for chunk in tool_call_chunks:
             choices = chunk["choices"]
@@ -536,6 +585,17 @@ class ChunkProcessor:
         # # Update usage information if needed
         prompt_tokens = 0
         completion_tokens = 0
+        # Anthropic's `message_start` SSE event carries usage.output_tokens=1 as a
+        # cursor/placeholder; the real value only arrives in `message_delta`.
+        # If a stream is cancelled before `message_delta` lands, the last-wins
+        # accumulator below leaves completion_tokens stuck at 1 — which then
+        # bypasses the `completion_tokens or token_counter(...)` fallback in
+        # calculate_usage() because 1 is truthy. Count the completion-bearing
+        # usage events so `_reset_anthropic_cursor_completion_tokens` can tell a
+        # legitimate single-token reply (Anthropic emits 1 in BOTH message_start
+        # AND message_delta, so >=2 events is positive evidence message_delta
+        # arrived) from a stale lone cursor.
+        completion_usage_updates = 0
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
@@ -555,6 +615,8 @@ class ChunkProcessor:
                 usage_chunk = chunk._hidden_params.get("usage", None)
 
             if usage_chunk is not None:
+                if isinstance(usage_chunk, dict):
+                    usage_chunk = Usage(**usage_chunk)
                 usage_chunk_dict = self._usage_chunk_calculation_helper(usage_chunk)
                 if (
                     usage_chunk_dict["prompt_tokens"] is not None
@@ -566,6 +628,7 @@ class ChunkProcessor:
                     and usage_chunk_dict["completion_tokens"] > 0
                 ):
                     completion_tokens = usage_chunk_dict["completion_tokens"]
+                    completion_usage_updates += 1
                 if usage_chunk_dict["cache_creation_input_tokens"] is not None and (
                     usage_chunk_dict["cache_creation_input_tokens"] > 0
                     or cache_creation_input_tokens is None
@@ -588,7 +651,18 @@ class ChunkProcessor:
                     hasattr(usage_chunk, "server_tool_use")
                     and usage_chunk.server_tool_use is not None
                 ):
-                    server_tool_use = usage_chunk.server_tool_use
+                    # Coerce dict to ServerToolUse so downstream cost-calc code
+                    # (which accesses .web_search_requests as an attribute)
+                    # doesn't raise AttributeError. Some providers / streaming
+                    # paths leave server_tool_use as a plain dict on the chunk.
+                    if isinstance(usage_chunk.server_tool_use, dict):
+                        server_tool_use = ServerToolUse(**usage_chunk.server_tool_use)
+                    elif isinstance(usage_chunk.server_tool_use, ServerToolUse):
+                        server_tool_use = usage_chunk.server_tool_use
+                    else:
+                        server_tool_use = ServerToolUse.model_validate(
+                            usage_chunk.server_tool_use
+                        )
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(
@@ -605,6 +679,12 @@ class ChunkProcessor:
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
 
+        completion_tokens = self._reset_anthropic_cursor_completion_tokens(
+            chunks=chunks,
+            completion_tokens=completion_tokens,
+            completion_usage_updates=completion_usage_updates,
+        )
+
         return UsagePerChunk(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -615,6 +695,47 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
         )
+
+    @staticmethod
+    def _reset_anthropic_cursor_completion_tokens(
+        chunks: list[dict[str, Any] | ModelResponse],
+        completion_tokens: int,
+        completion_usage_updates: int,
+    ) -> int:
+        """Reset a stale Anthropic ``message_start`` cursor placeholder to 0.
+
+        See the ``completion_usage_updates`` comment in
+        ``_calculate_usage_per_chunk``. The accumulated value is NOT a stale
+        cursor when either it is > 1 (definitely not a placeholder) or we saw
+        >= 2 completion-bearing usage events (positive evidence ``message_delta``
+        arrived). Otherwise — the only completion update we ever saw was the
+        Anthropic ``message_start`` cursor (=1) — reset to 0 so
+        ``calculate_usage()``'s ``or token_counter(text=...)`` fallback estimates
+        from the actually-received completion text instead of trusting the
+        placeholder. Gated on ``custom_llm_provider == "anthropic"`` so the
+        heuristic (which encodes Anthropic's specific message_start SSE shape)
+        does not silently affect other providers that may legitimately report
+        ``completion_tokens=1`` from a single usage event.
+        """
+        saw_non_cursor_completion = (
+            completion_tokens > 1 or completion_usage_updates >= 2
+        )
+        if saw_non_cursor_completion:
+            return completion_tokens
+
+        custom_llm_provider: Optional[str] = None
+        if chunks:
+            first_chunk = chunks[0]
+            if isinstance(first_chunk, dict):
+                hp = first_chunk.get("_hidden_params")
+            else:
+                hp = getattr(first_chunk, "_hidden_params", None)
+            if isinstance(hp, dict):
+                custom_llm_provider = hp.get("custom_llm_provider")
+
+        if custom_llm_provider == "anthropic" and completion_tokens == 1:
+            return 0
+        return completion_tokens
 
     def calculate_usage(
         self,
@@ -658,15 +779,16 @@ class ChunkProcessor:
             returned_usage.prompt_tokens = prompt_tokens or token_counter(
                 model=model, messages=messages
             )
-        except (
-            Exception
-        ):  # don't allow this failing to block a complete streaming response from being returned
+        except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0
-        returned_usage.completion_tokens = completion_tokens or token_counter(
-            model=model,
-            text=completion_output,
-            count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+        returned_usage.completion_tokens = (
+            completion_tokens
+            or token_counter(
+                model=model,
+                text=completion_output,
+                count_response_tokens=True,  # count_response_tokens is a Flag to tell token counter this is a response, No need to add extra tokens we do for input messages
+            )
         )
         returned_usage.total_tokens = (
             returned_usage.prompt_tokens + returned_usage.completion_tokens

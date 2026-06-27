@@ -21,7 +21,7 @@ from litellm.proxy.response_polling.polling_handler import ResponsePollingHandle
 from litellm.types.llms.openai import ResponsesAPIStatus
 
 
-async def background_streaming_task(  # noqa: PLR0915
+async def background_streaming_task(
     polling_id: str,
     data: dict,
     polling_handler: ResponsePollingHandler,
@@ -92,9 +92,7 @@ async def background_streaming_task(  # noqa: PLR0915
         # Process streaming response following OpenAI events format
         # https://platform.openai.com/docs/api-reference/responses-streaming
         output_items: dict[str, dict[str, Any]] = {}  # Track output items by ID
-        accumulated_text = (
-            {}
-        )  # Track accumulated text deltas by (item_id, content_index)
+        accumulated_text = {}  # Track accumulated text deltas by (item_id, content_index)
 
         # ResponsesAPIResponse fields to extract from response.completed
         usage_data = None

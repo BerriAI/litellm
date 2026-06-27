@@ -35,9 +35,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         self.router_cache = router_cache
         self.routing_args = RoutingArgs(**routing_args)
 
-    def log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
             Update latency usage on success
@@ -259,9 +257,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    async def async_log_success_event(  # noqa: PLR0915
-        self, kwargs, response_obj, start_time, end_time
-    ):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
             """
             Update latency usage on success
@@ -413,7 +409,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             )
             pass
 
-    def _get_available_deployments(  # noqa: PLR0915
+    def _get_available_deployments(
         self,
         model_group: str,
         healthy_deployments: list,
@@ -552,9 +548,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         deployment = random_valid_deployment[0]
         metadata_field = self._select_metadata_field(request_kwargs)
         if request_kwargs is not None and metadata_field in request_kwargs:
-            request_kwargs[metadata_field][
-                "_latency_per_deployment"
-            ] = _latency_per_deployment
+            request_kwargs[metadata_field]["_latency_per_deployment"] = (
+                _latency_per_deployment
+            )
         return deployment
 
     async def async_get_available_deployments(

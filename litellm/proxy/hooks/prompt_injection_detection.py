@@ -72,7 +72,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             verbose_proxy_logger.debug(print_statement)
 
         if litellm.set_verbose is True:
-            print(print_statement)  # noqa
+            print(print_statement)  # noqa: T201
 
     def update_environment(self, router: Optional[Router] = None):
         self.llm_router = router
@@ -270,7 +270,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if isinstance(response, litellm.ModelResponse) and isinstance(
                 response.choices[0], litellm.Choices
             ):
-                if self.prompt_injection_params.llm_api_fail_call_string in response.choices[0].message.content:  # type: ignore
+                if (
+                    self.prompt_injection_params.llm_api_fail_call_string
+                    in response.choices[0].message.content
+                ):  # type: ignore
                     is_prompt_attack = True
 
         if is_prompt_attack is True:

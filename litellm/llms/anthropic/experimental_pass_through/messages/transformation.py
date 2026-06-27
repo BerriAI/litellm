@@ -2,6 +2,11 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 import httpx
 
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -83,6 +88,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     content = message["content"]
                     if isinstance(content, list):
                         _process_content_list(content)
+
+    def should_strip_billing_metadata(self) -> bool:
+        """
+        Whether to drop x-anthropic-billing-header system blocks before sending upstream.
+
+        The first-party Anthropic API uses these blocks for Claude Code attribution, so the
+        base config keeps them. Providers that reject them override this to True.
+        """
+        return False
 
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
@@ -239,11 +253,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         budget = int(thinking.get("budget_tokens") or 0)
-        if budget >= 24000 and AnthropicConfig._supports_effort_level(model, "xhigh"):
+        if budget >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET and (
+            AnthropicConfig._supports_effort_level(model, "xhigh")
+        ):
             effort = "xhigh"
-        elif budget >= 10000:
+        elif budget >= DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET:
             effort = "high"
-        elif budget >= 5000:
+        elif budget >= DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET:
             effort = "medium"
         else:
             effort = "low"
@@ -286,14 +302,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
         )
 
-        # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")
-        if system_param is not None:
+        if self.should_strip_billing_metadata() and system_param is not None:
             filtered_system = self._filter_billing_headers_from_system(system_param)
             if filtered_system is not None and len(filtered_system) > 0:
                 anthropic_messages_optional_request_params["system"] = filtered_system
             else:
-                # Remove system parameter if all content was filtered out
                 anthropic_messages_optional_request_params.pop("system", None)
 
         # Transform context_management from OpenAI format to Anthropic format if needed
