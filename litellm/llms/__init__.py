@@ -63,9 +63,9 @@ def get_cost_for_web_search_request(
         return None
 
 
-def discover_guardrail_translation_mappings() -> (
-    Dict[CallTypes, Type["BaseTranslation"]]
-):
+def discover_guardrail_translation_mappings() -> Dict[
+    CallTypes, Type["BaseTranslation"]
+]:
     """
     Discover guardrail translation mappings by scanning the llms directory structure.
 

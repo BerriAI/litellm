@@ -349,11 +349,97 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
                         )
 
 
+class _ClientDisconnectedBeforeFirstChunk(Exception):
+    """Client went away during create_response's first-chunk buffering window.
+
+    The upstream LLM stream has already been closed by the time this is raised.
+    """
+
+
+async def _wait_for_http_disconnect(request: Request) -> None:
+    try:
+        while True:
+            message = await request.receive()
+            if message.get("type") == "http.disconnect":
+                return
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        verbose_proxy_logger.warning(
+            "create_response: request.receive() raised %s; first-chunk disconnect "
+            "monitoring disabled for this request",
+            exc,
+        )
+        # A receive() failure must not masquerade as a disconnect.
+        await asyncio.Event().wait()
+
+
+async def _buffer_first_chunk_honoring_disconnect(
+    generator: AsyncGenerator[str, None],
+    request: Optional[Request],
+) -> str:
+    """Fetch the first streamed chunk, cancelling the upstream LLM call if the
+    client disconnects before it arrives.
+
+    create_response buffers the first chunk to detect error-only streams before
+    handing the StreamingResponse to Starlette, which only begins listening for
+    client disconnects once it is serving that response. A disconnect during a
+    long time-to-first-token would otherwise leave the upstream call running
+    until the request timeout (LIT-3568). Cancelling the fetch propagates into
+    async_streaming_data_generator, whose finally block records the 499 and
+    closes the upstream stream.
+    """
+    if request is None:
+        return await generator.__anext__()
+
+    chunk_task: asyncio.Task[str] = asyncio.ensure_future(generator.__anext__())
+    disconnect_task: asyncio.Task[None] = asyncio.ensure_future(
+        _wait_for_http_disconnect(request)
+    )
+    try:
+        await asyncio.wait(
+            {chunk_task, disconnect_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        # A completed disconnect_task has already consumed the http.disconnect
+        # message, so Starlette's later listen_for_disconnect would never see it.
+        # Take the cancellation path whenever a disconnect was observed, even if
+        # the first chunk landed in the same scheduler turn.
+        disconnect_observed = disconnect_task.done()
+    finally:
+        disconnect_task.cancel()
+        try:
+            await disconnect_task
+        except BaseException:  # noqa: BLE001
+            pass
+
+    if not disconnect_observed and chunk_task.done() and not chunk_task.cancelled():
+        return chunk_task.result()
+
+    chunk_task.cancel()
+    with anyio.CancelScope(shield=True):
+        try:
+            await chunk_task
+        except BaseException:  # noqa: BLE001
+            pass
+        try:
+            await generator.aclose()
+        except BaseException as exc:  # noqa: BLE001
+            verbose_proxy_logger.debug(
+                "create_response: error closing generator on disconnect: %s", exc
+            )
+    verbose_proxy_logger.info(
+        "create_response: client disconnected before first chunk, "
+        "upstream LLM request cancelled"
+    )
+    raise _ClientDisconnectedBeforeFirstChunk()
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
     default_status_code: int = status.HTTP_200_OK,
+    request: Optional[Request] = None,
 ) -> Union[StreamingResponse, JSONResponse]:
     """
     Create streaming response, checking if the first chunk is an error.
@@ -376,7 +462,9 @@ async def create_response(
             generator = await generator
 
         # Now get the first chunk from the actual generator
-        first_chunk_value = await generator.__anext__()
+        first_chunk_value = await _buffer_first_chunk_honoring_disconnect(
+            generator, request
+        )
 
         if first_chunk_value is not None:
             try:
@@ -409,6 +497,21 @@ async def create_response(
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
 
+    except _ClientDisconnectedBeforeFirstChunk:
+        # Client vanished during the time-to-first-token wait; the upstream
+        # stream is already closed. Return a 499 the (now-gone) client never reads.
+        return JSONResponse(
+            status_code=LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+            content={
+                "error": {
+                    "message": _CLIENT_DISCONNECT_DETAIL,
+                    "type": "client_disconnect",
+                    "param": "None",
+                    "code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
+                }
+            },
+            headers=headers,
+        )
     except StopAsyncIteration:
         # Generator was empty. Default status
         async def empty_gen() -> AsyncGenerator[str, None]:
@@ -516,12 +619,13 @@ def _override_openai_response_model(
     LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
     That internal identifier should not be returned to clients in the OpenAI `model` field.
 
-    Note: This is intentionally verbose. A model mismatch is a useful signal that an internal
-    model identifier is being stamped/preserved somewhere in the request/response pipeline.
-    We log mismatches as warnings (and then restamp to the client-requested value) so these
-    paths stay observable for maintainers/operators without breaking client compatibility.
+    Note: This is intentionally verbose at debug level. A model mismatch is a useful signal that an
+    internal model identifier is being stamped/preserved somewhere in the request/response pipeline.
+    We log mismatches as debug (and then restamp to the client-requested value) so these paths stay
+    observable for maintainers without breaking client compatibility or alarming operators.
 
-    Errors are reserved for cases where the proxy cannot read/override the response model field.
+    Responses that omit an OpenAI-style `model` field are left unchanged (silent return),
+    including dict responses with no `model` key.
 
     Exceptions:
     1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
@@ -577,6 +681,8 @@ def _override_openai_response_model(
         return
 
     if isinstance(response_obj, dict):
+        if "model" not in response_obj:
+            return
         downstream_model = response_obj.get("model")
         if downstream_model != requested_model:
             verbose_proxy_logger.debug(
@@ -589,11 +695,6 @@ def _override_openai_response_model(
         return
 
     if not hasattr(response_obj, "model"):
-        verbose_proxy_logger.error(
-            "%s: cannot override response model; missing `model` attribute. response_type=%s",
-            log_context,
-            type(response_obj),
-        )
         return
 
     downstream_model = getattr(response_obj, "model", None)
@@ -608,7 +709,7 @@ def _override_openai_response_model(
     try:
         setattr(response_obj, "model", requested_model)
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.debug(
             "%s: failed to override response.model=%r on response_type=%s. error=%s",
             log_context,
             requested_model,
@@ -1037,6 +1138,8 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if not general_settings.get("expose_fallback_errors_to_caller"):
+            self.data.pop("include_fallback_errors", None)
         if route_type in {"aresponses", "_aresponses_websocket"}:
             await _authorize_response_file_search_vector_stores(
                 data=self.data,
@@ -1061,9 +1164,9 @@ class ProxyBaseLLMRequestProcessing:
                 self.data[_metadata_variable_name] = {}
             if not isinstance(self.data[_metadata_variable_name], dict):
                 self.data[_metadata_variable_name] = {}
-            self.data[_metadata_variable_name][
-                "queue_time_seconds"
-            ] = queue_time_seconds
+            self.data[_metadata_variable_name]["queue_time_seconds"] = (
+                queue_time_seconds
+            )
 
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -1506,7 +1609,9 @@ class ProxyBaseLLMRequestProcessing:
                             cache_hit=cache_hit,
                         )
 
-                    logging_obj._on_deferred_stream_complete = _on_deferred_stream_complete  # type: ignore[union-attr]
+                    logging_obj._on_deferred_stream_complete = (
+                        _on_deferred_stream_complete  # type: ignore[union-attr]
+                    )
 
                 if route_type == "allm_passthrough_route":
                     # Check if response is an async generator
@@ -1585,6 +1690,7 @@ class ProxyBaseLLMRequestProcessing:
                             generator=selected_data_generator,
                             media_type="text/event-stream",
                             headers=custom_headers,
+                            request=request,
                         )
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
@@ -1613,6 +1719,7 @@ class ProxyBaseLLMRequestProcessing:
                         generator=selected_data_generator,
                         media_type="text/event-stream",
                         headers=custom_headers,
+                        request=request,
                     )
 
             ### CALL HOOKS ### - modify outgoing data

@@ -785,7 +785,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         )
 
                         logging_obj.model_call_details["response_headers"] = headers
-                        stringified_response = response.model_dump()
+                        stringified_response = (
+                            provider_config.transform_parsed_response_dict(
+                                response.model_dump()
+                            )
+                        )
                         logging_obj.post_call(
                             input=messages,
                             api_key=api_key,
@@ -933,7 +937,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     timeout=timeout,
                     logging_obj=logging_obj,
                 )
-                stringified_response = response.model_dump()
+                stringified_response = provider_config.transform_parsed_response_dict(
+                    response.model_dump()
+                )
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
@@ -1132,9 +1138,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     data = drop_params_from_unprocessable_entity_error(e, data)
                 else:
                     raise e
-            except (
-                Exception
-            ) as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
+            except Exception as e:  # need to exception handle here. async exceptions don't get caught in sync functions.
                 if isinstance(e, OpenAIError):
                     raise e
 
@@ -1433,7 +1437,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=stringified_response,
             )
-            return convert_to_model_response_object(response_object=stringified_response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=stringified_response,
+                model_response_object=model_response,
+                response_type="image_generation",
+            )  # type: ignore
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -1466,7 +1474,19 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise OpenAIError(status_code=422, message="max retries must be an int")
 
             if aimg_generation is True:
-                return self.aimage_generation(data=data, prompt=prompt, logging_obj=logging_obj, model_response=model_response, api_base=api_base, api_key=api_key, timeout=timeout, client=client, max_retries=max_retries, organization=organization, headers=headers)  # type: ignore
+                return self.aimage_generation(
+                    data=data,
+                    prompt=prompt,
+                    logging_obj=logging_obj,
+                    model_response=model_response,
+                    api_base=api_base,
+                    api_key=api_key,
+                    timeout=timeout,
+                    client=client,
+                    max_retries=max_retries,
+                    organization=organization,
+                    headers=headers,
+                )  # type: ignore
 
             openai_client: OpenAI = self._get_openai_client(  # type: ignore
                 is_async=False,
@@ -1503,7 +1523,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 additional_args={"complete_input_dict": data},
                 original_response=response,
             )
-            return convert_to_model_response_object(response_object=response, model_response_object=model_response, response_type="image_generation")  # type: ignore
+            return convert_to_model_response_object(
+                response_object=response,
+                model_response_object=model_response,
+                response_type="image_generation",
+            )  # type: ignore
         except OpenAIError as e:
             ## LOGGING
             logging_obj.post_call(
@@ -2517,8 +2541,11 @@ class OpenAIAssistantsAPI(BaseLLM):
             client=client,
         )
 
-        thread_message: OpenAIMessage = await openai_client.beta.threads.messages.create(  # type: ignore
-            thread_id, **message_data  # type: ignore
+        thread_message: OpenAIMessage = (
+            await openai_client.beta.threads.messages.create(  # type: ignore
+                thread_id,
+                **message_data,  # type: ignore
+            )
         )
 
         response_obj: Optional[OpenAIMessage] = None
@@ -2596,7 +2623,8 @@ class OpenAIAssistantsAPI(BaseLLM):
         )
 
         thread_message: OpenAIMessage = openai_client.beta.threads.messages.create(  # type: ignore
-            thread_id, **message_data  # type: ignore
+            thread_id,
+            **message_data,  # type: ignore
         )
 
         response_obj: Optional[OpenAIMessage] = None

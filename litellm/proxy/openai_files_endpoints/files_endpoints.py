@@ -7,7 +7,7 @@
 
 import asyncio
 import traceback
-from typing import Any, Optional, cast, get_args
+from typing import Any, BinaryIO, Optional, Union, cast, get_args
 
 import httpx
 from fastapi import (
@@ -97,16 +97,18 @@ def get_files_provider_config(
     return None
 
 
-def get_first_json_object(file_content_bytes: bytes) -> Optional[dict]:
+def get_first_json_object(file_source: Union[bytes, BinaryIO]) -> Optional[dict]:
     try:
-        # Decode the bytes to a string and split into lines
-        file_content = file_content_bytes.decode("utf-8")
-        first_line = file_content.splitlines()[0].strip()
-
-        # Parse the JSON object from the first line
-        json_object = json.loads(first_line)
-        return json_object
-    except (json.JSONDecodeError, UnicodeDecodeError):
+        if isinstance(file_source, (bytes, bytearray)):
+            newline = file_source.find(b"\n")
+            raw = file_source if newline == -1 else file_source[:newline]
+            first_line = raw.decode("utf-8")
+        else:
+            file_source.seek(0)
+            first_line = file_source.readline().decode("utf-8")
+            file_source.seek(0)
+        return json.loads(first_line.strip())
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError):
         return None
 
 
@@ -268,7 +270,9 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)  # type: ignore
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)  # type: ignore
+        response = await litellm.acreate_file(
+            **_create_file_request, custom_llm_provider=custom_llm_provider
+        )  # type: ignore
 
     return response
 
@@ -327,9 +331,15 @@ async def create_file(
 
     data: Dict = {}
     try:
-        # Use orjson to parse JSON data, orjson speeds up requests significantly
-        # Read the file content
-        file_content = await file.read()
+        # Batch uploads can be gigabytes. Starlette has already spooled the upload
+        # to disk, so stream from that handle instead of reading it into memory.
+        # Other uploads are small and stay in-memory bytes.
+        file_source: Union[bytes, BinaryIO]
+        if purpose == "batch":
+            await file.seek(0)
+            file_source = file.file
+        else:
+            file_source = await file.read()
         custom_llm_provider = (
             provider
             or get_custom_llm_provider_from_request_headers(request=request)
@@ -454,13 +464,13 @@ async def create_file(
         )
 
         # Prepare the file data according to FileTypes
-        file_data = (file.filename, file_content, file.content_type)
+        file_data = (file.filename, file_source, file.content_type)
 
         ## check if model is a loadbalanced model
         router_model: Optional[str] = None
         is_router_model = False
         if litellm.enable_loadbalancing_on_batch_endpoints is True:
-            json_obj = get_first_json_object(file_content_bytes=file_content)
+            json_obj = get_first_json_object(file_source)
             if json_obj:
                 router_model = get_model_from_json_obj(json_object=json_obj)
                 is_router_model = is_known_model(
@@ -1016,7 +1026,9 @@ async def get_file(
             # data was initialized with {"file_id": file_id}
             data.pop("file_id", None)
             response = await litellm.afile_retrieve(
-                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                **data,  # type: ignore
             )
 
         ### ALERTING ###
@@ -1220,7 +1232,9 @@ async def delete_file(
         else:
             data.pop("file_id", None)
             response = await litellm.afile_delete(
-                custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                file_id=file_id,
+                **data,  # type: ignore
             )
 
         ### ALERTING ###
@@ -1402,7 +1416,9 @@ async def list_files(
                 prepare_data_with_credentials(data=data, credentials=team_credentials)
 
             response = await litellm.afile_list(
-                custom_llm_provider=custom_llm_provider, purpose=purpose, **data  # type: ignore
+                custom_llm_provider=custom_llm_provider,
+                purpose=purpose,
+                **data,  # type: ignore
             )
 
         if response is None:

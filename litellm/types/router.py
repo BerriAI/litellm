@@ -110,9 +110,7 @@ class ModelInfo(BaseModel):
     id: Optional[
         str
     ]  # Allow id to be optional on input, but it will always be present as a str in the model instance
-    db_model: bool = (
-        False  # used for proxy - to separate models which are stored in the db vs. config.
-    )
+    db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
     updated_at: Optional[datetime.datetime] = None
     updated_by: Optional[str] = None
 
@@ -179,6 +177,9 @@ class CredentialLiteLLMParams(BaseModel):
     vertex_credentials: Optional[Union[str, dict]] = None
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str] = None
+
+    ## OBJECT STORAGE (files / batches) ##
+    gcs_bucket_name: Optional[str] = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
@@ -436,9 +437,7 @@ class Deployment(BaseModel):
         elif isinstance(model_info, dict):
             model_info = ModelInfo(**model_info)
 
-        for (
-            key
-        ) in (
+        for key in (
             SPECIAL_MODEL_INFO_PARAMS
         ):  # ensures custom pricing info is consistently in 'model_info'
             field = getattr(litellm_params, key, None)

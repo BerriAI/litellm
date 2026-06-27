@@ -270,7 +270,10 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             if isinstance(response, litellm.ModelResponse) and isinstance(
                 response.choices[0], litellm.Choices
             ):
-                if self.prompt_injection_params.llm_api_fail_call_string in response.choices[0].message.content:  # type: ignore
+                if (
+                    self.prompt_injection_params.llm_api_fail_call_string
+                    in response.choices[0].message.content
+                ):  # type: ignore
                     is_prompt_attack = True
 
         if is_prompt_attack is True:

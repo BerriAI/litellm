@@ -259,6 +259,13 @@ class PrometheusLogger(CustomLogger):
                 ),
             )
 
+            # Number of members in a team
+            self.litellm_team_members_metric = self._gauge_factory(
+                "litellm_team_members_metric",
+                "Number of members in a team",
+                labelnames=self.get_labels_for_metric("litellm_team_members_metric"),
+            )
+
             # Remaining Budget for Org
             self.litellm_remaining_org_budget_metric = self._gauge_factory(
                 "litellm_remaining_org_budget_metric",
@@ -3237,7 +3244,9 @@ class PrometheusLogger(CustomLogger):
             )
             return
 
-        async def fetch_keys(page_size: int, page: int) -> Tuple[
+        async def fetch_keys(
+            page_size: int, page: int
+        ) -> Tuple[
             List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]],
             Optional[int],
         ]:
@@ -3554,6 +3563,22 @@ class PrometheusLogger(CustomLogger):
                     budget_reset_at=team.budget_reset_at
                 )
             )
+
+    def set_team_members_metric(self, team: LiteLLM_TeamTable) -> None:
+        """Set the team members gauge to the team's current member count."""
+        enum_values = UserAPIKeyLabelValues(
+            team=team.team_id,
+            team_alias=team.team_alias or "",
+        )
+        _labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_team_members_metric"
+            ),
+            enum_values=enum_values,
+        )
+        self.litellm_team_members_metric.labels(**_labels).set(
+            len(team.members_with_roles)
+        )
 
     async def _set_org_budget_metrics_after_api_request(
         self,

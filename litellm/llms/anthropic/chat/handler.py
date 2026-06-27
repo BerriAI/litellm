@@ -11,7 +11,6 @@ from typing import (
     Dict,
     List,
     Literal,
-    Optional,
     Tuple,
     Union,
     cast,
@@ -73,17 +72,17 @@ if TYPE_CHECKING:
 
 
 async def make_call(
-    client: Optional[AsyncHTTPHandler],
+    client: AsyncHTTPHandler | None,
     api_base: str,
     headers: dict,
     data: str,
     model: str,
     messages: list,
     logging_obj,
-    timeout: Optional[Union[float, httpx.Timeout]],
+    timeout: Union[float, httpx.Timeout] | None,
     json_mode: bool,
-    speed: Optional[str] = None,
-    tool_name_reverse_map: Optional[Dict[str, str]] = None,
+    speed: str | None = None,
+    tool_name_reverse_map: Dict[str, str] | None = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_aclient
@@ -133,17 +132,17 @@ async def make_call(
 
 
 def make_sync_call(
-    client: Optional[HTTPHandler],
+    client: HTTPHandler | None,
     api_base: str,
     headers: dict,
     data: str,
     model: str,
     messages: list,
     logging_obj,
-    timeout: Optional[Union[float, httpx.Timeout]],
+    timeout: Union[float, httpx.Timeout] | None,
     json_mode: bool,
-    speed: Optional[str] = None,
-    tool_name_reverse_map: Optional[Dict[str, str]] = None,
+    speed: str | None = None,
+    tool_name_reverse_map: Dict[str, str] | None = None,
 ) -> Tuple[Any, httpx.Headers]:
     if client is None:
         client = litellm.module_level_client  # re-use a module level client
@@ -213,7 +212,7 @@ class AnthropicChatCompletion(BaseLLM):
         model_response: ModelResponse,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
-        client: Optional[AsyncHTTPHandler],
+        client: AsyncHTTPHandler | None,
         encoding,
         api_key,
         logging_obj,
@@ -277,7 +276,7 @@ class AnthropicChatCompletion(BaseLLM):
         provider_config: "BaseConfig",
         logger_fn=None,
         headers={},
-        client: Optional[AsyncHTTPHandler] = None,
+        client: AsyncHTTPHandler | None = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
         async_handler = client or get_async_httpx_client(
             llm_provider=litellm.LlmProviders.ANTHROPIC
@@ -364,6 +363,7 @@ class AnthropicChatCompletion(BaseLLM):
             messages=messages,
             optional_params={**optional_params, "is_vertex_request": is_vertex_request},
             litellm_params=litellm_params,
+            api_base=api_base,
         )
 
         config = ProviderConfigManager.get_provider_chat_config(
@@ -538,9 +538,9 @@ class ModelResponseIterator:
         self,
         streaming_response,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
-        speed: Optional[str] = None,
-        tool_name_reverse_map: Optional[Dict[str, str]] = None,
+        json_mode: bool | None = False,
+        speed: str | None = None,
+        tool_name_reverse_map: Dict[str, str] | None = None,
     ):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -570,7 +570,7 @@ class ModelResponseIterator:
 
         # Track current content block type to avoid emitting tool calls for non-tool blocks
         # See: https://github.com/BerriAI/litellm/issues/17254
-        self.current_content_block_type: Optional[str] = None
+        self.current_content_block_type: str | None = None
 
         # Accumulate web_search_tool_result blocks for multi-turn reconstruction
         # See: https://github.com/BerriAI/litellm/issues/17737
@@ -586,8 +586,8 @@ class ModelResponseIterator:
         # Track server tool use inputs and results for code_interpreter_results
         self._server_tool_inputs: Dict[str, Any] = {}
         self.tool_results: List[Dict[str, Any]] = []
-        self._current_server_tool_id: Optional[str] = None
-        self._container_id: Optional[str] = None
+        self._current_server_tool_id: str | None = None
+        self._container_id: str | None = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -624,18 +624,22 @@ class ModelResponseIterator:
             speed=self.speed,
         )
 
-    def _content_block_delta_helper(self, chunk: dict) -> Tuple[
+    def _content_block_delta_helper(
+        self, chunk: dict
+    ) -> Tuple[
         str,
-        Optional[ChatCompletionToolCallChunk],
+        ChatCompletionToolCallChunk | None,
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
         Dict[str, Any],
+        str | None,
     ]:
         """
         Helper function to handle the content block delta
         """
         text = ""
-        tool_use: Optional[ChatCompletionToolCallChunk] = None
+        tool_use: ChatCompletionToolCallChunk | None = None
         provider_specific_fields = {}
+        reasoning_content: str | None = None
         content_block = ContentBlockDelta(**chunk)  # type: ignore
         thinking_blocks: List[
             Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
@@ -670,14 +674,31 @@ class ModelResponseIterator:
             thinking_content = content_block["delta"].get("thinking")
             if isinstance(thinking_content, str) and thinking_content:
                 self.reasoning_content_chunks.append(thinking_content)
-            thinking_blocks = [
-                ChatCompletionThinkingBlock(
-                    type="thinking",
-                    thinking=thinking_content or "",
-                    signature=str(content_block["delta"].get("signature") or ""),
-                )
-            ]
-            provider_specific_fields["thinking_blocks"] = thinking_blocks
+                reasoning_content = thinking_content
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking=thinking_content,
+                    )
+                ]
+                provider_specific_fields["thinking_blocks"] = thinking_blocks
+
+            signature = content_block["delta"].get("signature")
+            if isinstance(signature, str) and signature:
+                thinking_blocks = [
+                    ChatCompletionThinkingBlock(
+                        type="thinking",
+                        thinking="".join(
+                            cast(str, block["delta"].get("thinking"))
+                            for block in self.content_blocks
+                            if isinstance(block["delta"].get("thinking"), str)
+                        ),
+                        signature=signature,
+                    )
+                ]
+                provider_specific_fields["thinking_blocks"] = thinking_blocks
+                if reasoning_content is None:
+                    reasoning_content = ""
         elif (
             "content" in content_block["delta"]
             and content_block["delta"].get("type") == "compaction_delta"
@@ -688,25 +709,13 @@ class ModelResponseIterator:
                 "content": content_block["delta"]["content"],
             }
 
-        return text, tool_use, thinking_blocks, provider_specific_fields
-
-    def _handle_reasoning_content(
-        self,
-        thinking_blocks: List[
-            Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
-        ],
-    ) -> Optional[str]:
-        """
-        Handle the reasoning content
-        """
-        reasoning_content = None
-        for block in thinking_blocks:
-            thinking_content = cast(Optional[str], block.get("thinking"))
-            if reasoning_content is None:
-                reasoning_content = ""
-            if thinking_content is not None:
-                reasoning_content += thinking_content
-        return reasoning_content
+        return (
+            text,
+            tool_use,
+            thinking_blocks,
+            provider_specific_fields,
+            reasoning_content,
+        )
 
     def _handle_redacted_thinking_content(
         self,
@@ -777,18 +786,19 @@ class ModelResponseIterator:
             type_chunk = chunk.get("type", "") or ""
 
             text = ""
-            tool_use: Optional[ChatCompletionToolCallChunk] = None
+            tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
-            usage: Optional[Usage] = None
+            usage: Usage | None = None
             provider_specific_fields: Dict[str, Any] = {}
-            reasoning_content: Optional[str] = None
-            thinking_blocks: Optional[
+            reasoning_content: str | None = None
+            thinking_blocks: (
                 List[
                     Union[
                         ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
                     ]
                 ]
-            ] = None
+                | None
+            ) = None
 
             # Always use index=0 for OpenAI choice format (fixes multi-choice errors)
             index = 0
@@ -802,11 +812,8 @@ class ModelResponseIterator:
                     tool_use,
                     thinking_blocks,
                     provider_specific_fields,
+                    reasoning_content,
                 ) = self._content_block_delta_helper(chunk=chunk)
-                if thinking_blocks:
-                    reasoning_content = self._handle_reasoning_content(
-                        thinking_blocks=thinking_blocks
-                    )
             elif type_chunk == "content_block_start":
                 """
                 event: content_block_start
@@ -1058,8 +1065,8 @@ class ModelResponseIterator:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     def _handle_json_mode_chunk(
-        self, text: str, tool_use: Optional[ChatCompletionToolCallChunk]
-    ) -> Tuple[str, Optional[ChatCompletionToolCallChunk]]:
+        self, text: str, tool_use: ChatCompletionToolCallChunk | None
+    ) -> Tuple[str, ChatCompletionToolCallChunk | None]:
         """
         If JSON mode is enabled, convert the tool call to a message.
 
@@ -1107,7 +1114,7 @@ class ModelResponseIterator:
 
     def _handle_message_delta(
         self, chunk: dict
-    ) -> Tuple[str, Optional[Usage], Optional[Dict[str, Any]]]:
+    ) -> Tuple[str, Usage | None, Dict[str, Any] | None]:
         """
         Handle message_delta event for finish_reason, usage, and container.
 
@@ -1131,7 +1138,7 @@ class ModelResponseIterator:
 
     def _handle_accumulated_json_chunk(
         self, data_str: str
-    ) -> Optional[ModelResponseStream]:
+    ) -> ModelResponseStream | None:
         """
         Handle partial JSON chunks by accumulating them until valid JSON is received.
 
@@ -1156,7 +1163,7 @@ class ModelResponseIterator:
             # If it's not valid JSON yet, continue to the next chunk
             return None
 
-    def _parse_sse_data(self, str_line: str) -> Optional[ModelResponseStream]:
+    def _parse_sse_data(self, str_line: str) -> ModelResponseStream | None:
         """
         Parse SSE data line, handling both complete and partial JSON chunks.
 

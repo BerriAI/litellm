@@ -100,6 +100,7 @@ from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -363,6 +364,16 @@ def _enrich_http_exception_with_guardrail_context(
         detail.setdefault("guardrail_mode", event_hook)
 
 
+def _exception_changes_request_flow(exc: BaseException) -> bool:
+    """
+    True for guardrail exceptions the proxy turns into an alternate request flow
+    (a reroute or a passthrough response) rather than a block. A pipeline step
+    configured to block must honor that block, so these are surfaced as the
+    generic pipeline block instead of being re-raised verbatim.
+    """
+    return isinstance(exc, (SensitiveDataRouteException, ModifyResponseException))
+
+
 @dataclass(frozen=True)
 class _CallbackCapabilities:
     """Cached per-hook capability flags derived from ``litellm.callbacks``.
@@ -523,7 +534,9 @@ class ProxyLogging:
                     or "outage_alerts" in self.alert_types
                     or "region_outage_alerts" in self.alert_types
                 ):
-                    litellm.logging_callback_manager.add_litellm_callback(self.slack_alerting_instance)  # type: ignore
+                    litellm.logging_callback_manager.add_litellm_callback(
+                        self.slack_alerting_instance
+                    )  # type: ignore
                 litellm.logging_callback_manager.add_litellm_success_callback(
                     self.slack_alerting_instance.response_taking_too_long_callback
                 )
@@ -1122,7 +1135,6 @@ class ProxyLogging:
         Returns:
             Updated data dictionary if guardrail passes, None if guardrail should be skipped
         """
-        from litellm.integrations.prometheus import PrometheusLogger
         from litellm.types.guardrails import GuardrailEventHooks
 
         # Determine the event type based on call type
@@ -1195,17 +1207,13 @@ class ProxyLogging:
                 or "unknown"
             )
 
-            # Find PrometheusLogger in callbacks and record metrics
-            for prom_callback in litellm.callbacks:
-                if isinstance(prom_callback, PrometheusLogger):
-                    prom_callback._record_guardrail_metrics(
-                        guardrail_name=metrics_guardrail_name,
-                        latency_seconds=latency_seconds,
-                        status=status,
-                        error_type=error_type,
-                        hook_type="pre_call",
-                    )
-                    break
+            self._emit_guardrail_metrics(
+                guardrail_name=metrics_guardrail_name,
+                latency_seconds=latency_seconds,
+                status=status,
+                error_type=error_type,
+                hook_type="pre_call",
+            )
 
         return data
 
@@ -1354,7 +1362,7 @@ class ProxyLogging:
 
     @staticmethod
     def _handle_pipeline_result(
-        result: Any,
+        result: PipelineExecutionResult,
         data: dict,
         policy_name: str,
     ) -> dict:
@@ -1369,6 +1377,21 @@ class ProxyLogging:
             return data
 
         if result.terminal_action == "block":
+            original_exception = result.original_exception
+            if original_exception is not None and not _exception_changes_request_flow(
+                original_exception
+            ):
+                blocking_step = result.step_results[-1] if result.step_results else None
+                if blocking_step is not None:
+                    callback = PipelineExecutor.find_guardrail_callback(
+                        blocking_step.guardrail_name
+                    )
+                    if callback is not None:
+                        _enrich_http_exception_with_guardrail_context(
+                            original_exception, callback
+                        )
+                raise original_exception
+
             step_results_serializable = [
                 {
                     "guardrail": sr.guardrail_name,
@@ -1623,19 +1646,58 @@ class ProxyLogging:
         return data
 
     @staticmethod
-    async def _run_guardrail_task_with_enrichment(
-        callback: Any, coro: Awaitable[Any]
+    def _emit_guardrail_metrics(
+        guardrail_name: str,
+        latency_seconds: float,
+        status: str,
+        error_type: Optional[str],
+        hook_type: str,
+    ) -> None:
+        for prom_callback in litellm.callbacks:
+            if isinstance(prom_callback, PrometheusLogger):
+                prom_callback._record_guardrail_metrics(
+                    guardrail_name=guardrail_name,
+                    latency_seconds=latency_seconds,
+                    status=status,
+                    error_type=error_type,
+                    hook_type=hook_type,
+                )
+                break
+
+    @staticmethod
+    async def _run_guardrail_with_metrics(
+        callback: Any, coro: Awaitable[Any], hook_type: str
     ) -> Any:
         """
-        Await `coro`; if it raises an HTTPException with dict detail,
-        enrich the detail with the originating callback's `guardrail_name`
-        and `guardrail_mode` before re-raising.
+        Await `coro`, recording its latency and status to the
+        `litellm_guardrail_latency_seconds` metric under `hook_type`, and
+        enriching any raised HTTPException with the originating callback's
+        `guardrail_name`/`guardrail_mode` before re-raising.
         """
+        guardrail_name = (
+            getattr(callback, "guardrail_name", None) or type(callback).__name__
+        )
+        start_time = time.perf_counter()
+        status = "success"
+        error_type: Optional[str] = None
         try:
             return await coro
+        except SensitiveDataRouteException:
+            status = "intervened"
+            raise
         except Exception as e:
+            status = "error"
+            error_type = type(e).__name__
             _enrich_http_exception_with_guardrail_context(e, callback)
             raise
+        finally:
+            ProxyLogging._emit_guardrail_metrics(
+                guardrail_name=guardrail_name,
+                latency_seconds=time.perf_counter() - start_time,
+                status=status,
+                error_type=error_type,
+                hook_type=hook_type,
+            )
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
@@ -1691,10 +1753,8 @@ class ProxyLogging:
 
         for callback in callbacks:
             if isinstance(callback, str):
-                resolved: Any = (
-                    litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
-                        cast(_custom_logger_compatible_callbacks_literal, callback)
-                    )
+                resolved: Any = litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class(
+                    cast(_custom_logger_compatible_callbacks_literal, callback)
                 )
             else:
                 resolved = callback
@@ -1853,22 +1913,24 @@ class ProxyLogging:
                     and not getattr(callback, "use_native_during_call_hook", False)
                 ):
                     data["guardrail_to_apply"] = callback
-                    guardrail_task = self._run_guardrail_task_with_enrichment(
+                    guardrail_task = self._run_guardrail_with_metrics(
                         callback,
                         unified_guardrail.async_moderation_hook(
                             user_api_key_dict=user_api_key_dict,
                             data=data,
                             call_type=call_type,
                         ),
+                        "during_call",
                     )
                 else:
-                    guardrail_task = self._run_guardrail_task_with_enrichment(
+                    guardrail_task = self._run_guardrail_with_metrics(
                         callback,
                         callback.async_moderation_hook(
                             data=data,
                             user_api_key_dict=user_api_key_auth_dict,  # type: ignore
                             call_type=call_type,  # type: ignore
                         ),
+                        "during_call",
                     )
                 guardrail_tasks.append(guardrail_task)
 
@@ -2394,29 +2456,25 @@ class ProxyLogging:
 
                 if "apply_guardrail" in type(callback).__dict__:
                     data["guardrail_to_apply"] = callback
-                    try:
-                        guardrail_response = (
-                            await unified_guardrail.async_post_call_success_hook(
-                                user_api_key_dict=user_api_key_dict,
-                                data=data,
-                                response=response,
-                            )
-                        )
-                    except Exception as e:
-                        _enrich_http_exception_with_guardrail_context(e, callback)
-                        raise
+                    guardrail_response = await self._run_guardrail_with_metrics(
+                        callback,
+                        unified_guardrail.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        ),
+                        "post_call",
+                    )
                 else:
-                    try:
-                        guardrail_response = (
-                            await callback.async_post_call_success_hook(
-                                user_api_key_dict=user_api_key_dict,
-                                data=data,
-                                response=response,
-                            )
-                        )
-                    except Exception as e:
-                        _enrich_http_exception_with_guardrail_context(e, callback)
-                        raise
+                    guardrail_response = await self._run_guardrail_with_metrics(
+                        callback,
+                        callback.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=response,
+                        ),
+                        "post_call",
+                    )
 
                 if guardrail_response is not None:
                     response = guardrail_response
@@ -3627,7 +3685,9 @@ class PrismaClient:
                 return response
             elif table_name == "user_notification":
                 if query_type == "find_unique":
-                    response = await UserNotificationsRepository(self).table.find_unique(  # type: ignore
+                    response = await UserNotificationsRepository(
+                        self
+                    ).table.find_unique(  # type: ignore
                         where={"user_id": user_id}  # type: ignore
                     )
                 elif query_type == "find_all":
@@ -3792,6 +3852,10 @@ class PrismaClient:
             db_data["members_with_roles"], list
         ):
             db_data["members_with_roles"] = json.dumps(db_data["members_with_roles"])
+        if db_data.get("budget_limits", None) is not None and isinstance(
+            db_data["budget_limits"], list
+        ):
+            db_data["budget_limits"] = json.dumps(db_data["budget_limits"])
         return db_data
 
     # Define a retrying strategy with exponential backoff
@@ -3827,7 +3891,9 @@ class PrismaClient:
                 print_verbose(
                     "PrismaClient: Before upsert into litellm_verificationtoken"
                 )
-                new_verification_token = await VerificationTokenRepository(self).table.upsert(  # type: ignore
+                new_verification_token = await VerificationTokenRepository(
+                    self
+                ).table.upsert(  # type: ignore
                     where={
                         "token": hashed_token,
                     },
@@ -5713,19 +5779,19 @@ async def update_daily_tag_spend(
     """
     n_retry_times = 3
     try:
-        if (
-            proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis()
-        ):
+        if proxy_logging_obj.db_spend_update_writer.redis_update_buffer._should_commit_spend_updates_to_redis():
             await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db_with_redis(
                 prisma_client=prisma_client,
                 n_retry_times=n_retry_times,
                 proxy_logging_obj=proxy_logging_obj,
             )
         else:
-            await proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
-                prisma_client=prisma_client,
-                n_retry_times=n_retry_times,
-                proxy_logging_obj=proxy_logging_obj,
+            await (
+                proxy_logging_obj.db_spend_update_writer._commit_daily_tag_spend_to_db(
+                    prisma_client=prisma_client,
+                    n_retry_times=n_retry_times,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
             )
     except Exception as e:
         # NOTE: keep this as a plain ``error`` (no traceback) to match the

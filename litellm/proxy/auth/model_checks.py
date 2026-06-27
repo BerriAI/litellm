@@ -1,6 +1,7 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
-from typing import Dict, List, Optional, Set
+import copy
+from typing import Any, Dict, List, Optional, Set
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -122,9 +123,16 @@ def get_key_models(
             SpecialModelNames.all_team_models.value in all_models
             and user_api_key_dict.team_id is not None
         ):
-            all_models = list(
-                user_api_key_dict.team_models
-            )  # copy to avoid mutating cached objects
+            all_models = list(user_api_key_dict.team_models)
+            if SpecialModelNames.all_team_models.value in all_models:
+                all_models = [
+                    model
+                    for model in all_models
+                    if model != SpecialModelNames.all_team_models.value
+                ]
+                all_models.extend(proxy_model_list)
+                if include_model_access_groups:
+                    all_models.extend(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models:
             all_models = list(proxy_model_list)  # copy to avoid mutating caller's list
             if include_model_access_groups:
@@ -160,6 +168,12 @@ def get_team_models(
         all_models_set.update(team_models)
         if SpecialModelNames.all_team_models.value in all_models_set:
             all_models_set.update(team_models)
+            # GH#30619: expand all-team-models sentinel
+            # to the actual proxy model list
+            all_models_set.discard(SpecialModelNames.all_team_models.value)
+            all_models_set.update(proxy_model_list)
+            if include_model_access_groups:
+                all_models_set.update(model_access_groups.keys())
         if SpecialModelNames.all_proxy_models.value in all_models_set:
             all_models_set.update(proxy_model_list)
             if include_model_access_groups:
@@ -268,8 +282,18 @@ def _hydrate_litellm_credential_name(
 def get_known_models_from_wildcard(
     wildcard_model: str, litellm_params: Optional[LiteLLM_Params] = None
 ) -> List[str]:
+    wildcard_model_to_expand = (
+        litellm_params.model
+        if wildcard_model == "*"
+        and litellm_params is not None
+        and _check_wildcard_routing(litellm_params.model)
+        and "/" in litellm_params.model
+        else wildcard_model
+    )
     try:
-        wildcard_provider_prefix, wildcard_suffix = wildcard_model.split("/", 1)
+        wildcard_provider_prefix, wildcard_suffix = wildcard_model_to_expand.split(
+            "/", 1
+        )
     except ValueError:  # safely fail
         return []
 
@@ -326,6 +350,68 @@ def get_known_models_from_wildcard(
                 model = f"{wildcard_provider_prefix}/{model}"
         suffix_appended_wildcard_models.append(model)
     return suffix_appended_wildcard_models or []
+
+
+def expand_wildcard_deployments_for_model_info(
+    deployments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Expand wildcard deployments into one row per known provider model.
+
+    PR #30025 changed /model/info to read from llm_router.model_list (correct,
+    so team-scoped rows are included). This function restores wildcard expansion
+    on top of that: a wildcard deployment like model_name="*" / litellm_params.model="openai/*"
+    becomes one entry per known openai model, matching /v1/models behaviour.
+    """
+    expanded: list[dict[str, Any]] = []
+    for deployment in deployments:
+        model_name = str(deployment.get("model_name") or "")
+        raw_params = deployment.get("litellm_params")
+        litellm_params_dict: dict[str, Any] = (
+            raw_params if isinstance(raw_params, dict) else {}
+        )
+        litellm_model = str(litellm_params_dict.get("model") or "")
+
+        # Determine the wildcard pattern to expand.
+        # Branch order matters: only fall to litellm_model when model_name is
+        # also a wildcard, so a concrete model_name is never overwritten.
+        if _check_wildcard_routing(model_name) and "/" in model_name:
+            wildcard_pattern = model_name
+        elif _check_wildcard_routing(model_name) and _check_wildcard_routing(
+            litellm_model
+        ):
+            wildcard_pattern = litellm_model
+        elif _check_wildcard_routing(model_name):
+            wildcard_pattern = model_name
+        else:
+            expanded.append(deployment)
+            continue
+
+        try:
+            litellm_params = (
+                LiteLLM_Params.model_validate(litellm_params_dict)
+                if litellm_params_dict
+                else None
+            )
+        except Exception:
+            expanded.append(deployment)
+            continue
+        expanded_names = get_known_models_from_wildcard(
+            wildcard_model=wildcard_pattern,
+            litellm_params=litellm_params,
+        )
+        if not expanded_names:
+            expanded.append(deployment)
+            continue
+
+        for name in expanded_names:
+            row = copy.deepcopy(deployment)
+            row["model_name"] = name
+            params = row.get("litellm_params")
+            if isinstance(params, dict):
+                params["model"] = name
+            expanded.append(row)
+
+    return expanded
 
 
 def _get_wildcard_models(

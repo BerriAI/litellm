@@ -27,6 +27,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
+    GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -187,6 +188,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         api_key: Optional[str] = None,
         additional_provider_specific_params: Optional[Dict[str, Any]] = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
+        fail_on_error: Optional[bool] = True,
         extra_headers: Optional[list] = None,
         **kwargs,
     ):
@@ -222,6 +224,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             unreachable_fallback
         )
+
+        self.fail_on_error: bool = True if fail_on_error is None else fail_on_error
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:
@@ -299,7 +303,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             f" http_status_code={http_status_code}" if http_status_code else ""
         )
         verbose_proxy_logger.critical(
-            "Generic Guardrail API unreachable (fail-open). Proceeding without guardrail.%s "
+            "Generic Guardrail API error (fail-open). Proceeding without guardrail.%s "
             "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
             status_suffix,
             getattr(self, "guardrail_name", None),
@@ -351,7 +355,10 @@ class GenericGuardrailAPI(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"],
         is_unreachable: bool = True,
     ) -> GenericGuardrailAPIInputs:
-        if is_unreachable and self.unreachable_fallback == "fail_open":
+        unreachable_fail_open = (
+            is_unreachable and self.unreachable_fallback == "fail_open"
+        )
+        if unreachable_fail_open or not self.fail_on_error:
             http_status_code = getattr(
                 getattr(error, "response", None), "status_code", None
             )
@@ -432,26 +439,30 @@ class GenericGuardrailAPI(CustomGuardrail):
             extra_allowlist=extra_allowlist,
         )
 
-        # Create request payload
-        guardrail_request = GenericGuardrailAPIRequest(
-            litellm_call_id=logging_obj.litellm_call_id if logging_obj else None,
-            litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
-            texts=texts,
-            request_data=user_metadata,
-            request_headers=inbound_headers,
-            litellm_version=litellm_version,
-            images=images,
-            tools=tools,
-            structured_messages=structured_messages,
-            tool_calls=tool_calls,
-            additional_provider_specific_params=additional_params,
-            input_type=input_type,
-            model=model,
-        )
-
-        headers = self._build_request_headers()
-
         try:
+            # Create request payload
+            guardrail_request = GenericGuardrailAPIRequest(
+                litellm_call_id=logging_obj.litellm_call_id if logging_obj else None,
+                litellm_trace_id=logging_obj.litellm_trace_id if logging_obj else None,
+                texts=texts,
+                request_data=user_metadata,
+                request_headers=inbound_headers,
+                litellm_version=litellm_version,
+                images=images,
+                tools=(
+                    [GuardrailToolParam.model_validate(t) for t in tools]
+                    if tools
+                    else None
+                ),
+                structured_messages=structured_messages,
+                tool_calls=tool_calls,
+                additional_provider_specific_params=additional_params,
+                input_type=input_type,
+                model=model,
+            )
+
+            headers = self._build_request_headers()
+
             # Make the API request
             # Use mode="json" to ensure all iterables are converted to lists
             response = await self.async_handler.post(

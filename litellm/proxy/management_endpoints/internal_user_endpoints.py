@@ -36,6 +36,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
     require_caller_user_id_for_non_admin,
+    validate_finite_spend,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -746,7 +747,7 @@ def _build_user_info_response(
         user_info = {"spend": spend}
 
     returned_keys = _process_keys_for_user_info(keys=keys, all_teams=teams_1)
-    team_list.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+    team_list.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     _user_info = (
         user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
@@ -1053,7 +1054,7 @@ async def _get_user_info_for_proxy_admin(user_api_key_dict: UserAPIKeyAuth):
     # cast all teams to LiteLLM_TeamTable
     _teams_in_db: List = results[0]["teams"] or []
     _teams_in_db = [LiteLLM_TeamTable(**team) for team in _teams_in_db]
-    _teams_in_db.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+    _teams_in_db.sort(key=lambda x: getattr(x, "team_alias", "") or "")
     returned_keys = _process_keys_for_user_info(keys=keys_in_db, all_teams=_teams_in_db)
 
     # Get admin's own user_id and user_info
@@ -1256,6 +1257,25 @@ def _check_user_update_authz(
         )
 
 
+async def _invalidate_user_spend_counter_if_changed(
+    non_default_values: dict[str, Any],
+) -> None:
+    """Invalidate the cross-pod spend counter after a direct ``spend`` change.
+
+    A direct ``spend`` change must also invalidate the cross-pod spend counter
+    enforcement reads; the DB write alone leaves a warm counter at the stale
+    value. ``non_default_values["user_id"]`` is populated in every branch of the
+    caller (incl. the email-new-user insert path, whose response is a bare model
+    and not safely subscriptable).
+    """
+    if non_default_values.get("spend") is not None:
+        from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+        await _invalidate_spend_counter(
+            counter_key=f"spend:user:{non_default_values['user_id']}"
+        )
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1336,6 +1356,9 @@ async def _update_single_user_helper(
         existing_metadata=existing_metadata or {},
     )
 
+    # Reject NaN/±inf spend before it can reach the DB / spend counter.
+    validate_finite_spend(non_default_values.get("spend"))
+
     # Perform the update
     response: Optional[Dict[str, Any]] = None
 
@@ -1383,6 +1406,8 @@ async def _update_single_user_helper(
             user_api_key_dict=user_api_key_dict,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
+
+        await _invalidate_user_spend_counter_if_changed(non_default_values)
 
     if response is None:
         raise HTTPException(
@@ -1705,7 +1730,8 @@ async def bulk_user_update(
         try:
             # Perform bulk database update
             await UserRepository(prisma_client).table.update_many(
-                where={}, data=non_default_values  # Update all users
+                where={},
+                data=non_default_values,  # Update all users
             )
 
             # Create individual success results

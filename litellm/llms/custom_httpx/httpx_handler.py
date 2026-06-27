@@ -54,7 +54,10 @@ class HTTPHandler:
     ):
         try:
             response = await self.client.post(
-                url, data=data, params=params, headers=headers  # type: ignore
+                url,
+                data=data,
+                params=params,
+                headers=headers,  # type: ignore
             )
             return response
         except Exception as e:

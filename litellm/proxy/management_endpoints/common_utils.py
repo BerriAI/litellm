@@ -1,7 +1,26 @@
+import math
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
+
+
+# Defined above the `litellm.proxy.*` imports so the name is bound even when
+# this module is imported first through the proxy import cycle (CodeQL:
+# module-level cyclic import). Depends only on `math` + `HTTPException`.
+def validate_finite_spend(spend: float | None) -> None:
+    """Reject NaN/±inf spend before it reaches the DB / spend counter.
+
+    A non-finite spend would otherwise slip past `spend >= max_budget`
+    enforcement, since any comparison with NaN (and `-inf >= max_budget`)
+    is False, letting the entity keep spending past its configured budget.
+    """
+    if spend is not None and not math.isfinite(spend):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"spend must be a finite number. Received: {spend}"},
+        )
+
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache

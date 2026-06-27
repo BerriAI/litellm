@@ -1021,3 +1021,171 @@ class TestMultimodalSupport:
             call_args = mock_post.call_args
             json_payload = call_args.kwargs["json"]
             assert isinstance(json_payload["structured_messages"], list)
+
+
+class TestToolSupport:
+    """Test tool handling in guardrail requests"""
+
+    @pytest.mark.asyncio
+    async def test_builtin_tools_without_function_block_do_not_crash(
+        self, generic_guardrail
+    ):
+        """Built-in tools (code_interpreter, file_search) have no `function` block.
+
+        Regression for a 500 where serializing them raised a Pydantic
+        ValidationError because the tool schema required `function`. The full
+        tool, including built-in tool config, must reach the guardrail intact.
+        """
+        tools = [
+            {"type": "function", "function": {"name": "get_weather", "parameters": {}}},
+            {"type": "code_interpreter"},
+            {
+                "type": "file_search",
+                "vector_store_ids": ["vs_1"],
+                "max_num_results": 5,
+            },
+        ]
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"action": "NONE", "texts": ["hi"]}
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"], "tools": tools},
+                request_data={},
+                input_type="request",
+            )
+
+            forwarded_tools = mock_post.call_args.kwargs["json"]["tools"]
+
+        assert forwarded_tools == tools
+
+
+class TestFailOnError:
+    """Test fail_on_error: complete fail-open on any guardrail error"""
+
+    @pytest.fixture
+    def fail_open_guardrail(self):
+        return GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-fail-open-guardrail",
+            event_hook="pre_call",
+            default_on=True,
+            fail_on_error=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_endpoint_error_continues_when_fail_on_error_false(
+        self, fail_open_guardrail
+    ):
+        """A non-unreachable endpoint error (HTTP 400) is swallowed and the request proceeds unchanged."""
+        error = httpx.HTTPStatusError(
+            "bad request", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", side_effect=error
+        ):
+            result = await fail_open_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data={},
+                input_type="request",
+            )
+
+        assert result == {"texts": ["hi"]}
+
+    @pytest.mark.asyncio
+    async def test_internal_error_continues_without_calling_endpoint(
+        self, fail_open_guardrail
+    ):
+        """An error while building the request (here: invalid input_type) fails open too.
+
+        Proves the request construction runs inside the protected block: the
+        endpoint is never called, yet the request still proceeds unchanged.
+        """
+        with patch.object(fail_open_guardrail.async_handler, "post") as mock_post:
+            result = await fail_open_guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data={},
+                input_type="bogus",  # type: ignore[arg-type]
+            )
+
+        mock_post.assert_not_called()
+        assert result == {"texts": ["hi"]}
+
+    @pytest.mark.asyncio
+    async def test_valid_block_still_blocks_when_fail_on_error_false(
+        self, fail_open_guardrail
+    ):
+        """Only a valid response acts: a BLOCKED decision still raises even with fail_on_error=False."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "BLOCKED",
+            "blocked_reason": "policy violation",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(GuardrailRaisedException):
+                await fail_open_guardrail.apply_guardrail(
+                    inputs={"texts": ["hi"]},
+                    request_data={},
+                    input_type="request",
+                )
+
+    @pytest.mark.asyncio
+    async def test_endpoint_error_raises_by_default(self, generic_guardrail):
+        """Default fail_on_error=True keeps blocking on a non-unreachable endpoint error."""
+        error = httpx.HTTPStatusError(
+            "bad request", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+        with patch.object(generic_guardrail.async_handler, "post", side_effect=error):
+            with pytest.raises(Exception, match="Generic Guardrail API failed"):
+                await generic_guardrail.apply_guardrail(
+                    inputs={"texts": ["hi"]},
+                    request_data={},
+                    input_type="request",
+                )
+
+    @pytest.mark.asyncio
+    async def test_response_path_continues_when_fail_on_error_false(
+        self, fail_open_guardrail
+    ):
+        """fail_on_error governs the response path identically to the request path."""
+        error = httpx.HTTPStatusError(
+            "bad request", request=MagicMock(), response=MagicMock(status_code=400)
+        )
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", side_effect=error
+        ):
+            result = await fail_open_guardrail.apply_guardrail(
+                inputs={"texts": ["model output"]},
+                request_data={},
+                input_type="response",
+            )
+
+        assert result == {"texts": ["model output"]}
+
+    @pytest.mark.asyncio
+    async def test_response_path_valid_block_still_blocks(self, fail_open_guardrail):
+        """On the response path too, a valid BLOCKED decision raises despite fail_on_error=False."""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "BLOCKED",
+            "blocked_reason": "policy violation",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            fail_open_guardrail.async_handler, "post", return_value=mock_response
+        ):
+            with pytest.raises(GuardrailRaisedException):
+                await fail_open_guardrail.apply_guardrail(
+                    inputs={"texts": ["model output"]},
+                    request_data={},
+                    input_type="response",
+                )

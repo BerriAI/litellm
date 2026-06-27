@@ -381,5 +381,93 @@ class TestCompletionCostIntegration:
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
 
+class TestGPTImage2OutputImageTokensNoBreakdown:
+    """
+    Regression test: the OpenAI Images endpoints (/v1/images/generations and
+    /v1/images/edits) return usage with NO output token breakdown — litellm's
+    ImageUsage has no ``output_tokens_details`` field. Before the fix, the
+    generated-image OUTPUT tokens were priced at the text rate
+    (``output_cost_per_token`` = $10/1M for gpt-image-2) instead of the image rate
+    (``output_cost_per_image_token`` = $30/1M), a ~3x undercount on the dominant
+    cost component.
+    """
+
+    def test_gpt_image_2_output_priced_as_image_when_no_breakdown(self):
+        from litellm.llms.openai.image_generation.cost_calculator import (
+            cost_calculator,
+        )
+
+        # Mirrors a real gpt-image-2 /v1/images/edits response: input breakdown is
+        # present, but there is no usable output token breakdown.
+        usage = ImageUsage(
+            input_tokens=3987,
+            output_tokens=5488,
+            total_tokens=9475,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=943,
+                image_tokens=3044,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="test")],
+        )
+        image_response.usage = usage
+        image_response._hidden_params = {"custom_llm_provider": "openai"}
+
+        cost = cost_calculator(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+        # gpt-image-2 pricing:
+        #   text input:   943  * $5/1M  = 0.004715
+        #   image input:  3044 * $8/1M  = 0.024352
+        #   image output: 5488 * $30/1M = 0.164640  (NOT text output $10/1M = 0.054880)
+        expected_cost = 943 * 5e-6 + 3044 * 8e-6 + 5488 * 3e-5
+        assert abs(cost - expected_cost) < 1e-6, (
+            f"Expected {expected_cost}, got {cost}. Generated image output tokens "
+            f"are likely being priced at the text output_cost_per_token rate."
+        )
+
+    def test_gpt_image_2_chat_usage_without_breakdown_is_costed_not_zero(self):
+        """A chat ``Usage`` with ``completion_tokens_details=None`` must still be
+        costed via ``generic_cost_per_token`` (output at the text rate) rather than
+        erroring or silently returning 0.0."""
+        from litellm.llms.openai.image_generation.cost_calculator import (
+            cost_calculator,
+        )
+
+        usage = Usage(
+            prompt_tokens=600,
+            completion_tokens=5000,
+            total_tokens=5600,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                image_tokens=500,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(b64_json="test")],
+        )
+        image_response.usage = usage
+        image_response._hidden_params = {"custom_llm_provider": "openai"}
+
+        cost = cost_calculator(
+            model="gpt-image-2",
+            image_response=image_response,
+            custom_llm_provider="openai",
+        )
+
+        # No output breakdown -> output priced at the text rate (output_cost_per_token):
+        #   text in 100*$5/1M + image in 500*$8/1M + output 5000*$10/1M
+        expected_cost = 100 * 5e-6 + 500 * 8e-6 + 5000 * 1e-5
+        assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

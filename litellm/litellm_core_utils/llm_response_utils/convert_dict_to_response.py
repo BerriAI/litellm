@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import time
 import traceback
 from typing import Dict, Iterable, List, Literal, Optional, Tuple, Union, cast
@@ -118,7 +119,44 @@ def convert_tool_call_to_json_mode(
     return None, None
 
 
-async def convert_to_streaming_response_async(response_object: Optional[dict] = None):
+# Whitespace-preserving word splitter used by the cache-hit replay generators.
+# Each match is any leading whitespace plus a non-whitespace run plus any
+# trailing whitespace, so concatenating the matches losslessly reconstructs
+# the original string (including content that starts with whitespace).
+_REPLAY_CONTENT_SLICE_RE = re.compile(r"\s*\S+\s*", re.UNICODE)
+
+
+def _split_assembled_content_for_replay(content: Optional[str]) -> list[str]:
+    """
+    Slice an assembled cached completion's ``content`` into word-shaped pieces
+    for cadence-preserving streaming replay. The split is lossless:
+    ``"".join(_split_assembled_content_for_replay(s)) == s`` for every
+    non-empty ``s``. Returns ``[]`` for ``None`` / empty / all-whitespace
+    content.
+    """
+    if not content or content.isspace():
+        # isspace() guard: on all-whitespace content the regex backtracks
+        # quadratically before returning no matches.
+        return []
+    return _REPLAY_CONTENT_SLICE_RE.findall(content)
+
+
+def _clear_later_replay_slice_metadata(choice: StreamingChoices) -> None:
+    # Rebuild the delta as content-only so every accumulate-able field (role,
+    # tool_calls, reasoning_content, thinking_blocks, audio, images,
+    # annotations, ...) is dropped on later slices instead of an enumerated
+    # subset; repeating any of them makes downstream handlers that accumulate
+    # streamed deltas collect it once per slice, and a field added to Delta
+    # later can't silently re-introduce the duplication.
+    choice.delta = Delta(content=choice.delta.content)
+    choice.logprobs = None  # type: ignore[assignment]
+    if hasattr(choice, "enhancements"):
+        del choice.enhancements
+
+
+async def convert_to_streaming_response_async(
+    response_object: Optional[dict] = None,
+):
     """
     Asynchronously converts a response object to a streaming response.
 
@@ -215,11 +253,45 @@ async def convert_to_streaming_response_async(response_object: Optional[dict] = 
     if "model" in response_object:
         model_response_object.model = response_object["model"]
 
-    yield model_response_object
-    await asyncio.sleep(0)
+    # Replay cached content with per-word cadence so stream=true cache hits
+    # don't arrive as a single SSE frame. Multi-choice (n>1) responses and
+    # unsplittable content (None/empty/whitespace-free) keep the original
+    # single-yield behavior.
+    slices: list[str] = []
+    if len(model_response_object.choices) == 1:
+        slices = _split_assembled_content_for_replay(
+            model_response_object.choices[0].delta.content
+        )
+    if len(slices) <= 1:
+        yield model_response_object
+        await asyncio.sleep(0)
+        return
+
+    # Detach usage from the base object so we can re-attach it only to the
+    # final slice chunk. A non-None usage always lives in __pydantic_extra__
+    # here (set via setattr above), so delattr cannot fail.
+    original_usage = getattr(model_response_object, "usage", None)
+    if original_usage is not None:
+        delattr(model_response_object, "usage")
+    original_finish_reason = model_response_object.choices[0].finish_reason
+    last_idx = len(slices) - 1
+    for i, piece in enumerate(slices):
+        slice_chunk = model_response_object.model_copy(deep=True)
+        slice_chunk.choices[0].delta.content = piece
+        if i > 0:
+            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
+        slice_chunk.choices[0].finish_reason = (
+            original_finish_reason if i == last_idx else None  # type: ignore[assignment]
+        )
+        if i == last_idx and original_usage is not None:
+            setattr(slice_chunk, "usage", original_usage)
+        yield slice_chunk
+        await asyncio.sleep(0)
 
 
-def convert_to_streaming_response(response_object: Optional[dict] = None):
+def convert_to_streaming_response(
+    response_object: Optional[dict] = None,
+):
     # used for yielding Cache hits when stream == True
     if response_object is None:
         raise Exception("Error in response object format")
@@ -261,9 +333,15 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
 
     if "usage" in response_object and response_object["usage"] is not None:
         setattr(model_response_object, "usage", Usage())
-        model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-        model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-        model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+        model_response_object.usage.completion_tokens = response_object["usage"].get(
+            "completion_tokens", 0
+        )  # type: ignore
+        model_response_object.usage.prompt_tokens = response_object["usage"].get(
+            "prompt_tokens", 0
+        )  # type: ignore
+        model_response_object.usage.total_tokens = response_object["usage"].get(
+            "total_tokens", 0
+        )  # type: ignore
 
     if "id" in response_object:
         model_response_object.id = response_object["id"]
@@ -278,7 +356,35 @@ def convert_to_streaming_response(response_object: Optional[dict] = None):
 
     if "model" in response_object:
         model_response_object.model = response_object["model"]
-    yield model_response_object
+
+    # Replay cached content with per-word cadence on sync cache-hit paths
+    # (S3Cache, sync completion()). See convert_to_streaming_response_async
+    # for the full rationale — this mirrors its tail.
+    slices: list[str] = []
+    if len(model_response_object.choices) == 1:
+        slices = _split_assembled_content_for_replay(
+            model_response_object.choices[0].delta.content
+        )
+    if len(slices) <= 1:
+        yield model_response_object
+        return
+
+    original_usage = getattr(model_response_object, "usage", None)
+    if original_usage is not None:
+        delattr(model_response_object, "usage")
+    original_finish_reason = model_response_object.choices[0].finish_reason
+    last_idx = len(slices) - 1
+    for i, piece in enumerate(slices):
+        slice_chunk = model_response_object.model_copy(deep=True)
+        slice_chunk.choices[0].delta.content = piece
+        if i > 0:
+            _clear_later_replay_slice_metadata(slice_chunk.choices[0])
+        slice_chunk.choices[0].finish_reason = (
+            original_finish_reason if i == last_idx else None  # type: ignore[assignment]
+        )
+        if i == last_idx and original_usage is not None:
+            setattr(slice_chunk, "usage", original_usage)
+        yield slice_chunk
 
 
 from collections import defaultdict
@@ -748,9 +854,15 @@ def convert_to_model_response_object(
             model_response_object.data = response_object["data"]
 
             if "usage" in response_object and response_object["usage"] is not None:
-                model_response_object.usage.completion_tokens = response_object["usage"].get("completion_tokens", 0)  # type: ignore
-                model_response_object.usage.prompt_tokens = response_object["usage"].get("prompt_tokens", 0)  # type: ignore
-                model_response_object.usage.total_tokens = response_object["usage"].get("total_tokens", 0)  # type: ignore
+                model_response_object.usage.completion_tokens = response_object[
+                    "usage"
+                ].get("completion_tokens", 0)  # type: ignore
+                model_response_object.usage.prompt_tokens = response_object[
+                    "usage"
+                ].get("prompt_tokens", 0)  # type: ignore
+                model_response_object.usage.total_tokens = response_object["usage"].get(
+                    "total_tokens", 0
+                )  # type: ignore
 
             if start_time is not None and end_time is not None:
                 model_response_object._response_ms = (  # type: ignore

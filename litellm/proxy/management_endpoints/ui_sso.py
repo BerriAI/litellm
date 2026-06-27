@@ -2243,8 +2243,12 @@ async def cli_poll_key(
         key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.auth.auth_checks import (
+        ExperimentalUIJWTToken,
+        get_team_object,
+        get_user_object,
+    )
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
         flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
@@ -2320,18 +2324,46 @@ async def cli_poll_key(
                     None,
                 )
 
-            # Create user object for JWT generation
             user_info = LiteLLM_UserTable(
                 user_id=user_id,
                 user_role=session_data["user_role"],
                 models=session_data.get("models", []),
-                max_budget=litellm.max_ui_session_budget,
             )
 
-            # Generate CLI JWT on-demand (expiration configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS)
-            # Pass selected team_id to ensure JWT has correct team
+            user_db_obj = await get_user_object(
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+            )
+            user_budget = user_db_obj.max_budget if user_db_obj is not None else None
+
+            team_budget: Optional[float] = None
+            team_budget_resolved = False
+            if team_id is not None:
+                try:
+                    team_obj = await get_team_object(
+                        team_id=team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                    team_budget = team_obj.max_budget
+                    team_budget_resolved = True
+                except Exception:
+                    pass
+
+            session_max_budget = (
+                litellm.max_ui_session_budget
+                if user_budget is None
+                and (team_id is None or (team_budget_resolved and team_budget is None))
+                else None
+            )
+
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-                user_info=user_info, team_id=team_id, team_alias=team_alias
+                user_info=user_info,
+                team_id=team_id,
+                team_alias=team_alias,
+                max_budget=session_max_budget,
             )
 
             # Delete cache entry (single-use)
@@ -2777,7 +2809,9 @@ class SSOAuthenticationHandler:
                     state_only_params[key] = value
 
             # Get the redirect response from fastapi-sso with only state param
-            redirect_response = await generic_sso.get_login_redirect(**state_only_params)  # type: ignore
+            redirect_response = await generic_sso.get_login_redirect(
+                **state_only_params
+            )  # type: ignore
 
             # If PKCE is enabled, add PKCE parameters to the redirect URL
             if code_verifier and "state" in redirect_params:
@@ -3204,7 +3238,9 @@ class SSOAuthenticationHandler:
             user_id = getattr(result, "id", None)
             user_email = normalize_email(getattr(result, "email", None))
             if user_role is None:
-                _role_from_attr = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
+                _role_from_attr = getattr(
+                    result, generic_user_role_attribute_name, None
+                )  # type: ignore
                 if _role_from_attr is not None:
                     # Convert enum to string if needed
                     user_role = (
@@ -4539,14 +4575,16 @@ async def debug_sso_callback(request: Request):
         )
 
     elif generic_client_id is not None:
-        result, received_response, access_token_payload = (
-            await get_generic_sso_response(
-                request=request,
-                jwt_handler=jwt_handler,
-                generic_client_id=generic_client_id,
-                redirect_url=redirect_url,
-                sso_jwt_handler=sso_jwt_handler,
-            )
+        (
+            result,
+            received_response,
+            access_token_payload,
+        ) = await get_generic_sso_response(
+            request=request,
+            jwt_handler=jwt_handler,
+            generic_client_id=generic_client_id,
+            redirect_url=redirect_url,
+            sso_jwt_handler=sso_jwt_handler,
         )
 
     # If result is None, return a basic error message

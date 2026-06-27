@@ -37,6 +37,8 @@ from pydantic import (
     ConfigDict,
     Field,
     PrivateAttr,
+    SkipValidation,
+    field_serializer,
     field_validator,
 )
 from typing_extensions import Required, TypedDict
@@ -140,6 +142,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_parallel_function_calling: Optional[bool]
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
+    supports_adaptive_thinking: Optional[bool]
     supports_url_context: Optional[bool]
     supports_none_reasoning_effort: Optional[bool]
     supports_minimal_reasoning_effort: Optional[bool]
@@ -271,6 +274,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     search_context_cost_per_query: Optional[
         SearchContextCostPerQuery
     ]  # Cost for using web search tool
+    web_search_billing_unit: Optional[
+        Literal["per_query", "per_prompt"]
+    ]  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
     citation_cost_per_token: Optional[float]  # Cost per citation token for Perplexity
     tiered_pricing: Optional[
         List[Dict[str, Any]]
@@ -1537,6 +1543,9 @@ class PromptTokensDetailsWrapper(
     video_length_seconds: Optional[float] = None
     """Length of videos sent to the model. Used for Vertex AI multimodal embeddings."""
 
+    audio_length_seconds: Optional[float] = None
+    """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
+
     cache_creation_tokens: Optional[int] = None
     """Number of cache creation tokens sent to the model. Used for Anthropic prompt caching."""
 
@@ -1551,6 +1560,8 @@ class PromptTokensDetailsWrapper(
             del self.image_count
         if self.video_length_seconds is None:
             del self.video_length_seconds
+        if self.audio_length_seconds is None:
+            del self.audio_length_seconds
         if self.web_search_requests is None:
             del self.web_search_requests
         if self.cache_creation_tokens is None:
@@ -2439,7 +2450,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
 class TranscriptionUsageDurationObject(BaseModel):
     type: Literal["duration"]
-    seconds: int
+    seconds: float
 
 
 class TranscriptionUsageInputTokenDetailsObject(BaseModel):
@@ -3146,10 +3157,41 @@ class CustomPricingLiteLLMParams(BaseModel):
     search_context_cost_per_query: Optional[Dict[str, Any]] = None
     citation_cost_per_token: Optional[float] = None
     tiered_pricing: Optional[List[Dict[str, Any]]] = None
+    cache_read_input_token_cost_above_272k_tokens: Optional[float] = None
+    cache_read_input_token_cost_above_512k_tokens: Optional[float] = None
+    input_cost_per_image_token: Optional[float] = None
+    input_cost_per_token_above_272k_tokens: Optional[float] = None
+    input_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_cost_per_token_above_272k_tokens: Optional[float] = None
+    output_cost_per_token_above_512k_tokens: Optional[float] = None
+    output_vector_size: Optional[int] = None
+    ocr_cost_per_page: Optional[float] = None
+    ocr_cost_per_credit: Optional[float] = None
+    annotation_cost_per_page: Optional[float] = None
+    regional_processing_uplift_multiplier_eu: Optional[float] = None
+    regional_processing_uplift_multiplier_us: Optional[float] = None
 
+
+# Server-controlled fields that bound or drive an interceptor's agentic loop
+# (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
+# in all_litellm_params so they are treated as LiteLLM-level and excluded from
+# get_non_default_completion_params; otherwise the OpenAI param builder sweeps
+# any unrecognized top-level key into extra_body and leaks them to the provider.
+# This is what lets the loop carry state across rerun calls without a provider
+# scrubber.
+agentic_loop_internal_litellm_params = [
+    "_agentic_loop_depth",
+    "_agentic_loop_fingerprints",
+    "_agentic_loop_api_surface",
+    "max_agentic_loops",
+    "_code_interpreter_interception_active",
+    "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_converted_stream",
+]
 
 all_litellm_params = (
-    [
+    agentic_loop_internal_litellm_params
+    + [
         "metadata",
         "litellm_metadata",
         "litellm_trace_id",
@@ -3448,6 +3490,7 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    DARKBLOOM = "darkbloom"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3505,6 +3548,7 @@ class SandboxProviders(str, Enum):
     """
 
     E2B = "e2b"
+    OPENSANDBOX = "opensandbox"
 
 
 class LiteLLMLoggingBaseClass:
@@ -3610,9 +3654,19 @@ class LiteLLMBatch(Batch):
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
-    results: OpenAIRealtimeStreamList
+    # Events are already well-formed provider dicts. Validating them against the
+    # OpenAIRealtimeEvents union makes Pydantic try every member per event, which
+    # floods thousands of ValidationErrors for events outside the union (e.g.
+    # rate_limits.updated), blocks the event loop, and discards the session usage.
+    results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
     _hidden_params: dict = {}
+
+    @field_serializer("results")
+    def _serialize_results(
+        self, results: OpenAIRealtimeStreamList
+    ) -> List[Dict[str, Any]]:
+        return [dict(event) for event in results]
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator

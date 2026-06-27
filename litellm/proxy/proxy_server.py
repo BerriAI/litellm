@@ -38,7 +38,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json
+from pydantic import BaseModel, Json, JsonValue
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -106,6 +106,10 @@ from litellm.proxy.common_utils.callback_utils import (
     process_callback,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.router_utils.add_retry_fallback_headers import (
+    get_fallback_errors_from_headers,
+    get_hidden_params_dict,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -265,6 +269,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
+    expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
@@ -311,7 +316,10 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    get_management_object_ttl,
+)
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
@@ -342,6 +350,9 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
+    rust_control_plane_router,
+)
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
@@ -666,7 +677,21 @@ _description = (
 
 
 def cleanup_router_config_variables():
-    global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, prisma_client
+    global \
+        master_key, \
+        user_config_file_path, \
+        otel_logging, \
+        user_custom_auth, \
+        user_custom_auth_path, \
+        user_custom_key_generate, \
+        user_custom_key_update, \
+        user_custom_sso, \
+        user_custom_ui_sso_sign_in_handler, \
+        use_background_health_checks, \
+        use_shared_health_check, \
+        health_check_interval, \
+        health_check_concurrency, \
+        prisma_client
 
     # Set all variables to None
     master_key = None
@@ -686,7 +711,12 @@ def cleanup_router_config_variables():
 
 
 async def proxy_shutdown_event():
-    global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
+    global \
+        prisma_client, \
+        master_key, \
+        user_custom_auth, \
+        user_custom_key_generate, \
+        user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
@@ -756,7 +786,22 @@ async def _initialize_shared_aiohttp_session():
 
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI):
-    global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
+    global \
+        prisma_client, \
+        master_key, \
+        use_background_health_checks, \
+        llm_router, \
+        llm_model_list, \
+        general_settings, \
+        proxy_budget_rescheduler_min_time, \
+        proxy_budget_rescheduler_max_time, \
+        litellm_proxy_admin_name, \
+        db_writer_client, \
+        store_model_in_db, \
+        premium_user, \
+        _license_check, \
+        proxy_batch_polling_interval, \
+        shared_aiohttp_session
     import json
 
     init_verbose_loggers()
@@ -1073,6 +1118,33 @@ _OPENAPI_HTTP_METHODS = {
 # `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
 # and cache endpoint files.
 _ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+_DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
+    {
+        "api_key",
+        "client_secret",
+        "vertex_credentials",
+        "vertex_ai_credentials",
+        "aws_access_key_id",
+        "aws_secret_access_key",
+    }
+)
+
+
+def _db_model_is_team_scoped(model: object) -> bool:
+    model_info = getattr(model, "model_info", None)
+    if isinstance(model_info, BaseModel):
+        return getattr(model_info, "team_id", None) is not None
+    if isinstance(model_info, str):
+        try:
+            model_info = json.loads(model_info)
+        except (TypeError, ValueError):
+            model_info = None
+    if isinstance(model_info, dict) and model_info.get("team_id") is not None:
+        return True
+    if getattr(model_info, "team_id", None) is not None:
+        return True
+    model_name = getattr(model, "model_name", None)
+    return isinstance(model_name, str) and model_name.startswith("model_name_")
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -1910,9 +1982,9 @@ redis_usage_cache: Optional[RedisCache] = (
     None  # redis cache used for tracking spend, tpm/rpm limits
 )
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
-native_background_mode: List[str] = (
-    []
-)  # Models that should use native provider background mode instead of polling
+native_background_mode: List[
+    str
+] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -3036,7 +3108,7 @@ async def update_cache(
     asyncio.create_task(
         user_api_key_cache.async_set_cache_pipeline(
             cache_list=values_to_update_in_cache,
-            ttl=60,
+            ttl=get_management_object_ttl(user_api_key_cache),
             litellm_parent_otel_span=parent_otel_span,
         )
     )
@@ -3219,13 +3291,9 @@ def _write_health_state_to_router_cache(
 
             exception_status = getattr(original_exception, "status_code", 500)
 
-            if (
-                llm_router.health_check_ignore_transient_errors
-                and exception_status
-                in (
-                    429,
-                    408,
-                )
+            if llm_router.health_check_ignore_transient_errors and exception_status in (
+                429,
+                408,
             ):
                 continue
 
@@ -4054,7 +4122,9 @@ class ProxyConfig:
 
             # Cast to SearchToolTypedDict for type safety
             try:
-                search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)  # type: ignore
+                search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(
+                    **search_tool
+                )  # type: ignore
                 search_tools_parsed.append(search_tool_typed)
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -4129,7 +4199,35 @@ class ProxyConfig:
         """
         Load config values into proxy global state
         """
-        global master_key, user_config_file_path, otel_logging, user_custom_auth, user_custom_auth_path, user_custom_key_generate, user_custom_key_update, user_custom_sso, user_custom_ui_sso_sign_in_handler, use_background_health_checks, use_shared_health_check, health_check_interval, health_check_concurrency, use_queue, proxy_budget_rescheduler_max_time, proxy_budget_rescheduler_min_time, ui_access_mode, litellm_master_key_hash, proxy_batch_write_at, disable_spend_logs, prompt_injection_detection_obj, redis_usage_cache, store_model_in_db, premium_user, open_telemetry_logger, health_check_details, proxy_batch_polling_interval, config_passthrough_endpoints
+        global \
+            master_key, \
+            user_config_file_path, \
+            otel_logging, \
+            user_custom_auth, \
+            user_custom_auth_path, \
+            user_custom_key_generate, \
+            user_custom_key_update, \
+            user_custom_sso, \
+            user_custom_ui_sso_sign_in_handler, \
+            use_background_health_checks, \
+            use_shared_health_check, \
+            health_check_interval, \
+            health_check_concurrency, \
+            use_queue, \
+            proxy_budget_rescheduler_max_time, \
+            proxy_budget_rescheduler_min_time, \
+            ui_access_mode, \
+            litellm_master_key_hash, \
+            proxy_batch_write_at, \
+            disable_spend_logs, \
+            prompt_injection_detection_obj, \
+            redis_usage_cache, \
+            store_model_in_db, \
+            premium_user, \
+            open_telemetry_logger, \
+            health_check_details, \
+            proxy_batch_polling_interval, \
+            config_passthrough_endpoints
 
         config: dict = await self.get_config(config_file_path=config_file_path)
 
@@ -4406,7 +4504,10 @@ class ProxyConfig:
                     pass
                 elif key == "responses":
                     # Initialize global polling via cache settings
-                    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
+                    global \
+                        polling_via_cache_enabled, \
+                        native_background_mode, \
+                        polling_cache_ttl
                     background_mode = value.get("background_mode", {})
                     polling_via_cache_enabled = background_mode.get(
                         "polling_via_cache", False
@@ -4459,6 +4560,8 @@ class ProxyConfig:
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
                     )
                     setattr(litellm, key, value)
+                    if key == "request_timeout":
+                        litellm.request_timeout_explicitly_set = True
                     if key in {"s3_audit_callback_params", "s3_callback_params"}:
                         from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
                         from litellm.litellm_core_utils.litellm_logging import (
@@ -5039,8 +5142,7 @@ class ProxyConfig:
                 ### LOAD FROM GOOGLE KMS ###
                 load_google_kms(use_google_kms=True)
             elif (
-                key_management_system
-                == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
+                key_management_system == KeyManagementSystem.AWS_SECRET_MANAGER.value  # noqa: F405
             ):
                 from litellm.secret_managers.aws_secret_manager_v2 import (
                     AWSSecretsManagerV2,
@@ -5184,6 +5286,24 @@ class ProxyConfig:
                     deleted_deployments += 1
         return deleted_deployments
 
+    def _resolve_db_litellm_param(
+        self, key: str, value: object, resolve_env_refs: bool = True
+    ) -> object:
+        if not isinstance(value, str):
+            return value
+
+        decrypted_value = decrypt_value_helper(
+            value=value, key=key, return_original_value=True
+        )
+        if (
+            resolve_env_refs
+            and key in _DB_LITELLM_PARAM_ENV_REF_KEYS
+            and isinstance(decrypted_value, str)
+            and decrypted_value.startswith("os.environ/")
+        ):
+            return get_secret(decrypted_value)
+        return decrypted_value
+
     def _add_deployment(self, db_models: list) -> int:
         """
         Iterate through db models
@@ -5201,15 +5321,13 @@ class ProxyConfig:
         ## ADD MODEL LOGIC
         for m in db_models:
             _litellm_params = m.litellm_params
+            resolve_env_refs = not _db_model_is_team_scoped(m)
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    if isinstance(v, str):
-                        # decrypt value - returns original value if decryption fails or no key is set
-                        _value = decrypt_value_helper(
-                            value=v, key=k, return_original_value=True
-                        )
-                        _litellm_params[k] = _value
+                    _litellm_params[k] = self._resolve_db_litellm_param(
+                        key=k, value=v, resolve_env_refs=resolve_env_refs
+                    )
                 _litellm_params = LiteLLM_Params(**_litellm_params)
 
             else:
@@ -5237,15 +5355,15 @@ class ProxyConfig:
         _model_list: list = []
         for m in new_models:
             _litellm_params = m.litellm_params
+            resolve_env_refs = not _db_model_is_team_scoped(m)
             if isinstance(_litellm_params, BaseModel):
                 _litellm_params = _litellm_params.model_dump()
             if isinstance(_litellm_params, dict):
                 # decrypt values
                 for k, v in _litellm_params.items():
-                    decrypted_value = decrypt_value_helper(
-                        value=v, key=k, return_original_value=True
+                    _litellm_params[k] = self._resolve_db_litellm_param(
+                        key=k, value=v, resolve_env_refs=resolve_env_refs
                     )
-                    _litellm_params[k] = decrypted_value
                 _litellm_params = LiteLLM_Params(**_litellm_params)
             else:
                 verbose_proxy_logger.error(
@@ -6575,10 +6693,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -6890,7 +7008,23 @@ async def initialize(
     use_queue=False,
     config=None,
 ):
-    global user_model, user_api_base, user_debug, user_detailed_debug, user_user_max_tokens, user_request_timeout, user_temperature, user_telemetry, user_headers, experimental, llm_model_list, llm_router, general_settings, master_key, user_custom_auth, prisma_client
+    global \
+        user_model, \
+        user_api_base, \
+        user_debug, \
+        user_detailed_debug, \
+        user_user_max_tokens, \
+        user_request_timeout, \
+        user_temperature, \
+        user_telemetry, \
+        user_headers, \
+        experimental, \
+        llm_model_list, \
+        llm_router, \
+        general_settings, \
+        master_key, \
+        user_custom_auth, \
+        prisma_client
     from litellm.proxy.common_utils.banner import show_banner
 
     show_banner()
@@ -7085,57 +7219,122 @@ def _get_client_requested_model_for_streaming(request_data: dict) -> str:
     return requested_model if isinstance(requested_model, str) else ""
 
 
+def _is_positive_int_like(value: Any) -> bool:
+    try:
+        return int(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _should_include_fallback_errors(request_data: dict[str, object]) -> bool:
+    if not general_settings.get("expose_fallback_errors_to_caller"):
+        return False
+    return request_data.get("include_fallback_errors") is True
+
+
+def _get_streaming_fallback_metadata(
+    response_obj: object,
+) -> tuple[bool, str | None, list[dict[str, object]]]:
+    additional_headers = get_hidden_params_dict(response_obj).get("additional_headers")
+    if not isinstance(additional_headers, dict):
+        return False, None, []
+
+    if not _is_positive_int_like(
+        additional_headers.get("x-litellm-attempted-fallbacks")
+    ):
+        return False, None, []
+
+    fallback_model = additional_headers.get("x-litellm-model-group")
+    fallback_errors = get_fallback_errors_from_headers(additional_headers)
+    if isinstance(fallback_model, str) and fallback_model:
+        return True, fallback_model, fallback_errors
+    return True, None, fallback_errors
+
+
+def _format_fallback_metadata_sse_event(
+    *,
+    fallback_model: str | None,
+    fallback_errors: list[dict[str, object]],
+) -> str:
+    import time
+
+    payload = {
+        "id": "litellm-fallback-metadata",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": fallback_model or "",
+        "choices": [],
+        "litellm_fallback": {
+            "fallback_model": fallback_model,
+            "errors": fallback_errors,
+        },
+    }
+    return f"data: {json.dumps(payload)}\n\n"
+
+
 def _restamp_streaming_chunk_model(
     *,
     chunk: Any,
     requested_model_from_client: str,
     request_data: dict,
     model_mismatch_logged: bool,
-) -> Tuple[Any, bool]:
+    fallback_was_attempted: bool = False,
+    fallback_model_from_metadata: str | None = None,
+) -> tuple[Any, bool]:
+    target_model = (
+        fallback_model_from_metadata
+        if fallback_was_attempted
+        else requested_model_from_client
+    )
     # Always return the client-requested model name (not provider-prefixed internal identifiers)
     # on streaming chunks.
+    # On fallback, use the public OpenAI-compatible model name. This keeps
+    # provider-prefixed internal identifiers from leaking into the public API.
     #
     # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
     # internal provider/deployment identifier is leaking into the public API, and helps
     # maintainers/operators catch regressions while preserving OpenAI-compatible output.
-    if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+    if not target_model or not isinstance(chunk, (BaseModel, dict)):
         return chunk, model_mismatch_logged
 
     # For Azure Model Router, preserve the actual model used in each chunk
-    if _is_azure_model_router_request(requested_model_from_client):
+    if not fallback_was_attempted and _is_azure_model_router_request(
+        requested_model_from_client
+    ):
         return chunk, model_mismatch_logged
 
     # For fastest_response batch completions, preserve the winning model's name
     # instead of stamping the comma-separated list the client sent.
-    if request_data.get("fastest_response", False):
+    if not fallback_was_attempted and request_data.get("fastest_response", False):
         return chunk, model_mismatch_logged
 
     downstream_model = (
         chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
     )
-    if downstream_model == requested_model_from_client:
+    if downstream_model == target_model:
         return chunk, model_mismatch_logged
 
-    if not model_mismatch_logged and downstream_model != requested_model_from_client:
+    if not model_mismatch_logged and downstream_model != target_model:
         verbose_proxy_logger.debug(
-            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+            "litellm_call_id=%s: streaming chunk model mismatch - target=%r downstream=%r fallback_was_attempted=%s. Overriding chunk model to target.",
             request_data.get("litellm_call_id"),
-            requested_model_from_client,
+            target_model,
             downstream_model,
+            fallback_was_attempted,
         )
         model_mismatch_logged = True
 
     if isinstance(chunk, dict):
-        chunk["model"] = requested_model_from_client
+        chunk["model"] = target_model
         return chunk, model_mismatch_logged
 
     try:
-        setattr(chunk, "model", requested_model_from_client)
+        chunk.model = target_model
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
             request_data.get("litellm_call_id"),
-            requested_model_from_client,
+            target_model,
             type(chunk),
             str(e),
             exc_info=True,
@@ -7294,7 +7493,14 @@ async def async_data_generator(
         requested_model_from_client = _get_client_requested_model_for_streaming(
             request_data=request_data
         )
+        (
+            fallback_was_attempted,
+            fallback_model_from_metadata,
+            fallback_errors,
+        ) = _get_streaming_fallback_metadata(response)
         model_mismatch_logged = False
+        fallback_metadata_event_sent = False
+        include_fallback_errors = _should_include_fallback_errors(request_data)
         # Use a running string instead of list + join to avoid O(n^2) overhead.
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
@@ -7332,13 +7538,37 @@ async def async_data_generator(
                     str_so_far=_str_so_far,
                 )
 
+            # Mid-stream fallbacks surface metadata on individual chunks rather than
+            # the response wrapper. Keep scanning chunks until a fallback model is
+            # resolved, then latch it for the rest of the stream.
+            if fallback_model_from_metadata is None:
+                (
+                    chunk_fallback_was_attempted,
+                    chunk_fallback_model,
+                    chunk_fallback_errors,
+                ) = _get_streaming_fallback_metadata(chunk)
+                if chunk_fallback_was_attempted:
+                    fallback_was_attempted = True
+                    fallback_model_from_metadata = chunk_fallback_model
+                    fallback_errors = fallback_errors or chunk_fallback_errors
+
+            pending_fallback_event = (
+                include_fallback_errors
+                and fallback_was_attempted
+                and fallback_errors
+                and not fallback_metadata_event_sent
+            )
+
             chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
                 chunk=chunk,
                 requested_model_from_client=requested_model_from_client,
                 request_data=request_data,
                 model_mismatch_logged=model_mismatch_logged,
+                fallback_was_attempted=fallback_was_attempted,
+                fallback_model_from_metadata=fallback_model_from_metadata,
             )
 
+            raw_passthrough = False
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, bytes):
@@ -7354,14 +7584,14 @@ async def async_data_generator(
                         raise ValueError(
                             "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                         )
-                    continue
-                if chunk.startswith(("data:", "event:", ":")):
+                    raw_passthrough = True
+                elif chunk.startswith(("data:", "event:", ":")):
                     yield (
                         chunk
                         if chunk.endswith(_SSE_FRAME_DELIMITERS)
                         else chunk + "\n\n"
                     )
-                    continue
+                    raw_passthrough = True
             elif isinstance(chunk, str) and is_raw_sse_stream:
                 raw_sse_buffer += chunk
                 while True:
@@ -7373,15 +7603,23 @@ async def async_data_generator(
                     raise ValueError(
                         "Raw SSE stream exceeded maximum buffered size without a frame delimiter"
                     )
-                continue
+                raw_passthrough = True
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
 
-            try:
-                yield _format_streaming_sse_chunk(chunk=chunk)
-            except Exception as e:
-                yield f"data: {str(e)}\n\n"
+            if not raw_passthrough:
+                try:
+                    yield _format_streaming_sse_chunk(chunk=chunk)
+                except Exception as e:
+                    yield f"data: {str(e)}\n\n"
+
+            if pending_fallback_event:
+                yield _format_fallback_metadata_sse_event(
+                    fallback_model=fallback_model_from_metadata,
+                    fallback_errors=fallback_errors,
+                )
+                fallback_metadata_event_sent = True
 
         stream_completed = True
         if not needs_iterator_wrap:
@@ -7764,7 +8002,8 @@ class ProxyStartupEvent:
 
             teams_pydantic_obj = [NewUserRequestTeam(**team) for team in _teams]
             await update_default_team_member_budget(
-                teams=teams_pydantic_obj, user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key))  # type: ignore
+                teams=teams_pydantic_obj,
+                user_api_key_dict=UserAPIKeyAuth(token=hash_token(master_key)),  # type: ignore
             )
 
     @classmethod
@@ -8597,7 +8836,13 @@ async def model_list(
                     Hiding is presentation-only: a hidden model can still be
                     called directly.
     """
-    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+    global \
+        llm_model_list, \
+        general_settings, \
+        llm_router, \
+        prisma_client, \
+        user_api_key_cache, \
+        proxy_logging_obj
 
     settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
@@ -8774,7 +9019,13 @@ async def model_info(
     scoping, health filtering, paused deployments) drives both endpoints; the
     listing's public id must resolve to the same internal deployment here.
     """
-    global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
+    global \
+        llm_model_list, \
+        general_settings, \
+        llm_router, \
+        prisma_client, \
+        user_api_key_cache, \
+        proxy_logging_obj
 
     settings = cast(dict[str, object], general_settings)  # any-ok: legacy settings
 
@@ -8925,9 +9176,9 @@ async def chat_completion(
             hasattr(user_api_key_dict, "organization_alias")
             and user_api_key_dict.organization_alias is not None
         ):
-            data["metadata"][
-                "user_api_key_org_alias"
-            ] = user_api_key_dict.organization_alias
+            data["metadata"]["user_api_key_org_alias"] = (
+                user_api_key_dict.organization_alias
+            )
         if (
             hasattr(user_api_key_dict, "agent_id")
             and user_api_key_dict.agent_id is not None
@@ -9109,9 +9360,9 @@ async def completion(
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"][
-                    "user_api_key_org_alias"
-                ] = user_api_key_dict.organization_alias
+                data["metadata"]["user_api_key_org_alias"] = (
+                    user_api_key_dict.organization_alias
+                )
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -9325,9 +9576,12 @@ async def embeddings(
                     litellm_params = deployment.get("litellm_params", {}) or {}
                     litellm_model = litellm_params.get("model", "")
                     # Check if this provider supports token arrays
-                    supports_token_arrays = litellm_model in litellm.open_ai_embedding_models or any(
-                        litellm_model.startswith(provider)
-                        for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
+                    supports_token_arrays = (
+                        litellm_model in litellm.open_ai_embedding_models
+                        or any(
+                            litellm_model.startswith(provider)
+                            for provider in LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS
+                        )
                     )
                     if not supports_token_arrays:
                         # non-openai/azure embedding model called with token input - decode tokens
@@ -9360,9 +9614,9 @@ async def embeddings(
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"][
-                    "user_api_key_org_alias"
-                ] = user_api_key_dict.organization_alias
+                data["metadata"]["user_api_key_org_alias"] = (
+                    user_api_key_dict.organization_alias
+                )
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -10768,6 +11022,7 @@ async def run_thread(
                 ),
                 media_type="text/event-stream",
                 headers={},  # Added empty headers dict, original call missed this argument
+                request=request,
             )
 
         ### ALERTING ###
@@ -11390,18 +11645,20 @@ def get_direct_access_models(
     llm_router: Router,
 ) -> List[str]:
     """
-    Get all models that user has direct access to
-    """
+    Get all models that user has direct access to.
 
-    direct_access_models: List[str] = []
-    for model in user_db_object.models:
-        deployments = llm_router.get_model_list(model_name=model)
-        if deployments is not None:
-            for deployment in deployments:
-                model_id = deployment.get("model_info", {}).get("id", None)
-                if model_id is not None:
-                    direct_access_models.append(model_id)
-    return direct_access_models
+    The 'all-proxy-models' sentinel grants direct access to every non-team
+    deployment, mirroring how get_key_models expands it for the key/team path.
+    """
+    if SpecialModelNames.all_proxy_models.value in user_db_object.models:
+        return llm_router.get_model_ids(exclude_team_models=True)
+
+    return [
+        model_id
+        for model in user_db_object.models
+        for deployment in (llm_router.get_model_list(model_name=model) or [])
+        if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
+    ]
 
 
 def _filter_models_to_user_accessible(all_models: List[Dict]) -> List[Dict]:
@@ -12318,7 +12575,12 @@ async def model_info_v2(
     }
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+    global \
+        llm_model_list, \
+        general_settings, \
+        user_config_file_path, \
+        proxy_config, \
+        llm_router
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_router is None or not llm_router.model_list:
@@ -13074,7 +13336,13 @@ async def model_info_v1(
 
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router, user_model
+    global \
+        llm_model_list, \
+        general_settings, \
+        user_config_file_path, \
+        proxy_config, \
+        llm_router, \
+        user_model
 
     # Unit tests call this handler directly; FastAPI normally resolves Query defaults.
     if not isinstance(include_team_models, bool):
@@ -13166,6 +13434,8 @@ async def model_info_v1(
     all_models: List[dict] = copy.deepcopy(llm_router.model_list)
     alias_models = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
+
+    all_models = expand_wildcard_deployments_for_model_info(all_models)
 
     allowed_model_names = _get_v1_model_info_allowed_model_names(
         user_api_key_dict=user_api_key_dict,
@@ -13416,7 +13686,12 @@ async def model_group_info(
             }
     ```
     """
-    global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
+    global \
+        llm_model_list, \
+        general_settings, \
+        user_config_file_path, \
+        proxy_config, \
+        llm_router
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_model_list is None or llm_router is None or not llm_model_list:
@@ -14808,7 +15083,14 @@ async def update_config(
     untouched — this endpoint never persists pre-existing YAML values to DB as
     a side effect of an unrelated update.
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
+    global \
+        llm_router, \
+        llm_model_list, \
+        general_settings, \
+        proxy_config, \
+        proxy_logging_obj, \
+        master_key, \
+        prisma_client
     try:
         if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
@@ -15061,7 +15343,10 @@ async def update_config_general_settings(
     response = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
         data={
-            "create": {"param_name": "general_settings", "param_value": json.dumps(general_settings)},  # type: ignore
+            "create": {
+                "param_name": "general_settings",
+                "param_value": json.dumps(general_settings),
+            },  # type: ignore
             "update": {"param_value": json.dumps(general_settings)},  # type: ignore
         },
     )
@@ -15071,6 +15356,68 @@ async def update_config_general_settings(
         register_plugins_from_config(general_settings)
 
     return response
+
+
+# Secret-bearing general_settings fields the segment masker does not match by
+# name: database_url and database_extra_connection_params embed DB credentials,
+# pass_through_endpoints carry upstream Authorization headers, and
+# alert_to_webhook_url is itself a webhook secret
+_EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset(
+    {
+        "database_url",
+        "database_extra_connection_params",
+        "pass_through_endpoints",
+        "alert_to_webhook_url",
+    }
+)
+
+
+def _is_secret_general_setting_field(field_name: str) -> bool:
+    return (
+        field_name in _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS
+        or SENSITIVE_DATA_MASKER.is_sensitive_key(field_name)
+    )
+
+
+# Matches the cap on _redact_sensitive_litellm_params (the closest analog in the
+# proxy). Past this depth we fail closed by returning "REDACTED" for the whole
+# subtree rather than recursing further — better to over-redact a pathological
+# config than to silently return a deeply-nested credential verbatim
+_REDACT_SECRET_MAX_DEPTH = 10
+
+
+def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue:
+    """Recursively redact secret leaves inside a structured field so a nested
+    credential (e.g. aws_web_identity_token under database_args) is never
+    returned to a non-admin, while non-secret siblings stay visible. At
+    _REDACT_SECRET_MAX_DEPTH the whole subtree is replaced with "REDACTED"
+    so depth-overrun fails closed."""
+    if depth >= _REDACT_SECRET_MAX_DEPTH:
+        return "REDACTED"
+    if isinstance(value, dict):
+        return {
+            key: (
+                "REDACTED"
+                if _is_secret_general_setting_field(key)
+                else _redact_secret_values_in_obj(sub, depth + 1)
+            )
+            for key, sub in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_secret_values_in_obj(item, depth + 1) for item in value]
+    return value
+
+
+def _redact_general_setting_value(
+    field_name: str, value: JsonValue, is_full_admin: bool
+) -> JsonValue:
+    if is_full_admin:
+        return value
+    if _is_secret_general_setting_field(field_name):
+        return "REDACTED"
+    if isinstance(value, (dict, list)):
+        return _redact_secret_values_in_obj(value)
+    return value
 
 
 @router.get(
@@ -15125,9 +15472,11 @@ async def get_config_general_settings(
         general_settings = dict(db_general_settings.param_value)
 
         if field_name in general_settings:
-            field_value = general_settings[field_name]
-            # Redact plugin_key from plugin configs so the shared credential
-            # is never returned even to admin-viewer callers.
+            field_value = _redact_general_setting_value(
+                field_name,
+                general_settings[field_name],
+                user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            )
             if field_name == "plugins" and isinstance(field_value, list):
                 field_value = [
                     (
@@ -15183,6 +15532,8 @@ async def get_config_list(
             },
         )
 
+    is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
     ## get general settings from db
     db_general_settings = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "general_settings"}
@@ -15204,6 +15555,7 @@ async def get_config_list(
         "maximum_spend_logs_retention_period": {"type": "String"},
         "mcp_internal_ip_ranges": {"type": "List"},
         "mcp_trusted_proxy_ranges": {"type": "List"},
+        "mcp_xff_num_trusted_hops": {"type": "Integer"},
         "always_include_stream_usage": {"type": "Boolean"},
         "forward_client_headers_to_llm_api": {"type": "Boolean"},
         "mcp_required_fields": {"type": "List"},
@@ -15231,7 +15583,11 @@ async def get_config_list(
                             field_name=sub_field,
                             field_type=sub_field_type.__name__,
                             field_description="",  # Add custom logic if descriptions are available
-                            field_default_value=general_settings.get(sub_field, None),
+                            field_default_value=_redact_general_setting_value(
+                                sub_field,
+                                general_settings.get(sub_field, None),
+                                is_full_admin,
+                            ),
                             stored_in_db=None,
                         )
                         for sub_field, sub_field_type in pydantic_class.__annotations__.items()
@@ -15246,9 +15602,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None
@@ -15261,7 +15617,11 @@ async def get_config_list(
                         field_name=field_name,
                         field_type=allowed_args[field_name]["type"],
                         field_description=field_info.description or "",
-                        field_value=general_settings.get(field_name, None),
+                        field_value=_redact_general_setting_value(
+                            field_name,
+                            general_settings.get(field_name, None),
+                            is_full_admin,
+                        ),
                         stored_in_db=_stored_in_db,
                         field_default_value=field_info.default,
                         nested_fields=nested_fields,
@@ -15285,7 +15645,9 @@ async def get_config_list(
                     field_name=field_name,
                     field_type=allowed_args[field_name]["type"],
                     field_description=field_info.description or "",
-                    field_value=_field_value,
+                    field_value=_redact_general_setting_value(
+                        field_name, _field_value, is_full_admin
+                    ),
                     stored_in_db=_stored_in_db,
                     field_default_value=field_info.default,
                     nested_fields=nested_fields,
@@ -15359,7 +15721,10 @@ async def delete_config_general_settings(
     response = await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "general_settings"},
         data={
-            "create": {"param_name": "general_settings", "param_value": json.dumps(general_settings)},  # type: ignore
+            "create": {
+                "param_name": "general_settings",
+                "param_value": json.dumps(general_settings),
+            },  # type: ignore
             "update": {"param_value": json.dumps(general_settings)},  # type: ignore
         },
     )
@@ -15427,9 +15792,9 @@ async def delete_callback(
 
         # Remove callback from success_callback list
         success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})[
-            "success_callback"
-        ] = success_callbacks
+        config.setdefault("litellm_settings", {})["success_callback"] = (
+            success_callbacks
+        )
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
@@ -15473,10 +15838,14 @@ async def get_config():
     # return the callbacks and the env variables for the callback
 
     """
-    global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
+    global \
+        llm_router, \
+        llm_model_list, \
+        general_settings, \
+        proxy_config, \
+        proxy_logging_obj, \
+        master_key
     try:
-        import base64
-
         all_available_callbacks = AllCallbacks()
 
         config_data = await proxy_config.get_config()
@@ -15542,18 +15911,14 @@ async def get_config():
             _slack_vars = [
                 "SLACK_WEBHOOK_URL",
             ]
-            _slack_env_vars = {}
-            for _var in _slack_vars:
-                env_variable = environment_variables.get(_var, None)
-                if env_variable is None:
-                    _value = os.getenv("SLACK_WEBHOOK_URL", None)
-                    _slack_env_vars[_var] = _value
-                else:
-                    # decode + decrypt the value
-                    _decrypted_value = decrypt_value_helper(
-                        value=env_variable, key=_var
-                    )
-                    _slack_env_vars[_var] = _decrypted_value
+            _slack_env_vars = {
+                _var: (
+                    value
+                    if (value := environment_variables.get(_var)) is not None
+                    else os.getenv(_var)
+                )
+                for _var in _slack_vars
+            }
             _slack_env_vars = mask_sensitive_keys(
                 _slack_env_vars, _ALERTING_SENSITIVE_VARS
             )
@@ -15584,15 +15949,9 @@ async def get_config():
             "EMAIL_LOGO_URL",
             "EMAIL_SUPPORT_CONTACT",
         ]
-        _email_env_vars = {}
-        for _var in _email_vars:
-            env_variable = environment_variables.get(_var, None)
-            if env_variable is None:
-                _email_env_vars[_var] = None
-            else:
-                # decode + decrypt the value
-                _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
-                _email_env_vars[_var] = _decrypted_value
+        _email_env_vars = {
+            _var: environment_variables.get(_var) for _var in _email_vars
+        }
         _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
 
         alerting_data.append(
@@ -16450,6 +16809,7 @@ app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
+app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
@@ -16687,17 +17047,15 @@ async def _resolve_mcp_csv_tokens(
 async def _is_mcp_access_group_cached(name: str) -> bool:
     """Return True if *name* is a known MCP access group tag.
 
-    Positive results are cached for ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
-    seconds. Negative results are cached for a short
+    Positive results are cached for the configured management-object TTL
+    (``get_management_object_ttl(user_api_key_cache)``). Negative results are
+    cached for a short
     ``DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL`` window so unauthenticated
     callers cannot force a fresh DB lookup per request for unknown names, while
     bounding staleness so a transient DB error (which surfaces as an empty
     list) cannot hide a real group for long.
     """
-    from litellm.constants import (
-        DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-        DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL,
-    )
+    from litellm.constants import DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
@@ -16711,7 +17069,7 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
         key=cache_key,
         value=result,
         ttl=(
-            DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+            get_management_object_ttl(user_api_key_cache)
             if result
             else DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL
         ),

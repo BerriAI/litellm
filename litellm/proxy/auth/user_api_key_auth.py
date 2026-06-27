@@ -1513,8 +1513,16 @@ async def _user_api_key_auth_builder(
                 verbose_logger.debug("api key not found in cache.")
                 valid_token = None
 
-            ## Check UI Hash Key
-            if valid_token is None and get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+            ## Check UI/CLI Hash Key
+            # Attempt decryption for non-sk- tokens unless the operator has
+            # explicitly set EXPERIMENTAL_UI_LOGIN=false to disable it.
+            # Unset (None) keeps the new default of always attempting decryption;
+            # decryption fails closed for anything that is not a genuine blob.
+            if (
+                valid_token is None
+                and not api_key.startswith("sk-")
+                and get_secret_bool("EXPERIMENTAL_UI_LOGIN") is not False
+            ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(
                     api_key
                 )
@@ -1983,13 +1991,16 @@ async def _user_api_key_auth_builder(
             else:
                 valid_token.team_object_permission = None
 
-            # Only cache when the key is a real team_id (non-team keys must not use key=None).
+            # Cache under the canonical "team_id:{id}" key so get_team_object and
+            # _update_team_cache serve this write from the L2 cache. The guard keeps a
+            # non-team (personal) key, whose team_id is None, from reaching the cache
+            # layer, which Redis rejects with a NoneType key error.
             if valid_token.team_id is not None and _team_obj is not None:
                 await user_api_key_cache.async_set_cache(
-                    key=valid_token.team_id,
+                    key=f"team_id:{valid_token.team_id}",
                     value=_team_obj,
                     model_type=LiteLLM_TeamTableCachedObj,
-                )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
+                )
 
             # Fetch project object if key belongs to a project
             _project_obj = None
@@ -2726,9 +2737,9 @@ async def _return_user_api_key_auth_obj(
         user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
     else:
-        return UserAPIKeyAuth(**user_api_key_kwargs)
+        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
 
 
 def get_api_key_from_custom_header(

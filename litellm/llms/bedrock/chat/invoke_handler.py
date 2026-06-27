@@ -70,6 +70,7 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     BedrockError,
     ModelResponseIterator,
+    build_bedrock_stream_error,
     get_bedrock_response_stream_shape,
     get_bedrock_tool_name,
 )
@@ -224,19 +225,19 @@ async def make_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: (
-                ModelResponse
-            ) = litellm.AmazonConverseConfig()._transform_response(
-                model=model,
-                response=response,
-                model_response=litellm.ModelResponse(),
-                stream=True,
-                logging_obj=logging_obj,
-                optional_params={},
-                api_key="",
-                data=data,
-                messages=messages,
-                encoding=litellm.encoding,
+            model_response: ModelResponse = (
+                litellm.AmazonConverseConfig()._transform_response(
+                    model=model,
+                    response=response,
+                    model_response=litellm.ModelResponse(),
+                    stream=True,
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    api_key="",
+                    data=data,
+                    messages=messages,
+                    encoding=litellm.encoding,
+                )
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
@@ -320,19 +321,19 @@ def make_sync_call(
             raise BedrockError(status_code=response.status_code, message=response.text)
 
         if fake_stream:
-            model_response: (
-                ModelResponse
-            ) = litellm.AmazonConverseConfig()._transform_response(
-                model=model,
-                response=response,
-                model_response=litellm.ModelResponse(),
-                stream=True,
-                logging_obj=logging_obj,
-                optional_params={},
-                api_key="",
-                data=data,
-                messages=messages,
-                encoding=litellm.encoding,
+            model_response: ModelResponse = (
+                litellm.AmazonConverseConfig()._transform_response(
+                    model=model,
+                    response=response,
+                    model_response=litellm.ModelResponse(),
+                    stream=True,
+                    logging_obj=logging_obj,
+                    optional_params={},
+                    api_key="",
+                    data=data,
+                    messages=messages,
+                    encoding=litellm.encoding,
+                )
             )  # type: ignore
             completion_stream: Any = MockResponseIterator(
                 model_response=model_response, json_mode=json_mode
@@ -1299,7 +1300,9 @@ class BedrockLLM(BaseAWSLLM):
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     timeout = httpx.Timeout(timeout)
                 _params["timeout"] = timeout
-            client = get_async_httpx_client(params=_params, llm_provider=litellm.LlmProviders.BEDROCK)  # type: ignore
+            client = get_async_httpx_client(
+                params=_params, llm_provider=litellm.LlmProviders.BEDROCK
+            )  # type: ignore
         else:
             client = client  # type: ignore
 
@@ -1841,23 +1844,7 @@ class AWSEventStreamDecoder:
         parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
-            decoded_body = response_dict["body"].decode()
-            if isinstance(decoded_body, dict):
-                error_message = decoded_body.get("message")
-            elif isinstance(decoded_body, str):
-                error_message = decoded_body
-            else:
-                error_message = ""
-            exception_status = response_dict["headers"].get(":exception-type")
-            error_message = exception_status + " " + error_message
-            raise BedrockError(
-                status_code=response_dict["status_code"],
-                message=(
-                    json.dumps(error_message)
-                    if isinstance(error_message, dict)
-                    else error_message
-                ),
-            )
+            raise build_bedrock_stream_error(response_dict, response_stream_shape)
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:

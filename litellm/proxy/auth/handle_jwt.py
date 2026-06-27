@@ -22,7 +22,6 @@ from fastapi import HTTPException, status
 from jwt.api_jwk import PyJWK
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -48,7 +47,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    get_management_object_ttl,
+)
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 
@@ -1824,7 +1826,7 @@ class JWTAuthManager:
                     key=user_object.user_id,
                     value=user_object,
                     model_type=LiteLLM_UserTable,
-                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+                    ttl=get_management_object_ttl(user_api_key_cache),
                 )
 
         # Sync team memberships
@@ -1848,7 +1850,7 @@ class JWTAuthManager:
                     key=user_object.user_id,
                     value=user_object,
                     model_type=LiteLLM_UserTable,
-                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+                    ttl=get_management_object_ttl(user_api_key_cache),
                 )
         return None
 
@@ -1970,9 +1972,8 @@ class JWTAuthManager:
         """Main authentication and authorization builder"""
         # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
         # JWT auth if the token itself is a well-formed JWT (3-part structure).
-        if (
-            jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
-            and not jwt_handler.is_jwt(token=api_key)
+        if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(
+            token=api_key
         ):
             verbose_proxy_logger.debug(
                 "OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint."
@@ -2173,16 +2174,18 @@ class JWTAuthManager:
 
         # If JWT did not resolve team_id, attempt single-team DB fallback.
         if team_id is None:
-            team_id, team_object, team_membership_object = (
-                await JWTAuthManager._resolve_single_team_fallback(
-                    user_object=user_object,
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
-                )
+            (
+                team_id,
+                team_object,
+                team_membership_object,
+            ) = await JWTAuthManager._resolve_single_team_fallback(
+                user_object=user_object,
+                user_id=user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
             )
 
         ## MAP USER TO TEAMS

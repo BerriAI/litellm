@@ -23,10 +23,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
-    CLI_JWT_TOKEN_NAME,
+    CLI_SESSION_KEY_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
-    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
 )
@@ -67,7 +66,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    get_management_object_ttl,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
@@ -994,7 +996,7 @@ async def get_default_end_user_budget(
             key=cache_key,
             value=_budget_obj,
             model_type=LiteLLM_BudgetTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return _budget_obj
@@ -1050,7 +1052,7 @@ async def get_team_member_default_budget(
         await user_api_key_cache.async_set_cache(
             key=cache_key,
             value=budget_record.dict(),
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return LiteLLM_BudgetTable(**budget_record.dict())
@@ -1761,7 +1763,7 @@ async def get_user_object(
             key=user_id,
             value=_response,
             model_type=LiteLLM_UserTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         # save to db access time
@@ -1796,7 +1798,7 @@ async def _cache_management_object(
         key=key,
         value=value,
         model_type=model_type,
-        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        ttl=get_management_object_ttl(user_api_key_cache),
     )
 
 
@@ -2417,6 +2419,7 @@ class ExperimentalUIJWTToken:
         user_info: LiteLLM_UserTable,
         team_id: Optional[str] = None,
         team_alias: Optional[str] = None,
+        max_budget: Optional[float] = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -2432,6 +2435,7 @@ class ExperimentalUIJWTToken:
         Returns:
             Encrypted JWT token string
         """
+        import secrets
         from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -2453,18 +2457,22 @@ class ExperimentalUIJWTToken:
             # Use first team if user has teams
             _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
 
+        session_token = f"{CLI_SESSION_KEY_PREFIX}-{secrets.token_urlsafe(16)}"
+        session_alias = f"{CLI_SESSION_KEY_PREFIX}-{user_info.user_id}"
+
         valid_token = UserAPIKeyAuth(
-            token=CLI_JWT_TOKEN_NAME,
-            key_name=CLI_JWT_TOKEN_NAME,
-            key_alias=CLI_JWT_TOKEN_NAME,
-            max_budget=litellm.max_ui_session_budget,
+            token=session_token,
+            key_name=session_alias,
+            key_alias=session_alias,
             expires=expires,
+            max_budget=max_budget,
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
+            is_session_token=True,
         )
 
         return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
@@ -2694,7 +2702,7 @@ async def get_object_permission(
             key=key,
             value=_perm_obj,
             model_type=LiteLLM_ObjectPermissionTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return _perm_obj
@@ -2759,7 +2767,7 @@ async def get_managed_vector_store_rows_by_uuids(
             key=key,
             value=cached_obj,
             model_type=LiteLLM_ManagedVectorStoresTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
         result.append(cached_obj)
 
@@ -2954,6 +2962,26 @@ async def _get_agent_ids_from_access_groups(
     )
 
 
+def _resolve_all_team_model_sentinel_for_auth_check(
+    models: List[str],
+    llm_router: Optional[Router],
+    team_id: Optional[str],
+) -> List[str]:
+    if (
+        SpecialModelNames.all_team_models.value not in models
+        or team_id is None
+        or llm_router is None
+    ):
+        return models
+    proxy_models = llm_router.get_model_names()
+    non_sentinel_models = [
+        model for model in models if model != SpecialModelNames.all_team_models.value
+    ]
+    if not proxy_models:
+        return non_sentinel_models or models
+    return list(dict.fromkeys(non_sentinel_models + proxy_models))
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Optional[Router],
@@ -2970,6 +2998,12 @@ def _check_model_access_helper(
         access_groups = llm_router.get_model_access_groups(
             model_name=model, team_id=team_id
         )
+
+    models = _resolve_all_team_model_sentinel_for_auth_check(
+        models=models,
+        llm_router=llm_router,
+        team_id=team_id,
+    )
 
     if (
         len(access_groups) > 0 and llm_router is not None
@@ -3663,9 +3697,18 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            # name the key in the error so operators don't have to reverse-map
+            # spend back to a key; key_name is the masked form (last 4 chars)
+            key_label = valid_token.key_alias or "key"
+            key_descriptor = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
             )
 
 

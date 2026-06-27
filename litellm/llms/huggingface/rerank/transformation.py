@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
 
 import httpx
 from typing_extensions import TypedDict
@@ -35,7 +35,7 @@ class HuggingFaceRerankResponseItem(TypedDict):
 
     index: int
     score: float
-    text: Optional[str]  # Optional, included when return_text=True
+    text: str | None  # Optional, included when return_text=True
 
 
 class HuggingFaceRerankResponse(TypedDict):
@@ -50,7 +50,7 @@ HuggingFaceRerankResponseList = List[HuggingFaceRerankResponseItem]
 
 
 class HuggingFaceRerankConfig(BaseRerankConfig):
-    def get_api_base(self, model: str, api_base: Optional[str]) -> str:
+    def get_api_base(self, model: str, api_base: str | None) -> str:
         if api_base is not None:
             return api_base
         elif os.getenv("HF_API_BASE") is not None:
@@ -62,9 +62,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
-        optional_params: Optional[dict] = None,
+        optional_params: dict | None = None,
     ) -> str:
         """
         Get the complete URL for the API call, including the /rerank suffix if necessary.
@@ -89,17 +89,18 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: Optional[dict],
+        non_default_params: dict | None,
         model: str,
         drop_params: bool,
         query: str,
         documents: List[Union[str, Dict[str, Any]]],
-        custom_llm_provider: Optional[str] = None,
-        top_n: Optional[int] = None,
-        rank_fields: Optional[List[str]] = None,
-        return_documents: Optional[bool] = True,
-        max_chunks_per_doc: Optional[int] = None,
-        max_tokens_per_doc: Optional[int] = None,
+        custom_llm_provider: str | None = None,
+        top_n: int | None = None,
+        rank_fields: List[str] | None = None,
+        return_documents: bool | None = True,
+        max_chunks_per_doc: int | None = None,
+        max_tokens_per_doc: int | None = None,
+        instruction: str | None = None,
     ) -> Dict:
         optional_rerank_params = {}
         if non_default_params is not None:
@@ -121,9 +122,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        optional_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        optional_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         # Get API credentials
         api_key, api_base = self.get_api_credentials(api_key=api_key, api_base=api_base)
@@ -146,7 +147,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Union[OptionalRerankParams, dict],
         headers: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for HuggingFace rerank")
@@ -172,7 +173,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         raw_response: httpx.Response,
         model_response: RerankResponse,
         logging_obj: LoggingClass,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
@@ -275,9 +276,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
 
     def get_api_credentials(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> Tuple[str | None, str | None]:
         """
         Get API key and base URL from multiple sources.
         Returns tuple of (api_key, api_base).

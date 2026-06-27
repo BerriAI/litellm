@@ -189,9 +189,7 @@ class CustomStreamWrapper:
             True if self.check_send_stream_usage(self.stream_options) else False
         )
         self.tool_call = False
-        self.chunks: List = (
-            []
-        )  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.chunks: List = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: Optional[int] = None
@@ -1438,10 +1436,11 @@ class CustomStreamWrapper:
                 self.received_finish_reason = response_obj["finish_reason"]
         elif self.custom_llm_provider == "cached_response":
             chunk = cast(ModelResponseStream, chunk)
+            chunk_finish_reason = chunk.choices[0].finish_reason
             response_obj = {
                 "text": chunk.choices[0].delta.content,
-                "is_finished": True,
-                "finish_reason": chunk.choices[0].finish_reason,
+                "is_finished": chunk_finish_reason is not None,
+                "finish_reason": chunk_finish_reason,
                 "original_chunk": chunk,
                 "tool_calls": (
                     chunk.choices[0].delta.tool_calls
@@ -1860,8 +1859,10 @@ class CustomStreamWrapper:
         Caches the streaming response
         """
         if not cache_hit and self.logging_obj._llm_caching_handler is not None:
-            await self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
-                processed_chunk
+            await (
+                self.logging_obj._llm_caching_handler._add_streaming_response_to_cache(
+                    processed_chunk
+                )
             )
 
     def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
@@ -2005,11 +2006,29 @@ class CustomStreamWrapper:
 
         except StopIteration:
             if self.sent_last_chunk is True:
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                )
+                try:
+                    complete_streaming_response = litellm.stream_chunk_builder(
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                except Exception as e:
+                    # stream_chunk_builder can re-raise (as APIError) on large agentic
+                    # streams. The raise originates inside this except-StopIteration block,
+                    # so the sibling `except Exception` below does not catch it; it would
+                    # escape __next__ and drop the request from SpendLogs. Recover
+                    # best-effort usage from the raw chunks so cost is still tracked
+                    verbose_logger.warning(
+                        "stream_chunk_builder raised at end-of-stream (%s); logging "
+                        "best-effort usage from chunks.",
+                        str(e),
+                    )
+                    try:
+                        complete_streaming_response = self.model_response_creator(
+                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
+                        )
+                    except Exception:
+                        complete_streaming_response = None
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
@@ -2198,7 +2217,9 @@ class CustomStreamWrapper:
                             )
                         )
                         # Add MCP metadata to final chunk if present (after hooks)
-                        processed_chunk = self._add_mcp_metadata_to_final_chunk(processed_chunk)  # type: ignore[reportArgumentType]
+                        processed_chunk = self._add_mcp_metadata_to_final_chunk(
+                            processed_chunk
+                        )  # type: ignore[reportArgumentType]
 
                     return processed_chunk
                 raise StopAsyncIteration
@@ -2210,7 +2231,9 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = await asyncio.to_thread(_next_sync_or_exhausted, self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(
+                            _next_sync_or_exhausted, self.completion_stream
+                        )  # type: ignore[arg-type]
                         if chunk is _SYNC_ITER_EXHAUSTED:
                             raise StopAsyncIteration
                     if chunk is not None and chunk != b"":
@@ -2234,11 +2257,27 @@ class CustomStreamWrapper:
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
                 # log the final chunk with accurate streaming values
-                complete_streaming_response = litellm.stream_chunk_builder(
-                    chunks=self.chunks,
-                    messages=self.messages,
-                    logging_obj=self.logging_obj,
-                )
+                try:
+                    complete_streaming_response = litellm.stream_chunk_builder(
+                        chunks=self.chunks,
+                        messages=self.messages,
+                        logging_obj=self.logging_obj,
+                    )
+                except Exception as e:
+                    # see sync __next__: a raise from stream_chunk_builder inside this
+                    # except handler escapes __anext__ and drops the request from SpendLogs.
+                    # Recover best-effort usage from the raw chunks so cost is still tracked
+                    verbose_logger.warning(
+                        "stream_chunk_builder raised at end-of-stream (%s); logging "
+                        "best-effort usage from chunks.",
+                        str(e),
+                    )
+                    try:
+                        complete_streaming_response = self.model_response_creator(
+                            chunk={"usage": calculate_total_usage(chunks=self.chunks)}
+                        )
+                    except Exception:
+                        complete_streaming_response = None
 
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
