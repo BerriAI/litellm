@@ -116,19 +116,19 @@ jobs:
 
     steps:
       - name: Checkout litellm
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Azure login (OIDC, federated credential)
         # Federated credential subject MUST be:
         #   repo:<OWNER>/<REPO>:ref:refs/heads/litellm_internal_staging
         # Adjust the federated credential in AAD if you also dispatch this from
         # other branches.
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2.3.0
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -191,7 +191,7 @@ jobs:
           echo "Image-by-digest reference: ${IMAGE_REF_BY_DIGEST}"
 
       - name: Trivy vulnerability scan (by digest, fail on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Scan the immutable image-by-digest reference, not the mutable :tag —
           # avoids racing with another concurrent push that retags :latest.
@@ -205,7 +205,7 @@ jobs:
           # (See https://github.com/aquasecurity/trivy/discussions/7989)
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Cosign keyless sign (Sigstore Fulcio + Rekor)
         env:
@@ -227,7 +227,7 @@ jobs:
         # property (our build runs in the same job that signs). For an internal
         # gateway with a small trusted operator set, this is acceptable; revisit
         # if external auditors require L3.
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2.4.0
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ${{ env.ACR }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -267,7 +267,7 @@ jobs:
 
     steps:
       - name: Checkout infras repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
           repository: rayward-internal/llm-gateway-infra
@@ -276,7 +276,7 @@ jobs:
           path: infras
 
       - name: Azure login (OIDC, federated credential)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5  # v2.3.0
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -286,13 +286,13 @@ jobs:
         run: az acr login --name "${ACR%%.*}"
 
       - name: Set up Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd  # v3.1.2
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           # Modules require >= 1.10 (per modules/*/versions.tf). Match local.
           terraform_version: 1.14.9
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       # Deploy steps inlined from the previous deploy.sh — keeps /infras as
       # pure terraform-as-code. Order matters: migration runs BEFORE the

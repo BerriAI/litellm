@@ -14,7 +14,7 @@ jobs:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@1160a2240286f5da8ec72b1c0816ce2481aabf84 # v8
+      - uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10.3.0
         with:
           repo-token: "${{ secrets.GITHUB_TOKEN }}"
           stale-issue-message: "This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs."
