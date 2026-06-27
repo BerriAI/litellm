@@ -32,20 +32,31 @@ class FocusLiteLLMDatabase:
         client = self._ensure_prisma_client()
 
         where_clauses: list[str] = []
+        tag_time_clauses: list[str] = []
         query_params: list[Any] = []
         placeholder_index = 1
         if start_time_utc:
             where_clauses.append(f"dus.updated_at >= ${placeholder_index}::timestamptz")
+            tag_time_clauses.append(
+                f"sl.\"startTime\" >= (${placeholder_index}::timestamptz AT TIME ZONE 'UTC')"
+            )
             query_params.append(start_time_utc)
             placeholder_index += 1
         if end_time_utc:
             where_clauses.append(f"dus.updated_at <= ${placeholder_index}::timestamptz")
+            tag_time_clauses.append(
+                f"sl.\"startTime\" <= (${placeholder_index}::timestamptz AT TIME ZONE 'UTC')"
+            )
             query_params.append(end_time_utc)
             placeholder_index += 1
 
         where_clause = ""
         if where_clauses:
             where_clause = "WHERE " + " AND ".join(where_clauses)
+
+        tag_time_clause = ""
+        if tag_time_clauses:
+            tag_time_clause = "WHERE " + " AND ".join(tag_time_clauses)
 
         limit_clause = ""
         if limit is not None:
@@ -82,13 +93,42 @@ class FocusLiteLLMDatabase:
             tt.team_alias,
             ut.user_email as user_email,
             COALESCE(vt.organization_id, tt.organization_id) as organization_id,
-            ot.organization_alias as organization_alias
+            ot.organization_alias as organization_alias,
+            tag_rollup.request_tags as request_tags
         FROM "LiteLLM_DailyUserSpend" dus
         LEFT JOIN "LiteLLM_VerificationToken" vt ON dus.api_key = vt.token
         LEFT JOIN "LiteLLM_TeamTable" tt ON vt.team_id = tt.team_id
         LEFT JOIN "LiteLLM_UserTable" ut ON dus.user_id = ut.user_id
         LEFT JOIN "LiteLLM_OrganizationTable" ot
             ON ot.organization_id = COALESCE(vt.organization_id, tt.organization_id)
+        LEFT JOIN (
+            SELECT
+                sl."user" AS user_id,
+                to_char(sl."startTime", 'YYYY-MM-DD') AS date,
+                sl.api_key,
+                sl.model,
+                sl.custom_llm_provider,
+                sl.mcp_namespaced_tool_name,
+                ARRAY_AGG(DISTINCT tag_value ORDER BY tag_value) FILTER (WHERE tag_value IS NOT NULL) AS request_tags
+            FROM "LiteLLM_SpendLogs" sl
+            LEFT JOIN LATERAL jsonb_array_elements_text(
+                CASE
+                    WHEN jsonb_typeof(sl.request_tags::jsonb) = 'array'
+                    THEN sl.request_tags::jsonb
+                    ELSE '[]'::jsonb
+                END
+            ) AS elem(tag_value) ON TRUE
+            {tag_time_clause}
+            GROUP BY sl."user",
+                to_char(sl."startTime", 'YYYY-MM-DD'),
+                sl.api_key, sl.model, sl.custom_llm_provider, sl.mcp_namespaced_tool_name
+        ) tag_rollup
+            ON COALESCE(tag_rollup.user_id, '') = COALESCE(dus.user_id, '')
+            AND tag_rollup.date = dus.date
+            AND tag_rollup.api_key = dus.api_key
+            AND COALESCE(tag_rollup.model, '') = COALESCE(dus.model, '')
+            AND COALESCE(tag_rollup.custom_llm_provider, '') = COALESCE(dus.custom_llm_provider, '')
+            AND COALESCE(tag_rollup.mcp_namespaced_tool_name, '') = COALESCE(dus.mcp_namespaced_tool_name, '')
         {where_clause}
         ORDER BY dus.date DESC, dus.created_at DESC
         {limit_clause}
