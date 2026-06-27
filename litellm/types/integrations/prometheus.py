@@ -409,6 +409,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
@@ -424,6 +425,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
@@ -698,9 +700,9 @@ class PrometheusMetricLabels:
 
     litellm_managed_batch_created_total = _batch_user_labels
 
-    litellm_managed_file_size_bytes: List[str] = (
-        []
-    )  # labels: purpose, file_type, model, api_provider, user (custom)
+    litellm_managed_file_size_bytes: List[
+        str
+    ] = []  # labels: purpose, file_type, model, api_provider, user (custom)
 
     litellm_managed_batch_duration_seconds = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
@@ -709,9 +711,9 @@ class PrometheusMetricLabels:
 
     litellm_managed_file_created_total = _batch_user_labels
 
-    litellm_managed_file_deleted_total: List[str] = (
-        []
-    )  # only "result" label, added at metric creation
+    litellm_managed_file_deleted_total: List[
+        str
+    ] = []  # only "result" label, added at metric creation
 
     litellm_check_batch_cost_jobs_polled: List[str] = []
 

@@ -32,6 +32,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         self._project = project
         self._location = location
 
+    def _include_function_response_id(self) -> bool:
+        return False
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------
@@ -195,7 +198,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         setup_config.setdefault("inputAudioTranscription", {})
         setup_config.setdefault("outputAudioTranscription", {})
 
-        return setup_config
+        return self._finalize_gemini_live_setup(model, setup_config)
 
     def transform_realtime_request(
         self,

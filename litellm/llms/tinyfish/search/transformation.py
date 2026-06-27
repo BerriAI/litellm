@@ -67,7 +67,13 @@ class TinyfishSearchConfig(BaseSearchConfig):
         api_base: str | None = None,
         **kwargs: object,
     ) -> dict[str, str]:
-        resolved_key = api_key or get_secret_str("TINYFISH_API_KEY")
+        resolved_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("TINYFISH_API_KEY",),
+            base_env_var="TINYFISH_API_BASE",
+            default_api_base=self.TINYFISH_API_BASE,
+        )
         if not resolved_key:
             raise ValueError(
                 "TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable."
@@ -143,10 +149,8 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
         max_results_str: str = "20"
         if raw_response.request:
-            raw_param: object = (
-                raw_response.request.url.params.get(  # any-ok: httpx QueryParams.get() -> Any
-                    "max_results", "20"
-                )
+            raw_param: object = raw_response.request.url.params.get(  # any-ok: httpx QueryParams.get() -> Any
+                "max_results", "20"
             )
             max_results_str = str(raw_param)
         max_results: int = min(int(max_results_str), 20)

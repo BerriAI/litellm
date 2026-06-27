@@ -836,6 +836,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
+                "gemini_native_audio": {"type": "boolean"},
+                "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
                 "supports_code_execution": {"type": "boolean"},
                 "supports_file_search": {"type": "boolean"},
@@ -865,6 +867,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
+                "supports_speed": {"type": "boolean"},
                 "bedrock_output_config_effort_ceiling": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],

@@ -881,7 +881,9 @@ def _gemini_convert_messages_with_history(
             ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
             while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
                 if isinstance(messages[msg_i], BaseModel):
-                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[msg_i].model_dump()  # type: ignore
+                    msg_dict: Union[ChatCompletionAssistantMessage, dict] = messages[
+                        msg_i
+                    ].model_dump()  # type: ignore
                 else:
                     msg_dict = messages[msg_i]  # type: ignore
                 assistant_msg = ChatCompletionAssistantMessage(**msg_dict)  # type: ignore
@@ -945,7 +947,12 @@ def _gemini_convert_messages_with_history(
                         and len(thought_signatures) > 0
                     ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
-                        assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
+                        assistant_content.append(
+                            PartType(
+                                text=assistant_text,
+                                thoughtSignature=thought_signatures[0],
+                            )
+                        )  # type: ignore
                     else:
                         assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
@@ -1039,9 +1046,9 @@ def _gemini_convert_messages_with_history(
                                 if invocation.get("tool_type"):
                                     tr_dict["toolType"] = invocation["tool_type"]
                                 tr_part: Dict[str, Any] = {"toolResponse": tr_dict}
-                                if "thought_signature" in invocation:
+                                if "response_thought_signature" in invocation:
                                     tr_part["thoughtSignature"] = invocation[
-                                        "thought_signature"
+                                        "response_thought_signature"
                                     ]
                                 assistant_content.append(tr_part)  # type: ignore
 
@@ -1201,7 +1208,8 @@ def _transform_request_body(
         )
         if supports_response_schema is False:
             user_response_schema_message = response_schema_prompt(
-                model=model, response_schema=optional_params.get("response_schema")  # type: ignore
+                model=model,
+                response_schema=optional_params.get("response_schema"),  # type: ignore
             )
             messages.append({"role": "user", "content": user_response_schema_message})
             optional_params.pop("response_schema")

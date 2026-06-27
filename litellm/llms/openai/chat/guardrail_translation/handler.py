@@ -124,6 +124,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if model:
                 inputs["model"] = model
 
+            original_structured_messages = inputs.get("structured_messages")
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -137,26 +138,34 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if guardrailed_tools is not None:
                 data["tools"] = guardrailed_tools
 
-            # Step 3: Map guardrail responses back to original message structure
-            if guardrailed_texts and texts_to_check:
-                await self._apply_guardrail_responses_to_input_texts(
-                    messages=messages,
-                    responses=guardrailed_texts,
-                    task_mappings=text_task_mappings,
-                )
+            guardrailed_structured_messages = guardrailed_inputs.get(
+                "structured_messages"
+            )
+            if (
+                guardrailed_structured_messages is not None
+                and guardrailed_structured_messages is not original_structured_messages
+            ):
+                data["messages"] = guardrailed_structured_messages
+            else:
+                # Step 3: Map guardrail responses back to original message structure
+                if guardrailed_texts and texts_to_check:
+                    await self._apply_guardrail_responses_to_input_texts(
+                        messages=messages,
+                        responses=guardrailed_texts,
+                        task_mappings=text_task_mappings,
+                    )
 
-            # Step 4: Apply guardrailed tool calls back to messages
-            if guardrailed_tool_calls:
-                # Note: The guardrail may modify tool_calls_to_check in place
-                # or we may need to handle returned tool calls differently
-                await self._apply_guardrail_responses_to_input_tool_calls(
-                    messages=messages,
-                    tool_calls=guardrailed_tool_calls,  # type: ignore
-                    task_mappings=tool_call_task_mappings,
-                )
+                # Step 4: Apply guardrailed tool calls back to messages
+                if guardrailed_tool_calls:
+                    await self._apply_guardrail_responses_to_input_tool_calls(
+                        messages=messages,
+                        tool_calls=guardrailed_tool_calls,  # type: ignore
+                        task_mappings=tool_call_task_mappings,
+                    )
 
         verbose_proxy_logger.debug(
-            "OpenAI Chat Completions: Processed input messages: %s", messages
+            "OpenAI Chat Completions: Processed input messages: %s",
+            data.get("messages"),
         )
 
         return data
@@ -259,9 +268,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                messages[msg_idx]["content"][content_idx_optional][
-                    "text"
-                ] = guardrail_response
+                messages[msg_idx]["content"][content_idx_optional]["text"] = (
+                    guardrail_response
+                )
 
     async def _apply_guardrail_responses_to_input_tool_calls(
         self,
@@ -746,7 +755,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                choice.message.content[content_idx_optional]["text"] = guardrail_response  # type: ignore
+                choice.message.content[content_idx_optional]["text"] = (
+                    guardrail_response  # type: ignore
+                )
 
     async def _apply_guardrail_responses_to_output_tool_calls(
         self,

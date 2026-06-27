@@ -229,6 +229,8 @@ DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
     "Sonnet 4.6+, and Mythos Preview."
 )
 
+DROP_UNSUPPORTED_SPEED_WARNING = "Dropping unsupported `speed` for model=%s (drop_params=True). Fast mode is only supported on select Opus models."
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -373,6 +375,51 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             AnthropicConfig._supports_effort_level(model, level)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
         )
+
+    @staticmethod
+    def _model_supports_speed_param(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """Whether the model accepts Anthropic's ``speed`` parameter (fast mode).
+
+        Fast mode is direct Anthropic API-only (not Bedrock, Vertex, or Azure).
+        Those providers strip their prefix before this shared transform runs, so a
+        bare ``claude-opus-4-8`` would otherwise resolve to the direct-API entry;
+        the routed provider is checked explicitly to keep them out.
+        """
+        if custom_llm_provider is not None and custom_llm_provider != "anthropic":
+            return False
+        return (
+            AnthropicModelInfo._get_exact_model_capability(model, "supports_speed")
+            is True
+        )
+
+    @staticmethod
+    def _maybe_drop_speed_param(
+        model: str,
+        optional_params: dict,
+        drop_params: bool,
+        custom_llm_provider: Optional[str] = None,
+    ) -> None:
+        if "speed" not in optional_params:
+            return
+        if AnthropicConfig._model_supports_speed_param(model, custom_llm_provider):
+            return
+        if not (litellm.drop_params or drop_params):
+            speed_value = optional_params.get("speed")
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support speed={speed_value!r}. "
+                    "To drop unsupported params, set "
+                    "`litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+        litellm.verbose_logger.warning(
+            DROP_UNSUPPORTED_SPEED_WARNING,
+            model,
+        )
+        optional_params.pop("speed", None)
 
     @staticmethod
     def _raise_invalid_reasoning_effort(
@@ -700,7 +747,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     additional_tool_params[k] = v
 
             returned_tool = AnthropicHostedTools(
-                type=tool["type"], name=function_name, **additional_tool_params  # type: ignore
+                type=tool["type"],
+                name=function_name,
+                **additional_tool_params,  # type: ignore
             )
         elif tool["type"] == "url":  # mcp server tool
             mcp_server = AnthropicMcpServerTool(**tool)  # type: ignore
@@ -1240,14 +1289,36 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
     @staticmethod
-    def _get_int_param(params: Dict[str, Any], key: str) -> Optional[int]:
-        value = params.get(key)
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
+    def _translate_legacy_thinking_for_adaptive_model(
+        model: str, optional_params: Dict[str, Any]
+    ) -> None:
+        if not AnthropicConfig._is_adaptive_thinking_model(model):
+            return
+
+        thinking = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+            return
+
+        budget_tokens = (
+            AnthropicConfig._coerce_optional_int(thinking.get("budget_tokens")) or 0
+        )
+        max_tokens = AnthropicConfig._coerce_optional_int(
+            optional_params.get("max_tokens")
+        )
+        inferred_effort = AnthropicConfig._legacy_thinking_budget_to_effort(
+            model=model,
+            budget_tokens=budget_tokens,
+            max_tokens=max_tokens,
+        )
+
+        optional_params["thinking"] = {"type": "adaptive"}
+        output_config = optional_params.get("output_config")
+        if not isinstance(output_config, dict):
+            output_config = {}
+        else:
+            output_config = dict(output_config)
+        output_config.setdefault("effort", inferred_effort)
+        optional_params["output_config"] = output_config
 
     @staticmethod
     def _legacy_thinking_budget_to_effort(
@@ -1272,38 +1343,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return "low"
 
     @staticmethod
-    def _translate_legacy_thinking_for_adaptive_model(
-        model: str, optional_params: Dict[str, Any]
-    ) -> None:
-        """Translate legacy ``thinking.type=enabled`` to adaptive thinking.
-
-        Claude 4.6+ adaptive-thinking models reject the older budget_tokens
-        shape. Preserve an explicit output_config.effort if the caller provided
-        one; otherwise infer the closest effort from the legacy budget.
-        """
-        if not AnthropicConfig._is_adaptive_thinking_model(model):
-            return
-
-        thinking = optional_params.get("thinking")
-        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
-            return
-
-        budget_tokens = AnthropicConfig._get_int_param(thinking, "budget_tokens") or 0
-        max_tokens = AnthropicConfig._get_int_param(optional_params, "max_tokens")
-        inferred_effort = AnthropicConfig._legacy_thinking_budget_to_effort(
-            model=model,
-            budget_tokens=budget_tokens,
-            max_tokens=max_tokens,
-        )
-
-        optional_params["thinking"] = {"type": "adaptive"}
-        output_config = optional_params.get("output_config")
-        if not isinstance(output_config, dict):
-            output_config = {}
-        else:
-            output_config = dict(output_config)
-        output_config.setdefault("effort", inferred_effort)
-        optional_params["output_config"] = output_config
+    def _coerce_optional_int(value: Any) -> Optional[int]:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, int):
+            return value
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -1635,8 +1683,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             anthropic_context_management
                         )
             elif param == "speed" and isinstance(value, str):
-                # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
+                AnthropicConfig._maybe_drop_speed_param(
+                    model=model,
+                    optional_params=optional_params,
+                    drop_params=drop_params,
+                    custom_llm_provider=self.custom_llm_provider,
+                )
             elif param == "cache_control" and isinstance(value, dict):
                 # Pass through top-level cache_control for automatic prompt caching
                 optional_params["cache_control"] = value
@@ -1946,6 +1999,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             optional_params=optional_params,
         )
 
+        AnthropicConfig._maybe_drop_speed_param(
+            model=model,
+            optional_params=optional_params,
+            drop_params=litellm.drop_params
+            or litellm_params.get("drop_params") is True,
+            custom_llm_provider=self.custom_llm_provider,
+        )
+
         headers = self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params
         )
@@ -2099,8 +2160,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if effort is not None and effort not in valid_efforts:
             raise litellm.exceptions.BadRequestError(
                 message=(
-                    f"Invalid effort value: {effort!r}. Must be one of: "
-                    f"'high', 'medium', 'low', 'xhigh', 'max'"
+                    f"Invalid effort value: {effort!r}. Must be one of: 'high', 'medium', 'low', 'xhigh', 'max'"
                 ),
                 model=model,
                 llm_provider=self.custom_llm_provider or "anthropic",
@@ -2152,7 +2212,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
 
-    def extract_response_content(self, completion_response: dict) -> Tuple[
+    def extract_response_content(
+        self, completion_response: dict
+    ) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -2289,7 +2351,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             _usage.get("service_tier"),
         )
 
-        iterations: Optional[list[Any]] = _usage.get("iterations")
+        iterations: Optional[List[Any]] = _usage.get("iterations")
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
             completion_tokens = sum(

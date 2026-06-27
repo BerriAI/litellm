@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -7,6 +6,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
@@ -92,8 +92,8 @@ class PassThroughStreamingHandler:
             if not logging_scheduled and raw_bytes:
                 logging_scheduled = True
                 try:
-                    asyncio.create_task(
-                        PassThroughStreamingHandler._route_streaming_logging_to_handler(
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                        async_coroutine=PassThroughStreamingHandler._route_streaming_logging_to_handler(
                             litellm_logging_obj=litellm_logging_obj,
                             passthrough_success_handler_obj=passthrough_success_handler_obj,
                             url_route=url_route,
@@ -285,8 +285,10 @@ class PassThroughStreamingHandler:
         Returns:
             List of string lines, with each line being a complete data: {} chunk
         """
-        # Combine all bytes and decode to string
-        combined_str = b"".join(raw_bytes).decode("utf-8")
+        # errors="replace" so a stream cut mid-multibyte-sequence (client disconnect)
+        # still decodes and logs the usage events already received, instead of raising
+        # and dropping the whole request from SpendLogs
+        combined_str = b"".join(raw_bytes).decode("utf-8", errors="replace")
 
         # Split by newlines and filter out empty lines
         lines = [line.strip() for line in combined_str.split("\n") if line.strip()]

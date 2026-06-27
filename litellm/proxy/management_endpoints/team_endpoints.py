@@ -281,9 +281,9 @@ class TeamMemberBudgetHandler:
         # Add team_member_budget_id as metadata field to team table
         if new_team_data_json.get("metadata") is None:
             new_team_data_json["metadata"] = {}
-        new_team_data_json["metadata"][
-            "team_member_budget_id"
-        ] = team_member_budget_table.budget_id
+        new_team_data_json["metadata"]["team_member_budget_id"] = (
+            team_member_budget_table.budget_id
+        )
 
         # Remove team member fields from new_team_data_json
         TeamMemberBudgetHandler._clean_team_member_fields(new_team_data_json)
@@ -2225,6 +2225,26 @@ async def _validate_team_member_add_permissions(
             },
         )
 
+    # Available-team self-join grants only the ability to join; per-member
+    # budget and model controls stay admin-only.  Reject them here so a
+    # self-joining non-admin cannot set their own cap, reset window, or model
+    # scope via the bypass.
+    if (
+        data.max_budget_in_team is not None
+        or data.budget_duration is not None
+        or data.allowed_models is not None
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": (
+                    "Available-team self-join cannot set per-member budget or "
+                    "model controls (max_budget_in_team, budget_duration, "
+                    "allowed_models); these are admin-only."
+                )
+            },
+        )
+
     # Available-team self-join: caller may add only themselves, only as a
     # standard user.  Enforce that here so the bypass cannot be used as a
     # privilege-escalation or cross-user-injection primitive.
@@ -2290,6 +2310,7 @@ async def _process_team_members(
                 team_id=data.team_id,
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
+                budget_duration=data.budget_duration,
             )
         except Exception as e:
             raise HTTPException(
@@ -2315,6 +2336,7 @@ async def _process_team_members(
                     team_id=data.team_id,
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
+                    budget_duration=data.budget_duration,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2577,6 +2599,8 @@ async def team_member_add(
         )
     except HTTPException as e:
         raise e
+
+    _validate_budget_duration(data.budget_duration)
 
     prisma_client = cast(PrismaClient, prisma_client)
 
@@ -3889,7 +3913,8 @@ async def block_team(
     )
 
     record = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id}, data={"blocked": True}  # type: ignore
+        where={"team_id": data.team_id},
+        data={"blocked": True},  # type: ignore
     )
 
     return record
@@ -3941,7 +3966,8 @@ async def unblock_team(
     )
 
     record = await TeamRepository(prisma_client).table.update(
-        where={"team_id": data.team_id}, data={"blocked": False}  # type: ignore
+        where={"team_id": data.team_id},
+        data={"blocked": False},  # type: ignore
     )
 
     return record
@@ -4651,7 +4677,7 @@ async def list_team(
             verbose_proxy_logger.exception(team_exception)
             continue
     # Sort the responses by team_alias
-    returned_responses.sort(key=lambda x: (getattr(x, "team_alias", "") or ""))
+    returned_responses.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     if organization_id is not None:
         if organization_id == SpecialManagementEndpointEnums.DEFAULT_ORGANIZATION.value:
@@ -4692,7 +4718,9 @@ async def get_paginated_teams(
 
         # Get paginated teams
         teams = await TeamRepository(prisma_client).table.find_many(
-            skip=skip, take=page_size, order={"team_alias": "asc"}  # Sort by team_alias
+            skip=skip,
+            take=page_size,
+            order={"team_alias": "asc"},  # Sort by team_alias
         )
         return teams, total_count
     except Exception as e:

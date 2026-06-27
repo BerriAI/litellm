@@ -116,6 +116,7 @@ def parse_cache_control(cache_control):
 
 LITELLM_METADATA_ROUTES = (
     "batches",
+    "bedrock",
     "/v1/messages",
     "responses",
     "files",
@@ -1056,9 +1057,9 @@ class LiteLLMProxyRequestSetup:
             )
         )
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
-        data[_metadata_variable_name][
-            "user_api_key"
-        ] = user_api_key_dict.api_key  # this is just the hashed token
+        data[_metadata_variable_name]["user_api_key"] = (
+            user_api_key_dict.api_key
+        )  # this is just the hashed token
 
         # Key-owned agent_id for spend attribution; keep existing (e.g. from header) if key has none
         _key_agent_id = getattr(user_api_key_dict, "agent_id", None)
@@ -1070,9 +1071,9 @@ class LiteLLMProxyRequestSetup:
             user_api_key_dict, "end_user_max_budget", None
         )
         if user_api_key_dict.budget_reservation is not None:
-            data[_metadata_variable_name][
-                "user_api_key_budget_reservation"
-            ] = user_api_key_dict.budget_reservation
+            data[_metadata_variable_name]["user_api_key_budget_reservation"] = (
+                user_api_key_dict.budget_reservation
+            )
         # Add the full UserAPIKeyAuth object for MCP server access control
         data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict
         return data
@@ -1147,9 +1148,9 @@ class LiteLLMProxyRequestSetup:
                     if (
                         key not in data[_metadata_variable_name]["spend_logs_metadata"]
                     ):  # don't override k-v pair sent by request (user request)
-                        data[_metadata_variable_name]["spend_logs_metadata"][
-                            key
-                        ] = value
+                        data[_metadata_variable_name]["spend_logs_metadata"][key] = (
+                            value
+                        )
             else:
                 data[_metadata_variable_name]["spend_logs_metadata"] = key_metadata[
                     "spend_logs_metadata"
@@ -1244,6 +1245,27 @@ class LiteLLMProxyRequestSetup:
             tags = data["tags"]
 
         return tags
+
+    @staticmethod
+    def pre_seed_litellm_metadata_for_route(
+        request_data: dict,
+        route: str,
+    ) -> None:
+        """Pre-seed ``litellm_metadata`` for routes that track tags there.
+
+        Routes in ``LITELLM_METADATA_ROUTES`` (e.g. Bedrock, ``/v1/messages``,
+        responses, batches, files) store request-scoped tag metadata in
+        ``litellm_metadata`` rather than the provider-facing ``metadata``
+        field. ``get_metadata_variable_name_from_kwargs`` picks the target
+        based on whether ``litellm_metadata`` is present, so it must be
+        seeded BEFORE any tag merge runs; otherwise header tags from
+        ``apply_client_tag_policy_pre_auth`` land in ``metadata`` while
+        key tags from ``apply_key_tags_pre_auth`` and the read in
+        ``_tag_max_budget_check`` resolve to ``litellm_metadata``, leaving
+        header tags invisible to per-tag budget enforcement.
+        """
+        if any(metadata_route in route for metadata_route in LITELLM_METADATA_ROUTES):
+            request_data.setdefault("litellm_metadata", {})
 
     @staticmethod
     def apply_key_tags_pre_auth(
@@ -1476,8 +1498,7 @@ async def add_litellm_data_to_request(
         _metadata_variable_name=_metadata_variable_name,
     )
 
-    # Add headers to metadata for guardrails to access (fixes #17477)
-    # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
+    # Expose request headers under the metadata field for guardrails (fixes #17477)
     if _metadata_variable_name in data and isinstance(
         data[_metadata_variable_name], dict
     ):
@@ -1699,41 +1720,41 @@ async def add_litellm_data_to_request(
     )
 
     # Team spend, budget - used by prometheus.py
-    data[_metadata_variable_name][
-        "user_api_key_team_max_budget"
-    ] = user_api_key_dict.team_max_budget
-    data[_metadata_variable_name][
-        "user_api_key_team_spend"
-    ] = user_api_key_dict.team_spend
-    data[_metadata_variable_name][
-        "user_api_key_request_route"
-    ] = user_api_key_dict.request_route
+    data[_metadata_variable_name]["user_api_key_team_max_budget"] = (
+        user_api_key_dict.team_max_budget
+    )
+    data[_metadata_variable_name]["user_api_key_team_spend"] = (
+        user_api_key_dict.team_spend
+    )
+    data[_metadata_variable_name]["user_api_key_request_route"] = (
+        user_api_key_dict.request_route
+    )
 
     # API Key spend, budget - used by prometheus.py
     data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend
-    data[_metadata_variable_name][
-        "user_api_key_max_budget"
-    ] = user_api_key_dict.max_budget
-    data[_metadata_variable_name][
-        "user_api_key_model_max_budget"
-    ] = user_api_key_dict.model_max_budget
-    data[_metadata_variable_name][
-        "user_api_key_end_user_model_max_budget"
-    ] = user_api_key_dict.end_user_model_max_budget
+    data[_metadata_variable_name]["user_api_key_max_budget"] = (
+        user_api_key_dict.max_budget
+    )
+    data[_metadata_variable_name]["user_api_key_model_max_budget"] = (
+        user_api_key_dict.model_max_budget
+    )
+    data[_metadata_variable_name]["user_api_key_end_user_model_max_budget"] = (
+        user_api_key_dict.end_user_model_max_budget
+    )
 
     # User spend, budget - used by prometheus.py
     # Follow same pattern as team and API key budgets
-    data[_metadata_variable_name][
-        "user_api_key_user_spend"
-    ] = user_api_key_dict.user_spend
-    data[_metadata_variable_name][
-        "user_api_key_user_max_budget"
-    ] = user_api_key_dict.user_max_budget
+    data[_metadata_variable_name]["user_api_key_user_spend"] = (
+        user_api_key_dict.user_spend
+    )
+    data[_metadata_variable_name]["user_api_key_user_max_budget"] = (
+        user_api_key_dict.user_max_budget
+    )
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
-    data[_metadata_variable_name][
-        "user_api_key_team_metadata"
-    ] = user_api_key_dict.team_metadata
+    data[_metadata_variable_name]["user_api_key_team_metadata"] = (
+        user_api_key_dict.team_metadata
+    )
     data[_metadata_variable_name]["user_api_key_object_permission_id"] = getattr(
         user_api_key_dict, "object_permission_id", None
     )
@@ -1751,9 +1772,9 @@ async def add_litellm_data_to_request(
 
     # OTEL Controls / Tracing
     # Add the OTEL Parent Trace before sending it LiteLLM
-    data[_metadata_variable_name][
-        "litellm_parent_otel_span"
-    ] = user_api_key_dict.parent_otel_span
+    data[_metadata_variable_name]["litellm_parent_otel_span"] = (
+        user_api_key_dict.parent_otel_span
+    )
     _add_otel_traceparent_to_data(data, request=request)
 
     ### END-USER SPECIFIC PARAMS ###
@@ -2565,9 +2586,9 @@ async def move_guardrails_to_metadata(
                 request_body_guardrail_config
             )
         else:
-            data[_metadata_variable_name][
-                "guardrail_config"
-            ] = request_body_guardrail_config
+            data[_metadata_variable_name]["guardrail_config"] = (
+                request_body_guardrail_config
+            )
 
 
 def _is_policy_version_id(s: str) -> bool:
@@ -2697,9 +2718,9 @@ def _apply_resolved_guardrails_to_metadata(
             pipelines
         )
         data[metadata_variable_name]["_guardrail_pipelines"] = pipelines
-        data[metadata_variable_name][
-            "_pipeline_managed_guardrails"
-        ] = pipeline_managed_guardrails
+        data[metadata_variable_name]["_pipeline_managed_guardrails"] = (
+            pipeline_managed_guardrails
+        )
         verbose_proxy_logger.debug(
             f"Policy engine: resolved {len(pipelines)} pipeline(s), "
             f"managed guardrails: {pipeline_managed_guardrails}"

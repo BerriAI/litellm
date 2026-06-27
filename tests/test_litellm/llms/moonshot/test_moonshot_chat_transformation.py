@@ -305,6 +305,34 @@ class TestMoonshotConfig:
         assert len(result["messages"]) == 2
         assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
 
+    def test_tool_choice_required_does_not_mutate_input_messages(self):
+        """tool_choice='required' must not mutate the caller's messages list.
+
+        The handling appends a "select a tool" user message; building it in
+        place corrupts the caller's conversation history and makes
+        transform_request non-idempotent across retries.
+        """
+        config = MoonshotChatConfig()
+
+        messages = [{"role": "user", "content": "What's the weather like?"}]
+
+        for _ in range(2):
+            optional_params = {
+                "tool_choice": "required",
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            }
+            result = config.transform_request(
+                model="moonshot-v1-8k",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+            # The returned request carries the extra message.
+            assert len(result["messages"]) == 2
+            # The caller's list is untouched, so repeated calls stay idempotent.
+            assert messages == [{"role": "user", "content": "What's the weather like?"}]
+
     def test_tool_choice_non_required_preserved(self):
         """Test that non-'required' tool_choice values are preserved"""
         config = MoonshotChatConfig()

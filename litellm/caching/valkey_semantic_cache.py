@@ -24,8 +24,12 @@ from typing import Any
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from redis.commands.search.field import TagField, VectorField
-from redis.commands.search.index_definition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
+
+try:
+    from redis.commands.search.index_definition import IndexDefinition, IndexType
+except ModuleNotFoundError:
+    from redis.commands.search.indexDefinition import IndexDefinition, IndexType
 
 from litellm._logging import print_verbose
 from litellm._uuid import uuid
@@ -91,7 +95,9 @@ class ValkeySemanticCache(RedisSemanticCache):
             sync_client if sync_client is not None else Redis.from_url(resolved_url)  # type: ignore[arg-type]
         )
         self.async_client = (
-            async_client if async_client is not None else AsyncRedis.from_url(resolved_url)  # type: ignore[arg-type]
+            async_client
+            if async_client is not None
+            else AsyncRedis.from_url(resolved_url)  # type: ignore[arg-type]
         )
 
         print_verbose(f"Valkey semantic-cache initializing index - {self.index_name}")

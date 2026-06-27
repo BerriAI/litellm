@@ -23,7 +23,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
-    CLI_JWT_TOKEN_NAME,
+    CLI_SESSION_KEY_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
@@ -698,6 +698,11 @@ async def common_checks(
 
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+                request_data=request_body,
+                route=route,
+            )
 
             LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
                 request_data=request_body,
@@ -2412,6 +2417,7 @@ class ExperimentalUIJWTToken:
         user_info: LiteLLM_UserTable,
         team_id: Optional[str] = None,
         team_alias: Optional[str] = None,
+        max_budget: Optional[float] = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -2427,6 +2433,7 @@ class ExperimentalUIJWTToken:
         Returns:
             Encrypted JWT token string
         """
+        import secrets
         from datetime import timedelta
 
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -2448,18 +2455,22 @@ class ExperimentalUIJWTToken:
             # Use first team if user has teams
             _team_id = user_info.teams[0] if len(user_info.teams) > 0 else None
 
+        session_token = f"{CLI_SESSION_KEY_PREFIX}-{secrets.token_urlsafe(16)}"
+        session_alias = f"{CLI_SESSION_KEY_PREFIX}-{user_info.user_id}"
+
         valid_token = UserAPIKeyAuth(
-            token=CLI_JWT_TOKEN_NAME,
-            key_name=CLI_JWT_TOKEN_NAME,
-            key_alias=CLI_JWT_TOKEN_NAME,
-            max_budget=litellm.max_ui_session_budget,
+            token=session_token,
+            key_name=session_alias,
+            key_alias=session_alias,
             expires=expires,
+            max_budget=max_budget,
             user_id=user_info.user_id,
             team_id=_team_id,
             team_alias=team_alias,
             models=user_info.models,
             max_parallel_requests=None,
             user_role=LitellmUserRoles(user_info.user_role),
+            is_session_token=True,
         )
 
         return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
@@ -2949,6 +2960,26 @@ async def _get_agent_ids_from_access_groups(
     )
 
 
+def _resolve_all_team_model_sentinel_for_auth_check(
+    models: List[str],
+    llm_router: Optional[Router],
+    team_id: Optional[str],
+) -> List[str]:
+    if (
+        SpecialModelNames.all_team_models.value not in models
+        or team_id is None
+        or llm_router is None
+    ):
+        return models
+    proxy_models = llm_router.get_model_names()
+    non_sentinel_models = [
+        model for model in models if model != SpecialModelNames.all_team_models.value
+    ]
+    if not proxy_models:
+        return non_sentinel_models or models
+    return list(dict.fromkeys(non_sentinel_models + proxy_models))
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Optional[Router],
@@ -2965,6 +2996,12 @@ def _check_model_access_helper(
         access_groups = llm_router.get_model_access_groups(
             model_name=model, team_id=team_id
         )
+
+    models = _resolve_all_team_model_sentinel_for_auth_check(
+        models=models,
+        llm_router=llm_router,
+        team_id=team_id,
+    )
 
     if (
         len(access_groups) > 0 and llm_router is not None
@@ -3658,9 +3695,18 @@ async def _virtual_key_max_budget_check(
         # so a NaN max_budget would silently disable enforcement.  Treat a
         # non-finite max_budget as "no configured limit" rather than as a bypass.
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
+            # name the key in the error so operators don't have to reverse-map
+            # spend back to a key; key_name is the masked form (last 4 chars)
+            key_label = valid_token.key_alias or "key"
+            key_descriptor = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
+                message=f"Budget has been exceeded! Key={key_descriptor} Current cost: {spend}, Max budget: {valid_token.max_budget}",
             )
 
 

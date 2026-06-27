@@ -11025,7 +11025,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * WebSocket: responses_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_responses_websocket_endpoint_get"];
         put?: never;
         /**
          * Responses Api
@@ -17063,7 +17067,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * WebSocket: responses_websocket_endpoint
+         * @description WebSocket connection endpoint
+         */
+        get: operations["websocket_responses_websocket_endpoint_get_2"];
         put?: never;
         /**
          * Responses Api
@@ -17222,6 +17230,29 @@ export interface paths {
         get: operations["get_response_input_items_v1_responses__response_id__input_items_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/rust_control_plane/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Callback Logs
+         * @description Replay a batch of finished logging payloads through the callback fan-out.
+         *
+         *     Admin-only: the payloads write spend logs and trigger every callback, so this
+         *     is a trusted internal route, not a public surface.
+         */
+        post: operations["ingest_callback_logs_v1_rust_control_plane_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21094,10 +21125,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with
-             * @default chat
+             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -21503,6 +21533,54 @@ export interface components {
         CallbackDelete: {
             /** Callback Name */
             callback_name: string;
+        };
+        /**
+         * CallbackLogFailure
+         * @description A record that failed to replay, identified by its index in the batch.
+         */
+        CallbackLogFailure: {
+            /** Error */
+            error: string;
+            /** Index */
+            index: number;
+        };
+        /**
+         * CallbackLogRecord
+         * @description A single finished logging event to replay through the callbacks.
+         */
+        CallbackLogRecord: {
+            /** Error */
+            error?: string | null;
+            /** Standard Logging Payload */
+            standard_logging_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "failure";
+        };
+        /**
+         * CallbackLogsRequest
+         * @description A batch of logging events posted by an external producer.
+         */
+        CallbackLogsRequest: {
+            /** Records */
+            records: components["schemas"]["CallbackLogRecord"][];
+        };
+        /**
+         * CallbackLogsResponse
+         * @description Per-batch result: counts plus per-record failure detail so the caller can
+         *     distinguish a transient callback error from a structurally bad payload.
+         */
+        CallbackLogsResponse: {
+            /** Failed */
+            failed: number;
+            /** Failures */
+            failures?: components["schemas"]["CallbackLogFailure"][];
+            /** Processed */
+            processed: number;
         };
         /** CallbacksByType */
         CallbacksByType: {
@@ -22347,6 +22425,11 @@ export interface components {
              * @description CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.
              */
             mcp_trusted_proxy_ranges?: string[] | null;
+            /**
+             * Mcp Xff Num Trusted Hops
+             * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
+             */
+            mcp_xff_num_trusted_hops?: number | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -25104,6 +25187,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -25148,8 +25233,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -25186,6 +25275,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -25200,8 +25291,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -25247,6 +25342,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -25277,8 +25376,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -25287,6 +25390,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -25295,6 +25400,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
@@ -26768,8 +26877,6 @@ export interface components {
              * @enum {string}
              */
             transport: "sse" | "http" | "stdio";
-            /** Url */
-            url?: string | null;
         };
         /**
          * MCPSemanticFilterSettings
@@ -30736,6 +30843,11 @@ export interface components {
              */
             allowed_models?: string[] | null;
             /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
+            /**
              * Max Budget In Team
              * @description Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits
              */
@@ -32193,6 +32305,11 @@ export interface components {
             end_user_tpm_limit?: number | null;
             /** Expires */
             expires?: string | null;
+            /**
+             * Is Session Token
+             * @default false
+             */
+            is_session_token: boolean;
             /** Jwt Claims */
             jwt_claims?: {
                 [key: string]: unknown;
@@ -32788,6 +32905,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -32832,8 +32951,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -32870,6 +32993,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -32884,8 +33009,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -32931,6 +33060,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -32961,8 +33094,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -32971,6 +33108,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -32979,6 +33118,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
@@ -46717,6 +46860,24 @@ export interface operations {
             };
         };
     };
+    websocket_responses_websocket_endpoint_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     responses_api_responses_post: {
         parameters: {
             query?: never;
@@ -54428,6 +54589,24 @@ export interface operations {
             };
         };
     };
+    websocket_responses_websocket_endpoint_get_2: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description WebSocket Protocol Switched */
+            101: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     responses_api_v1_responses_post: {
         parameters: {
             query?: never;
@@ -54579,6 +54758,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_callback_logs_v1_rust_control_plane_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallbackLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallbackLogsResponse"];
                 };
             };
             /** @description Validation Error */
