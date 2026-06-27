@@ -25,6 +25,24 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so adaptive-thinking detection reads this
+    branch's ``supports_adaptive_thinking`` flags, which the network-fetched
+    ``main`` copy lacks until merge."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_bedrock_sse_wrapper_encodes_dict_chunks():
     """Verify that `bedrock_sse_wrapper` converts dictionary chunks to properly formatted Server-Sent Events and forwards non-dict chunks unchanged."""
@@ -388,7 +406,9 @@ def test_bedrock_invoke_messages_transform_adds_name_when_tool_missing_name():
     assert result["tools"][0]["name"] == "litellm_unnamed_tool_0"
 
 
-def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled():
+def test_bedrock_invoke_messages_skips_thinking_injection_when_already_enabled(
+    local_model_cost_map,
+):
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -1038,7 +1058,7 @@ def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
     ],
 )
 def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
-    reasoning_effort, expected_effort
+    local_model_cost_map, reasoning_effort, expected_effort
 ):
     """``reasoning_effort`` maps to ``thinking`` + ``output_config.effort`` on /v1/messages."""
     from unittest.mock import patch
@@ -1659,13 +1679,15 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         "global.anthropic.claude-fable-5",
     ],
 )
-def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models(model):
+def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models(
+    local_model_cost_map, model
+):
     """clear_thinking_20251015 without a top-level ``thinking`` field must inject
     ``thinking.type=adaptive`` plus ``output_config.effort`` on adaptive-thinking
     models (Opus 4.7/4.8, Fable 5). The legacy ``thinking.type=enabled`` shape is
     rejected by Bedrock for these models (issue #29188). Detection is sourced from
-    the cost-map ``supports_adaptive_thinking`` flag (with a version fallback for
-    unmapped provider-prefixed Opus aliases like the dated/versioned 4.7 above)."""
+    the cost-map ``supports_adaptive_thinking`` flag; the versioned Bedrock id
+    (``-v1:0``) resolves to its suffix-less cost-map entry."""
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {
         "max_tokens": 32000,

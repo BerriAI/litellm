@@ -26,9 +26,10 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 
-_CLAUDE_FAMILY_VERSION_RE = re.compile(
-    r"(?:opus|sonnet|haiku)[._-](\d+)[._-](\d{1,2})(?!\d)", re.IGNORECASE
-)
+_BEDROCK_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
+_INFERENCE_PROFILE_MINOR_RE = re.compile(r":\d+$")
+_DATED_RELEASE_SUFFIX_RE = re.compile(r"-\d{8}$")
+_DOTTED_VERSION_RE = re.compile(r"(\d)\.(\d)")
 
 
 def is_anthropic_oauth_key(value: Optional[str]) -> bool:
@@ -248,22 +249,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return False
 
     @staticmethod
-    def _claude_version_at_least(model: str, major: int, minor: int) -> bool:
-        """Whether ``model`` names a Claude family model of version >= ``major.minor``.
-
-        Parses the modern ``<family>-<major>-<minor>`` naming (``-``/``_``/``.``
-        separators, optional provider prefixes), e.g. ``us.anthropic.claude-opus-4-6``
-        or ``claude-sonnet-4.6``. A ``minor`` is at most two digits, so an eight-digit
-        date suffix (``claude-opus-4-20250514``, the non-adaptive Opus 4.0) is not
-        misread as a minor version. Legacy ``claude-<major>-<minor>-<family>`` names
-        (3.x) and anything without a parseable family version return False.
-        """
-        match = _CLAUDE_FAMILY_VERSION_RE.search(model)
-        if match is None:
-            return False
-        return (int(match.group(1)), int(match.group(2))) >= (major, minor)
-
-    @staticmethod
     def _supports_sampling_params(model: str) -> bool:
         """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
         rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
@@ -324,27 +309,41 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _model_map_lookup_candidates(model: str) -> List[str]:
-        """Model-map keys to try for ``model``, stripping bedrock/vertex
-        prefixes so a provider-routed Claude still resolves to its entry."""
-        candidates = [model]
-        for prefix in (
+        """Model-map keys to try for ``model``: the id itself, the same id with a
+        bedrock/vertex routing prefix removed, the Bedrock base model, and each of
+        those normalized by stripping a Bedrock version suffix (``-v1:0`` fully or
+        just the ``:0`` inference-profile minor), stripping a dated-release suffix
+        (``-20260205``), or rewriting a dotted family version to hyphens
+        (``4.6`` -> ``4-6``). Lets any reasonable alias (e.g.
+        ``bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0``,
+        ``claude-sonnet-4-6-20260219`` or ``claude-sonnet-4.6``) resolve to its base
+        cost-map entry so the capability flag on that entry stays authoritative."""
+        prefixes = (
             "bedrock/converse/",
             "bedrock/invoke/",
             "bedrock/",
             "vertex_ai/",
-        ):
-            if model.startswith(prefix):
-                candidates.append(model[len(prefix) :])
+        )
+        deprefixed = tuple(model[len(p) :] for p in prefixes if model.startswith(p))
         try:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
             base = BedrockModelInfo.get_base_model(model)
-            if base:
-                candidates.append(base)
-                candidates.append(f"bedrock/{base}")
         except Exception:
-            pass
-        return candidates
+            base = None
+        bedrock_base = (base, f"bedrock/{base}") if base else ()
+        primary = (model, *deprefixed, *bedrock_base)
+        normalized = tuple(
+            stripped
+            for cand in primary
+            for stripped in (
+                _BEDROCK_VERSION_SUFFIX_RE.sub("", cand),
+                _INFERENCE_PROFILE_MINOR_RE.sub("", cand),
+                _DATED_RELEASE_SUFFIX_RE.sub("", cand),
+                _DOTTED_VERSION_RE.sub(r"\1-\2", cand),
+            )
+        )
+        return list(dict.fromkeys((*primary, *normalized)))
 
     @staticmethod
     def _get_model_capability(model: str, key: str) -> Optional[bool]:
@@ -393,19 +392,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _is_adaptive_thinking_model(model: str) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
-        The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
-        entry resolved through provider prefixes. As a graceful fallback for
-        provider-prefixed names that resolve to no mapped entry (e.g.
-        ``bedrock/invoke/us.anthropic.claude-opus-4-7``), a Claude family version of
-        >= 4.6 also qualifies. Single-number families like Fable 5 carry no parseable
-        minor, so their unmapped aliases rely on the cost map alone until a
-        ``fallback_generalizations`` rule covers them.
+        Sourced solely from the model cost map's ``supports_adaptive_thinking`` flag,
+        resolved through provider prefixes. A model that resolves to no mapped entry
+        (an unmapped alias or a future release not yet in the map) is treated as
+        non-adaptive until a ``fallback_generalizations`` rule covers it.
         """
-        if AnthropicModelInfo._supports_model_capability(
+        return AnthropicModelInfo._supports_model_capability(
             model, "supports_adaptive_thinking"
-        ):
-            return True
-        return AnthropicModelInfo._claude_version_at_least(model, 4, 6)
+        )
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None

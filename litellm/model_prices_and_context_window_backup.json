@@ -999,6 +999,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1029,6 +1030,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1059,6 +1061,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1089,6 +1092,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1119,6 +1123,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1149,6 +1154,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1196,6 +1202,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1228,6 +1235,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1260,6 +1268,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1292,6 +1301,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1620,6 +1630,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1652,6 +1663,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1681,6 +1693,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1710,6 +1723,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1739,6 +1753,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1768,6 +1783,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -1797,6 +1813,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -2316,6 +2333,7 @@
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -2344,6 +2362,7 @@
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -2470,6 +2489,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -19247,6 +19267,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
+        "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_vision": true
@@ -28468,6 +28489,7 @@
         "output_cost_per_token": 1.5e-05,
         "output_cost_per_token_above_200k_tokens": 2.25e-05,
         "source": "https://openrouter.ai/anthropic/claude-sonnet-4.6",
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -28506,6 +28528,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -28566,6 +28589,7 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -30539,6 +30563,7 @@
     "perplexity/anthropic/claude-opus-4-6": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_adaptive_thinking": true,
         "supports_web_search": true,
         "supports_reasoning": false,
         "supports_function_calling": true,
@@ -30547,6 +30572,7 @@
     "perplexity/anthropic/claude-opus-4-7": {
         "litellm_provider": "perplexity",
         "mode": "responses",
+        "supports_adaptive_thinking": true,
         "supports_web_search": true,
         "supports_reasoning": false,
         "supports_function_calling": true,
@@ -33722,6 +33748,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -34955,6 +34982,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -34983,6 +35011,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -35011,6 +35040,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -35040,6 +35070,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -35211,6 +35242,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -42601,6 +42633,7 @@
         "max_tokens": 64000,
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,

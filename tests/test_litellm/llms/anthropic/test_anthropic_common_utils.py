@@ -1506,53 +1506,52 @@ class TestClaudeOpus48AdaptiveThinking:
     @pytest.mark.parametrize(
         "model",
         [
-            "claude-opus-4-8-some-future-suffix",
+            "claude-opus-4-6",
+            "us.anthropic.claude-opus-4-7",
             "bedrock/invoke/us.anthropic.claude-opus-4-7",
-            "claude-opus-4-9",
+            "bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0",
+            "global.anthropic.claude-sonnet-4-6-v1:0",
+            "bedrock/invoke/us.anthropic.claude-opus-4-6-v1:0",
+            "anthropic.claude-opus-4-6-v1",
+            "bedrock/us.anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-sonnet-4-6",
+            "vertex_ai/claude-opus-4-6",
+            "azure_ai/claude-sonnet-4-6",
+            "claude-sonnet-4-6-20260219",
+            "claude-sonnet-4.6",
         ],
     )
-    def test_adaptive_thinking_version_fallback_for_unmapped_opus(self, model):
-        """An unmapped Opus alias (>= 4.6) with a parseable family version still
-        resolves to adaptive via ``_claude_version_at_least`` so the Bedrock path
-        does not emit the rejected legacy ``thinking.type=enabled``."""
-        import litellm
+    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(
+        self, local_model_cost_map, model
+    ):
+        """Opus 4.6/4.7 and Sonnet 4.6 carry the ``supports_adaptive_thinking`` flag,
+        so detection holds purely from the cost map with no name-based version
+        fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
+        base entry through candidate normalization: provider/region prefixes, a
+        Bedrock ``-v1:0`` version suffix (stripped fully for 4.7/4.8 keys or to ``-v1``
+        for the 4.6 key), a dated release suffix (``-20260219``), and a dotted family
+        version (``4.6`` -> ``4-6``)."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        assert model not in litellm.model_cost
         assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
 
-    def test_adaptive_thinking_unmapped_fable_defers_to_cost_map(self):
-        """Fable 5 has no parseable minor version, so an unmapped Fable alias is not
-        caught by the version fallback; until a ``fallback_generalizations`` rule
-        covers it (PR #29718) it is intentionally not detected as adaptive."""
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-9",
+            "claude-opus-4-8-some-future-suffix",
+            "us.anthropic.claude-fable-5-preview",
+        ],
+    )
+    def test_unmapped_aliases_defer_to_cost_map(self, local_model_cost_map, model):
+        """Detection is sourced solely from the cost map flag: an alias absent from
+        the map (a future release or a preview suffix) is not adaptive until a
+        ``fallback_generalizations`` rule (PR #29718) covers it."""
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        model = "us.anthropic.claude-fable-5-preview"
         assert model not in litellm.model_cost
         assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
-
-    @pytest.mark.parametrize(
-        "model,expected",
-        [
-            ("claude-opus-4-6", True),
-            ("us.anthropic.claude-opus-4-7", True),
-            ("claude-opus-4.8", True),
-            ("claude-sonnet-4-6", True),
-            ("claude-opus-4-9", True),
-            ("claude-opus-4-5", False),
-            ("claude-opus-4-20250514", False),
-            ("claude-3-7-sonnet", False),
-            ("claude-fable-5", False),
-        ],
-    )
-    def test_claude_version_at_least_4_6(self, model, expected):
-        """The generalized version parser replaces the per-minor name helpers: it
-        accepts any Claude family >= 4.6 across separators/prefixes and does not
-        misread an 8-digit date suffix (Opus 4.0) as a minor version."""
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        assert AnthropicModelInfo._claude_version_at_least(model, 4, 6) is expected
 
     @pytest.mark.parametrize(
         "model",
