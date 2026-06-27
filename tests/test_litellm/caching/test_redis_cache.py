@@ -693,7 +693,7 @@ async def test_async_register_script_cluster_path_uses_evalsha(
 
     cluster_client = MagicMock(spec=["script_load", "evalsha"])
     cluster_client.script_load = MagicMock(return_value="sha123")
-    cluster_client.evalsha = MagicMock(return_value="cluster-ok")
+    cluster_client.evalsha = AsyncMock(return_value="cluster-ok")
 
     with patch.object(
         redis_cache, "init_async_client", return_value=cluster_client
@@ -703,7 +703,9 @@ async def test_async_register_script_cluster_path_uses_evalsha(
 
     assert result == "cluster-ok"
     cluster_client.script_load.assert_called_once_with("return 'cluster'")
-    cluster_client.evalsha.assert_called_once_with("sha123", 1, "ns:{k:v}:tokens", 5, 60)
+    cluster_client.evalsha.assert_awaited_once_with(
+        "sha123", 1, "ns:{k:v}:tokens", 5, 60
+    )
 
 
 @pytest.mark.asyncio

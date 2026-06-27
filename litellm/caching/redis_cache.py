@@ -620,7 +620,7 @@ class RedisCache(BaseCache):
                 namespaced_keys = tuple(
                     self.check_and_fix_namespace(key=key) for key in keys
                 )
-                return _redis_client.evalsha(
+                return await _redis_client.evalsha(
                     script_sha, len(namespaced_keys), *namespaced_keys, *args
                 )
 
