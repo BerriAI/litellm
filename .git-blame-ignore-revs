@@ -11,3 +11,9 @@
 
 # style(ui): run prettier --write across the dashboard (#29622)
 7edf3a9cb55548b143df1692f4ed7c4681d7fcf7
+
+# style: reformat litellm/ with ruff format (#31317)
+430b5b8f1b12dc261a49fda99ac5d1b22381a428
+
+# style: unify ruff format width on 120 (#31518)
+3dfbeabe626d203ac9de86024519d9a96c484ce4
