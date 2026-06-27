@@ -64,6 +64,113 @@ default_vertex_config = None
 
 passthrough_endpoint_router = PassthroughEndpointRouter()
 
+ANTHROPIC_PROMPT_CACHE_TTL_ENV = "ANTHROPIC_PROMPT_CACHE_TTL"
+ANTHROPIC_PROMPT_CACHE_TTL_HEADER = "x-anthropic-prompt-cache-ttl"
+ANTHROPIC_PROMPT_CACHE_WORKLOAD_HEADER = "x-anthropic-prompt-cache-workload"
+
+
+def apply_anthropic_prompt_cache_control(
+    request_body: dict,
+    headers: dict,
+) -> bool:
+    ttl = _resolve_anthropic_prompt_cache_ttl(headers)
+    if ttl is None or _has_cache_control(request_body):
+        return False
+    request_body["cache_control"] = {"type": "ephemeral", "ttl": ttl}
+    return True
+
+
+def filter_anthropic_prompt_cache_control_headers(headers: dict) -> dict:
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower()
+        not in {
+            ANTHROPIC_PROMPT_CACHE_TTL_HEADER,
+            ANTHROPIC_PROMPT_CACHE_WORKLOAD_HEADER,
+        }
+    }
+
+
+async def _apply_anthropic_prompt_cache_control_to_request(
+    request: Request,
+    custom_llm_provider: str,
+    encoded_endpoint: str,
+) -> None:
+    if custom_llm_provider != LlmProviders.ANTHROPIC.value:
+        return
+
+    headers = _safe_get_request_headers(request).copy()
+    filtered_headers = filter_anthropic_prompt_cache_control_headers(headers)
+    if filtered_headers != headers:
+        request.state._cached_headers = filtered_headers
+
+    if request.method != "POST" or encoded_endpoint.rstrip("/") != "/v1/messages":
+        return
+    if "multipart/form-data" in request.headers.get("content-type", ""):
+        return
+
+    request_body = await _read_request_body(request)
+    if apply_anthropic_prompt_cache_control(request_body, headers):
+        setattr(
+            request.state,
+            LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+            request_body,
+        )
+
+
+def _resolve_anthropic_prompt_cache_ttl(headers: dict) -> Optional[str]:
+    lower_headers = {str(k).lower(): v for k, v in headers.items()}
+    raw_value = lower_headers.get(ANTHROPIC_PROMPT_CACHE_TTL_HEADER)
+    if raw_value is None:
+        raw_value = os.getenv(ANTHROPIC_PROMPT_CACHE_TTL_ENV, "")
+    return _normalize_anthropic_prompt_cache_ttl(
+        raw_value,
+        lower_headers.get(ANTHROPIC_PROMPT_CACHE_WORKLOAD_HEADER, ""),
+    )
+
+
+def _normalize_anthropic_prompt_cache_ttl(
+    value: Any,
+    workload: Any,
+) -> Optional[str]:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"", "off", "false", "none", "disabled"}:
+        return None
+    if normalized in {"5m", "1h"}:
+        return normalized
+    if normalized == "auto":
+        return "1h" if _is_long_running_anthropic_workload(workload) else "5m"
+    return None
+
+
+def _is_long_running_anthropic_workload(workload: Any) -> bool:
+    return str(workload or "").strip().lower() in {
+        "eval",
+        "evaluation",
+        "benchmark",
+        "bench",
+        "batch",
+        "pipeline",
+        "long",
+        "long-running",
+    }
+
+
+def _has_cache_control(value: Any) -> bool:
+    stack = [value]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, child in current.items():
+                if key == "cache_control" and child is not None:
+                    return True
+                if isinstance(child, (dict, list)):
+                    stack.append(child)
+        elif isinstance(current, list):
+            stack.extend(child for child in current if isinstance(child, (dict, list)))
+    return False
+
 
 def create_request_copy(request: Request):
     return {
@@ -129,6 +236,12 @@ async def llm_passthrough_factory_proxy_route(
     # Ensure endpoint starts with '/' for proper URL construction
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
+
+    await _apply_anthropic_prompt_cache_control_to_request(
+        request=request,
+        custom_llm_provider=custom_llm_provider,
+        encoded_endpoint=encoded_endpoint,
+    )
 
     # Construct the full target URL using httpx, preserving any base path
     # prefix that the operator configured on base_target_url.
