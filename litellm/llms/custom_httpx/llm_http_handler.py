@@ -5772,9 +5772,7 @@ class BaseLLMHTTPHandler:
                 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
-            backend_ws = await self._open_realtime_backend_ws(
-                websockets, url, headers, ssl_context
-            )
+            backend_ws = await self._open_realtime_backend_ws(websockets, url, headers, ssl_context)
             async with backend_ws:
                 _request_data: Dict[str, Any] = {}
                 if litellm_metadata:
@@ -5800,17 +5798,13 @@ class BaseLLMHTTPHandler:
                 # and the guardrail bypassed.
                 _session_config: Optional[str] = None
                 if provider_config.requires_session_configuration():
-                    _session_config = provider_config.session_configuration_request(
-                        model
-                    )
+                    _session_config = provider_config.session_configuration_request(model)
                     if _session_config:
                         _session_config = realtime_streaming._maybe_inject_guardrail_auto_response_disable(
                             _session_config
                         )
                         await backend_ws.send(_session_config)
-                        realtime_streaming.session_configuration_request = (
-                            _session_config
-                        )
+                        realtime_streaming.session_configuration_request = _session_config
 
                 # For providers that defer setup until client session.update, optionally
                 # send synthetic session.created to unblock clients waiting on connect.

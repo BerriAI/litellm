@@ -442,10 +442,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # it. The Vertex subclass already drops subsequent setups for this exact
         # reason; the constraint is identical on AI Studio.
         client_turn_detection = self._extract_turn_detection(session_payload)
-        if (
-            isinstance(client_turn_detection, dict)
-            and client_turn_detection.get("create_response") is False
-        ):
+        if isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False:
             verbose_logger.warning(
                 "Gemini Realtime: Dropping subsequent session.update "
                 "(turn_detection.create_response=False) — Gemini Live rejects a "
@@ -453,9 +450,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "suppress the model's auto-response mid-session."
             )
         else:
-            verbose_logger.debug(
-                "Gemini Realtime: Ignoring session.update (setup already sent)"
-            )
+            verbose_logger.debug("Gemini Realtime: Ignoring session.update (setup already sent)")
         return []
 
     def _handle_conversation_item(self, json_message: dict) -> List[str]:

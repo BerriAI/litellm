@@ -646,14 +646,11 @@ class RealTimeStreaming:
         setup = obj.get("setup") if isinstance(obj, dict) else None
         if not isinstance(setup, dict):
             return setup_message
-        automatic = setup.setdefault("realtimeInputConfig", {}).setdefault(
-            "automaticActivityDetection", {}
-        )
+        automatic = setup.setdefault("realtimeInputConfig", {}).setdefault("automaticActivityDetection", {})
         automatic["disabled"] = True
         self._guardrail_turn_detection_update_sent = True
         verbose_logger.debug(
-            "Realtime: folded automaticActivityDetection.disabled=true into setup "
-            "for transcription-guardrail gating"
+            "Realtime: folded automaticActivityDetection.disabled=true into setup for transcription-guardrail gating"
         )
         return json.dumps(obj)
 

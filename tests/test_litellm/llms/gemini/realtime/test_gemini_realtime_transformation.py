@@ -6,9 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
@@ -86,10 +84,7 @@ def test_session_created_does_not_overwrite_session_configuration_request():
     )
 
     # Must keep original setup payload (with "setup"), not overwrite with session.created event.
-    assert (
-        transformed["session_configuration_request"]
-        == session_configuration_request_str
-    )
+    assert transformed["session_configuration_request"] == session_configuration_request_str
 
     # Also verify emitted session.created reflects audio modality from setup payload.
     session_created = transformed["response"][0]
@@ -146,19 +141,13 @@ def test_gemini_realtime_transformation_content_delta():
     print(transformed_message)
 
     ## assert all instances of 'event_id' are unique
-    event_ids = [
-        event["event_id"] for event in transformed_message if "event_id" in event
-    ]
+    event_ids = [event["event_id"] for event in transformed_message if "event_id" in event]
     assert len(event_ids) == len(set(event_ids))
     ## assert all instances of 'response_id' are the same
-    response_ids = [
-        event["response_id"] for event in transformed_message if "response_id" in event
-    ]
+    response_ids = [event["response_id"] for event in transformed_message if "response_id" in event]
     assert len(set(response_ids)) == 1
     ## assert all instances of 'output_item_id' are the same
-    output_item_ids = [
-        event["item_id"] for event in transformed_message if "item_id" in event
-    ]
+    output_item_ids = [event["item_id"] for event in transformed_message if "item_id" in event]
     assert len(set(output_item_ids)) == 1
 
 
@@ -172,9 +161,7 @@ def test_gemini_model_turn_event_mapping():
     openai_event = config.map_model_turn_event(model_turn_event)
     assert openai_event == OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
 
-    model_turn_event = {
-        "parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "..."}}]
-    }
+    model_turn_event = {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "..."}}]}
     openai_event = config.map_model_turn_event(model_turn_event)
     assert openai_event == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA
 
@@ -205,13 +192,7 @@ def test_gemini_realtime_transformation_audio_delta():
     session_configuration_request_str = json.dumps(session_configuration_request)
 
     audio_delta_event = {
-        "serverContent": {
-            "modelTurn": {
-                "parts": [
-                    {"inlineData": {"mimeType": "audio/pcm", "data": "my-audio-data"}}
-                ]
-            }
-        }
+        "serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "my-audio-data"}}]}}
     }
 
     result = config.transform_realtime_response(
@@ -235,10 +216,7 @@ def test_gemini_realtime_transformation_audio_delta():
 
     contains_audio_delta = False
     for response in responses:
-        if (
-            response["type"]
-            == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DELTA.value
-        ):
+        if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DELTA.value:
             contains_audio_delta = True
             break
     assert contains_audio_delta, "Expected audio delta event"
@@ -257,11 +235,7 @@ def test_gemini_output_audio_transcript_delta_uses_active_response_ids():
     event = {
         "serverContent": {
             "outputTranscription": {"text": "Hello from Gemini."},
-            "modelTurn": {
-                "parts": [
-                    {"inlineData": {"mimeType": "audio/pcm", "data": "my-audio-data"}}
-                ]
-            },
+            "modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "my-audio-data"}}]},
         }
     }
 
@@ -281,19 +255,11 @@ def test_gemini_output_audio_transcript_delta_uses_active_response_ids():
     )
 
     responses = result["response"]
-    response_created = next(
-        response for response in responses if response["type"] == "response.created"
-    )
+    response_created = next(response for response in responses if response["type"] == "response.created")
     transcript_delta = next(
-        response
-        for response in responses
-        if response["type"] == "response.output_audio_transcript.delta"
+        response for response in responses if response["type"] == "response.output_audio_transcript.delta"
     )
-    audio_delta = next(
-        response
-        for response in responses
-        if response["type"] == "response.output_audio.delta"
-    )
+    audio_delta = next(response for response in responses if response["type"] == "response.output_audio.delta")
 
     assert transcript_delta["response_id"] == response_created["response"]["id"]
     assert transcript_delta["response_id"] == audio_delta["response_id"]
@@ -339,10 +305,7 @@ def test_gemini_realtime_transformation_generation_complete():
 
     contains_audio_done_event = False
     for response in responses:
-        if (
-            response["type"]
-            == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE.value
-        ):
+        if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE.value:
             contains_audio_done_event = True
             break
     assert contains_audio_done_event, "Expected audio done event"
@@ -412,9 +375,7 @@ def test_gemini_realtime_tool_call_transformation():
             function_call_event = event
             break
 
-    assert (
-        function_call_event is not None
-    ), "Expected function_call_arguments.done event"
+    assert function_call_event is not None, "Expected function_call_arguments.done event"
     assert function_call_event["call_id"] == "call_123"
     assert function_call_event["name"] == "get_weather"
     assert function_call_event["response_id"] == "resp_123"
@@ -616,10 +577,7 @@ def test_gemini_subsequent_guardrail_session_update_dropped_with_warning(caplog)
         )
 
     assert messages == []
-    assert any(
-        "Dropping subsequent session.update" in record.message
-        for record in caplog.records
-    )
+    assert any("Dropping subsequent session.update" in record.message for record in caplog.records)
 
 
 @pytest.mark.parametrize(
@@ -793,9 +751,7 @@ def test_gemini_realtime_function_call_output_transformation():
         "gemini-2.5-flash",
         session_configuration_request="existing",
     )
-    retry_response = json.loads(retry_messages[0])["toolResponse"]["functionResponses"][
-        0
-    ]
+    retry_response = json.loads(retry_messages[0])["toolResponse"]["functionResponses"][0]
     assert retry_response["name"] == "get_weather"
 
 
@@ -809,9 +765,7 @@ def test_gemini_realtime_user_text_transformation():
         "item": {
             "type": "message",
             "role": "user",
-            "content": [
-                {"type": "input_text", "text": "What's the weather in London?"}
-            ],
+            "content": [{"type": "input_text", "text": "What's the weather in London?"}],
         },
     }
 
@@ -890,11 +844,7 @@ def test_gemini_realtime_multi_tool_calls_have_unique_item_ids():
         },
     )
 
-    responses = [
-        ev
-        for ev in result["response"]
-        if ev.get("type") == "response.function_call_arguments.done"
-    ]
+    responses = [ev for ev in result["response"] if ev.get("type") == "response.function_call_arguments.done"]
     assert len(responses) == 2
     assert responses[0]["response_id"] == "resp_123"
     assert responses[1]["response_id"] == "resp_123"
@@ -1060,13 +1010,7 @@ def test_gemini_tool_call_resets_ids_for_post_tool_model_turn():
     assert tool_result["current_response_id"] is None
 
     post_tool_result = config.transform_realtime_response(
-        json.dumps(
-            {
-                "serverContent": {
-                    "modelTurn": {"parts": [{"text": "The weather is sunny."}]}
-                }
-            }
-        ),
+        json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "The weather is sunny."}]}}}),
         "gemini-2.5-flash",
         logging_obj,
         realtime_response_transform_input={
@@ -1083,9 +1027,7 @@ def test_gemini_tool_call_resets_ids_for_post_tool_model_turn():
     post_tool_events = post_tool_result["response"]
     assert post_tool_events[0]["type"] == "response.created"
     assert post_tool_events[0]["response"]["id"] != tool_response_id
-    assert (
-        post_tool_result["current_response_id"] == post_tool_events[0]["response"]["id"]
-    )
+    assert post_tool_result["current_response_id"] == post_tool_events[0]["response"]["id"]
 
 
 def test_gemini_empty_tool_call_does_not_crash_websocket():
@@ -1198,9 +1140,7 @@ def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
         },
     )
 
-    response_done = next(
-        ev for ev in result["response"] if ev.get("type") == "response.done"
-    )
+    response_done = next(ev for ev in result["response"] if ev.get("type") == "response.done")
     usage = response_done["response"]["usage"]
     assert usage["input_tokens"] == 17
     assert usage["output_tokens"] == 4
@@ -1244,9 +1184,7 @@ def test_gemini_tool_call_response_done_falls_back_to_empty_usage():
         },
     )
 
-    response_done = next(
-        ev for ev in result["response"] if ev.get("type") == "response.done"
-    )
+    response_done = next(ev for ev in result["response"] if ev.get("type") == "response.done")
     usage = response_done["response"]["usage"]
     assert usage["input_tokens"] == 0
     assert usage["output_tokens"] == 0
@@ -1366,9 +1304,7 @@ def test_gemini_realtime_pipecat_ga_session_voice_and_tools(patch_gemini_audio_c
     # Native-audio Live rejects speechConfig on setup (see _finalize_gemini_live_setup).
     assert "speechConfig" not in setup.get("generationConfig", {})
     assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
-    assert (
-        setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is False
-    )
+    assert setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is False
 
 
 def test_gemini_realtime_pipecat_semantic_vad_omits_realtime_input_config():
@@ -1611,9 +1547,7 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_tool_call_respon
         },
     )
 
-    response_done = next(
-        ev for ev in tool_call_result["response"] if ev.get("type") == "response.done"
-    )
+    response_done = next(ev for ev in tool_call_result["response"] if ev.get("type") == "response.done")
     usage = response_done["response"]["usage"]
     assert usage["input_tokens"] == 31
     assert usage["output_tokens"] == 9
@@ -1675,11 +1609,7 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
         },
     )
 
-    response_done = next(
-        ev
-        for ev in turn_complete_result["response"]
-        if ev.get("type") == "response.done"
-    )
+    response_done = next(ev for ev in turn_complete_result["response"] if ev.get("type") == "response.done")
     usage = response_done["response"]["usage"]
     assert usage["input_tokens"] == 5
     assert usage["output_tokens"] == 11
@@ -1735,9 +1665,7 @@ def test_gemini_in_frame_usage_metadata_clears_pending_buffer():
         },
     )
 
-    response_done = next(
-        ev for ev in result["response"] if ev.get("type") == "response.done"
-    )
+    response_done = next(ev for ev in result["response"] if ev.get("type") == "response.done")
     usage = response_done["response"]["usage"]
     assert usage["input_tokens"] == 3
     assert usage["output_tokens"] == 2
@@ -1854,9 +1782,7 @@ def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
     )
     assert post_tool_answer["response"][0]["type"] == "response.created"
     transcript_delta = next(
-        event
-        for event in post_tool_answer["response"]
-        if event["type"] == "response.output_audio_transcript.delta"
+        event for event in post_tool_answer["response"] if event["type"] == "response.output_audio_transcript.delta"
     )
     assert "72" in transcript_delta["delta"]
 
@@ -1874,11 +1800,7 @@ def test_gemini_post_tool_bare_turn_complete_followed_by_answer():
             "current_delta_type": post_tool_answer["current_delta_type"],
         },
     )
-    response_done = next(
-        event
-        for event in final_turn["response"]
-        if event["type"] == "response.done"
-    )
+    response_done = next(event for event in final_turn["response"] if event["type"] == "response.done")
     assert response_done["response"]["status"] == "completed"
 
 
@@ -1920,9 +1842,7 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         ("gemini-2.5-flash", False),
     ],
 )
-def test_is_audio_only_live_model_uses_cost_map(
-    model, expected, patch_gemini_audio_cost_map_entries
-):
+def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
 
 
@@ -1936,9 +1856,7 @@ def test_is_audio_only_live_model_uses_cost_map(
         ("gemini-2.0-flash", False),
     ],
 )
-def test_is_native_audio_model_uses_cost_map(
-    model, expected, patch_gemini_audio_cost_map_entries
-):
+def test_is_native_audio_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
     assert GeminiRealtimeConfig._is_native_audio_model(model) == expected
 
 
