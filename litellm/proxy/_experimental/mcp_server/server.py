@@ -181,9 +181,7 @@ def _mcp_session_id_from_headers(
 def _mcp_content_block_text(block: object) -> Optional[str]:
     """The ``text`` of an MCP content block (``TextContent`` object or ``dict``),
     or ``None`` when the block carries no usable text."""
-    text = (
-        block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
-    )
+    text = block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
     return text if isinstance(text, str) and text else None
 
 
@@ -2558,9 +2556,7 @@ if MCP_AVAILABLE:
             content = getattr(response, "content", None) or ()
         if not is_error:
             return None
-        texts = tuple(
-            text for block in content if (text := _mcp_content_block_text(block))
-        )
+        texts = tuple(text for block in content if (text := _mcp_content_block_text(block)))
         return "\n".join(texts) or "MCP tool call returned an error result"
 
     @client

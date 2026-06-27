@@ -2658,14 +2658,10 @@ class Logging(LiteLLMLoggingBaseClass):
         # An MCP tool call that fails at the tool level (CallToolResult.isError)
         # likewise still incurs the configured per-query cost, computed before
         # this handler runs; don't zero it like a generic failed LLM call.
-        preserve_mcp_cost = (
-            self.call_type == CallTypes.call_mcp_tool.value
-            and self.model_call_details.get("response_cost")
+        preserve_mcp_cost = self.call_type == CallTypes.call_mcp_tool.value and self.model_call_details.get(
+            "response_cost"
         )
-        if (
-            self.model_call_details.get("combined_usage_object") is None
-            and not preserve_mcp_cost
-        ):
+        if self.model_call_details.get("combined_usage_object") is None and not preserve_mcp_cost:
             self.model_call_details["response_cost"] = 0
 
         if hasattr(exception, "headers") and isinstance(exception.headers, dict):
