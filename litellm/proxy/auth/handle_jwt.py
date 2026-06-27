@@ -2022,15 +2022,8 @@ class JWTAuthManager:
         from litellm.proxy.proxy_server import llm_router
 
         user_team_ids = user_object.teams if user_object else []
-        normalized_method = (
-            request_method.upper() if isinstance(request_method, str) else None
-        )
-        team_route_allowed = RouteChecks.is_auth_enforced_pass_through_route(
-            route=route, method=normalized_method
-        ) or allowed_routes_check(
-            user_role=LitellmUserRoles.TEAM,
-            user_route=route,
-            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+        team_route_allowed = JWTAuthManager._is_team_route_allowed(
+            route=route, request_method=request_method, jwt_handler=jwt_handler
         )
         any_team_resolved = False
         for candidate_team_id in user_team_ids:
@@ -2104,6 +2097,28 @@ class JWTAuthManager:
                 ),
             )
         return None, None, None
+
+    @staticmethod
+    def _is_team_route_allowed(
+        route: str,
+        request_method: str | None,
+        jwt_handler: JWTHandler,
+    ) -> bool:
+        """
+        Whether a team-role caller may reach `route` per the JWT config's
+        `team_allowed_routes`. Auth-enforced passthrough routes are exempt
+        here; their team's `allowed_passthrough_routes` gate runs separately.
+        """
+        normalized_method = (
+            request_method.upper() if isinstance(request_method, str) else None
+        )
+        return RouteChecks.is_auth_enforced_pass_through_route(
+            route=route, method=normalized_method
+        ) or allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+        )
 
     @staticmethod
     def _validate_header_team_in_db_membership(
@@ -2414,6 +2429,18 @@ class JWTAuthManager:
                 team_id=team_id,
                 user_object=user_object,
             )
+            if not JWTAuthManager._is_team_route_allowed(
+                route=route,
+                request_method=request_method,
+                jwt_handler=jwt_handler,
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Team '{team_id}' (from x-litellm-team-id header) is not "
+                        f"allowed to access route '{route}'."
+                    ),
+                )
 
         ## MAP USER TO TEAMS
         await JWTAuthManager.map_user_to_teams(
