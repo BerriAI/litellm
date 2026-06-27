@@ -3979,6 +3979,56 @@ def test_chunk_parser_handles_prompt_feedback_block_with_usage():
     ), f"total_tokens should be 8175, got {result.usage.total_tokens}"
 
 
+def test_chunk_parser_empty_blockReason_does_not_trigger_content_filter():
+    """
+    Regression test: Gemini returns promptFeedback.blockReason as an empty string
+    when the prompt is NOT blocked. The old code used `"blockReason" in dict` which
+    checked key existence, falsely triggering content_filter for empty string.
+    """
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # promptFeedback.blockReason is empty string (NOT blocked)
+    chunk = {
+        "promptFeedback": {
+            "blockReason": "",
+            "blockReasonMessage": "",
+        },
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=[], sync_stream=True, logging_obj=logging_obj
+    )
+
+    # Act
+    result = streaming_obj.chunk_parser(chunk)
+
+    # Assert — should NOT be content_filter since blockReason is empty
+    assert result is not None
+    assert len(result.choices) == 1
+    assert (
+        result.choices[0].finish_reason != "content_filter"
+    ), "Empty blockReason should NOT trigger content_filter"
+    assert result.choices[0].delta.content == "Hello"
+
+
 def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
     """Test trafficType is preserved in _hidden_params for streaming."""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -4002,6 +4052,132 @@ def test_vertex_ai_traffic_type_preserved_in_hidden_params_streaming():
 
     assert (
         result._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND"
+    )
+
+
+def test_non_streaming_empty_blockReason_does_not_trigger_blocked_response():
+    """
+    Regression test: non-streaming path must not short-circuit to
+    _handle_blocked_response when promptFeedback.blockReason is empty string.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm import ModelResponse
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # completion has promptFeedback.blockReason="" (NOT blocked) and valid content
+    completion_response = {
+        "promptFeedback": {
+            "blockReason": "",
+            "blockReasonMessage": "",
+        },
+        "candidates": [
+            {
+                "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    raw_response = MagicMock()
+    raw_response.json.return_value = completion_response
+
+    result = VertexGeminiConfig().transform_response(
+        model="gemini-pro",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    # Should NOT be a blocked response — should have valid text
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason != "content_filter"
+    assert result.choices[0].message.content == "Hello"
+
+
+def test_non_streaming_safety_finish_reason_with_function_calls():
+    """
+    Regression test: when Gemini returns a safety finishReason (SAFETY, RECITATION, etc.)
+    alongside valid functionCall parts, the response should NOT short-circuit to
+    content_filter — function calls must be properly extracted.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm import ModelResponse
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # finishReason is SAFETY but candidate has functionCall parts
+    completion_response = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {
+                            "functionCall": {
+                                "name": "get_current_weather",
+                                "args": {"location": "Boston, MA"},
+                            }
+                        }
+                    ],
+                    "role": "model",
+                },
+                "finishReason": "SAFETY",
+                "safetyRatings": [
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "probability": "NEGLIGIBLE",
+                        "blocked": False,
+                    }
+                ],
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 68,
+            "candidatesTokenCount": 120,
+            "totalTokenCount": 188,
+        },
+    }
+
+    raw_response = MagicMock()
+    raw_response.json.return_value = completion_response
+
+    result = VertexGeminiConfig().transform_response(
+        model="gemini-pro",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    # Must have tool_calls, NOT content_filter
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "tool_calls", (
+        f"finish_reason should be 'tool_calls' when functionCall parts exist, "
+        f"got '{result.choices[0].finish_reason}'"
+    )
+    assert result.choices[0].message.tool_calls is not None
+    assert len(result.choices[0].message.tool_calls) == 1
+    assert (
+        result.choices[0].message.tool_calls[0].function.name
+        == "get_current_weather"
     )
 
 

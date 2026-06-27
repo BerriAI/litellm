@@ -1572,13 +1572,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         Per Google's docs, thoughtSignature is returned for multi-turn context preservation
         and can appear on parts even without thought: true (e.g., regular text responses,
-        function calls). This method extracts all thoughtSignature values from parts.
+        function calls).
+
+        Only extracts signatures from non-functionCall parts — functionCall
+        thoughtSignatures are handled via tool_call.provider_specific_fields.
 
         Returns:
             List of thoughtSignature strings if any are found, None otherwise
         """
         signatures: List[str] = []
         for part in parts:
+            if "functionCall" in part:
+                continue
             signature = part.get("thoughtSignature")
             if signature is not None:
                 signatures.append(signature)
@@ -2147,7 +2152,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         # Check if prompt is blocked due to content filtering
         prompt_feedback = processed_chunk.get("promptFeedback")
-        if prompt_feedback and "blockReason" in prompt_feedback:
+        if prompt_feedback and prompt_feedback.get("blockReason"):
             verbose_logger.debug(
                 f"Prompt blocked due to: {prompt_feedback.get('blockReason')} - {prompt_feedback.get('blockReasonMessage')}"
             )
@@ -2647,10 +2652,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model_response.model = model
 
         ## CHECK IF RESPONSE FLAGGED
-        if (
-            "promptFeedback" in completion_response
-            and "blockReason" in completion_response["promptFeedback"]
-        ):
+        if "promptFeedback" in completion_response and completion_response[
+            "promptFeedback"
+        ].get("blockReason"):
             return self._handle_blocked_response(
                 model_response=model_response,
                 completion_response=completion_response,
@@ -2658,17 +2662,24 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         _candidates = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
-            content_policy_violations = (
-                VertexGeminiConfig().get_flagged_finish_reasons()
-            )
-            if (
-                "finishReason" in _candidates[0]
-                and _candidates[0]["finishReason"] in content_policy_violations.keys()
-            ):
-                return self._handle_content_policy_violation(
-                    model_response=model_response,
-                    completion_response=completion_response,
+            # Don't short-circuit to content_filter if the candidate has
+            # functionCall parts — Gemini may return a safety finishReason
+            # alongside valid function call data.
+            candidate_parts = _candidates[0].get("content", {}).get("parts", [])
+            has_function_call = any("functionCall" in part for part in candidate_parts)
+            if not has_function_call:
+                content_policy_violations = (
+                    VertexGeminiConfig().get_flagged_finish_reasons()
                 )
+                if (
+                    "finishReason" in _candidates[0]
+                    and _candidates[0]["finishReason"]
+                    in content_policy_violations.keys()
+                ):
+                    return self._handle_content_policy_violation(
+                        model_response=model_response,
+                        completion_response=completion_response,
+                    )
 
         model_response.choices = []
         response_id = completion_response.get("responseId")
