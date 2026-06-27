@@ -58,6 +58,7 @@ class StandardBuiltInToolCostTracking:
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
                 standard_built_in_tools_params=standard_built_in_tools_params,
+                response_object=response_object,
             )
 
         # Handle file search
@@ -83,6 +84,7 @@ class StandardBuiltInToolCostTracking:
         custom_llm_provider: Optional[str],
         usage: Optional[Usage],
         standard_built_in_tools_params: StandardBuiltInToolsParams,
+        response_object: Optional[Any] = None,
     ) -> float:
         """Handle web search cost calculation."""
         from litellm.llms import get_cost_for_web_search_request
@@ -105,15 +107,14 @@ class StandardBuiltInToolCostTracking:
         if custom_llm_provider is None and model_info is not None:
             custom_llm_provider = model_info["litellm_provider"]
 
-        if (
-            model_info is not None
-            and usage is not None
-            and custom_llm_provider is not None
+        if model_info is not None and custom_llm_provider is not None and (
+            usage is not None or response_object is not None
         ):
             result = get_cost_for_web_search_request(
                 custom_llm_provider=custom_llm_provider,
                 usage=usage,
                 model_info=model_info,
+                response_object=response_object,
             )
             if result is not None:
                 return result
@@ -416,6 +417,17 @@ class StandardBuiltInToolCostTracking:
                             if annotation.get("type", None) == annotation_type:
                                 return True
         return False
+
+    @staticmethod
+    def count_output_type(
+        response_object: ResponsesAPIResponse,
+        output_type: Literal["web_search_call", "file_search_call"],
+    ) -> int:
+        """Count how many output items of the given type appear in a ResponsesAPIResponse."""
+        return sum(
+            1 for item in response_object.output
+            if getattr(item, "type", None) == output_type
+        )
 
     @staticmethod
     def response_includes_output_type(

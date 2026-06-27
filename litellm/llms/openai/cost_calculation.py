@@ -1,6 +1,6 @@
 """
 Helper util for handling openai-specific cost calculation
-- e.g.: prompt caching
+- e.g.: prompt caching, web search via Responses API
 """
 
 from typing import Any, Literal, Mapping, Optional, Tuple
@@ -9,6 +9,40 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_model_info
+
+
+def cost_per_web_search_request(
+    response_object: Optional[Any],
+    model_info: Optional["ModelInfo"],
+) -> Optional[float]:
+    """
+    Cost for web search calls made via the OpenAI Responses API.
+
+    The Responses API embeds each search as a discrete ``web_search_call`` output item.
+    OpenAI charges a flat $10 / 1k calls regardless of search-context tier, so the
+    per-call cost lives in ``search_context_cost_per_query.search_context_size_medium``
+    (all three tiers are identical for gpt-5 family models).
+
+    Returns None when the response is not a ResponsesAPIResponse (e.g. a plain chat
+    completion), so the caller can fall back to the generic web-search cost path.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+        StandardBuiltInToolCostTracking,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    if not isinstance(response_object, ResponsesAPIResponse):
+        return None
+
+    count = StandardBuiltInToolCostTracking.count_output_type(
+        response_object=response_object, output_type="web_search_call"
+    )
+    if count == 0:
+        return None
+
+    search_costs = (model_info or {}).get("search_context_cost_per_query") or {}
+    cost_per_call: float = search_costs.get("search_context_size_medium", 0.0)
+    return count * cost_per_call
 
 
 def cost_router(call_type: CallTypes) -> Literal["cost_per_token", "cost_per_second"]:

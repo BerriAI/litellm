@@ -15940,6 +15940,11 @@
         "supports_tool_choice": true,
         "supports_url_context": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "search_context_cost_per_query": {
             "search_context_size_low": 0.035,
@@ -20573,6 +20578,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "gpt-4.1-2025-04-14": {
@@ -20608,6 +20618,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "gpt-4.1-mini": {
@@ -20646,6 +20661,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "gpt-4.1-mini-2025-04-14": {
@@ -20681,6 +20701,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "gpt-4.1-nano": {
@@ -21844,6 +21869,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -21884,6 +21914,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
@@ -21924,6 +21959,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
@@ -21963,6 +22003,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": false,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": false,
@@ -22004,6 +22049,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22045,6 +22095,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22083,6 +22138,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -22121,6 +22181,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -22155,6 +22220,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -22189,6 +22259,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -22239,6 +22314,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22289,6 +22369,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22334,6 +22419,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -22380,6 +22470,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -22521,6 +22616,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -22566,6 +22666,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -22614,6 +22719,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22662,6 +22772,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22707,6 +22822,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22752,6 +22872,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
@@ -22788,6 +22913,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -22824,6 +22954,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -22867,6 +23002,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -22971,6 +23111,11 @@
         "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -23008,6 +23153,11 @@
         "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -23042,6 +23192,11 @@
         "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -23079,6 +23234,11 @@
         "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -23116,6 +23276,11 @@
         "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
@@ -23153,6 +23318,11 @@
         "supports_system_messages": false,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -23196,6 +23366,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -23239,6 +23414,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -23279,6 +23459,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -23318,6 +23503,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -27391,6 +27581,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o3-2025-04-16": {
@@ -27424,6 +27619,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o3-deep-research": {
@@ -27458,6 +27658,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o3-deep-research-2025-06-26": {
@@ -27492,6 +27697,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o3-mini": {
@@ -27557,6 +27767,11 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o3-pro-2025-06-10": {
@@ -27588,6 +27803,11 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o4-mini": {
@@ -27614,6 +27834,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o4-mini-2025-04-16": {
@@ -27634,6 +27859,11 @@
         "supports_tool_choice": true,
         "supports_service_tier": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o4-mini-deep-research": {
@@ -27668,6 +27898,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "o4-mini-deep-research-2025-06-26": {
@@ -27702,6 +27937,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "oci/meta.llama-3.1-8b-instruct": {
@@ -37495,6 +37735,11 @@
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "xai/grok-2-1212": {
@@ -37507,6 +37752,11 @@
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "xai/grok-2-latest": {
@@ -37519,6 +37769,11 @@
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "xai/grok-2-vision": {
@@ -37533,6 +37788,11 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "xai/grok-2-vision-1212": {
@@ -37548,6 +37808,11 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true
     },
     "xai/grok-2-vision-latest": {
@@ -42407,6 +42672,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false,
@@ -42429,6 +42699,11 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": false
