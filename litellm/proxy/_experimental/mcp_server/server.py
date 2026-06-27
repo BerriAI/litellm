@@ -178,6 +178,15 @@ def _mcp_session_id_from_headers(
     return None
 
 
+def _mcp_content_block_text(block: object) -> Optional[str]:
+    """The ``text`` of an MCP content block (``TextContent`` object or ``dict``),
+    or ``None`` when the block carries no usable text."""
+    text = (
+        block.get("text") if isinstance(block, dict) else getattr(block, "text", None)
+    )
+    return text if isinstance(text, str) and text else None
+
+
 def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     """Whether a (possibly truncated) JSON-RPC envelope has a ``method`` key at
     the root object's top level.
@@ -2529,23 +2538,28 @@ if MCP_AVAILABLE:
 
         return response
 
-    def _get_mcp_tool_call_error_message(
-        response: "CallToolResult",
-    ) -> Optional[str]:
+    def _get_mcp_tool_call_error_message(response: object) -> Optional[str]:
         """The error text of a failed MCP ``tools/call`` result, or ``None`` when
         it succeeded.
 
         A failed tool call returns HTTP 200 with ``isError: true`` in the JSON-RPC
         result (MCP spec), so the result object itself is the only failure signal.
-        The message is the concatenated text of the result's ``TextContent``
-        blocks, falling back to a generic string when the tool reported no text.
+        Accepts a ``CallToolResult``, an equivalent ``dict`` (``isError`` true), or
+        any other shape (e.g. a bare content list from a legacy path), which is
+        always treated as success. The message is the concatenated text of the
+        result's content blocks, falling back to a generic string when the tool
+        reported no text.
         """
-        if not response.isError:
+        if isinstance(response, dict):
+            is_error = response.get("isError")
+            content = response.get("content") or ()
+        else:
+            is_error = getattr(response, "isError", None)
+            content = getattr(response, "content", None) or ()
+        if not is_error:
             return None
         texts = tuple(
-            text
-            for block in (response.content or ())
-            if isinstance((text := getattr(block, "text", None)), str) and text
+            text for block in content if (text := _mcp_content_block_text(block))
         )
         return "\n".join(texts) or "MCP tool call returned an error result"
 
@@ -2634,16 +2648,27 @@ if MCP_AVAILABLE:
                 # A tool returning ``isError: true`` (auth denied, upstream
                 # error, guardrail block, ...) is a failed call even though the
                 # MCP spec keeps it on HTTP 200. Log it as a failure so spend
-                # logs and the OTel span are marked ERROR, then mark async
-                # success as already handled so the @client wrapper doesn't
-                # also emit a success log for the same call.
+                # logs and the OTel span are marked ERROR. The configured MCP
+                # per-query cost still applies, so compute it up front; the
+                # failure handler preserves an MCP cost rather than zeroing it.
+                from litellm.proxy._experimental.mcp_server.cost_calculator import (
+                    MCPCostCalculator,
+                )
+
+                litellm_logging_obj.model_call_details["response_cost"] = (
+                    MCPCostCalculator.calculate_mcp_tool_call_cost(litellm_logging_obj)
+                )
                 await litellm_logging_obj.async_failure_handler(
                     MCPToolCallError(tool_error_message),
                     "",
                     start_time,
                     end_time,
                 )
+                # The @client wrapper still dispatches both async and sync
+                # success logging for this returned result; mark both handled so
+                # the same isError call isn't double-logged as a success.
                 litellm_logging_obj.has_run_logging(event_type="async_success")
+                litellm_logging_obj.has_run_logging(event_type="sync_success")
             else:
                 await litellm_logging_obj.async_success_handler(
                     result=response, start_time=start_time, end_time=end_time

@@ -4188,6 +4188,20 @@ def test_get_mcp_tool_call_error_message():
         == "MCP tool call returned an error result"
     )
 
+    # dict-shaped result (isError true) is handled like a CallToolResult.
+    assert (
+        _get_mcp_tool_call_error_message(
+            {"isError": True, "content": [{"type": "text", "text": "boom"}]}
+        )
+        == "boom"
+    )
+
+    # A bare content list (legacy path, no isError attribute) is never an error,
+    # and must not raise: this is what reached the helper in the wild.
+    assert (
+        _get_mcp_tool_call_error_message([TextContent(type="text", text="ok")]) is None
+    )
+
 
 async def _run_call_mcp_tool_with_result(call_tool_result):
     """Drive ``call_mcp_tool`` against a stubbed ``execute_mcp_tool`` that returns
@@ -4304,6 +4318,126 @@ async def test_call_mcp_tool_success_result_logged_as_success():
     assert response.isError is False
     slp = logging_obj.model_call_details["standard_logging_object"]
     assert slp["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_legacy_list_response_logged_as_success():
+    """A bare content-list response (legacy path, no ``isError`` attribute) must
+    not crash the logging branch and is treated as a success.
+
+    Regression: the error helper assumed a CallToolResult and raised
+    AttributeError on a list, breaking the whole tool call."""
+    try:
+        from mcp.types import TextContent
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    list_response = [TextContent(type="text", text="ok")]
+    response, logging_obj = await _run_call_mcp_tool_with_result(list_response)
+
+    assert response == list_response
+    slp = logging_obj.model_call_details["standard_logging_object"]
+    assert slp["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_iserror_still_charges_configured_cost():
+    """A failed tools/call still bills the configured MCP per-query cost; routing
+    through the failure handler must not zero the spend like a generic failed LLM
+    call would.
+
+    Regression: the failure path zeroed response_cost, letting an authenticated
+    caller trigger an isError result to dodge the configured MCP cost."""
+    try:
+        from mcp.types import CallToolResult, TextContent
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    import uuid
+    from datetime import timezone
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        call_mcp_tool,
+        global_mcp_server_manager,
+    )
+    from litellm.utils import Rules, function_setup
+
+    mock_server = MCPServer(
+        server_id="server-cost",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={
+            "server_name": "test_server",
+            "mcp_server_cost_info": {"default_cost_per_query": 0.5},
+        },
+    )
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    start_time = datetime.now(timezone.utc)
+    logging_obj, _ = function_setup(
+        original_function="call_mcp_tool",
+        rules_obj=Rules(),
+        start_time=start_time,
+        litellm_call_id=str(uuid.uuid4()),
+        name="test_server-send_email",
+        arguments={"x": 1},
+    )
+
+    error_result = CallToolResult(
+        content=[TextContent(type="text", text="Error: denied")], isError=True
+    )
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[mock_server.server_id],
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            return_value=mock_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[mock_server],
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=mock_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+        ) as mock_registry,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=error_result,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        mock_registry.get_tool.return_value = None
+        response = await call_mcp_tool(
+            name="test_server-send_email",
+            arguments={"x": 1},
+            user_api_key_auth=user_auth,
+            mcp_servers=["test_server"],
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert response.isError is True
+    slp = logging_obj.model_call_details["standard_logging_object"]
+    assert slp["status"] == "failure"
+    assert slp["response_cost"] == 0.5
 
 
 @pytest.mark.asyncio
