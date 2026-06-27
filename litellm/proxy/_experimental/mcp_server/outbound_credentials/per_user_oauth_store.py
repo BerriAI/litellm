@@ -108,9 +108,7 @@ def build_per_user_oauth_token_store(
     # Cache and refresh coordinator use the foundation's in-process defaults (a single replica needs
     # no shared cache or lock); the cross-replica path is layered on separately.
     refreshing = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher)
-    return CachedOAuthTokenStore(
-        refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS
-    )
+    return CachedOAuthTokenStore(refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS)
 
 
 class LazyPerUserOAuthTokenStore:

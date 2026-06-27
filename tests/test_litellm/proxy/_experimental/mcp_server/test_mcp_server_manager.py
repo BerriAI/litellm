@@ -4717,15 +4717,23 @@ class TestCreateMcpClientV2Graft:
             client._resolved_auth._header_value.get_secret_value() == f"Basic {encoded}"
         )
 
-    async def test_deferred_mode_uses_v1_auth_value(self):
+    async def test_m2m_client_credentials_defers_to_v1(self):
+        # M2M (oauth2 client_credentials) is not migrated: to_server_spec returns
+        # None, so the graft sets no resolved auth and leaves v1 in charge (v1
+        # performs the client_credentials grant itself - the static
+        # authentication_token is never consumed for oauth2, so it does not flow
+        # to _mcp_auth_value). Per-user oauth2 (authorization_code) is migrated to
+        # v2 and is exercised separately.
         client = await MCPServerManager()._create_mcp_client(
             self._http_server(
-                auth_type=MCPAuth.oauth2, authentication_token="legacy-token"
+                auth_type=MCPAuth.oauth2,
+                oauth2_flow="client_credentials",
+                authentication_token="legacy-token",
             )
         )
 
         assert client._resolved_auth is None
-        assert client._mcp_auth_value == "legacy-token"
+        assert client._mcp_auth_value is None
 
     async def test_static_token_missing_defers_to_v1(self):
         client = await MCPServerManager()._create_mcp_client(
