@@ -17,6 +17,7 @@ busy holder; a Redis blip degrades to an extra refresh, never a stale bearer.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import KW_ONLY, dataclass
 from typing import Protocol
 
 from litellm._logging import verbose_logger
@@ -42,19 +43,15 @@ class RedisCommands(Protocol):
     async def exists(self, *names: str) -> int: ...
 
 
+@dataclass(frozen=True, slots=True)
 class RedisDistributedLock:
-    def __init__(
-        self,
-        client: RedisCommands,
-        *,
-        namespace_key: Callable[[str], str] = lambda key: key,
-    ) -> None:
-        self._client = client
-        self._namespace_key = namespace_key
+    client: RedisCommands
+    _: KW_ONLY
+    namespace_key: Callable[[str], str] = lambda key: key
 
     async def acquire(self, key: str, token: str, ttl_seconds: float) -> LockAcquisition:
         try:
-            result = await self._client.set(self._namespace_key(key), token, nx=True, px=int(ttl_seconds * 1000))
+            result = await self.client.set(self.namespace_key(key), token, nx=True, px=int(ttl_seconds * 1000))
         # Degrade on any Redis client error: redis.exceptions narrows only via an import that
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
         except Exception as exc:  # noqa: BLE001
@@ -64,10 +61,10 @@ class RedisDistributedLock:
 
     async def extend(self, key: str, token: str, ttl_seconds: float) -> bool:
         try:
-            result = await self._client.eval(
+            result = await self.client.eval(
                 _EXTEND_IF_OWNER,
                 1,
-                self._namespace_key(key),
+                self.namespace_key(key),
                 token,
                 str(int(ttl_seconds * 1000)),
             )
@@ -80,7 +77,7 @@ class RedisDistributedLock:
 
     async def release(self, key: str, token: str) -> None:
         try:
-            await self._client.eval(_RELEASE_IF_OWNER, 1, self._namespace_key(key), token)
+            await self.client.eval(_RELEASE_IF_OWNER, 1, self.namespace_key(key), token)
         # Degrade on any Redis client error: redis.exceptions narrows only via an import that
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
         except Exception as exc:  # noqa: BLE001
@@ -88,7 +85,7 @@ class RedisDistributedLock:
 
     async def is_held(self, key: str) -> bool:
         try:
-            return await self._client.exists(self._namespace_key(key)) > 0
+            return await self.client.exists(self.namespace_key(key)) > 0
         # Degrade on any Redis client error: redis.exceptions narrows only via an import that
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
         except Exception as exc:  # noqa: BLE001

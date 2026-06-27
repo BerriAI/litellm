@@ -23,6 +23,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import KW_ONLY, dataclass
 from enum import Enum
 from typing import Protocol
 
@@ -57,30 +58,20 @@ class DistributedLock(Protocol):
     async def is_held(self, key: str) -> bool: ...
 
 
+@dataclass(frozen=True, slots=True)
 class RedisRefreshCoordinator:
-    def __init__(
-        self,
-        lock: DistributedLock,
-        *,
-        key_prefix: str = "mcp:refresh_lock:",
-        lock_ttl_seconds: float = 10.0,
-        wait_timeout_seconds: float = 10.0,
-        poll_interval_seconds: float = 0.05,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        clock: Callable[[], float] = time.monotonic,
-        new_token: Callable[[], str] = lambda: uuid.uuid4().hex,
-    ) -> None:
-        self._lock = lock
-        self._key_prefix = key_prefix
-        self._lock_ttl_seconds = lock_ttl_seconds
-        self._wait_timeout_seconds = wait_timeout_seconds
-        self._poll_interval_seconds = poll_interval_seconds
-        self._sleep = sleep
-        self._clock = clock
-        self._new_token = new_token
+    lock: DistributedLock
+    _: KW_ONLY
+    key_prefix: str = "mcp:refresh_lock:"
+    lock_ttl_seconds: float = 10.0
+    wait_timeout_seconds: float = 10.0
+    poll_interval_seconds: float = 0.05
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+    clock: Callable[[], float] = time.monotonic
+    new_token: Callable[[], str] = lambda: uuid.uuid4().hex
 
     def _key(self, user_id: str, server_id: str) -> str:
-        return f"{self._key_prefix}{user_id}:{server_id}"
+        return f"{self.key_prefix}{user_id}:{server_id}"
 
     async def run(
         self,
@@ -90,8 +81,8 @@ class RedisRefreshCoordinator:
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
         key = self._key(user_id, server_id)
-        token = self._new_token()
-        match await self._lock.acquire(key, token, self._lock_ttl_seconds):
+        token = self.new_token()
+        match await self.lock.acquire(key, token, self.lock_ttl_seconds):
             case LockAcquisition.ACQUIRED:
                 return await self._refresh_with_lease_renewal(key, token, refresh)
             case LockAcquisition.ERROR:
@@ -102,9 +93,9 @@ class RedisRefreshCoordinator:
                 # Another worker holds the lock; wait for it to finish (release or PX-expiry), then read
                 # the token it persisted - the winner wrote the fresh token to the store, so a plain
                 # re-read sees it without us refreshing again.
-                deadline = self._clock() + self._wait_timeout_seconds
-                while self._clock() < deadline and await self._lock.is_held(key):
-                    await self._sleep(self._poll_interval_seconds)
+                deadline = self.clock() + self.wait_timeout_seconds
+                while self.clock() < deadline and await self.lock.is_held(key):
+                    await self.sleep(self.poll_interval_seconds)
                 return await reread()
 
     async def _refresh_with_lease_renewal(
@@ -121,7 +112,7 @@ class RedisRefreshCoordinator:
             renewal_task.cancel()
             with suppress(asyncio.CancelledError):
                 await renewal_task
-            await self._lock.release(key, token)
+            await self.lock.release(key, token)
 
     async def _renew_lease_until_done(
         self,
@@ -130,6 +121,6 @@ class RedisRefreshCoordinator:
         refresh_task: asyncio.Future[OAuthToken | None],
     ) -> None:
         while not refresh_task.done():
-            await self._sleep(self._lock_ttl_seconds / 2)
-            if not refresh_task.done() and not await self._lock.extend(key, token, self._lock_ttl_seconds):
+            await self.sleep(self.lock_ttl_seconds / 2)
+            if not refresh_task.done() and not await self.lock.extend(key, token, self.lock_ttl_seconds):
                 return

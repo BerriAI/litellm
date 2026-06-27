@@ -12,26 +12,23 @@ TTL, not the value, bounds its life. An empty/undecryptable blob (e.g. master-ke
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
 
 
+@dataclass(frozen=True, slots=True)
 class OAuthTokenCacheCodec:
-    def __init__(
-        self,
-        encrypt: Callable[[str], str],
-        decrypt: Callable[[str], str | None],
-    ) -> None:
-        self._encrypt = encrypt
-        self._decrypt = decrypt
+    encrypt: Callable[[str], str]
+    decrypt: Callable[[str], str | None]
 
     def encode(self, token: OAuthToken) -> str:
-        return self._encrypt(token.access_token)
+        return self.encrypt(token.access_token)
 
     def decode(self, blob: str) -> OAuthToken | None:
-        access_token = self._decrypt(blob)
+        access_token = self.decrypt(blob)
         if not access_token:
             return None
         return OAuthToken(access_token=access_token, refresh_token=None)

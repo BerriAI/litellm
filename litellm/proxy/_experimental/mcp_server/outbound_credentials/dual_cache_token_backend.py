@@ -9,6 +9,7 @@ the other across the cutover). A missing or undecryptable entry reads as a miss.
 
 from __future__ import annotations
 
+from dataclasses import KW_ONLY, dataclass
 from typing import Protocol
 
 from litellm._logging import verbose_logger
@@ -30,6 +31,7 @@ class AsyncCache(Protocol):
     async def async_delete_cache(self, key: str) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
 class DualCacheTokenCacheBackend:
     """Every method degrades a cache or codec failure to its safe value - ``get`` to a miss
     (``None``), ``set``/``delete`` to a no-op - so a Redis outage or an undecryptable entry reads as a
@@ -37,24 +39,18 @@ class DualCacheTokenCacheBackend:
     contract. The guarantee holds here regardless of whether the injected cache/codec also swallow.
     """
 
-    def __init__(
-        self,
-        cache: AsyncCache,
-        codec: OAuthTokenCacheCodec,
-        *,
-        key_prefix: str = "mcp:per_user_token:",
-    ) -> None:
-        self._cache = cache
-        self._codec = codec
-        self._key_prefix = key_prefix
+    cache: AsyncCache
+    codec: OAuthTokenCacheCodec
+    _: KW_ONLY
+    key_prefix: str = "mcp:per_user_token:"
 
     def _key(self, user_id: str, server_id: str) -> str:
-        return f"{self._key_prefix}{user_id}:{server_id}"
+        return f"{self.key_prefix}{user_id}:{server_id}"
 
     async def get(self, user_id: str, server_id: str) -> OAuthToken | None:
         try:
-            blob = await self._cache.async_get_cache(self._key(user_id, server_id))
-            return self._codec.decode(blob) if isinstance(blob, str) else None
+            blob = await self.cache.async_get_cache(self._key(user_id, server_id))
+            return self.codec.decode(blob) if isinstance(blob, str) else None
         except Exception as exc:  # noqa: BLE001
             verbose_logger.debug("MCP per-user token cache get failed (miss): %s", exc)
             return None
@@ -63,9 +59,9 @@ class DualCacheTokenCacheBackend:
         if ttl_seconds <= 0:
             return
         try:
-            await self._cache.async_set_cache(
+            await self.cache.async_set_cache(
                 self._key(user_id, server_id),
-                self._codec.encode(token),
+                self.codec.encode(token),
                 ttl=ttl_seconds,
             )
         except Exception as exc:  # noqa: BLE001
@@ -73,6 +69,6 @@ class DualCacheTokenCacheBackend:
 
     async def delete(self, user_id: str, server_id: str) -> None:
         try:
-            await self._cache.async_delete_cache(self._key(user_id, server_id))
+            await self.cache.async_delete_cache(self._key(user_id, server_id))
         except Exception as exc:  # noqa: BLE001
             verbose_logger.debug("MCP per-user token cache delete failed (ignored): %s", exc)
