@@ -149,6 +149,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            original_structured_messages = structured_messages
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
             # Include model information if available
@@ -175,18 +176,49 @@ class AnthropicMessagesHandler(BaseTranslation):
                     # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = anthropic_tools
 
-            # Step 3: Map guardrail responses back to original message structure
-            await self._apply_guardrail_responses_to_input(
-                messages=messages,
-                responses=guardrailed_texts,
-                task_mappings=task_mappings,
+            guardrailed_structured_messages = guardrailed_inputs.get(
+                "structured_messages"
             )
+            if (
+                guardrailed_structured_messages is not None
+                and guardrailed_structured_messages is not original_structured_messages
+            ):
+                self._write_back_structured_messages(
+                    data, guardrailed_structured_messages
+                )
+            else:
+                # Step 3: Map guardrail responses back to original message structure
+                await self._apply_guardrail_responses_to_input(
+                    messages=messages,
+                    responses=guardrailed_texts,
+                    task_mappings=task_mappings,
+                )
 
         verbose_proxy_logger.debug(
             "Anthropic Messages: Processed input messages: %s", messages
         )
 
         return data
+
+    @staticmethod
+    def _write_back_structured_messages(data: dict, structured_messages: list) -> None:
+        """Convert compressed structured_messages back to Anthropic format and write to data."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            anthropic_messages_pt,
+        )
+
+        model = str(data.get("model") or "")
+        non_system = [m for m in structured_messages if m.get("role") != "system"]
+        converted = anthropic_messages_pt(
+            messages=non_system, model=model, llm_provider="anthropic"
+        )
+        for msg in converted:
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "thinking":
+                        block.pop("cache_control", None)
+        data["messages"] = converted
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
         """Extract tool names from Anthropic messages request (tools[].name)."""

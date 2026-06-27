@@ -1093,6 +1093,45 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
+def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
+    """Merge guardrail entries into a single litellm_params dict."""
+    if not isinstance(lp, dict):
+        return
+    if lp.get("metadata") is None:
+        lp["metadata"] = {}
+    existing = lp["metadata"].setdefault("standard_logging_guardrail_information", [])
+    for entry in entries:
+        if entry not in existing:
+            existing.append(entry)
+
+
+def _sync_guardrail_info_to_logging_obj(
+    request_data: dict, logging_obj: object
+) -> None:
+    """Copy standard_logging_guardrail_information from request_data into logging_obj.
+
+    The @log_guardrail_information decorator writes guardrail info to
+    request_data["metadata"] or request_data["litellm_metadata"].  For
+    passthrough routes (/v1/messages, /v1/responses) the spend-log payload is
+    built from logging_obj.litellm_params["metadata"], which is a separate dict
+    that does not share identity with the one in request_data.  This helper
+    bridges that gap so guardrail_information is non-null in spend logs for all
+    routes, not just /v1/chat/completions.
+    """
+    if logging_obj is None:
+        return
+    meta_src = (
+        request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    )
+    slg_info = meta_src.get("standard_logging_guardrail_information")
+    if not slg_info:
+        return
+    entries: list = slg_info if isinstance(slg_info, list) else [slg_info]
+    mcd = getattr(logging_obj, "model_call_details", None) or {}
+    _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
+    _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
+
+
 def log_guardrail_information(func):
     """
     Decorator to add standard logging guardrail information to any function
@@ -1153,6 +1192,7 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
+        logging_obj = kwargs.get("logging_obj")
         entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = await func(*args, **kwargs)
@@ -1178,6 +1218,8 @@ def log_guardrail_information(func):
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
             )
+        finally:
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
@@ -1191,6 +1233,7 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
+        logging_obj = kwargs.get("logging_obj")
         entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = func(*args, **kwargs)
@@ -1212,6 +1255,8 @@ def log_guardrail_information(func):
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
             )
+        finally:
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):

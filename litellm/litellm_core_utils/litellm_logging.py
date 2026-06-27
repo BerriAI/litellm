@@ -5959,7 +5959,6 @@ def get_standard_logging_object_payload(
             ),
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
-
         # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
 
         return payload
