@@ -132,6 +132,16 @@ async def handle_mcp_tool_call(
         client_ip=client_ip,
     )
 
+    # Reject before dispatch when the key has no accessible servers; otherwise an
+    # unprefixed local tool name would fall through to the local registry in
+    # execute_mcp_tool, which has no server permission check.
+    if not allowed_mcp_servers:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=403, detail="User not allowed to call this tool."
+        )
+
     return await execute_mcp_tool(
         name=tool_name,
         arguments=arguments,

@@ -344,7 +344,7 @@ class TestCallToolRestApiVirtualTools:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[],
+                return_value=[MagicMock()],
             ),
             patch(
                 "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
@@ -395,7 +395,7 @@ class TestCallToolRestApiVirtualTools:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[],
+                return_value=[MagicMock()],
             ) as mock_allowed,
             patch(
                 "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
@@ -576,7 +576,7 @@ class TestDispatchVirtualMcpTool:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[],
+                return_value=[MagicMock()],
             ) as mock_allowed,
             patch(
                 "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
@@ -608,6 +608,41 @@ class TestDispatchVirtualMcpTool:
         assert kw["litellm_logging_obj"] is sentinel_logging_obj
         # Scoped session: the requested mcp_servers scope must reach server resolution
         assert mock_allowed.await_args.kwargs["mcp_servers"] == ["github"]
+
+    @pytest.mark.asyncio
+    async def test_call_rejected_when_no_accessible_servers(self) -> None:
+        """Regression: a key with no accessible MCP servers must not reach
+        execute_mcp_tool, where an unprefixed local tool name would otherwise
+        run via the local registry without a server permission check."""
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server.tool_search import (
+            handle_mcp_tool_call,
+        )
+
+        uak = UserAPIKeyAuth(
+            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                new_callable=AsyncMock,
+            ) as mock_exec,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handle_mcp_tool_call(
+                    tool_name="local_secret_tool",
+                    arguments={},
+                    user_api_key_dict=uak,
+                )
+
+        assert exc_info.value.status_code == 403
+        mock_exec.assert_not_awaited()
 
 
 class TestCaptureHostProgressCallback:
