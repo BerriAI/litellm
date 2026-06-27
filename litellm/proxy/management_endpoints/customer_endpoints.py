@@ -15,6 +15,7 @@ from typing import List, Optional
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -42,7 +43,7 @@ from litellm.types.proxy.management_endpoints.customer_endpoints import (
 router = APIRouter()
 
 
-def _to_customer_response(record) -> CustomerResponse:
+def _to_customer_response(record: BaseModel) -> CustomerResponse:
     """Validate a raw end-user DB row into the typed customer response.
 
     object_permission reverse relations and the budget's audit fields are
