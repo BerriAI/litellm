@@ -17,15 +17,15 @@ class _FakeLock:
     def __init__(self, acquired, held_sequence=()):
         self._acquired = acquired
         self._held = list(held_sequence)
-        self.acquired_keys = []
+        self.acquire_calls = []
         self.released = []
 
-    async def acquire(self, key, ttl_seconds):
-        self.acquired_keys.append((key, ttl_seconds))
+    async def acquire(self, key, token, ttl_seconds):
+        self.acquire_calls.append((key, token, ttl_seconds))
         return self._acquired
 
-    async def release(self, key):
-        self.released.append(key)
+    async def release(self, key, token):
+        self.released.append((key, token))
 
     async def is_held(self, key):
         return self._held.pop(0) if self._held else False
@@ -47,7 +47,7 @@ def _advancing_sleep(clock, step=0.5):
 
 
 @pytest.mark.asyncio
-async def test_winner_refreshes_then_releases_and_never_rereads():
+async def test_winner_acquires_and_releases_with_the_same_token_and_never_rereads():
     lock = _FakeLock(acquired=LockAcquisition.ACQUIRED)
     refreshed = OAuthToken(access_token="new")
     reread_calls = []
@@ -59,10 +59,12 @@ async def test_winner_refreshes_then_releases_and_never_rereads():
         reread_calls.append(1)
         return None
 
-    result = await RedisRefreshCoordinator(lock).run("u", "s", refresh, reread)
+    coord = RedisRefreshCoordinator(lock, new_token=lambda: "tok")
+    result = await coord.run("u", "s", refresh, reread)
     assert result is refreshed
-    assert lock.acquired_keys == [(_KEY, 10.0)]
-    assert lock.released == [_KEY]
+    assert lock.acquire_calls == [(_KEY, "tok", 10.0)]
+    # released with the SAME token it acquired with, so it can only delete its own lock
+    assert lock.released == [(_KEY, "tok")]
     assert reread_calls == []
 
 
@@ -76,9 +78,10 @@ async def test_winner_releases_even_when_refresh_raises():
     async def reread():
         return None
 
+    coord = RedisRefreshCoordinator(lock, new_token=lambda: "tok")
     with pytest.raises(RuntimeError):
-        await RedisRefreshCoordinator(lock).run("u", "s", refresh, reread)
-    assert lock.released == [_KEY]  # the lock is freed even on failure
+        await coord.run("u", "s", refresh, reread)
+    assert lock.released == [(_KEY, "tok")]  # the lock is freed even on failure
 
 
 @pytest.mark.asyncio
@@ -94,17 +97,21 @@ async def test_loser_waits_for_the_holder_then_rereads_persisted_token():
     async def reread():
         return OAuthToken(access_token="persisted-by-winner")
 
-    coord = RedisRefreshCoordinator(lock, clock=clock, sleep=_advancing_sleep(clock), wait_timeout_seconds=100.0)
+    coord = RedisRefreshCoordinator(
+        lock, clock=clock, sleep=_advancing_sleep(clock), wait_timeout_seconds=100.0
+    )
     result = await coord.run("u", "s", refresh, reread)
     assert result is not None and result.access_token == "persisted-by-winner"
-    assert refresh_calls == []  # the loser never refreshes - it reads the winner's result
-    assert lock.released == []  # ...and never holds the lock
+    assert (
+        refresh_calls == []
+    )  # the loser never refreshes - it reads the winner's result
+    assert lock.released == []  # ...and never releases a lock it does not own
 
 
 @pytest.mark.asyncio
 async def test_loser_rereads_after_timeout_if_holder_never_releases():
     clock = _Clock()
-    lock = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=[True] * 100)  # holder never releases
+    lock = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=[True] * 100)
 
     async def refresh():
         return None

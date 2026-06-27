@@ -139,7 +139,10 @@ def _runtime_backend_and_coordinator() -> tuple[
     # Redis client from init_async_client() is partially typed - both are untyped-boundary casts.
     cache: AsyncCache = user_api_key_cache  # pyright: ignore
     redis_client = redis_cache.init_async_client()  # pyright: ignore
-    lock = RedisDistributedLock(redis_client)  # pyright: ignore
+    lock = RedisDistributedLock(
+        redis_client,  # pyright: ignore
+        namespace_key=redis_cache.check_and_fix_namespace,
+    )
     backend = DualCacheTokenCacheBackend(cache, codec)
     coordinator = RedisRefreshCoordinator(lock)
     return backend, coordinator

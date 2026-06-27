@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Protocol
@@ -40,13 +41,16 @@ class LockAcquisition(Enum):
 
 
 class DistributedLock(Protocol):
-    """A best-effort cross-replica lock. ``acquire`` is ``SET key NX PX ttl`` reported as a
-    ``LockAcquisition`` (won / held by another / backend error); ``release`` is ``DEL``; ``is_held``
-    is ``EXISTS`` (so a waiter can poll without taking the lock)."""
+    """A best-effort cross-replica lock. ``acquire`` is ``SET key token NX PX ttl`` reported as a
+    ``LockAcquisition`` (won / held by another / backend error); ``release`` deletes the key only if
+    it still holds this caller's ``token`` (so it cannot delete a lock another worker re-acquired
+    after PX-expiry); ``is_held`` is ``EXISTS`` (so a waiter can poll without taking the lock)."""
 
-    async def acquire(self, key: str, ttl_seconds: float) -> LockAcquisition: ...
+    async def acquire(
+        self, key: str, token: str, ttl_seconds: float
+    ) -> LockAcquisition: ...
 
-    async def release(self, key: str) -> None: ...
+    async def release(self, key: str, token: str) -> None: ...
 
     async def is_held(self, key: str) -> bool: ...
 
@@ -62,6 +66,7 @@ class RedisRefreshCoordinator:
         poll_interval_seconds: float = 0.05,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
+        new_token: Callable[[], str] = lambda: uuid.uuid4().hex,
     ) -> None:
         self._lock = lock
         self._key_prefix = key_prefix
@@ -70,6 +75,7 @@ class RedisRefreshCoordinator:
         self._poll_interval_seconds = poll_interval_seconds
         self._sleep = sleep
         self._clock = clock
+        self._new_token = new_token
 
     def _key(self, user_id: str, server_id: str) -> str:
         return f"{self._key_prefix}{user_id}:{server_id}"
@@ -82,12 +88,13 @@ class RedisRefreshCoordinator:
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
         key = self._key(user_id, server_id)
-        match await self._lock.acquire(key, self._lock_ttl_seconds):
+        token = self._new_token()
+        match await self._lock.acquire(key, token, self._lock_ttl_seconds):
             case LockAcquisition.ACQUIRED:
                 try:
                     return await refresh()
                 finally:
-                    await self._lock.release(key)
+                    await self._lock.release(key, token)
             case LockAcquisition.ERROR:
                 # No election happened (lock backend down), so waiting would just re-read the
                 # still-expired token. Refresh anyway; worst case is an extra refresh, not a stale bearer.
