@@ -624,8 +624,7 @@ def resolve_static_header_env_vars(
             secret_value = litellm.get_secret(value)
             if secret_value is None:
                 verbose_proxy_logger.warning(
-                    "MCP static header '%s' references missing env var '%s'. "
-                    "Leaving the header value unresolved.",
+                    "MCP static header '%s' references missing env var '%s'. Leaving the header value unresolved.",
                     key,
                     env_var_name,
                 )

@@ -1347,9 +1347,7 @@ class MCPServerManager:
     ) -> MCPServer:
         _mcp_info: MCPInfo = mcp_server.mcp_info or {}
         env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
-        static_headers_dict = _deserialize_json_dict(
-            getattr(mcp_server, "static_headers", None)
-        )
+        static_headers_dict = _deserialize_json_dict(getattr(mcp_server, "static_headers", None))
         static_headers_dict = resolve_static_header_env_vars(
             static_headers_dict,
             allow_env_var_resolution=getattr(mcp_server, "submitted_by", None) is None,
