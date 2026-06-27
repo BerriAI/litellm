@@ -577,7 +577,7 @@ class TestDispatchVirtualMcpTool:
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
                 return_value=[],
-            ),
+            ) as mock_allowed,
             patch(
                 "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
                 new_callable=AsyncMock,
@@ -588,6 +588,7 @@ class TestDispatchVirtualMcpTool:
                 tool_name="github-create_issue",
                 arguments={},
                 user_api_key_dict=uak,
+                mcp_servers=["github"],
                 mcp_auth_header="bearer-xyz",
                 mcp_server_auth_headers={"github": {"Authorization": "Bearer gh"}},
                 oauth2_headers={"Authorization": "Bearer oauth"},
@@ -601,6 +602,8 @@ class TestDispatchVirtualMcpTool:
         }
         assert kw["oauth2_headers"] == {"Authorization": "Bearer oauth"}
         assert kw["raw_headers"] == {"x-mcp-auth": "tok"}
+        # Scoped session: the requested mcp_servers scope must reach server resolution
+        assert mock_allowed.await_args.kwargs["mcp_servers"] == ["github"]
 
 
 class TestCaptureHostProgressCallback:

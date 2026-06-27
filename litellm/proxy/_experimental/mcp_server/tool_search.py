@@ -77,6 +77,7 @@ async def handle_mcp_tool_search(
     top_k: int,
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: Optional[str] = None,
+    mcp_servers: Optional[list[str]] = None,
     mcp_auth_header: Optional[str] = None,
     mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
     oauth2_headers: Optional[dict[str, str]] = None,
@@ -86,6 +87,7 @@ async def handle_mcp_tool_search(
 
     mcp_tools = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
+        mcp_servers=mcp_servers,
         client_ip=client_ip,
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
@@ -111,6 +113,7 @@ async def handle_mcp_tool_call(
     arguments: dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: Optional[str] = None,
+    mcp_servers: Optional[list[str]] = None,
     mcp_auth_header: Optional[str] = None,
     mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
     oauth2_headers: Optional[dict[str, str]] = None,
@@ -123,7 +126,7 @@ async def handle_mcp_tool_call(
 
     allowed_mcp_servers = await _get_allowed_mcp_servers(
         user_api_key_auth=user_api_key_dict,
-        mcp_servers=None,
+        mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
 
