@@ -2233,7 +2233,11 @@ class BaseLLMHTTPHandler:
             kwargs=kwargs,
         )
 
-        return final_response if final_response is not None else initial_response
+        return self._maybe_wrap_in_fake_stream(
+            final_response if final_response is not None else initial_response,
+            logging_obj,
+            "anthropic_messages",
+        )
 
     def anthropic_messages_handler(
         self,

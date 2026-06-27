@@ -223,13 +223,17 @@ async def anthropic_messages(
         "_websearch_interception_converted_stream", False
     )
 
-    # Execute pre-request hooks to allow CustomLoggers to modify request
+    # Execute pre-request hooks to allow CustomLoggers to modify request.
+    # tool_choice is forwarded explicitly (it is a named param, not in kwargs)
+    # so hooks that rename tools — e.g. websearch_interception converting
+    # web_search -> litellm_web_search — can keep a forced tool_choice in sync.
     request_kwargs = await _execute_pre_request_hooks(
         model=model,
         messages=messages,
         tools=tools,
         stream=stream,
         custom_llm_provider=custom_llm_provider,
+        tool_choice=tool_choice,
         **kwargs,
     )
 

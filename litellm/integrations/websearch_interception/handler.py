@@ -345,6 +345,34 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_tool_name=search_tool_name,
         )
 
+    @staticmethod
+    def _tool_name(tool: dict[str, Any]) -> Optional[str]:
+        """Effective tool name, handling OpenAI ``function`` wrapper shape."""
+        fn = tool.get("function")
+        if tool.get("type") == "function" and isinstance(fn, dict):
+            return fn.get("name")
+        return tool.get("name")
+
+    @classmethod
+    def _sync_forced_tool_choice(
+        cls, tool_choice: Any, converted_tools: list[dict[str, Any]]
+    ) -> Any:
+        """Repoint a forced ``tool_choice`` at ``litellm_web_search`` when it
+        names a web-search tool that was just converted away.
+
+        Native clients (e.g. Claude Code) force the search tool via
+        ``tool_choice={"type": "tool", "name": "web_search"}``. Since the tool
+        definition gets renamed to ``litellm_web_search``, an unrewritten
+        ``tool_choice`` points at a tool that no longer exists, which Anthropic
+        rejects with "Tool 'web_search' not found in provided tools".
+        """
+        if not isinstance(tool_choice, dict) or tool_choice.get("type") != "tool":
+            return tool_choice
+        converted_names = {cls._tool_name(t) for t in converted_tools}
+        if tool_choice.get("name") in converted_names:
+            return tool_choice
+        return {**tool_choice, "name": LITELLM_WEB_SEARCH_TOOL_NAME}
+
     async def async_pre_request_hook(
         self, model: str, messages: List[Dict], kwargs: Dict
     ) -> Optional[Dict]:
@@ -421,6 +449,11 @@ class WebSearchInterceptionLogger(CustomLogger):
         verbose_logger.debug(
             f"WebSearchInterception: Tools after conversion: {[t.get('name') for t in converted_tools]}"
         )
+
+        if "tool_choice" in kwargs:
+            kwargs["tool_choice"] = self._sync_forced_tool_choice(
+                kwargs.get("tool_choice"), converted_tools
+            )
 
         # Also convert here for direct callers that bypass the deployment hook.
         if kwargs.get("stream"):
