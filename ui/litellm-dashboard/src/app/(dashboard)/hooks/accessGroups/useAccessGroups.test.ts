@@ -44,6 +44,8 @@ const mockAccessGroups: AccessGroupResponse[] = [
     access_model_names: [],
     access_mcp_server_ids: [],
     access_agent_ids: [],
+    access_passthrough_routes: [],
+    access_vector_store_ids: [],
     assigned_team_ids: [],
     assigned_key_ids: [],
     created_at: "2025-01-01T00:00:00Z",

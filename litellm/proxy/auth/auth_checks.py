@@ -767,6 +767,19 @@ async def common_checks(
         user_object=user_object, route=route, request_body=request_body
     )
 
+    passthrough_access_group_ids = list(
+        {
+            *(valid_token.access_group_ids or []),
+            *((team_object.access_group_ids or []) if team_object is not None else []),
+        }
+    )
+    if passthrough_access_group_ids:
+        valid_token.access_group_passthrough_routes = (
+            await _get_passthrough_routes_from_access_groups(
+                access_group_ids=passthrough_access_group_ids,
+            )
+        )
+
     _is_route_allowed = _is_api_route_allowed(
         route=route,
         request=request,
@@ -2845,7 +2858,11 @@ async def get_org_object(
 async def _get_resources_from_access_groups(
     access_group_ids: List[str],
     resource_field: Literal[
-        "access_model_names", "access_mcp_server_ids", "access_agent_ids"
+        "access_model_names",
+        "access_mcp_server_ids",
+        "access_agent_ids",
+        "access_passthrough_routes",
+        "access_vector_store_ids",
     ],
     prisma_client: Optional[PrismaClient] = None,
     user_api_key_cache: Optional[UserApiKeyCache] = None,
@@ -2861,6 +2878,8 @@ async def _get_resources_from_access_groups(
             - "access_model_names": model names (for model access checks)
             - "access_mcp_server_ids": MCP server IDs (for MCP access checks)
             - "access_agent_ids": agent IDs (for agent access checks)
+            - "access_passthrough_routes": passthrough route paths (for passthrough access checks)
+            - "access_vector_store_ids": vector store IDs (for vector store access checks)
         prisma_client: Optional PrismaClient (lazy-imported from proxy_server if None)
         user_api_key_cache: Optional DualCache (lazy-imported from proxy_server if None)
         proxy_logging_obj: Optional ProxyLogging (lazy-imported from proxy_server if None)
@@ -2954,6 +2973,44 @@ async def _get_agent_ids_from_access_groups(
     return await _get_resources_from_access_groups(
         access_group_ids=access_group_ids,
         resource_field="access_agent_ids",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _get_passthrough_routes_from_access_groups(
+    access_group_ids: List[str],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Collect passthrough route paths from unified access groups.
+    Routes are matched by path (exact or prefix), same as allowed_passthrough_routes.
+    """
+    return await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_passthrough_routes",
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+async def _get_vector_store_ids_from_access_groups(
+    access_group_ids: List[str],
+    prisma_client: Optional[PrismaClient] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
+    proxy_logging_obj: Optional[ProxyLogging] = None,
+) -> List[str]:
+    """
+    Collect vector store IDs from unified access groups.
+    Vector stores are matched by vector_store_id.
+    """
+    return await _get_resources_from_access_groups(
+        access_group_ids=access_group_ids,
+        resource_field="access_vector_store_ids",
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
@@ -4663,6 +4720,9 @@ async def vector_store_access_check(
                 object_type="key",
                 vector_store_ids_to_run=vector_store_ids_to_run,
                 object_permissions=key_object_permission,
+                access_group_vector_store_ids=await _get_vector_store_ids_from_access_groups(
+                    access_group_ids=valid_token.access_group_ids or [],
+                ),
             )
 
     # Check if the team can access the vector store
@@ -4677,6 +4737,9 @@ async def vector_store_access_check(
                 object_type="team",
                 vector_store_ids_to_run=vector_store_ids_to_run,
                 object_permissions=team_object_permission,
+                access_group_vector_store_ids=await _get_vector_store_ids_from_access_groups(
+                    access_group_ids=team_object.access_group_ids or [],
+                ),
             )
     return True
 
@@ -4685,9 +4748,13 @@ def _can_object_call_vector_stores(
     object_type: Literal["key", "team", "org"],
     vector_store_ids_to_run: List[str],
     object_permissions: Optional[LiteLLM_ObjectPermissionTable],
+    access_group_vector_store_ids: Optional[List[str]] = None,
 ):
     """
     Raises ProxyException if the object (key, team, org) cannot access the specific vector store.
+
+    Access is granted if a requested vector store is in the object's object_permission
+    list OR in a vector store granted through one of the object's access groups.
     """
     if object_permissions is None:
         return True
@@ -4699,10 +4766,14 @@ def _can_object_call_vector_stores(
     if len(object_permissions.vector_stores) == 0:
         return True
 
+    allowed_vector_store_ids = set(object_permissions.vector_stores) | set(
+        access_group_vector_store_ids or []
+    )
+
     for vector_store_id in vector_store_ids_to_run:
-        if vector_store_id not in object_permissions.vector_stores:
+        if vector_store_id not in allowed_vector_store_ids:
             raise ProxyException(
-                message=f"User not allowed to access vector store. Tried to access {vector_store_id}. Only allowed to access {object_permissions.vector_stores}",
+                message=f"User not allowed to access vector store. Tried to access {vector_store_id}. Only allowed to access {sorted(allowed_vector_store_ids)}",
                 type=ProxyErrorTypes.get_vector_store_access_error_type_for_object(
                     object_type
                 ),

@@ -4,6 +4,7 @@ import MessageManager from "@/components/molecules/message_manager";
 import { AccessGroupBaseForm, AccessGroupFormValues } from "./AccessGroupBaseForm";
 import { useEditAccessGroup, AccessGroupUpdateParams } from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface AccessGroupEditModalProps {
   visible: boolean;
@@ -15,6 +16,7 @@ interface AccessGroupEditModalProps {
 export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess }: AccessGroupEditModalProps) {
   const [form] = Form.useForm<AccessGroupFormValues>();
   const editMutation = useEditAccessGroup();
+  const { accessToken } = useAuthorized();
 
   // Populate the form with initial values whenever the modal opens or the data changes
   useEffect(() => {
@@ -25,6 +27,8 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
         modelIds: accessGroup.access_model_names ?? [],
         mcpServerIds: accessGroup.access_mcp_server_ids ?? [],
         agentIds: accessGroup.access_agent_ids ?? [],
+        passthroughRoutes: accessGroup.access_passthrough_routes ?? [],
+        vectorStoreIds: accessGroup.access_vector_store_ids ?? [],
       });
     }
   }, [visible, accessGroup, form]);
@@ -39,6 +43,8 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
           access_model_names: values.modelIds,
           access_mcp_server_ids: values.mcpServerIds,
           access_agent_ids: values.agentIds,
+          access_passthrough_routes: values.passthroughRoutes,
+          access_vector_store_ids: values.vectorStoreIds,
         };
 
         editMutation.mutate(
@@ -69,7 +75,7 @@ export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess
       confirmLoading={editMutation.isPending}
       destroyOnHidden
     >
-      <AccessGroupBaseForm form={form} />
+      <AccessGroupBaseForm form={form} accessToken={accessToken ?? ""} />
     </Modal>
   );
 }

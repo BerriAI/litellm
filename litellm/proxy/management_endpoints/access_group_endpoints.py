@@ -58,6 +58,8 @@ def _record_to_response(record) -> AccessGroupResponse:
         access_model_names=record.access_model_names,
         access_mcp_server_ids=record.access_mcp_server_ids,
         access_agent_ids=record.access_agent_ids,
+        access_passthrough_routes=record.access_passthrough_routes,
+        access_vector_store_ids=record.access_vector_store_ids,
         assigned_team_ids=record.assigned_team_ids,
         assigned_key_ids=record.assigned_key_ids,
         created_at=record.created_at,
@@ -331,6 +333,8 @@ async def create_access_group(
                     "access_model_names": data.access_model_names or [],
                     "access_mcp_server_ids": data.access_mcp_server_ids or [],
                     "access_agent_ids": data.access_agent_ids or [],
+                    "access_passthrough_routes": data.access_passthrough_routes or [],
+                    "access_vector_store_ids": data.access_vector_store_ids or [],
                     "assigned_team_ids": data.assigned_team_ids or [],
                     "assigned_key_ids": data.assigned_key_ids or [],
                     "created_by": user_api_key_dict.user_id,
@@ -442,6 +446,8 @@ async def update_access_group(
                 "access_model_names",
                 "access_mcp_server_ids",
                 "access_agent_ids",
+                "access_passthrough_routes",
+                "access_vector_store_ids",
             )
             and value is None
         ):

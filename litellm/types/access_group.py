@@ -10,6 +10,8 @@ class AccessGroupCreateRequest(BaseModel):
     access_model_names: Optional[List[str]] = None
     access_mcp_server_ids: Optional[List[str]] = None
     access_agent_ids: Optional[List[str]] = None
+    access_passthrough_routes: Optional[List[str]] = None
+    access_vector_store_ids: Optional[List[str]] = None
     assigned_team_ids: Optional[List[str]] = None
     assigned_key_ids: Optional[List[str]] = None
 
@@ -20,6 +22,8 @@ class AccessGroupUpdateRequest(BaseModel):
     access_model_names: Optional[List[str]] = None
     access_mcp_server_ids: Optional[List[str]] = None
     access_agent_ids: Optional[List[str]] = None
+    access_passthrough_routes: Optional[List[str]] = None
+    access_vector_store_ids: Optional[List[str]] = None
     assigned_team_ids: Optional[List[str]] = None
     assigned_key_ids: Optional[List[str]] = None
 
@@ -31,6 +35,8 @@ class AccessGroupResponse(BaseModel):
     access_model_names: List[str]
     access_mcp_server_ids: List[str]
     access_agent_ids: List[str]
+    access_passthrough_routes: List[str]
+    access_vector_store_ids: List[str]
     assigned_team_ids: List[str]
     assigned_key_ids: List[str]
     created_at: datetime

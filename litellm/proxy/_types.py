@@ -2540,6 +2540,9 @@ class UserAPIKeyAuth(
     # Decoded upstream IdP claims (groups, roles, etc.) propagated by JWT auth machinery
     # and forwarded into outbound tokens by guardrails such as MCPJWTSigner.
     jwt_claims: Optional[Dict] = None
+    # Passthrough routes granted to this token through its (and its team's) access
+    # groups, resolved in common_checks so the synchronous route checks can read them.
+    access_group_passthrough_routes: Optional[List[str]] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

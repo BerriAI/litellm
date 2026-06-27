@@ -1389,6 +1389,63 @@ def test_check_passthrough_route_access_empty_list():
     assert result is False
 
 
+def test_check_passthrough_route_access_access_group_route():
+    """A passthrough route granted through an access group (resolved into
+    access_group_passthrough_routes) is allowed even with no metadata routes."""
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        metadata={},
+        access_group_passthrough_routes=["/group-endpoint"],
+    )
+
+    # exact match via access group
+    assert (
+        RouteChecks.check_passthrough_route_access(
+            route="/group-endpoint",
+            user_api_key_dict=valid_token,
+        )
+        is True
+    )
+    # prefix match via access group
+    assert (
+        RouteChecks.check_passthrough_route_access(
+            route="/group-endpoint/v1/chat/completions",
+            user_api_key_dict=valid_token,
+        )
+        is True
+    )
+    # route not granted by the access group is denied
+    assert (
+        RouteChecks.check_passthrough_route_access(
+            route="/other-endpoint",
+            user_api_key_dict=valid_token,
+        )
+        is False
+    )
+
+
+def test_check_passthrough_route_access_access_group_unions_with_metadata():
+    """Access-group routes are additive to metadata routes; both sources grant access."""
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        metadata={"allowed_passthrough_routes": ["/key-endpoint"]},
+        access_group_passthrough_routes=["/group-endpoint"],
+    )
+
+    assert (
+        RouteChecks.check_passthrough_route_access(
+            route="/key-endpoint", user_api_key_dict=valid_token
+        )
+        is True
+    )
+    assert (
+        RouteChecks.check_passthrough_route_access(
+            route="/group-endpoint", user_api_key_dict=valid_token
+        )
+        is True
+    )
+
+
 @pytest.mark.parametrize(
     "route",
     [

@@ -13,6 +13,8 @@ export interface AccessGroupResponse {
   access_model_names: string[];
   access_mcp_server_ids: string[];
   access_agent_ids: string[];
+  access_passthrough_routes: string[];
+  access_vector_store_ids: string[];
   assigned_team_ids: string[];
   assigned_key_ids: string[];
   created_at: string;

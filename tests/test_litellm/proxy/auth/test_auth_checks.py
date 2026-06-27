@@ -970,6 +970,87 @@ async def test_vector_store_access_check_with_team_permissions():
     assert exc_info.value.type == ProxyErrorTypes.team_vector_store_access_denied
 
 
+def test_can_object_call_vector_stores_access_group_widens():
+    """A vector store granted through an access group is allowed even when it is
+    not in the object's object_permission list."""
+    mock_permissions = MagicMock()
+    mock_permissions.vector_stores = ["store-1"]
+
+    # store-2 is not in object_permission but is granted via an access group
+    result = _can_object_call_vector_stores(
+        object_type="key",
+        vector_store_ids_to_run=["store-2"],
+        object_permissions=mock_permissions,
+        access_group_vector_store_ids=["store-2"],
+    )
+    assert result is True
+
+    # store-2 in neither object_permission nor access group -> denied
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_vector_stores(
+            object_type="key",
+            vector_store_ids_to_run=["store-2"],
+            object_permissions=mock_permissions,
+            access_group_vector_store_ids=["store-9"],
+        )
+    assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
+@pytest.mark.asyncio
+async def test_vector_store_access_check_access_group_grant():
+    """vector_store_access_check unions access-group-granted stores with the key's
+    object_permission, so an access-group grant unblocks an otherwise-denied store."""
+    request_body = {"tools": [{"type": "function", "function": {"name": "test"}}]}
+    valid_token = UserAPIKeyAuth(
+        token="ag-test-token",
+        object_permission_id="perm-123",
+        access_group_ids=["ag-1"],
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_permissions = MagicMock()
+    mock_permissions.vector_stores = ["store-1"]
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=mock_permissions
+    )
+
+    mock_vector_store_registry = MagicMock()
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-2"]
+
+    # Access group grants store-2 -> request for store-2 is allowed
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", mock_vector_store_registry),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_vector_store_ids_from_access_groups",
+            AsyncMock(return_value=["store-2"]),
+        ),
+    ):
+        result = await vector_store_access_check(
+            request_body=request_body,
+            team_object=None,
+            valid_token=valid_token,
+        )
+    assert result is True
+
+    # Access group grants nothing -> request for store-2 is denied
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.vector_store_registry", mock_vector_store_registry),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_vector_store_ids_from_access_groups",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=None,
+                valid_token=valid_token,
+            )
+    assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
 def test_can_object_call_model_with_alias():
     """Test that can_object_call_model works with model aliases"""
     from litellm import Router

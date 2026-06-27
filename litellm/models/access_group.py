@@ -18,6 +18,8 @@ class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
     access_model_names: List[str] = []
     access_mcp_server_ids: List[str] = []
     access_agent_ids: List[str] = []
+    access_passthrough_routes: List[str] = []
+    access_vector_store_ids: List[str] = []
     assigned_team_ids: List[str] = []
     assigned_key_ids: List[str] = []
     created_at: Optional[datetime] = None

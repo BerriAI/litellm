@@ -15,7 +15,17 @@ import {
   theme,
   Typography,
 } from "antd";
-import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
+import {
+  ArrowLeftIcon,
+  BotIcon,
+  DatabaseIcon,
+  EditIcon,
+  KeyIcon,
+  LayersIcon,
+  RouteIcon,
+  ServerIcon,
+  UsersIcon,
+} from "lucide-react";
 import { useState } from "react";
 import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
@@ -69,6 +79,8 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   const modelIds = accessGroup.access_model_names ?? [];
   const mcpServerIds = accessGroup.access_mcp_server_ids ?? [];
   const agentIds = accessGroup.access_agent_ids ?? [];
+  const passthroughRoutes = accessGroup.access_passthrough_routes ?? [];
+  const vectorStoreIds = accessGroup.access_vector_store_ids ?? [];
   const keyIds = accessGroup.assigned_key_ids ?? [];
   const teamIds = accessGroup.assigned_team_ids ?? [];
 
@@ -156,6 +168,58 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
           />
         ) : (
           <Empty description="No agents assigned to this group" />
+        ),
+    },
+    {
+      key: "passthrough",
+      label: (
+        <Flex align="center" gap={8}>
+          <RouteIcon size={16} />
+          Pass Through Routes
+          <Tag>{passthroughRoutes?.length}</Tag>
+        </Flex>
+      ),
+      children:
+        passthroughRoutes?.length > 0 ? (
+          <List
+            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
+            dataSource={passthroughRoutes}
+            renderItem={(route) => (
+              <List.Item>
+                <Card size="small">
+                  <Text code>{route}</Text>
+                </Card>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty description="No pass through routes assigned to this group" />
+        ),
+    },
+    {
+      key: "vector_stores",
+      label: (
+        <Flex align="center" gap={8}>
+          <DatabaseIcon size={16} />
+          Vector Stores
+          <Tag>{vectorStoreIds?.length}</Tag>
+        </Flex>
+      ),
+      children:
+        vectorStoreIds?.length > 0 ? (
+          <List
+            grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
+            dataSource={vectorStoreIds}
+            renderItem={(id) => (
+              <List.Item>
+                <Card size="small">
+                  <Text code>{id}</Text>
+                </Card>
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Empty description="No vector stores assigned to this group" />
         ),
     },
   ];
