@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from mcp.types import CallToolResult, TextContent
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
 
 MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
@@ -118,6 +119,7 @@ async def handle_mcp_tool_call(
     mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
     oauth2_headers: Optional[dict[str, str]] = None,
     raw_headers: Optional[dict[str, str]] = None,
+    litellm_logging_obj: Optional[LiteLLMLoggingObj] = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import (
         _get_allowed_mcp_servers,
@@ -140,4 +142,5 @@ async def handle_mcp_tool_call(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        litellm_logging_obj=litellm_logging_obj,
     )

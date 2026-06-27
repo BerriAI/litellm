@@ -854,6 +854,21 @@ if MCP_AVAILABLE:
                         raw_headers=virtual_raw_headers,
                     )
                 else:  # MCP_TOOL_CALL_TOOL_NAME
+                    # Run the same pre-call pipeline as the normal call path so the
+                    # tool execution is spend-logged and guardrail-checked.
+                    (
+                        _,
+                        virtual_logging_obj,
+                    ) = await ProxyBaseLLMRequestProcessing(
+                        data=data
+                    ).common_processing_pre_call_logic(
+                        request=request,
+                        user_api_key_dict=user_api_key_dict,
+                        proxy_config=proxy_config,
+                        route_type=CallTypes.call_mcp_tool.value,
+                        proxy_logging_obj=proxy_logging_obj,
+                        general_settings=general_settings,
+                    )
                     return await handle_mcp_tool_call(
                         tool_name=tool_arguments.get("tool_name", ""),
                         arguments=tool_arguments.get("arguments") or {},
@@ -863,6 +878,7 @@ if MCP_AVAILABLE:
                         mcp_server_auth_headers=virtual_mcp_server_auth_headers,
                         oauth2_headers=virtual_oauth2_headers,
                         raw_headers=virtual_raw_headers,
+                        litellm_logging_obj=virtual_logging_obj,
                     )
 
             # Validate required parameters early

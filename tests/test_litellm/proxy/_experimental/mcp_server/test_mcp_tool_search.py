@@ -584,6 +584,7 @@ class TestDispatchVirtualMcpTool:
                 return_value=fake,
             ) as mock_exec,
         ):
+            sentinel_logging_obj = object()
             await handle_mcp_tool_call(
                 tool_name="github-create_issue",
                 arguments={},
@@ -593,6 +594,7 @@ class TestDispatchVirtualMcpTool:
                 mcp_server_auth_headers={"github": {"Authorization": "Bearer gh"}},
                 oauth2_headers={"Authorization": "Bearer oauth"},
                 raw_headers={"x-mcp-auth": "tok"},
+                litellm_logging_obj=sentinel_logging_obj,
             )
 
         kw = mock_exec.await_args.kwargs
@@ -602,6 +604,8 @@ class TestDispatchVirtualMcpTool:
         }
         assert kw["oauth2_headers"] == {"Authorization": "Bearer oauth"}
         assert kw["raw_headers"] == {"x-mcp-auth": "tok"}
+        # Spend logging: the logging object must reach execute_mcp_tool
+        assert kw["litellm_logging_obj"] is sentinel_logging_obj
         # Scoped session: the requested mcp_servers scope must reach server resolution
         assert mock_allowed.await_args.kwargs["mcp_servers"] == ["github"]
 
