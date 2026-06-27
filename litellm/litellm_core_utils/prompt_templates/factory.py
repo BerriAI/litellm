@@ -4237,6 +4237,58 @@ def _convert_to_bedrock_tool_call_result(
     return content_block
 
 
+def _bedrock_tool_call_split_count(arguments: Optional[str]) -> int:
+    """Number of Bedrock ``toolUse`` blocks a single OpenAI tool call expands into.
+
+    Mirrors the concatenated-JSON split in
+    ``_convert_to_bedrock_tool_call_invoke``: when a tool call's ``arguments``
+    string contains several JSON objects jammed together
+    (e.g. ``'{"cmd":"a"}{"cmd":"b"}'``) it is emitted as one ``toolUse`` per
+    object. Returns 1 for the normal single-object case.
+
+    Used so the matching ``toolResult`` can be duplicated for every split id,
+    so no ``toolUse`` is left without a result on the next turn.
+    See https://github.com/BerriAI/litellm/issues/26060
+    """
+    if not arguments or not arguments.strip():
+        return 1
+    try:
+        json.loads(arguments)
+        return 1
+    except json.JSONDecodeError:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            split_concatenated_json_objects,
+        )
+
+        parsed_objects = split_concatenated_json_objects(arguments)
+        return len(parsed_objects) if parsed_objects else 1
+
+
+def _duplicate_bedrock_tool_result_for_splits(
+    tool_call_result: BedrockContentBlock, split_count: int
+) -> list[BedrockContentBlock]:
+    """Expand one ``toolResult`` into one per split id of a concatenated tool call.
+
+    ``_convert_to_bedrock_tool_call_invoke`` splits a single tool call into
+    ``split_count`` ``toolUse`` blocks with deterministic ids ``id``, ``id_1`` ..
+    ``id_{n-1}``. The app only returns one result (for the original ``id``), so we
+    reuse its content under each split id to keep every ``toolUse`` matched and
+    avoid Bedrock's "Expected toolResult blocks ... for the following Ids" error.
+    See https://github.com/BerriAI/litellm/issues/26060
+    """
+    if split_count <= 1 or "toolResult" not in tool_call_result:
+        return [tool_call_result]
+
+    base_tool_result = tool_call_result["toolResult"]
+    base_tool_use_id = base_tool_result["toolUseId"]
+    blocks: list[BedrockContentBlock] = [tool_call_result]
+    for idx in range(1, split_count):
+        duplicated_tool_result = copy.deepcopy(base_tool_result)
+        duplicated_tool_result["toolUseId"] = f"{base_tool_use_id}_{idx}"
+        blocks.append(BedrockContentBlock(toolResult=duplicated_tool_result))
+    return blocks
+
+
 def _deduplicate_bedrock_content_blocks(
     blocks: List[BedrockContentBlock],
     block_key: str,
@@ -4719,6 +4771,10 @@ class BedrockConverseMessagesProcessor:
             messages, model, llm_provider, user_continue_message
         )
 
+        # Maps an original tool_call_id to the number of bedrock toolUse blocks it
+        # was split into, so its toolResult can be duplicated to match (#26060).
+        tool_call_id_to_split_count: dict[str, int] = {}
+
         while msg_i < len(messages):
             user_content: List[BedrockContentBlock] = []
             init_msg_i = msg_i
@@ -4822,7 +4878,21 @@ class BedrockConverseMessagesProcessor:
             while msg_i < len(messages) and messages[msg_i]["role"] == "tool":
                 current_message = messages[msg_i]
                 tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
-                tool_content.append(tool_call_result)
+                # The matching assistant turn split a concatenated-JSON tool call
+                # into N toolUse blocks with ids "<id>", "<id>_1", ... "<id>_N-1",
+                # but the model returns only one result (for the original id).
+                # Duplicate that result across every split id so no toolUse is left
+                # unmatched; otherwise Bedrock rejects the next turn with:
+                #   "Expected toolResult blocks ... for the following Ids: <id>_1"
+                # Fixes: https://github.com/BerriAI/litellm/issues/26060
+                _split_count = tool_call_id_to_split_count.get(
+                    str(current_message.get("tool_call_id", "")), 1
+                )
+                tool_content.extend(
+                    _duplicate_bedrock_tool_result_for_splits(
+                        tool_call_result, _split_count
+                    )
+                )
 
                 # Check if we need to add a separate cachePoint block
                 has_cache_control = False
@@ -4967,6 +5037,17 @@ class BedrockConverseMessagesProcessor:
                     assistant_content.extend(
                         _convert_to_bedrock_tool_call_invoke(_tool_calls)
                     )
+                    # Remember how many toolUse blocks each tool call split into so
+                    # the matching toolResult can be duplicated next turn (#26060).
+                    for _tool_call in _tool_calls:
+                        if "function" in _tool_call:
+                            _split_count = _bedrock_tool_call_split_count(
+                                _tool_call["function"].get("arguments", "")
+                            )
+                            if _split_count > 1:
+                                tool_call_id_to_split_count[str(_tool_call["id"])] = (
+                                    _split_count
+                                )
 
                 msg_i += 1
 
@@ -5159,6 +5240,10 @@ def _bedrock_converse_messages_pt(
         messages, model, llm_provider, user_continue_message
     )
 
+    # Maps an original tool_call_id to the number of bedrock toolUse blocks it
+    # was split into, so its toolResult can be duplicated to match (#26060).
+    tool_call_id_to_split_count: dict[str, int] = {}
+
     while msg_i < len(messages):
         user_content: List[BedrockContentBlock] = []
         init_msg_i = msg_i
@@ -5262,8 +5347,21 @@ def _bedrock_converse_messages_pt(
             tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
             current_message = messages[msg_i]
 
-            # Add the tool result first
-            tool_content.append(tool_call_result)
+            # The matching assistant turn split a concatenated-JSON tool call into
+            # N toolUse blocks with ids "<id>", "<id>_1", ... "<id>_N-1", but the
+            # model returns only one result (for the original id). Duplicate that
+            # result across every split id so no toolUse is left unmatched;
+            # otherwise Bedrock rejects the next turn with:
+            #   "Expected toolResult blocks ... for the following Ids: <id>_1"
+            # Fixes: https://github.com/BerriAI/litellm/issues/26060
+            _split_count = tool_call_id_to_split_count.get(
+                str(current_message.get("tool_call_id", "")), 1
+            )
+            tool_content.extend(
+                _duplicate_bedrock_tool_result_for_splits(
+                    tool_call_result, _split_count
+                )
+            )
 
             # Check if we need to add a separate cachePoint block
             has_cache_control = False
@@ -5397,6 +5495,17 @@ def _bedrock_converse_messages_pt(
                 assistant_content.extend(
                     _convert_to_bedrock_tool_call_invoke(_tool_calls)
                 )
+                # Remember how many toolUse blocks each tool call split into so
+                # the matching toolResult can be duplicated next turn (#26060).
+                for _tool_call in _tool_calls:
+                    if "function" in _tool_call:
+                        _split_count = _bedrock_tool_call_split_count(
+                            _tool_call["function"].get("arguments", "")
+                        )
+                        if _split_count > 1:
+                            tool_call_id_to_split_count[str(_tool_call["id"])] = (
+                                _split_count
+                            )
 
             msg_i += 1
 
