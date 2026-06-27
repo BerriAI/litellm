@@ -5971,6 +5971,93 @@ def test_router_ttft_timeout_resolution_chain():
     assert router_unset._get_stream_idle_timeout(kwargs={}, data={}) is None
 
 
+def _ttft_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_collect_until_first_token_buffers_preamble_then_stops():
+    """_collect_until_first_token buffers content-free preamble chunks and returns as soon
+    as the first chunk carrying content arrives, leaving the rest of the stream unconsumed.
+    """
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+    aiter = _async_chunks(
+        _make_chunk(""),  # preamble: role-only / empty delta
+        _make_chunk("Hello"),  # first real token -> stop here
+        _make_chunk(" world"),  # must not be consumed
+    )
+    chunks: list = []
+    loop = asyncio.get_running_loop()
+
+    await router._collect_until_first_token(
+        aiter, response, chunks, loop.time() + 5.0, 5.0
+    )
+
+    assert [c.choices[0].delta.content for c in chunks] == ["", "Hello"]
+
+
+@pytest.mark.asyncio
+async def test_collect_until_first_token_raises_on_ttft_timeout():
+    """A provider that accepts the connection but sends no token before the deadline
+    raises litellm.Timeout from the first-token phase."""
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+
+    async def _hung():
+        await asyncio.sleep(10)
+        yield _make_chunk("late")
+
+    loop = asyncio.get_running_loop()
+    with pytest.raises(litellm.Timeout):
+        await router._collect_until_first_token(
+            _hung(), response, [], loop.time() + 0.05, 0.05
+        )
+
+
+@pytest.mark.asyncio
+async def test_collect_until_idle_timeout_buffers_active_stream():
+    """_collect_until_idle_timeout buffers every chunk while the provider keeps producing
+    within the idle window."""
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+    aiter = _async_chunks(_make_chunk("a"), _make_chunk("b"), _make_chunk("c"))
+    chunks: list = []
+    loop = asyncio.get_running_loop()
+
+    await router._collect_until_idle_timeout(aiter, response, chunks, loop, 5.0)
+
+    assert [c.choices[0].delta.content for c in chunks] == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_collect_until_idle_timeout_raises_when_provider_stalls():
+    """A gap between tokens longer than stream_idle_timeout raises litellm.Timeout, and the
+    chunks received before the stall are preserved."""
+    router = _ttft_router()
+    response = _fake_stream(lambda: _async_chunks())
+
+    async def _stalling():
+        yield _make_chunk("a")
+        await asyncio.sleep(5)  # longer than the idle window below
+        yield _make_chunk("b")
+
+    chunks: list = []
+    loop = asyncio.get_running_loop()
+    with pytest.raises(litellm.Timeout):
+        await router._collect_until_idle_timeout(
+            _stalling(), response, chunks, loop, 0.1
+        )
+    assert [c.choices[0].delta.content for c in chunks] == ["a"]
+
+
 class TestRouterRequestTimeoutPropagation:
     """litellm_settings.request_timeout must act as an independent per-attempt timeout.
 
