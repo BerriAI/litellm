@@ -1093,6 +1093,18 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
+def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
+    """Merge guardrail entries into a single litellm_params dict."""
+    if not isinstance(lp, dict):
+        return
+    if lp.get("metadata") is None:
+        lp["metadata"] = {}
+    existing = lp["metadata"].setdefault("standard_logging_guardrail_information", [])
+    for entry in entries:
+        if entry not in existing:
+            existing.append(entry)
+
+
 def _sync_guardrail_info_to_logging_obj(
     request_data: dict, logging_obj: object
 ) -> None:
@@ -1116,21 +1128,8 @@ def _sync_guardrail_info_to_logging_obj(
         return
     entries: list = slg_info if isinstance(slg_info, list) else [slg_info]
     mcd = getattr(logging_obj, "model_call_details", None) or {}
-    candidates = [
-        getattr(logging_obj, "litellm_params", None),
-        mcd.get("litellm_params"),
-    ]
-    for lp in candidates:
-        if not isinstance(lp, dict):
-            continue
-        if lp.get("metadata") is None:
-            lp["metadata"] = {}
-        existing = lp["metadata"].setdefault(
-            "standard_logging_guardrail_information", []
-        )
-        for entry in entries:
-            if entry not in existing:
-                existing.append(entry)
+    _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
+    _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
 
 
 def log_guardrail_information(func):
