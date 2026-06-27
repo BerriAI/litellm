@@ -91,7 +91,10 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     console.log("router_settings", router_settings);
 
     const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
-    const jsonKeys = new Set(["model_group_alias", "retry_policy"]);
+    const jsonKeys = new Set(["model_group_alias"]);
+    // retry_policy and model_group_retry_policy are owned exclusively by the
+    // Model Retry Settings tab; this page must not read or write them.
+    const tabOwnedKeys = new Set(["retry_policy", "model_group_retry_policy"]);
 
     const parseInputValue = (key: string, raw: string | undefined, fallback: unknown) => {
       if (raw === undefined) return fallback;
@@ -129,6 +132,9 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     const updatedVariables = Object.fromEntries(
       Object.entries(settingsToUpdate)
         .map(([key, value]) => {
+          if (tabOwnedKeys.has(key)) {
+            return null;
+          }
           if (key !== "routing_strategy_args" && key !== "routing_strategy" && key !== "enable_tag_filtering") {
             const inputEl = document.querySelector(`input[name="${key}"]`) as HTMLInputElement | null;
             const parsed = parseInputValue(key, inputEl?.value, value);
@@ -191,9 +197,7 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
 
       {/* Actions - Sticky at bottom */}
       <div className="border-t border-gray-200 pt-6 flex justify-end gap-3">
-        <Button onClick={() => window.location.reload()}>
-          Reset
-        </Button>
+        <Button onClick={() => window.location.reload()}>Reset</Button>
         <Button type="primary" onClick={handleSaveChanges}>
           Save Changes
         </Button>

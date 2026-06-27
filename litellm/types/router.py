@@ -83,6 +83,22 @@ class RouterConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class RetryPolicy(BaseModel):
+    """
+    Use this to set a custom number of retries per exception type
+    If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+    Mapping of Exception type to number of retries
+    https://docs.litellm.ai/docs/exception_mapping
+    """
+
+    BadRequestErrorRetries: Optional[int] = None
+    AuthenticationErrorRetries: Optional[int] = None
+    TimeoutErrorRetries: Optional[int] = None
+    RateLimitErrorRetries: Optional[int] = None
+    ContentPolicyViolationErrorRetries: Optional[int] = None
+    InternalServerErrorRetries: Optional[int] = None
+
+
 class UpdateRouterConfig(BaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
@@ -91,8 +107,8 @@ class UpdateRouterConfig(BaseModel):
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
     routing_groups: Optional[List[RoutingGroup]] = None
-    retry_policy: Optional[dict] = None
-    model_group_retry_policy: Optional[dict] = None
+    retry_policy: Optional[RetryPolicy] = None
+    model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = None
     model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None
     cooldown_time: Optional[float] = None
@@ -493,22 +509,6 @@ class AllowedFailsPolicy(BaseModel):
     RateLimitErrorAllowedFails: Optional[int] = None
     ContentPolicyViolationErrorAllowedFails: Optional[int] = None
     InternalServerErrorAllowedFails: Optional[int] = None
-
-
-class RetryPolicy(BaseModel):
-    """
-    Use this to set a custom number of retries per exception type
-    If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
-    Mapping of Exception type to number of retries
-    https://docs.litellm.ai/docs/exception_mapping
-    """
-
-    BadRequestErrorRetries: Optional[int] = None
-    AuthenticationErrorRetries: Optional[int] = None
-    TimeoutErrorRetries: Optional[int] = None
-    RateLimitErrorRetries: Optional[int] = None
-    ContentPolicyViolationErrorRetries: Optional[int] = None
-    InternalServerErrorRetries: Optional[int] = None
 
 
 class AlertingConfig(BaseModel):

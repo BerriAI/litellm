@@ -22,6 +22,9 @@ This file pins both halves of the fix.
 import os
 import sys
 
+import pytest
+from pydantic import ValidationError
+
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
@@ -58,6 +61,23 @@ def test_update_router_config_accepts_retry_policy_payload():
     assert dumped["retry_policy"]["BadRequestErrorRetries"] == 5
     assert dumped["retry_policy"]["RateLimitErrorRetries"] == 7
     assert dumped["retry_policy"]["TimeoutErrorRetries"] == 3
+
+
+def test_update_router_config_rejects_malformed_retry_policy():
+    """The field is typed as RetryPolicy, so /config/update validates the
+    payload at the boundary and rejects non-numeric counts with a 422 instead
+    of silently persisting garbage the apply path would later have to drop."""
+    with pytest.raises(ValidationError):
+        UpdateRouterConfig(retry_policy={"BadRequestErrorRetries": "not-an-int"})
+
+
+def test_update_router_config_rejects_malformed_model_group_retry_policy():
+    """model_group_retry_policy is Dict[str, RetryPolicy], so each per-group
+    policy is validated the same way."""
+    with pytest.raises(ValidationError):
+        UpdateRouterConfig(
+            model_group_retry_policy={"gpt-4": {"RateLimitErrorRetries": "x"}}
+        )
 
 
 # ---------------------------------------------------------------------------
