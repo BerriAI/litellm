@@ -459,6 +459,31 @@ describe("useKeys", () => {
     const callUrl = mockFetch.mock.calls[0][0];
     expect(callUrl).not.toContain("project_id");
   });
+
+  // LIT-4080 guard: filter options must be part of the query key, not just the
+  // queryFn closure. If they were dropped from the key, changing a filter would
+  // reuse the cached (unfiltered) result and never refetch — exactly the bug
+  // where deleting a key wiped the active User ID filter.
+  it("refetches with the new filter when a filter option changes (options are in the query key)", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result, rerender } = renderHook(({ userID }) => useKeys(1, 10, { userID }), {
+      wrapper,
+      initialProps: { userID: "user-1" },
+    });
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch.mock.calls[0][0]).toContain("user_id=user-1");
+
+    rerender({ userID: "user-2" });
+
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    expect(mockFetch.mock.calls[1][0]).toContain("user_id=user-2");
+  });
 });
 
 describe("useDeletedKeys", () => {
