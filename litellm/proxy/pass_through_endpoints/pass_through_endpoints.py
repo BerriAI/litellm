@@ -37,6 +37,7 @@ from litellm._uuid import uuid
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
@@ -1310,8 +1311,8 @@ async def pass_through_request(
         ## LOG SUCCESS
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
-        asyncio.create_task(
-            pass_through_endpoint_logging.pass_through_async_success_handler(
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                 httpx_response=response,
                 response_body=response_body,
                 url_route=str(url),
@@ -2153,8 +2154,8 @@ async def websocket_passthrough_request(
             mock_response = MockWebSocketResponse(target)
 
             # Use the same success handler as HTTP passthrough endpoints
-            asyncio.create_task(
-                pass_through_endpoint_logging.pass_through_async_success_handler(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=mock_response,  # type: ignore
                     response_body=websocket_messages,  # type: ignore
                     url_route=endpoint or "",

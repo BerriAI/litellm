@@ -126,7 +126,16 @@ def raise_public(error: CredError) -> NoReturn:
     """Map a resolver CredError onto the proxy's public HTTP contract. The one edge that raises."""
     match error.tag:
         case "unauthorized":
-            raise HTTPException(status_code=401, detail=error.summary)
+            challenge = error.unauthorized
+            raise HTTPException(
+                status_code=401,
+                detail=challenge.body if challenge.body is not None else error.summary,
+                headers=(
+                    {"WWW-Authenticate": challenge.www_authenticate}
+                    if challenge.www_authenticate
+                    else None
+                ),
+            )
         case "misconfigured":
             raise HTTPException(status_code=500, detail=error.summary)
         case "upstream_unavailable":

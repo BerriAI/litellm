@@ -320,6 +320,7 @@ class Router:
             "latency-based-routing",
             "cost-based-routing",
             "usage-based-routing-v2",
+            "lar1",
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
         routing_strategy_args: dict = {},  # just for latency-based
@@ -639,10 +640,15 @@ class Router:
         """
 
         ### ROUTING SETUP ###
-        self.routing_strategy_init(
-            routing_strategy=routing_strategy,
-            routing_strategy_args=routing_strategy_args,
-        )
+        if self._normalize_strategy(routing_strategy) == "lar1":
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, routing_strategy_args)
+        else:
+            self.routing_strategy_init(
+                routing_strategy=routing_strategy,
+                routing_strategy_args=routing_strategy_args,
+            )
         self._init_routing_groups(self._routing_groups_input)
         self.access_groups = None
         ## USAGE TRACKING ##
@@ -863,7 +869,9 @@ class Router:
         self, routing_strategy: Union[RoutingStrategy, str, None]
     ) -> None:
         # See: https://github.com/BerriAI/litellm/issues/11330
-        valid_strategy_strings = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
+        valid_strategy_strings = ["simple-shuffle", "lar1"] + [
+            s.value for s in RoutingStrategy
+        ]
         if routing_strategy is None:
             return
         is_valid_string = (
@@ -953,6 +961,7 @@ class Router:
     ):
         verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
         self._validate_routing_strategy(routing_strategy)
+        self._reset_custom_routing_strategy()
 
         self._unregister_router_selectors(
             [
@@ -2323,6 +2332,14 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
+                    # No fallback handled the mid-stream error, so surface the
+                    # real provider exception (e.g. RateLimitError) instead of
+                    # leaking the internal MidStreamFallbackError to the client
+                    if (
+                        isinstance(fallback_error, MidStreamFallbackError)
+                        and fallback_error.original_exception is not None
+                    ):
+                        raise fallback_error.original_exception from fallback_error
                     raise fallback_error
             finally:
                 # Close the underlying streams to release HTTP connections
@@ -2754,6 +2771,11 @@ class Router:
                     verbose_router_logger.error(
                         f"Responses streaming fallback also failed: {fallback_error}"
                     )
+                    if (
+                        isinstance(fallback_error, MidStreamFallbackError)
+                        and fallback_error.original_exception is not None
+                    ):
+                        raise fallback_error.original_exception from fallback_error
                     raise fallback_error
             finally:
                 with anyio.CancelScope(shield=True):
@@ -2890,6 +2912,11 @@ class Router:
                     verbose_router_logger.error(
                         f"Fallback also failed: {fallback_error}"
                     )
+                    if (
+                        isinstance(fallback_error, MidStreamFallbackError)
+                        and fallback_error.original_exception is not None
+                    ):
+                        raise fallback_error.original_exception from fallback_error
                     raise fallback_error
             finally:
                 if hasattr(model_response, "close"):
@@ -10583,6 +10610,7 @@ class Router:
 
         _existing_router_settings = self.get_settings()
         rebuild_routing_groups = False
+        relink_lar1_from_args = False
         for var in kwargs:
             if var in _allowed_settings:
                 if var in _int_settings:
@@ -10597,16 +10625,36 @@ class Router:
                     if var == "routing_strategy":
                         value = self._normalize_strategy(value)
                         if _existing_router_settings["routing_strategy"] != value:
-                            self.routing_strategy_init(
-                                routing_strategy=value,
-                                routing_strategy_args=kwargs.get(
-                                    "routing_strategy_args", {}
-                                ),
-                            )
+                            if value == "lar1":
+                                from litellm.router_strategy.lar1_routing import (
+                                    apply_lar1_routing_strategy,
+                                )
+
+                                apply_lar1_routing_strategy(
+                                    self,
+                                    kwargs.get("routing_strategy_args"),
+                                )
+                            else:
+                                self.routing_strategy_init(
+                                    routing_strategy=value,
+                                    routing_strategy_args=kwargs.get(
+                                        "routing_strategy_args", {}
+                                    ),
+                                )
                             rebuild_routing_groups = True
+                    elif var == "routing_strategy_args":
+                        relink_lar1_from_args = True
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting {} is not allowed".format(var))
+
+        if (
+            relink_lar1_from_args
+            and self._normalize_strategy(self.routing_strategy) == "lar1"
+        ):
+            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
+
+            apply_lar1_routing_strategy(self, self.routing_strategy_args)
 
         if rebuild_routing_groups:
             self._init_routing_groups(self._routing_groups_input)
@@ -12170,6 +12218,11 @@ class Router:
             "async_get_available_deployment",
             CustomRoutingStrategy.async_get_available_deployment,
         )
+
+    def _reset_custom_routing_strategy(self) -> None:
+        for attr in ("get_available_deployment", "async_get_available_deployment"):
+            if attr in self.__dict__:
+                delattr(self, attr)
 
     def flush_cache(self):
         litellm.cache = None

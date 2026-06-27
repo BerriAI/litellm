@@ -2527,6 +2527,7 @@ class UserAPIKeyAuth(
     user_spend: Optional[float] = None
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
+    is_session_token: bool = False
     budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
     created_by_user: Optional[Any] = (
@@ -3181,6 +3182,7 @@ class SpendLogsMetadata(TypedDict):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    litellm_call_id: Optional[str]
     applied_guardrails: Optional[List[str]]
     mcp_tool_call_metadata: Optional[StandardLoggingMCPToolCall]
     vector_store_request_metadata: Optional[List[StandardLoggingVectorStoreRequest]]
@@ -3655,6 +3657,10 @@ class TeamMemberAddRequest(MemberAddRequest):
     max_budget_in_team: Optional[float] = Field(
         default=None,
         description="Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits",
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.",
     )
     allowed_models: Optional[List[str]] = Field(
         default=None,
