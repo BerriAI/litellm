@@ -453,10 +453,10 @@ module "litellm" {
   tenant = "acme"
   env    = "prod"
 
-  # Production: provide an ACM cert. Without one, set allow_plaintext_alb = true
-  # (dev/trial only).
-  # acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
-  allow_plaintext_alb = true
+  # Production requires TLS via an ACM cert. For a dev/trial spin-up without
+  # one, comment this line out and uncomment allow_plaintext_alb instead.
+  acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
+  # allow_plaintext_alb = true
 }
 
 output "litellm_url" {
@@ -517,10 +517,11 @@ module "litellm" {
   # Replace my-gcp-project with your GCP project ID (same value as project_id above).
   image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
 
-  # Production: provide DNS already pointing at the LB IP for Google-managed certs.
-  # Without one, set allow_plaintext_lb = true (dev/trial only).
-  # lb_domains         = ["proxy.example.com"]
-  allow_plaintext_lb = true
+  # Production requires DNS pointing at the LB IP for Google-managed certs.
+  # For a dev/trial spin-up without one, comment lb_domains out and uncomment
+  # allow_plaintext_lb instead.
+  lb_domains         = ["proxy.example.com"]
+  # allow_plaintext_lb = true
 }
 
 output "litellm_url" {
