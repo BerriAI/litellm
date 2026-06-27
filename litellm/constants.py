@@ -88,6 +88,12 @@ MAX_IMAGE_URL_DOWNLOAD_SIZE_MB = float(os.getenv("MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
     os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 1024)
 )  # 1MB = 1024KB
+# Surrogate-repair fallback in _read_request_body runs two full-body re.sub passes
+# that block the event loop on multi-MB malformed bodies. Skip the repair above this
+# size and raise the existing 400 immediately. Set to 0 to disable the cap.
+MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB = get_env_int(
+    "MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB", 1
+)
 SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD = int(
     os.getenv("SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD", 1000)
 )  # Minimum number of requests to consider "reasonable traffic". Used for single-deployment cooldown logic.
