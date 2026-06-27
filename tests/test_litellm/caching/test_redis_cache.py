@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -593,8 +594,134 @@ async def test_async_register_script_namespaces_keys(
 
     assert result == "ok"
     registered_script.assert_awaited_once_with(
-        keys=expected_keys, args=[60], client=None
+        keys=tuple(expected_keys), args=[60], client=None
     )
+
+
+# LIT-3298: rate limits tripped at ~40M instead of 80M. async_register_script
+# registered the Lua script once at startup and stored the object on the
+# limiter, so a request running on a different event loop awaited a script bound
+# to the startup loop's connection -> "got Future attached to a different loop".
+# The limiter then fell back to a pipeline that reset the window TTL, so two
+# minutes of tokens piled into one window. The script must instead be registered
+# lazily against the calling loop's client and cached per loop.
+
+
+@pytest.mark.parametrize("namespace", [None, "litellm_sandbox"])
+def test_async_register_script_binds_per_event_loop(namespace, monkeypatch):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+
+    clients_built = []
+
+    def make_client():
+        client = MagicMock()
+        client.register_script = MagicMock(return_value=AsyncMock(return_value="ok"))
+        clients_built.append(client)
+        return client
+
+    unique_script = "return 'lit3298'"
+
+    with patch.object(redis_cache, "init_async_client", side_effect=make_client):
+        script = redis_cache.async_register_script(unique_script)
+
+        # Registration is deferred: no client is touched until the script runs.
+        assert clients_built == []
+
+        # Two loops kept alive at once so their ids can't be recycled into one
+        # cache key. The buggy version reuses the first loop's bound object.
+        loop_a = asyncio.new_event_loop()
+        loop_b = asyncio.new_event_loop()
+        try:
+            result_a = loop_a.run_until_complete(
+                script(keys=["{k:v}:tokens"], args=[60])
+            )
+            result_b = loop_b.run_until_complete(
+                script(keys=["{k:v}:tokens"], args=[60])
+            )
+        finally:
+            loop_a.close()
+            loop_b.close()
+
+    assert result_a == "ok"
+    assert result_b == "ok"
+    assert len(clients_built) == 2
+    for client in clients_built:
+        client.register_script.assert_called_once_with(unique_script)
+
+
+@pytest.mark.asyncio
+async def test_async_register_script_not_shared_across_namespaces(
+    monkeypatch, redis_no_ping
+):
+    """Two caches with different namespaces registering the SAME script must
+    each run against their own client and key prefix. A content-only executor
+    cache would let the second cache reuse the first's executor and namespace."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    cache_a = RedisCache(namespace="ns_a")
+    cache_b = RedisCache(namespace="ns_b")
+
+    reg_a = AsyncMock(return_value="a")
+    client_a = MagicMock()
+    client_a.register_script = MagicMock(return_value=reg_a)
+    reg_b = AsyncMock(return_value="b")
+    client_b = MagicMock()
+    client_b.register_script = MagicMock(return_value=reg_b)
+
+    same_script = "return redis.call('GET', KEYS[1])"
+    with patch.object(
+        cache_a, "init_async_client", return_value=client_a
+    ), patch.object(cache_b, "init_async_client", return_value=client_b):
+        script_a = cache_a.async_register_script(same_script)
+        script_b = cache_b.async_register_script(same_script)
+        result_a = await script_a(keys=["k"], args=[])
+        result_b = await script_b(keys=["k"], args=[])
+
+    assert (result_a, result_b) == ("a", "b")
+    reg_a.assert_awaited_once_with(keys=("ns_a:k",), args=[], client=None)
+    reg_b.assert_awaited_once_with(keys=("ns_b:k",), args=[], client=None)
+
+
+@pytest.mark.asyncio
+async def test_async_register_script_cluster_path_uses_evalsha(
+    monkeypatch, redis_no_ping
+):
+    """Redis Cluster exposes script_load/evalsha rather than register_script.
+    The script is loaded once and invoked via evalsha with namespaced keys."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+
+    cluster_client = MagicMock(spec=["script_load", "evalsha"])
+    cluster_client.script_load = MagicMock(return_value="sha123")
+    cluster_client.evalsha = AsyncMock(return_value="cluster-ok")
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=cluster_client
+    ):
+        script = redis_cache.async_register_script("return 'cluster'")
+        result = await script(keys=["{k:v}:tokens"], args=[5, 60])
+
+    assert result == "cluster-ok"
+    cluster_client.script_load.assert_called_once_with("return 'cluster'")
+    cluster_client.evalsha.assert_awaited_once_with(
+        "sha123", 1, "ns:{k:v}:tokens", 5, 60
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_register_script_raises_for_unsupported_client(
+    monkeypatch, redis_no_ping
+):
+    """A client exposing neither register_script nor script_load fails loudly
+    rather than silently returning a no-op callable."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    bad_client = MagicMock(spec=[])
+
+    with patch.object(redis_cache, "init_async_client", return_value=bad_client):
+        script = redis_cache.async_register_script("return 'x'")
+        with pytest.raises(ValueError, match="does not support Lua script"):
+            await script(keys=["k"], args=[1])
 
 
 @pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
