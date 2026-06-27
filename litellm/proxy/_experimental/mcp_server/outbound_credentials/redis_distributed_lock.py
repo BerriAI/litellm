@@ -22,7 +22,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_c
 class RedisCommands(Protocol):
     """The slice of the async Redis client this lock needs."""
 
-    async def set(self, name: str, value: str, *, nx: bool = False, px: int | None = None) -> object | None: ...
+    async def set(
+        self, name: str, value: str, *, nx: bool = False, px: int | None = None
+    ) -> object | None: ...
 
     async def delete(self, *names: str) -> int: ...
 
@@ -35,7 +37,9 @@ class RedisDistributedLock:
 
     async def acquire(self, key: str, ttl_seconds: float) -> LockAcquisition:
         try:
-            result = await self._client.set(key, "1", nx=True, px=int(ttl_seconds * 1000))
+            result = await self._client.set(
+                key, "1", nx=True, px=int(ttl_seconds * 1000)
+            )
         # Degrade on any Redis client error: redis.exceptions narrows only via an import that
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
         except Exception as exc:  # noqa: BLE001
