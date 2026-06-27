@@ -10,6 +10,7 @@ collaborators acquire their globals per call, mirroring v1's lazy-import pattern
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -186,10 +187,17 @@ class LazyPerUserOAuthTokenStore:
         self._redis_available = redis_available
         self._store: OAuthTokenStore | None = None
         self._uses_redis = False
+        self._fetch_lock = asyncio.Lock()
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
-        store = self._store
-        if store is None or (not self._uses_redis and self._redis_available()):
-            store, self._uses_redis = self._store_builder(self._server_lookup)
-            self._store = store
-        return await store.fetch(user_id, server_id)
+        if self._uses_redis:
+            store = self._store
+            if store is not None:
+                return await store.fetch(user_id, server_id)
+
+        async with self._fetch_lock:
+            store = self._store
+            if store is None or (not self._uses_redis and self._redis_available()):
+                store, self._uses_redis = self._store_builder(self._server_lookup)
+                self._store = store
+            return await store.fetch(user_id, server_id)

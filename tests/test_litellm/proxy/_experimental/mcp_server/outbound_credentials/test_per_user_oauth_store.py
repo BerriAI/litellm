@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
@@ -17,6 +19,20 @@ class _RecordingStore:
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         self.calls.append((user_id, server_id))
+        return OAuthToken(access_token=self._access_token)
+
+
+class _BlockingStore:
+    def __init__(self, access_token: str) -> None:
+        self._access_token = access_token
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls: list[tuple[str, str]] = []
+
+    async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+        self.calls.append((user_id, server_id))
+        self.started.set()
+        await self.release.wait()
         return OAuthToken(access_token=self._access_token)
 
 
@@ -62,3 +78,42 @@ async def test_lazy_store_rebuilds_when_redis_becomes_available() -> None:
     assert build_calls == 2
     assert local_store.calls == [("u", "s")]
     assert redis_store.calls == [("u", "s"), ("u", "s")]
+
+
+@pytest.mark.asyncio
+async def test_lazy_store_waits_for_in_flight_local_fetch_before_redis_rebuild() -> None:
+    local_store = _BlockingStore("local")
+    redis_store = _RecordingStore("redis")
+    redis_available = _RedisAvailability()
+
+    def build_store(_server_lookup: ServerLookup) -> tuple[OAuthTokenStore, bool]:
+        if redis_available.available:
+            return redis_store, True
+        return local_store, False
+
+    def server_lookup(_server_id: str) -> None:
+        return None
+
+    store = LazyPerUserOAuthTokenStore(
+        server_lookup,
+        store_builder=build_store,
+        redis_available=redis_available,
+    )
+
+    first_fetch = asyncio.create_task(store.fetch("u", "s"))
+    await local_store.started.wait()
+
+    redis_available.available = True
+    second_fetch = asyncio.create_task(store.fetch("u", "s"))
+    await asyncio.sleep(0)
+
+    assert redis_store.calls == []
+
+    local_store.release.set()
+    first = await first_fetch
+    second = await second_fetch
+
+    assert first is not None and first.access_token == "local"
+    assert second is not None and second.access_token == "redis"
+    assert local_store.calls == [("u", "s")]
+    assert redis_store.calls == [("u", "s")]
