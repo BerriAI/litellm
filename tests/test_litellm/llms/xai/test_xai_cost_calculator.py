@@ -17,7 +17,16 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.xai.cost_calculator import cost_per_token, cost_per_web_search_request
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
+from litellm.llms.xai.cost_calculator import (
+    _DEFAULT_WEB_SEARCH_COST_PER_CALL,
+    _web_search_cost_per_call_from_model_info,
+    apply_server_side_tool_usage_details_to_usage,
+    cost_per_token,
+    cost_per_web_search_request,
+)
 
 
 class TestXAICostCalculator:
@@ -354,75 +363,52 @@ class TestXAICostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_web_search_cost_calculation(self):
-        """Test web search cost calculation for X.AI models."""
-        # Test with web_search_requests in prompt_tokens_details (primary path)
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=100,
-                web_search_requests=3,  # 3 sources used
-            ),
+    def test_web_search_cost_via_server_side_tool_usage_details(self):
+        """usage.server_side_tool_usage_details.web_search_calls at default $5/1k."""
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {
+                "web_search_calls": 3,
+                "x_search_calls": 0,
+                "code_interpreter_calls": 0,
+                "file_search_calls": 0,
+                "mcp_calls": 0,
+                "document_search_calls": 0,
+            },
         )
 
         web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
+        assert math.isclose(web_search_cost, 3 * (5.0 / 1000.0), rel_tol=1e-10)
 
-        # Expected cost: 3 sources * $0.025 per source = $0.075
-        expected_cost = 3 * (25.0 / 1000.0)  # 3 * $0.025
-
-        assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
-        assert math.isclose(web_search_cost, 0.075, rel_tol=1e-10)
-
-    def test_web_search_cost_fallback_calculation(self):
-        """Test web search cost calculation using fallback num_sources_used."""
-        # Test fallback: num_sources_used on usage object
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
+    def test_web_search_cost_uses_model_info_search_context_pricing(self):
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 2})
+        model_info = {
+            "search_context_cost_per_query": {
+                "search_context_size_medium": 0.01,
+            }
+        }
+        web_search_cost = cost_per_web_search_request(
+            usage=usage, model_info=model_info
         )
-        # Manually set num_sources_used (as done by transformation layer)
-        setattr(usage, "num_sources_used", 5)
+        assert math.isclose(web_search_cost, 0.02, rel_tol=1e-10)
 
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
+    def test_web_search_cost_zero_without_details(self):
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
 
-        # Expected cost: 5 sources * $0.025 per source = $0.125
-        expected_cost = 5 * (25.0 / 1000.0)  # 5 * $0.025
-
-        assert math.isclose(web_search_cost, expected_cost, rel_tol=1e-10)
-        assert math.isclose(web_search_cost, 0.125, rel_tol=1e-10)
-
-    def test_web_search_no_sources_used(self):
-        """Test web search cost calculation when no sources are used."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
-            prompt_tokens_details=PromptTokensDetailsWrapper(
-                text_tokens=100,
-                web_search_requests=0,  # No web search
-            ),
+    def test_apply_details_sets_web_search_requests_for_cost_gate(self):
+        usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        apply_server_side_tool_usage_details_to_usage(
+            usage, {"web_search_calls": 2, "x_search_calls": 0}
         )
-
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-
-        # Expected cost: 0 sources * $0.025 per source = $0.0
-        assert web_search_cost == 0.0
-
-    def test_web_search_cost_without_prompt_tokens_details(self):
-        """Test web search cost calculation when prompt_tokens_details is None."""
-        usage = Usage(
-            prompt_tokens=100,
-            completion_tokens=50,
-            total_tokens=150,
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.web_search_requests == 2
+        assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+            response_object=object(), usage=usage
         )
-
-        web_search_cost = cost_per_web_search_request(usage=usage, model_info={})
-
-        # Expected cost: No web search data = $0.0
-        assert web_search_cost == 0.0
 
     def test_grok_4_20_beta_reasoning_cost_calculation(self):
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
@@ -471,3 +457,112 @@ class TestXAICostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+
+class TestXAIWebSearchCostHelpers:
+    """Focused coverage for web_search / tool-usage helpers in cost_calculator.py."""
+
+    def test_apply_details_noop_when_details_none(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        apply_server_side_tool_usage_details_to_usage(usage, None)
+        assert getattr(usage, "server_side_tool_usage_details", None) is None
+
+    def test_apply_details_sets_attr_but_skips_mirror_when_web_search_zero(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        details = {"web_search_calls": 0, "x_search_calls": 3}
+        apply_server_side_tool_usage_details_to_usage(usage, details)
+        assert getattr(usage, "server_side_tool_usage_details") == details
+        assert (
+            usage.prompt_tokens_details is None
+            or usage.prompt_tokens_details.web_search_requests is None
+        )
+
+    def test_apply_details_skips_mirror_when_web_search_calls_invalid(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        details = {"web_search_calls": "not-a-number"}
+        apply_server_side_tool_usage_details_to_usage(usage, details)
+        assert getattr(usage, "server_side_tool_usage_details") == details
+        assert usage.prompt_tokens_details is None
+
+    def test_apply_details_updates_existing_prompt_tokens_details(self):
+        usage = Usage(
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=7),
+        )
+        apply_server_side_tool_usage_details_to_usage(usage, {"web_search_calls": 4})
+        assert usage.prompt_tokens_details is not None
+        assert usage.prompt_tokens_details.cached_tokens == 7
+        assert usage.prompt_tokens_details.web_search_requests == 4
+
+    def test_web_search_cost_per_call_default_when_model_info_empty(self):
+        assert (
+            _web_search_cost_per_call_from_model_info({})
+            == _DEFAULT_WEB_SEARCH_COST_PER_CALL
+        )
+
+    def test_web_search_cost_per_call_prefers_medium_over_low(self):
+        model_info = {
+            "search_context_cost_per_query": {
+                "search_context_size_low": 0.001,
+                "search_context_size_medium": 0.009,
+            }
+        }
+        assert _web_search_cost_per_call_from_model_info(model_info) == 0.009
+
+    def test_web_search_cost_per_call_falls_back_to_low_then_high(self):
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {"search_context_cost_per_query": {"search_context_size_low": 0.003}}
+            )
+            == 0.003
+        )
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {"search_context_cost_per_query": {"search_context_size_high": 0.007}}
+            )
+            == 0.007
+        )
+
+    def test_web_search_cost_per_call_ignores_zero_and_invalid_values(self):
+        assert (
+            _web_search_cost_per_call_from_model_info(
+                {
+                    "search_context_cost_per_query": {
+                        "search_context_size_medium": 0,
+                        "search_context_size_low": "bad",
+                    }
+                }
+            )
+            == _DEFAULT_WEB_SEARCH_COST_PER_CALL
+        )
+
+    def test_cost_per_web_search_request_zero_when_details_not_mapping(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(usage, "server_side_tool_usage_details", "invalid")
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_zero_when_web_search_calls_invalid(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {"web_search_calls": object()},
+        )
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_zero_when_web_search_calls_zero(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(
+            usage,
+            "server_side_tool_usage_details",
+            {"web_search_calls": 0, "x_search_calls": 5},
+        )
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_cost_per_web_search_request_uses_default_rate_without_model_pricing(self):
+        usage = Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 4})
+        cost = cost_per_web_search_request(usage=usage, model_info={})
+        assert math.isclose(cost, 4 * _DEFAULT_WEB_SEARCH_COST_PER_CALL, rel_tol=1e-10)

@@ -1,16 +1,29 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.cost_calculator import (
+    apply_server_side_tool_usage_details_to_usage,
+)
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseFailedEvent,
+    ResponseIncompleteEvent,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -50,6 +63,91 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             supported_params.remove("instructions")
 
         return supported_params
+
+    def transform_response_api_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        """
+        Attach xAI tool usage details onto a chat Usage object.
+
+        Cost calculation normalizes Responses usage via
+        ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage, which
+        drops non-standard fields unless usage is already a chat Usage instance.
+        """
+        response = super().transform_response_api_response(
+            model=model, raw_response=raw_response, logging_obj=logging_obj
+        )
+        self._attach_server_side_tool_usage_details_to_usage(response)
+        return response
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIStreamingResponse:
+        """
+        Preserve xAI tool usage on streaming terminal events for cost logging.
+
+        Completed/incomplete/failed events embed a full ResponsesAPIResponse; without
+        attaching server_side_tool_usage_details here, stream=true web_search usage is
+        dropped when usage is normalized for billing.
+        """
+        event = super().transform_streaming_response(
+            model=model, parsed_chunk=parsed_chunk, logging_obj=logging_obj
+        )
+        if isinstance(
+            event,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        ):
+            embedded_response = getattr(event, "response", None)
+            if isinstance(embedded_response, ResponsesAPIResponse):
+                self._attach_server_side_tool_usage_details_to_usage(embedded_response)
+        return event
+
+    @staticmethod
+    def _server_side_tool_usage_details_from_usage(usage: Any) -> Any:
+        if usage is None:
+            return None
+        if isinstance(usage, dict):
+            return usage.get("server_side_tool_usage_details")
+        details = getattr(usage, "server_side_tool_usage_details", None)
+        if details is not None:
+            return details
+        model_extra = getattr(usage, "model_extra", None) or getattr(
+            usage, "__pydantic_extra__", None
+        )
+        if isinstance(model_extra, dict):
+            return model_extra.get("server_side_tool_usage_details")
+        return None
+
+    @staticmethod
+    def _attach_server_side_tool_usage_details_to_usage(
+        response: ResponsesAPIResponse,
+    ) -> None:
+        if response.usage is None:
+            return
+
+        details = XAIResponsesAPIConfig._server_side_tool_usage_details_from_usage(
+            response.usage
+        )
+        if details is None:
+            return
+
+        if isinstance(response.usage, Usage):
+            apply_server_side_tool_usage_details_to_usage(response.usage, details)
+            return
+
+        chat_usage = (
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                response.usage
+            )
+        )
+        apply_server_side_tool_usage_details_to_usage(chat_usage, details)
+        response.usage = chat_usage  # type: ignore[assignment]
 
     def _transform_web_search_tool(
         self, tool: Dict[str, Any]
