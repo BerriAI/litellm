@@ -15,6 +15,7 @@ import hashlib
 import inspect
 import json
 import time
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 
@@ -535,7 +536,7 @@ class RedisCache(BaseCache):
             )
             raise e
 
-    def async_register_script(self, script: str) -> Any:
+    def async_register_script(self, script: str) -> Callable[..., Awaitable[Any]]:
         """
         Register a Lua script with Redis asynchronously.
         Works with both standalone Redis and Redis Cluster.
@@ -545,39 +546,87 @@ class RedisCache(BaseCache):
         scripts would operate on raw keys while the rest of the cache uses the
         namespace, leaving rate-limit and lock keys outside the configured prefix.
 
+        Registration is deferred to call time and cached per running event loop
+        (via in_memory_llm_clients_cache, which keys its entries on the loop). A
+        registered script is bound to the connection of the loop it was created
+        on; awaiting it from another loop raises "got Future attached to a
+        different loop". Binding lazily on the calling loop gives the script the
+        same per-loop scoping init_async_client already gives the clients, so a
+        script registered once at startup is never reused across loops.
+
         Args:
             script (str): The Lua script to register
 
         Returns:
-            Any: A script object that can be called with keys and args
+            A callable ``(keys, args, client=None)`` that runs the script
+            against the calling loop's Redis client.
         """
-        try:
-            _redis_client = self.init_async_client()
-            # For standalone Redis
-            if hasattr(_redis_client, "register_script"):
-                registered_script = _redis_client.register_script(script)  # type: ignore
+        # Keyed by connection params and namespace as well as the script, so
+        # two RedisCache instances pointing at different servers or using
+        # different key prefixes never share an executor; in_memory_llm_clients_cache
+        # then adds the running loop, completing the per-(client, namespace, loop)
+        # scoping.
+        script_cache_key = (
+            f"redis-registered-script-{self._get_async_client_cache_key()}-"
+            f"{self.namespace}-{hashlib.sha256(script.encode()).hexdigest()[:16]}"
+        )
 
-                async def namespaced_script(
-                    keys: list[str], args: list[Any], client: Any = None
-                ) -> Any:
-                    keys = [self.check_and_fix_namespace(key=key) for key in keys]
-                    return await registered_script(keys=keys, args=args, client=client)
+        async def run_script(
+            keys: Sequence[str], args: Sequence[Any], client: Any = None
+        ) -> Any:
+            executor: Optional[Callable[..., Awaitable[Any]]] = (
+                litellm.in_memory_llm_clients_cache.get_cache(key=script_cache_key)
+            )
+            if executor is None:
+                executor = self._register_script_for_current_loop(script)
+                litellm.in_memory_llm_clients_cache.set_cache(
+                    key=script_cache_key, value=executor
+                )
+            return await executor(keys=keys, args=args, client=client)
 
-                return namespaced_script
-            # For Redis Cluster
-            elif hasattr(_redis_client, "script_load"):
-                # Load the script and get its SHA
-                script_sha = _redis_client.script_load(script)  # type: ignore
+        return run_script
 
-                # Return a callable that uses evalsha
-                async def script_callable(keys: List[str], args: List[Any]) -> Any:
-                    keys = [self.check_and_fix_namespace(key=key) for key in keys]
-                    return _redis_client.evalsha(script_sha, len(keys), *keys, *args)  # type: ignore
+    def _register_script_for_current_loop(
+        self, script: str
+    ) -> Callable[..., Awaitable[Any]]:
+        """
+        Register the script against the current event loop's Redis client.
 
-                return script_callable
-        except Exception as e:
-            verbose_logger.error(f"Error registering Redis script: {str(e)}")
-            raise e
+        Kept separate from async_register_script so each loop caches its own
+        executor; see that method for why the binding must be per loop.
+        """
+        _redis_client: Any = self.init_async_client()
+        if hasattr(_redis_client, "register_script"):
+            registered_script = _redis_client.register_script(script)
+
+            async def standalone_executor(
+                keys: Sequence[str], args: Sequence[Any], client: Any = None
+            ) -> Any:
+                namespaced_keys = tuple(
+                    self.check_and_fix_namespace(key=key) for key in keys
+                )
+                return await registered_script(
+                    keys=namespaced_keys, args=args, client=client
+                )
+
+            return standalone_executor
+
+        if hasattr(_redis_client, "script_load"):
+            script_sha = _redis_client.script_load(script)
+
+            async def cluster_executor(
+                keys: Sequence[str], args: Sequence[Any], client: Any = None
+            ) -> Any:
+                namespaced_keys = tuple(
+                    self.check_and_fix_namespace(key=key) for key in keys
+                )
+                return _redis_client.evalsha(
+                    script_sha, len(namespaced_keys), *namespaced_keys, *args
+                )
+
+            return cluster_executor
+
+        raise ValueError("Redis client does not support Lua script registration")
 
     @_redis_circuit_breaker_guard
     async def async_set_cache(self, key, value, **kwargs):
