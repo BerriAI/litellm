@@ -30,6 +30,7 @@ _BEDROCK_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE = re.compile(r"(\d)\.(\d)")
+_CLAUDE_FAMILY_VERSION_RE = re.compile(r"(?:opus|sonnet|haiku)[._-](\d+)[._-](\d{1,2})(?!\d)", re.IGNORECASE)
 
 
 def _strip_bedrock_id_suffixes(model: str) -> str:
@@ -372,15 +373,34 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicModelInfo._get_model_capability(model, key) is True
 
     @staticmethod
+    def _claude_version_at_least(model: str, major: int, minor: int) -> bool:
+        """Whether ``model`` names a Claude family model of version >= ``major.minor``.
+
+        Parses the modern ``<family>-<major>-<minor>`` naming (``-``/``_``/``.``
+        separators, optional provider prefixes), e.g. ``us.anthropic.claude-opus-4-6``
+        or ``claude-sonnet-4.6``. A ``minor`` is at most two digits, so an eight-digit
+        date suffix (``claude-opus-4-20250514``, the non-adaptive Opus 4.0) is not
+        misread as a minor version. Legacy ``claude-<major>-<minor>-<family>`` names
+        (3.x) and anything without a parseable family version return False.
+        """
+        match = _CLAUDE_FAMILY_VERSION_RE.search(model)
+        if match is None:
+            return False
+        return (int(match.group(1)), int(match.group(2))) >= (major, minor)
+
+    @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
-        Sourced solely from the model cost map's ``supports_adaptive_thinking`` flag,
-        resolved through provider prefixes. A model that resolves to no mapped entry
-        (an unmapped alias or a future release not yet in the map) is treated as
-        non-adaptive until a ``fallback_generalizations`` rule covers it.
+        The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
+        entry, or the ``fallback_generalizations`` rule for unknown Claude models. As a
+        graceful fallback for provider-prefixed names that resolve to no mapped entry
+        (e.g. ``bedrock/invoke/us.anthropic.claude-opus-4-6``), a Claude family version
+        of >= 4.6 also qualifies.
         """
-        return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking")
+        if AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking"):
+            return True
+        return AnthropicModelInfo._claude_version_at_least(model, 4, 6)
 
     def is_effort_used(self, optional_params: Optional[dict], model: Optional[str] = None) -> bool:
         """

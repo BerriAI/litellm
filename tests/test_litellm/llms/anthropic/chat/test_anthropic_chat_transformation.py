@@ -2484,11 +2484,12 @@ def local_model_cost_map(monkeypatch):
 def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
     local_model_cost_map, model, expected
 ):
-    """Adaptive thinking is determined solely by the cost map: an explicit
-    supports_adaptive_thinking entry, or the anthropic-claude fallback rule for
-    unmapped future Claudes. No version is parsed from the model name, so the dated
-    Claude 4.0 names stay non-adaptive while 4.8/4.9/5.x are covered without a code
-    change."""
+    """Adaptive thinking resolves from the cost map first (an explicit
+    supports_adaptive_thinking entry, or the anthropic-claude fallback rule for unmapped
+    future Claudes), then from a date-safe opus/sonnet/haiku >= 4.6 name version as a
+    fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
+    non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
+    are covered without a code change."""
     assert AnthropicConfig._is_adaptive_thinking_model(model) is expected
 
 

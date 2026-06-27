@@ -1650,20 +1650,70 @@ class TestClaudeOpus48AdaptiveThinking:
     @pytest.mark.parametrize(
         "model",
         [
-            "claude-opus-4-8-some-future-suffix",
             "us.anthropic.claude-fable-5-preview",
+            "claude-fable-5-preview",
         ],
     )
-    def test_unmapped_aliases_defer_to_cost_map(self, local_model_cost_map, model):
-        """Detection is sourced solely from the cost map flag: an alias absent from
-        the map and not matched by any ``fallback_generalizations`` rule (PR #29718)
-        stays non-adaptive. A bare unmapped Claude like ``claude-opus-4-9`` does match
-        the ``anthropic-claude`` rule, so it is covered separately."""
+    def test_unmapped_aliases_without_parseable_version_stay_non_adaptive(
+        self, local_model_cost_map, model
+    ):
+        """An alias absent from the map, not matched by any ``fallback_generalizations``
+        rule, and without a parseable opus/sonnet/haiku >= 4.6 family version stays
+        non-adaptive. ``fable`` is outside the version-fallback family set, so neither the
+        cost map nor the name-based fallback marks it adaptive."""
         import litellm
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert model not in litellm.model_cost
         assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "bedrock/invoke/us.anthropic.claude-opus-4-9",
+            "vertex_ai/claude-sonnet-5-0",
+            "us.anthropic.claude-opus-5-2",
+            "claude-opus-4-8-some-future-suffix",
+        ],
+    )
+    def test_adaptive_thinking_version_fallback_for_unmapped_high_versions(
+        self, local_model_cost_map, model
+    ):
+        """Provider-prefixed or suffixed Claude names that resolve to no mapped entry and
+        are not matched by the anchored ``anthropic-claude`` rule still degrade to adaptive
+        when their opus/sonnet/haiku family version parses to >= 4.6. This is the name-based
+        fallback for ids the cost map cannot resolve."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    @pytest.mark.parametrize(
+        "model, expected",
+        [
+            ("claude-opus-4-6", True),
+            ("claude-sonnet-4.6", True),
+            ("us.anthropic.claude-opus-4-7", True),
+            ("bedrock/invoke/us.anthropic.claude-opus-4-9", True),
+            ("claude-opus-5-0", True),
+            ("claude-opus-4-8-some-future-suffix", True),
+            ("claude-opus-4-5", False),
+            ("claude-opus-4-20250514", False),
+            ("us.anthropic.claude-opus-4-20250514-v1:0", False),
+            ("claude-3-7-sonnet", False),
+            ("claude-fable-5", False),
+            ("gpt-4o", False),
+        ],
+    )
+    def test_claude_version_at_least_4_6(self, model, expected):
+        """Date-safe family-version parsing: a two-digit cap on the minor keeps an
+        eight-digit date suffix (the non-adaptive Claude 4.0 dated release) from being
+        misread as a very large minor version. Legacy 3.x ordering and non
+        opus/sonnet/haiku families do not parse to a version."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._claude_version_at_least(model, 4, 6) is expected
 
     @pytest.mark.parametrize(
         "model",

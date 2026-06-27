@@ -5027,7 +5027,7 @@ def _get_model_info_from_generalization(
     model: str,
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: Optional[str],
-) -> Optional[Tuple[str, dict]]:
+) -> Optional[tuple[str, dict]]:
     """Resolve an unmapped model via a declarative fallback-generalization rule.
 
     Tries the same name candidates as the exact lookups, in the same order, and

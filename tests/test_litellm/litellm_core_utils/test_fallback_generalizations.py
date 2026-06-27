@@ -184,3 +184,38 @@ def test_unknown_model_without_matching_rule_still_unmapped(restore_generalizati
     )
     with pytest.raises(Exception):
         litellm.get_model_info("totally-unknown-model-xyz")
+
+
+# --------------------------------------------------------------------------- #
+# Shipped anthropic-claude rule
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def shipped_cost_map(monkeypatch):
+    """Activate the bundled cost map so the shipped anthropic-claude rule is installed."""
+    original_cost = litellm.model_cost
+    previous_rules = list(get_fallback_generalization_rules())
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_cost
+        litellm.get_model_info.cache_clear()
+        set_fallback_generalizations(previous_rules)
+
+
+def test_shipped_rule_prices_unmapped_claude_at_opus_tier(shipped_cost_map):
+    """The shipped anthropic-claude rule prices an unmapped/new Claude at the Opus tier
+    and flags it adaptive, so an unknown Claude is over-costed rather than silently free."""
+    model = "claude-opus-9-9"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model)
+    assert info["litellm_provider"] == "anthropic"
+    assert info["input_cost_per_token"] == 5e-06
+    assert info["output_cost_per_token"] == 2.5e-05
+    assert info["cache_creation_input_token_cost"] == 6.25e-06
+    assert info["cache_read_input_token_cost"] == 5e-07
+    assert info["supports_adaptive_thinking"] is True
