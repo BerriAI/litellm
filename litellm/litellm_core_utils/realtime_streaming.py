@@ -378,6 +378,7 @@ class RealTimeStreaming:
                             "Dropping follow-up setup after content was already sent to backend"
                         )
                         continue
+                    msg = self._maybe_inject_guardrail_auto_response_disable(msg)
                     await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
                     self._cache_session_configuration_request(msg)
                     sent = True
@@ -672,6 +673,39 @@ class RealTimeStreaming:
         # — such as a duplicate session.created — can retry.
         if sent:
             self._guardrail_turn_detection_update_sent = True
+
+    def _maybe_inject_guardrail_auto_response_disable(self, setup_message: str) -> str:
+        """Fold the transcription-guardrail auto-response disable into the setup.
+
+        Gemini/Vertex Live reject a second ``setup`` (1007), so the guardrail's
+        ``automaticActivityDetection.disabled=true`` cannot be delivered as a
+        follow-up session.update; it must live in the one-and-only setup, or a
+        ``realtime_input_transcription`` guardrail is bypassed (the model
+        auto-responds before the proxy can gate the turn). Applies only to the
+        bidi ``setup`` shape; OpenAI sessions accept follow-up updates and so are
+        left untouched (handled by ``_maybe_send_guardrail_turn_detection_update``).
+        """
+        if self._guardrail_turn_detection_update_sent:
+            return setup_message
+        if not self._has_audio_transcription_guardrails():
+            return setup_message
+        try:
+            obj = json.loads(setup_message)
+        except (json.JSONDecodeError, TypeError):
+            return setup_message
+        setup = obj.get("setup") if isinstance(obj, dict) else None
+        if not isinstance(setup, dict):
+            return setup_message
+        automatic = setup.setdefault("realtimeInputConfig", {}).setdefault(
+            "automaticActivityDetection", {}
+        )
+        automatic["disabled"] = True
+        self._guardrail_turn_detection_update_sent = True
+        verbose_logger.debug(
+            "Realtime: folded automaticActivityDetection.disabled=true into setup "
+            "for transcription-guardrail gating"
+        )
+        return json.dumps(obj)
 
     def _has_realtime_guardrails_for_event_hooks(
         self,

@@ -5950,6 +5950,17 @@ class BaseLLMHTTPHandler:
         retry, so no extra backoff is needed. Deterministic rejections (auth /
         handshake status) are not retried.
         """
+        # Handshake-status rejections are deterministic (auth / 4xx): retrying
+        # cannot help and the caller must see the upstream status, not a generic
+        # 1011. websockets <15 raises InvalidStatusCode, >=15 raises InvalidStatus.
+        deterministic_errors = tuple(
+            exc
+            for exc in (
+                getattr(websockets_module.exceptions, "InvalidStatus", None),
+                getattr(websockets_module.exceptions, "InvalidStatusCode", None),
+            )
+            if exc is not None
+        )
         last_exc: Optional[BaseException] = None
         for _ in range(max_attempts):
             try:
@@ -5960,8 +5971,8 @@ class BaseLLMHTTPHandler:
                     ssl=ssl_context,
                     open_timeout=open_timeout,
                 )
-            except websockets_module.exceptions.InvalidStatusCode:
-                raise  # auth / 4xx is deterministic; retrying cannot help
+            except deterministic_errors:
+                raise
             except (
                 TimeoutError,
                 OSError,
@@ -6007,16 +6018,6 @@ class BaseLLMHTTPHandler:
                 websockets, url, headers, ssl_context
             )
             async with backend_ws:
-                # Auto-send session setup if the provider requires it
-                # (e.g. Gemini/Vertex AI Live needs a `setup` message before any realtime_input)
-                _session_config: Optional[str] = None
-                if provider_config.requires_session_configuration():
-                    _session_config = provider_config.session_configuration_request(
-                        model
-                    )
-                    if _session_config:
-                        await backend_ws.send(_session_config)
-
                 _request_data: Dict[str, Any] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
@@ -6034,8 +6035,26 @@ class BaseLLMHTTPHandler:
                         else None
                     ),
                 )
-                if _session_config:
-                    realtime_streaming.session_configuration_request = _session_config
+
+                # Auto-send session setup if the provider requires it (e.g.
+                # Gemini/Vertex AI Live needs a `setup` before any realtime_input).
+                # Build the streaming handler first so a transcription guardrail's
+                # auto-response disable can be folded into this one setup: Gemini
+                # rejects a second setup, so a follow-up disable would be dropped
+                # and the guardrail bypassed.
+                _session_config: Optional[str] = None
+                if provider_config.requires_session_configuration():
+                    _session_config = provider_config.session_configuration_request(
+                        model
+                    )
+                    if _session_config:
+                        _session_config = realtime_streaming._maybe_inject_guardrail_auto_response_disable(
+                            _session_config
+                        )
+                        await backend_ws.send(_session_config)
+                        realtime_streaming.session_configuration_request = (
+                            _session_config
+                        )
 
                 # For providers that defer setup until client session.update, optionally
                 # send synthetic session.created to unblock clients waiting on connect.

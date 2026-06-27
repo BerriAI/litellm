@@ -1180,6 +1180,12 @@ class _FakeWSExceptions:
         def __init__(self) -> None:
             super().__init__("HTTP 403")
 
+    # websockets>=15 raises InvalidStatus (not InvalidStatusCode) for a rejected
+    # client handshake; both must be treated as deterministic.
+    class InvalidStatus(WebSocketException):
+        def __init__(self) -> None:
+            super().__init__("HTTP 401")
+
 
 class _FakeWebsocketsModule:
     """Stand-in for the ``websockets`` module so the realtime backend-open retry
@@ -1241,10 +1247,15 @@ async def test_realtime_backend_open_raises_after_max_attempts():
 
 
 @pytest.mark.asyncio
-async def test_realtime_backend_open_does_not_retry_auth_failure():
+@pytest.mark.parametrize(
+    "rejection",
+    [_FakeWSExceptions.InvalidStatusCode, _FakeWSExceptions.InvalidStatus],
+)
+async def test_realtime_backend_open_does_not_retry_auth_failure(rejection):
     """A deterministic handshake-status rejection (auth/4xx) must not be retried;
-    retrying cannot help and only delays the error."""
-    fake = _FakeWebsocketsModule([_FakeWSExceptions.InvalidStatusCode()])
+    retrying cannot help and the upstream status must surface, not a 1011. Both
+    the websockets<15 (InvalidStatusCode) and >=15 (InvalidStatus) shapes apply."""
+    fake = _FakeWebsocketsModule([rejection()])
 
     with pytest.raises(_FakeWSExceptions.WebSocketException):
         await BaseLLMHTTPHandler._open_realtime_backend_ws(
