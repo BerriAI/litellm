@@ -1465,6 +1465,8 @@ class TestClaudeOpus48AdaptiveThinking:
             "bedrock/eu.anthropic.claude-opus-4-8",
             "vertex_ai/claude-opus-4-8",
             "azure_ai/claude-opus-4-8",
+            "anthropic.claude-opus-4-8-20251201-v1:0",
+            "bedrock/invoke/global.anthropic.claude-opus-4-8-20251201-v1:0",
         ],
     )
     def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
@@ -1518,6 +1520,8 @@ class TestClaudeOpus48AdaptiveThinking:
             "vertex_ai/claude-opus-4-6",
             "azure_ai/claude-sonnet-4-6",
             "claude-sonnet-4-6-20260219",
+            "us.anthropic.claude-sonnet-4-6-20251101-v1:0",
+            "bedrock/invoke/us.anthropic.claude-sonnet-4-6-20251101-v1:0",
             "claude-sonnet-4.6",
         ],
     )
@@ -1529,7 +1533,8 @@ class TestClaudeOpus48AdaptiveThinking:
         fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
         base entry through candidate normalization: provider/region prefixes, a
         Bedrock ``-v1:0`` version suffix (stripped fully for 4.7/4.8 keys or to ``-v1``
-        for the 4.6 key), a dated release suffix (``-20260219``), and a dotted family
+        for the 4.6 key), a dated release suffix (``-20260219``), a combined
+        ``-<date>-v1:0`` suffix (the real Bedrock id shape), and a dotted family
         version (``4.6`` -> ``4-6``)."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
