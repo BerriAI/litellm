@@ -466,10 +466,7 @@ describe("useKeys", () => {
       json: async () => mockKeysResponse,
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { agentID: "agent-123" }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { agentID: "agent-123" }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -485,10 +482,7 @@ describe("useKeys", () => {
       json: async () => mockKeysResponse,
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { agentID: null }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { agentID: null }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);

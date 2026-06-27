@@ -27,11 +27,7 @@ interface AgentInfoViewProps {
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const [agent, setAgent] = useState<Agent | null>(null);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const {
-    data: keysData,
-    isLoading: keysLoading,
-    refetch: refetchAgentKeys,
-  } = useKeys(1, 100, { agentID: agentId });
+  const { data: keysData, isLoading: keysLoading, refetch: refetchAgentKeys } = useKeys(1, 100, { agentID: agentId });
   const agentKeys = keysData?.keys ?? [];
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -284,11 +280,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
               <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
             </Descriptions>
 
-            <AgentVirtualKeys
-              keys={agentKeys}
-              isLoading={keysLoading}
-              onKeyClick={setSelectedKey}
-            />
+            <AgentVirtualKeys keys={agentKeys} isLoading={keysLoading} onKeyClick={setSelectedKey} />
 
             {agent.object_permission &&
               (agent.object_permission.mcp_servers?.length ||
