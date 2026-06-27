@@ -606,6 +606,14 @@ if MCP_AVAILABLE:
                 and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
 
+            if getattr(getattr(user_api_key_dict, "object_permission", None), "mcp_tool_search_enabled", False):
+                from litellm.proxy._experimental.mcp_server.tool_search import get_virtual_tool_definitions
+                return {
+                    "tools": get_virtual_tool_definitions(),
+                    "error": None,
+                    "message": "Successfully retrieved tools",
+                }
+
             # Extract auth headers from request
             headers = request.headers
             raw_headers_from_request = dict(headers)
@@ -782,6 +790,35 @@ if MCP_AVAILABLE:
         try:
             data = await request.json()
 
+            tool_name = data.get("name")
+            tool_arguments = data.get("arguments") or {}
+
+            from litellm.proxy._experimental.mcp_server.tool_search import (
+                MCP_TOOL_CALL_TOOL_NAME,
+                MCP_TOOL_SEARCH_TOOL_NAME,
+                handle_mcp_tool_call,
+                handle_mcp_tool_search,
+            )
+
+            if tool_name in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
+                if not getattr(getattr(user_api_key_dict, "object_permission", None), "mcp_tool_search_enabled", False):
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"error": "forbidden", "message": f"{tool_name} requires mcp_tool_search_enabled on the key"},
+                    )
+                if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
+                    return await handle_mcp_tool_search(
+                        query=tool_arguments.get("query", ""),
+                        top_k=int(tool_arguments.get("top_k", 5)),
+                        user_api_key_dict=user_api_key_dict,
+                    )
+                else:  # MCP_TOOL_CALL_TOOL_NAME
+                    return await handle_mcp_tool_call(
+                        tool_name=tool_arguments.get("tool_name", ""),
+                        arguments=tool_arguments.get("arguments") or {},
+                        user_api_key_dict=user_api_key_dict,
+                    )
+
             # Validate required parameters early
             server_id = data.get("server_id")
             if not server_id:
@@ -793,7 +830,6 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            tool_name = data.get("name")
             if not tool_name:
                 raise HTTPException(
                     status_code=400,
@@ -802,8 +838,6 @@ if MCP_AVAILABLE:
                         "message": "name is required in request body",
                     },
                 )
-
-            tool_arguments = data.get("arguments") or {}
 
             proxy_base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
             (

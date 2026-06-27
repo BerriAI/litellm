@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
+
+from mcp.types import CallToolResult, TextContent
+
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+    global_mcp_server_manager,
+)
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
+MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
+
+
+def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
+    if not query:
+        return []
+    tokens = query.lower().split()
+    def _score(tool: dict[str, Any]) -> int:
+        haystack = (tool.get("name", "") + " " + tool.get("description", "")).lower()
+        return sum(1 for t in tokens if t in haystack)
+    scored = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
+    return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
+
+
+def get_virtual_tool_definitions() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": MCP_TOOL_SEARCH_TOOL_NAME,
+            "description": "Search for MCP tools by keyword. Returns top matching tools with names, descriptions, and input schemas.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Keywords to search for in tool names and descriptions."},
+                    "top_k": {"type": "integer", "description": "Maximum number of results to return.", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+        {
+            "name": MCP_TOOL_CALL_TOOL_NAME,
+            "description": "Call an MCP tool by name with the given arguments.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {"type": "string", "description": "The exact name of the MCP tool to call."},
+                    "arguments": {"type": "object", "description": "Arguments to pass to the tool."},
+                },
+                "required": ["tool_name"],
+            },
+        },
+    ]
+
+
+async def handle_mcp_tool_search(
+    query: str,
+    top_k: int,
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> CallToolResult:
+    mcp_tools = await global_mcp_server_manager.list_tools(user_api_key_auth=user_api_key_dict)
+    tools = [{"name": t.name, "description": t.description or "", "inputSchema": t.inputSchema} for t in mcp_tools]
+    results = search_tools(query, tools, top_k)
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(results))], isError=False)
+
+
+async def handle_mcp_tool_call(
+    tool_name: str,
+    arguments: dict[str, Any],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> CallToolResult:
+    return await global_mcp_server_manager.call_tool(
+        server_name="",
+        name=tool_name,
+        arguments=arguments,
+        user_api_key_auth=user_api_key_dict,
+        proxy_logging_obj=None,
+    )

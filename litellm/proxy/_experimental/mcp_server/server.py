@@ -695,6 +695,44 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
             )
+
+            from litellm.proxy._experimental.mcp_server.tool_search import (
+                MCP_TOOL_CALL_TOOL_NAME,
+                MCP_TOOL_SEARCH_TOOL_NAME,
+                handle_mcp_tool_call,
+                handle_mcp_tool_search,
+            )
+
+            if name in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
+                from mcp.types import CallToolResult, TextContent
+
+                if not getattr(
+                    getattr(user_api_key_auth, "object_permission", None),
+                    "mcp_tool_search_enabled",
+                    False,
+                ):
+                    return CallToolResult(
+                        content=[
+                            TextContent(
+                                type="text",
+                                text=f"Tool {name} requires mcp_tool_search_enabled on the key",
+                            )
+                        ],
+                        isError=True,
+                    )
+                if name == MCP_TOOL_SEARCH_TOOL_NAME:
+                    return await handle_mcp_tool_search(
+                        query=(arguments or {}).get("query", ""),
+                        top_k=int((arguments or {}).get("top_k", 5)),
+                        user_api_key_dict=user_api_key_auth,
+                    )
+                else:
+                    return await handle_mcp_tool_call(
+                        tool_name=(arguments or {}).get("tool_name", ""),
+                        arguments=(arguments or {}).get("arguments") or {},
+                        user_api_key_dict=user_api_key_auth,
+                    )
+
             host_progress_callback = None
             try:
                 host_ctx = server.request_context
