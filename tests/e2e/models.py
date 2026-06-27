@@ -197,6 +197,7 @@ class CustomPricing(BaseModel):
     overrides, and /model/info echoes the rates the proxy resolved."""
 
     model_config = ConfigDict(extra="ignore")
+    mode: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     cache_read_input_token_cost: float | None = None

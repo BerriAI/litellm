@@ -53,6 +53,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
     CiscoAIDefenseGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
+    HeadroomGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -119,6 +122,7 @@ class SupportedGuardrailIntegrations(Enum):
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
+    HEADROOM = "headroom"
 
 
 class Role(Enum):
@@ -750,7 +754,12 @@ class BaseLitellmParams(
     )
     fail_on_error: Optional[bool] = Field(
         default=True,
-        description="Whether to fail the request if Model Armor encounters an error",
+        description=(
+            "Whether to fail the request if the guardrail encounters an error. "
+            "Implemented by guardrail='model_armor' and 'generic_guardrail_api'. "
+            "True (default) raises the error. False logs a critical error and lets the request proceed, "
+            "so only a valid guardrail response can block or modify it."
+        ),
     )
 
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
@@ -860,6 +869,7 @@ class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
+    HeadroomGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,

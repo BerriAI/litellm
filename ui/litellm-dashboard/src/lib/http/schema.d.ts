@@ -21125,10 +21125,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with
-             * @default chat
+             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -30848,6 +30847,11 @@ export interface components {
              */
             allowed_models?: string[] | null;
             /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
+            /**
              * Max Budget In Team
              * @description Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits
              */
@@ -32305,6 +32309,11 @@ export interface components {
             end_user_tpm_limit?: number | null;
             /** Expires */
             expires?: string | null;
+            /**
+             * Is Session Token
+             * @default false
+             */
+            is_session_token: boolean;
             /** Jwt Claims */
             jwt_claims?: {
                 [key: string]: unknown;

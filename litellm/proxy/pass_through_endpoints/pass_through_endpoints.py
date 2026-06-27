@@ -6,6 +6,7 @@ import posixpath
 import traceback
 from base64 import b64encode
 from datetime import datetime
+from itertools import groupby
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
@@ -37,6 +38,7 @@ from litellm._uuid import uuid
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
@@ -477,20 +479,46 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         requested_query_params: Optional[dict] = None,
         stream: bool = False,
     ) -> httpx.Response:
-        """Process multipart/form-data requests, handling both files and form fields"""
-        form_data = await request.form()
-        files = {}
-        form_data_dict = {}
+        """Process multipart/form-data requests, handling both files and form fields.
 
-        for field_name, field_value in form_data.items():
-            if isinstance(field_value, (StarletteUploadFile, UploadFile)):
-                files[
-                    field_name
-                ] = await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
+        Iterates ``form.multi_items()`` rather than ``form.items()`` so repeated
+        field names (e.g. several ``-F file=@...`` parts) are all forwarded;
+        ``items()`` collapses duplicate keys to the last value. Files go out as a
+        list of ``(field_name, (filename, content, content_type))`` tuples and
+        repeated non-file fields are grouped into list values, both of which httpx
+        encodes as separate multipart parts.
+        """
+        form_items = (await request.form()).multi_items()
+
+        files = [
+            (
+                field_name,
+                await HttpPassThroughEndpointHelpers._build_request_files_from_upload_file(
                     upload_file=field_value
-                )
-            else:
-                form_data_dict[field_name] = field_value
+                ),
+            )
+            for field_name, field_value in form_items
+            if isinstance(field_value, (StarletteUploadFile, UploadFile))
+        ]
+
+        non_file_items = tuple(
+            (field_name, field_value)
+            for field_name, field_value in form_items
+            if not isinstance(field_value, (StarletteUploadFile, UploadFile))
+        )
+        field_order = {
+            field_name: index
+            for index, field_name in enumerate(
+                dict.fromkeys(field_name for field_name, _ in non_file_items)
+            )
+        }
+        form_data_dict = {
+            field_name: [value for _, value in group]
+            for field_name, group in groupby(
+                sorted(non_file_items, key=lambda item: field_order[item[0]]),
+                key=lambda item: item[0],
+            )
+        }
 
         # Remove content-type header - httpx will set it correctly with the new boundary
         # when it creates the multipart body from files/data parameters
@@ -1310,8 +1338,8 @@ async def pass_through_request(
         ## LOG SUCCESS
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
-        asyncio.create_task(
-            pass_through_endpoint_logging.pass_through_async_success_handler(
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                 httpx_response=response,
                 response_body=response_body,
                 url_route=str(url),
@@ -2153,8 +2181,8 @@ async def websocket_passthrough_request(
             mock_response = MockWebSocketResponse(target)
 
             # Use the same success handler as HTTP passthrough endpoints
-            asyncio.create_task(
-                pass_through_endpoint_logging.pass_through_async_success_handler(
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=mock_response,  # type: ignore
                     response_body=websocket_messages,  # type: ignore
                     url_route=endpoint or "",

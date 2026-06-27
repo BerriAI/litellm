@@ -58,7 +58,7 @@ def cost_per_web_search_request(usage: "Usage", model_info: "ModelInfo") -> floa
         number_of_web_search_requests = usage.prompt_tokens_details.web_search_requests
 
     # per_prompt billing: clamp to 1 (flat fee per grounded API call)
-    billing_mode = model_info.get("web_search_billing_unit", "per_prompt")
+    billing_mode = model_info.get("web_search_billing_unit") or "per_prompt"
     if number_of_web_search_requests > 0 and billing_mode == "per_prompt":
         number_of_web_search_requests = 1
 
