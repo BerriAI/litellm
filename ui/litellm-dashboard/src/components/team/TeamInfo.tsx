@@ -531,6 +531,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           opted_out_global_guardrails: optedOutGlobalGuardrails,
           ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
           disable_global_guardrails: killSwitchOnAtSave,
+          container_visibility: values.container_visibility ? "team" : "private",
           soft_budget_alerting_emails:
             typeof values.soft_budget_alerting_emails === "string"
               ? values.soft_budget_alerting_emails
@@ -955,6 +956,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       guardrails: effectiveGuardrails,
                       policies: info.policies || [],
                       disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
+                      container_visibility: info.metadata?.container_visibility === "team",
                       soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
                         ? info.metadata.soft_budget_alerting_emails.join(", ")
                         : "",
@@ -967,6 +969,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                               model_tpm_limit,
                               model_rpm_limit,
                               allowed_passthrough_routes,
+                              container_visibility,
                               ...rest
                             }) => rest)(info.metadata),
                             null,
@@ -1461,6 +1464,21 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
                         disabled={!premiumUser}
                       />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span>
+                          Team-visible code interpreter containers{" "}
+                          <Tooltip title="When on, code-interpreter containers created by any team member are accessible to the whole team, including the team's service-account keys. When off, each container stays private to its creator.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="container_visibility"
+                      valuePropName="checked"
+                    >
+                      <Switch checkedChildren="Team" unCheckedChildren="Private" />
                     </Form.Item>
 
                     <Form.Item label="Metadata" name="metadata">

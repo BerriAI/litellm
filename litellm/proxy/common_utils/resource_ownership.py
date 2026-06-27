@@ -90,3 +90,21 @@ def user_can_access_resource_owner(
     if owner is None:
         return False
     return owner in get_resource_owner_scopes(user_api_key_dict)
+
+
+def user_can_access_resource_owner_or_team(
+    owner: str | None,
+    resource_team_id: str | None,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> bool:
+    """Owner-scope access, widened to members of a team the resource is
+    shared with. ``resource_team_id`` is only set when the creator opted the
+    resource into team visibility, so a private resource (``resource_team_id``
+    None) falls back to owner-only access and the team branch never widens it.
+    This is what lets a team's service account (whose only scope is
+    ``team:<id>``) read a container a teammate created."""
+    if user_can_access_resource_owner(owner, user_api_key_dict):
+        return True
+    if user_api_key_dict is None or not resource_team_id:
+        return False
+    return f"team:{resource_team_id}" in get_resource_owner_scopes(user_api_key_dict)
