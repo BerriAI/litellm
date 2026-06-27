@@ -234,7 +234,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   };
 
   return (
-    <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
+    <div className="w-full p-6 overflow-x-hidden box-border">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
         <TabList>
           <Tab>Request Logs</Tab>

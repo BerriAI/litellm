@@ -126,7 +126,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
             <div className="mt-2">
               <SidebarProvider setPage={navigateToPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
             </div>
-            <main className="flex-1">{children}</main>
+            <main className="flex-1 min-w-0">{children}</main>
           </>
         )}
       </div>
