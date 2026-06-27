@@ -187,7 +187,8 @@ class LazyPerUserOAuthTokenStore:
         self._redis_available = redis_available
         self._store: OAuthTokenStore | None = None
         self._uses_redis = False
-        self._fetch_lock = asyncio.Lock()
+        self._fetch_lock = asyncio.Condition()
+        self._local_fetches = 0
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         if self._uses_redis:
@@ -195,9 +196,30 @@ class LazyPerUserOAuthTokenStore:
             if store is not None:
                 return await store.fetch(user_id, server_id)
 
+        store, uses_redis = await self._store_for_fetch()
+        try:
+            return await store.fetch(user_id, server_id)
+        finally:
+            if not uses_redis:
+                await self._finish_local_fetch()
+
+    async def _store_for_fetch(self) -> tuple[OAuthTokenStore, bool]:
         async with self._fetch_lock:
+            while (
+                self._store is not None and not self._uses_redis and self._redis_available() and self._local_fetches > 0
+            ):
+                await self._fetch_lock.wait()
             store = self._store
             if store is None or (not self._uses_redis and self._redis_available()):
                 store, self._uses_redis = self._store_builder(self._server_lookup)
                 self._store = store
-            return await store.fetch(user_id, server_id)
+            uses_redis = self._uses_redis
+            if not uses_redis:
+                self._local_fetches += 1
+            return store, uses_redis
+
+    async def _finish_local_fetch(self) -> None:
+        async with self._fetch_lock:
+            self._local_fetches -= 1
+            if self._local_fetches == 0:
+                self._fetch_lock.notify_all()

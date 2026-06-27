@@ -44,6 +44,14 @@ class _RedisAvailability:
         return self.available
 
 
+async def _wait_for_call_count(store: _BlockingStore, count: int) -> None:
+    for _ in range(100):
+        if len(store.calls) >= count:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"expected {count} calls, saw {len(store.calls)}")
+
+
 @pytest.mark.asyncio
 async def test_lazy_store_rebuilds_when_redis_becomes_available() -> None:
     local_store = _RecordingStore("local")
@@ -78,6 +86,39 @@ async def test_lazy_store_rebuilds_when_redis_becomes_available() -> None:
     assert build_calls == 2
     assert local_store.calls == [("u", "s")]
     assert redis_store.calls == [("u", "s"), ("u", "s")]
+
+
+@pytest.mark.asyncio
+async def test_lazy_store_allows_concurrent_local_fetches_without_redis() -> None:
+    local_store = _BlockingStore("local")
+    redis_available = _RedisAvailability()
+    build_calls = 0
+
+    def build_store(_server_lookup: ServerLookup) -> tuple[OAuthTokenStore, bool]:
+        nonlocal build_calls
+        build_calls += 1
+        return local_store, False
+
+    def server_lookup(_server_id: str) -> None:
+        return None
+
+    store = LazyPerUserOAuthTokenStore(
+        server_lookup,
+        store_builder=build_store,
+        redis_available=redis_available,
+    )
+
+    first_fetch = asyncio.create_task(store.fetch("u1", "s1"))
+    second_fetch = asyncio.create_task(store.fetch("u2", "s2"))
+    await asyncio.wait_for(_wait_for_call_count(local_store, 2), timeout=1)
+
+    local_store.release.set()
+    first, second = await asyncio.gather(first_fetch, second_fetch)
+
+    assert first is not None and first.access_token == "local"
+    assert second is not None and second.access_token == "local"
+    assert build_calls == 1
+    assert local_store.calls == [("u1", "s1"), ("u2", "s2")]
 
 
 @pytest.mark.asyncio
