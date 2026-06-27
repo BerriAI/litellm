@@ -41,11 +41,12 @@ describe("UsageIndicator", () => {
   });
 
   it("should not use fixed positioning that can cover sidebar items", async () => {
-    render(<UsageIndicator accessToken="token" width={220} />);
+    const { container } = render(<UsageIndicator accessToken="token" width={220} />);
 
-    const usageLabel = await screen.findByText("Usage");
+    await screen.findByText("Usage");
 
-    expect(usageLabel.closest(".fixed")).toBeNull();
+    expect(container.firstElementChild).not.toHaveClass("fixed");
+    expect(container.firstElementChild).not.toHaveStyle({ position: "fixed" });
   });
 
   it("should not show Near limit when users usage is below 80% (1/100 -> 1%)", async () => {

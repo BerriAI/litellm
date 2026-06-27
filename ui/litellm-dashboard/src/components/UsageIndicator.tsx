@@ -688,7 +688,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   }
 
   return (
-    <div className="px-4 py-2" style={{ boxSizing: "border-box", width: `${Math.min(width, 220)}px` }}>
+    <div className="px-4 py-2" style={{ width: `${Math.min(width, 220)}px` }}>
       <CardStyleView />
     </div>
   );
