@@ -141,3 +141,16 @@ async def test_set_is_swallowed_when_the_codec_raises():
     codec = OAuthTokenCacheCodec(encrypt=_boom, decrypt=lambda b: None)
     backend = DualCacheTokenCacheBackend(_FakeCache(), codec)
     await backend.set("alice", "srv", OAuthToken(access_token="at"), 60.0)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_get_is_a_miss_when_decrypt_raises():
+    # A blob the decrypt rejects with an exception (e.g. bad ciphertext after key rotation) must read
+    # as a miss, not propagate the error out of get() and abort fetch().
+    def _boom(_: str) -> str | None:
+        raise ValueError("bad ciphertext")
+
+    codec = OAuthTokenCacheCodec(encrypt=lambda s: f"enc:{s}", decrypt=_boom)
+    cache = _FakeCache()
+    cache.values["mcp:per_user_token:alice:srv"] = "whatever"
+    assert await DualCacheTokenCacheBackend(cache, codec).get("alice", "srv") is None
