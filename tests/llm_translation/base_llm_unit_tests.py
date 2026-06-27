@@ -1779,12 +1779,17 @@ class BaseAnthropicChatTest(ABC):
             model=base_completion_call_args["model"]
         )
 
+        from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
         optional_params = get_optional_params(
             model=base_completion_call_args.get("model"),
             custom_llm_provider=provider,
             reasoning_effort="high",
         )
-        assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 10000}
+        assert optional_params["thinking"] == {
+            "type": "enabled",
+            "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        }
 
         assert "reasoning_effort" not in optional_params
 
