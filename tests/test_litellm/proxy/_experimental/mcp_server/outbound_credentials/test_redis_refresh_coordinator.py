@@ -197,3 +197,74 @@ async def test_lock_backend_error_refreshes_anyway_instead_of_serving_stale():
     assert refresh_calls == [1]
     assert reread_calls == []  # never fell back to re-reading the expired token
     assert lock.released == []  # nothing was acquired, so nothing is released
+
+
+def test_wait_timeout_outlasts_the_holders_max_lock_hold():
+    # Regression: a loser's wait must exceed the holder's max lock-hold - the renewal budget plus one
+    # lease tail. When wait_timeout_seconds was merely == lock_ttl_seconds, a loser bailed at the lease
+    # TTL while the holder was still renewing mid-refresh and re-read the still-expired token.
+    coord = RedisRefreshCoordinator(_FakeLock(acquired=LockAcquisition.HELD))
+    assert coord.wait_timeout_seconds > coord.refresh_budget_seconds + coord.lock_ttl_seconds
+
+
+@pytest.mark.asyncio
+async def test_loser_with_default_timeout_waits_past_the_lease_ttl_for_the_holder():
+    # With the DEFAULT wait_timeout (not an inflated test value), a loser keeps waiting while the holder
+    # still holds the lock past lock_ttl_seconds, then re-reads what the holder persisted - rather than
+    # giving up at the lease TTL mid-refresh. At 0.5s/poll, 20 polls reach the 10s lease TTL.
+    clock = _Clock()
+    lock = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=[True] * 30 + [False])
+    refresh_calls = []
+
+    async def refresh():
+        refresh_calls.append(1)
+        return None
+
+    async def reread():
+        return OAuthToken(access_token="persisted-by-winner")
+
+    coord = RedisRefreshCoordinator(lock, clock=clock, sleep=_advancing_sleep(clock, step=0.5))
+    result = await coord.run("u", "s", refresh, reread)
+    assert result is not None and result.access_token == "persisted-by-winner"
+    assert refresh_calls == []  # the loser never refreshes - it waits for the holder
+    assert lock._held == []  # waited until the holder released (whole sequence drained)
+    assert clock.t > coord.lock_ttl_seconds  # ...past the lease TTL, not bailing at it
+
+
+@pytest.mark.asyncio
+async def test_winner_stops_renewing_after_the_refresh_budget():
+    # A holder whose refresh outruns the budget stops renewing - the lock then lapses for losers -
+    # instead of extending the lease forever and wedging the single-flight on one slow request.
+    clock = _Clock()
+    lock = _FakeLock(acquired=LockAcquisition.ACQUIRED)
+    release_refresh = asyncio.Event()
+
+    async def sleep(seconds):
+        clock.t += seconds  # renewal sleeps lock_ttl/2 each cycle
+
+    async def refresh():
+        await release_refresh.wait()  # outlives the budget
+        return OAuthToken(access_token="new")
+
+    async def reread():
+        return None
+
+    coord = RedisRefreshCoordinator(
+        lock,
+        new_token=lambda: "tok",
+        clock=clock,
+        sleep=sleep,
+        lock_ttl_seconds=10.0,
+        refresh_budget_seconds=20.0,
+    )
+    task = asyncio.create_task(coord.run("u", "s", refresh, reread))
+    for _ in range(200):  # let the bounded renewal drain to its budget (clock 5..20)
+        if clock.t >= 20.0:
+            break
+        await asyncio.sleep(0)
+    extends_during_budget = len(lock.extend_calls)
+    release_refresh.set()
+    result = await task
+    assert result is not None and result.access_token == "new"
+    assert extends_during_budget == 4  # renewed at clock 5, 10, 15, 20 then stopped
+    assert len(lock.extend_calls) == 4  # no further renewals after the budget

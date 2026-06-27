@@ -3,11 +3,12 @@
 Plugs into the foundation's ``RefreshingTokenStore`` via the ``RefreshCoordinator`` seam. A ``SET NX
 PX`` lock elects one worker to run the refresh while the rest wait for it and re-read the token it
 persisted - so a rotating refresh_token is used once across the fleet, not once per worker. The holder
-renews the ``PX`` lease while refresh is running, and the lock still auto-expires if it crashes; a
-loser that times out (or whose holder crashed mid-refresh) falls back to a re-read, and the surrounding
-store re-checks expiry on the next fetch, so a crash self-heals rather than serving stale forever.
-Reading needs no lock, so losers don't serialize behind each other. The lock is injected (a thin Redis
-wrapper in production, a fake in tests).
+renews the ``PX`` lease while refresh runs (up to a refresh budget, so a hung endpoint can't hold the
+lock forever), and a loser waits longer than that budget - so a loser only re-reads once the holder has
+finished or its bounded lease has lapsed, never mid-refresh, and the surrounding store re-checks expiry
+on the next fetch, so a crash self-heals rather than serving stale forever. Reading needs no lock, so
+losers don't serialize behind each other. The lock is injected (a thin Redis wrapper in production, a
+fake in tests).
 
 The lock is a single-flight optimization, not a correctness mutex, so it fails open: when the lock
 backend is unreachable, ``acquire`` reports ``ERROR`` (distinct from ``HELD``) and this coordinator
@@ -64,7 +65,15 @@ class RedisRefreshCoordinator:
     _: KW_ONLY
     key_prefix: str = "mcp:refresh_lock:"
     lock_ttl_seconds: float = 10.0
-    wait_timeout_seconds: float = 10.0
+    # The holder renews its lease while a slow token endpoint runs, but only up to this budget; past it
+    # it stops renewing and the lock lapses, so a hung refresh degrades to "maybe an extra refresh"
+    # rather than holding every loser behind it indefinitely.
+    refresh_budget_seconds: float = 20.0
+    # How long a loser waits for the holder before giving up and re-reading. It MUST outlast the
+    # holder's max lock-hold (refresh_budget_seconds + one lock_ttl_seconds tail); otherwise a loser
+    # bails while the holder is still legitimately refreshing, re-reads the still-expired token, and
+    # challenges the user mid-refresh.
+    wait_timeout_seconds: float = 35.0
     poll_interval_seconds: float = 0.05
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     clock: Callable[[], float] = time.monotonic
@@ -120,7 +129,8 @@ class RedisRefreshCoordinator:
         token: str,
         refresh_task: asyncio.Future[OAuthToken | None],
     ) -> None:
-        while not refresh_task.done():
+        budget_deadline = self.clock() + self.refresh_budget_seconds
+        while not refresh_task.done() and self.clock() < budget_deadline:
             await self.sleep(self.lock_ttl_seconds / 2)
             if not refresh_task.done() and not await self.lock.extend(key, token, self.lock_ttl_seconds):
                 return
