@@ -18,7 +18,12 @@ from litellm.llms.bedrock.common_utils import (
     normalize_tool_input_schema_types_for_bedrock_invoke,
     remove_custom_field_from_tools,
 )
-from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
+from litellm.constants import (
+    BEDROCK_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
@@ -1712,7 +1717,10 @@ def test_bedrock_clear_thinking_converts_legacy_enabled_budget_to_effort():
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {
         "max_tokens": 32000,
-        "thinking": {"type": "enabled", "budget_tokens": 12000},
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        },
         "context_management": {
             "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
         },
@@ -1906,13 +1914,13 @@ def test_as_system_content_blocks_handles_each_shape():
     "budget_tokens,expected_effort",
     [
         (0, "low"),
-        (4999, "low"),
-        (5000, "medium"),
-        (9999, "medium"),
-        (10000, "high"),
-        (19999, "high"),
-        (20000, "xhigh"),
-        (50000, "xhigh"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 1, "low"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET, "medium"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET - 1, "medium"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET - 1, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET, "xhigh"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET * 2, "xhigh"),
     ],
 )
 def test_effort_from_thinking_budget_tiers(budget_tokens, expected_effort):

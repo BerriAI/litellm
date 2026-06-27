@@ -3,6 +3,11 @@
 import pytest
 
 import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -356,13 +361,13 @@ def test_legacy_thinking_translates_to_adaptive_for_opus_48(
 @pytest.mark.parametrize(
     "budget_tokens,expected_effort",
     [
-        (31999, "high"),
-        (24000, "high"),
-        (10000, "high"),
-        (9999, "medium"),
-        (5000, "medium"),
-        (4999, "low"),
-        (1024, "low"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET * 2, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET, "high"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET, "high"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET - 1, "medium"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET, "medium"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 1, "low"),
+        (1, "low"),
     ],
 )
 def test_legacy_thinking_budget_buckets_on_sonnet_46(budget_tokens, expected_effort):
