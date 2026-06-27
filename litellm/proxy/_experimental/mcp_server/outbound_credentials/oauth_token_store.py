@@ -289,9 +289,18 @@ class RefreshingTokenStore:
                 return latest_token
             return await self._refresher.refresh(user_id, server_id, latest_token)
 
+        async def reread_fresh_token() -> OAuthToken | None:
+            # A loser re-reads what the winner persisted. If the winner's refresh failed, the store
+            # still holds the expired token; surface None (-> challenge) like the winner did rather
+            # than the stale bearer the upstream would 401.
+            latest_token = await self._inner.fetch(user_id, server_id)
+            if latest_token is None or self._is_expired(latest_token):
+                return None
+            return latest_token
+
         return await self._coordinator.run(
             user_id,
             server_id,
             refresh=refresh_latest_token,
-            reread=lambda: self._inner.fetch(user_id, server_id),
+            reread=reread_fresh_token,
         )
