@@ -17,6 +17,7 @@ replaced by a list-based pipeline:
      cursor).
 """
 
+import asyncio
 import gc
 import io
 import json
@@ -546,6 +547,12 @@ class TestResumableChunking:
     def test_default_chunk_size_is_256kib_multiple(self):
         assert BaseLLMHTTPHandler._RESUMABLE_CHUNK_SIZE % (256 * 1024) == 0
 
+    def test_default_chunk_size_limits_round_trips(self):
+        # At 8 MiB a 2 GB upload was ~256 strictly-sequential PUTs, whose total
+        # round-trip time trips client/LB timeouts (the 499). Keep chunks large
+        # so big uploads make far fewer round-trips.
+        assert BaseLLMHTTPHandler._RESUMABLE_CHUNK_SIZE >= 32 * 1024 * 1024
+
     def test_content_range_intermediate_uses_star_total(self):
         assert (
             BaseLLMHTTPHandler._resumable_content_range(0, 4096, is_final=False)
@@ -665,3 +672,46 @@ class TestResumableUploadProtocol:
         raw = _make_openai_jsonl_bytes(80)
         with pytest.raises(Exception):
             await self._run(raw, chunk_size=4096, final_status=403)
+
+
+@pytest.mark.asyncio
+class TestResumableUploadDoesNotBlockEventLoop:
+    """Generating each chunk runs the synchronous JSONL read + provider
+    transform. If that runs inline on the event loop, a multi-GB upload starves
+    every other coroutine on the worker, which is what makes the proxy drop
+    connections (the 499). The pull must be offloaded to a thread."""
+
+    async def test_chunk_generation_does_not_starve_the_loop(self):
+        class _BlockingStream(BaseFileUploadStream):
+            def iter_bytes(self):
+                for _ in range(3):
+                    time.sleep(0.1)  # stand-in for the per-chunk transform cost
+                    yield b"x" * 256
+
+        config = {"body_stream": _BlockingStream(), "chunk_size": 256}
+        session_url = "https://storage.googleapis.com/upload/sess?upload_id=SID"
+        mock, _state = _gcs_resumable_mock(session_url)
+
+        ticks = 0
+
+        async def _ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        ticker = asyncio.create_task(_ticker())
+        try:
+            await BaseLLMHTTPHandler()._aresumable_chunked_upload(
+                client=_async_handler_with(mock),
+                initiate_url="https://storage.googleapis.com/upload?uploadType=resumable",
+                base_headers={"Authorization": "Bearer x"},
+                config=config,
+                timeout=None,
+            )
+        finally:
+            ticker.cancel()
+
+        # ~0.3s of blocking generation. Run inline the 10ms ticker is starved
+        # (at most ~1 tick); offloaded it keeps advancing throughout.
+        assert ticks >= 5

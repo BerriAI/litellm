@@ -1,3 +1,4 @@
+import asyncio
 import json
 import ssl
 from functools import lru_cache
@@ -3682,8 +3683,10 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
-    # 8 MiB; a 256 KiB multiple, which GCS requires for every non-final chunk.
-    _RESUMABLE_CHUNK_SIZE = 8 * 1024 * 1024
+    # 32 MiB (a 256 KiB multiple, which GCS requires for every non-final chunk).
+    # Larger chunks mean fewer sequential round-trips on a multi-GB upload, which
+    # is what pushes total upload time past client/LB timeouts.
+    _RESUMABLE_CHUNK_SIZE = 32 * 1024 * 1024
 
     @staticmethod
     def _iter_resumable_chunks(
@@ -3836,9 +3839,17 @@ class BaseLLMHTTPHandler:
                 f"resumable upload: no session URL in '{session_url_header}' header"
             )
 
+        # Generating each chunk runs the synchronous JSONL read + provider
+        # transform; pulling it via a worker thread keeps that off the event
+        # loop so the proxy stays responsive while a multi-GB upload streams.
+        done = object()
+        chunk_iter = iter(self._iter_resumable_chunks(stream.iter_bytes(), chunk_size))
         offset = 0
         pending: Optional[bytes] = None
-        for chunk in self._iter_resumable_chunks(stream.iter_bytes(), chunk_size):
+        while True:
+            chunk = await asyncio.to_thread(next, chunk_iter, done)
+            if chunk is done:
+                break
             if pending is not None:
                 await self._asend_resumable_chunk(
                     httpx_client,
@@ -3850,7 +3861,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
                 offset += len(pending)
-            pending = chunk
+            pending = cast(bytes, chunk)
         return await self._asend_resumable_chunk(
             httpx_client,
             session_url,
