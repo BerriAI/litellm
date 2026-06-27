@@ -6,7 +6,16 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
+from litellm.llms.bedrock.passthrough.transformation import (
+    BedrockPassthroughConfig,
+    restrict_anthropic_bedrock_metadata,
+)
+
+_ANTHROPIC_INVOKE_BODY = {
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 16,
+    "messages": [{"role": "user", "content": "hi"}],
+}
 
 
 def test_bedrock_passthrough_get_complete_url_default_endpoint():
@@ -505,3 +514,105 @@ def test_bedrock_passthrough_model_id_without_arn():
             f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
         )
         assert url_str == expected_url
+
+
+def test_restrict_metadata_strips_internal_tags_keeps_user_id():
+    """
+    The reported leak (#30629): the proxy merges a key/team/header spend tag into
+    metadata.tags; Anthropic-on-Bedrock 400s on any metadata field but user_id.
+    """
+    body = {
+        **_ANTHROPIC_INVOKE_BODY,
+        "metadata": {"user_id": "user_abc123", "tags": ["CC:cost-center-123"]},
+    }
+
+    out = restrict_anthropic_bedrock_metadata(body)
+
+    assert out["metadata"] == {"user_id": "user_abc123"}
+    assert out["messages"] == _ANTHROPIC_INVOKE_BODY["messages"]
+    assert out["anthropic_version"] == "bedrock-2023-05-31"
+
+
+def test_restrict_metadata_does_not_mutate_input_so_spend_tracking_keeps_tags():
+    body = {
+        **_ANTHROPIC_INVOKE_BODY,
+        "metadata": {"user_id": "user_abc123", "tags": ["CC:cost-center-123"]},
+    }
+
+    restrict_anthropic_bedrock_metadata(body)
+
+    assert body["metadata"] == {
+        "user_id": "user_abc123",
+        "tags": ["CC:cost-center-123"],
+    }
+
+
+def test_restrict_metadata_strips_every_non_user_id_internal_field():
+    body = {
+        **_ANTHROPIC_INVOKE_BODY,
+        "metadata": {
+            "user_id": "user_abc123",
+            "tags": ["a"],
+            "spend_logs_metadata": {"owner": "team-x"},
+            "user_api_key_user_id": "k1",
+        },
+    }
+
+    out = restrict_anthropic_bedrock_metadata(body)
+
+    assert out["metadata"] == {"user_id": "user_abc123"}
+
+
+def test_restrict_metadata_drops_metadata_when_only_internal_fields_remain():
+    body = {**_ANTHROPIC_INVOKE_BODY, "metadata": {"tags": ["a"]}}
+
+    out = restrict_anthropic_bedrock_metadata(body)
+
+    assert "metadata" not in out
+
+
+def test_restrict_metadata_is_noop_when_already_closed_to_user_id():
+    body = {**_ANTHROPIC_INVOKE_BODY, "metadata": {"user_id": "user_abc123"}}
+
+    out = restrict_anthropic_bedrock_metadata(body)
+
+    assert out is body
+
+
+def test_restrict_metadata_is_noop_for_non_anthropic_body():
+    """A non-Anthropic invoke body (no anthropic_version) is forwarded verbatim."""
+    body = {"inputText": "hi", "metadata": {"tags": ["a"], "foo": "bar"}}
+
+    out = restrict_anthropic_bedrock_metadata(body)
+
+    assert out is body
+
+
+def test_restrict_metadata_is_noop_without_metadata():
+    out = restrict_anthropic_bedrock_metadata(_ANTHROPIC_INVOKE_BODY)
+
+    assert out is _ANTHROPIC_INVOKE_BODY
+
+
+def test_sign_request_strips_internal_metadata_before_signing():
+    """
+    Wiring: sign_request must feed the projected body to the AWS signer, so the bytes
+    AWS signs and receives never carry the internal tag.
+    """
+    config = BedrockPassthroughConfig()
+    body = {
+        **_ANTHROPIC_INVOKE_BODY,
+        "metadata": {"user_id": "user_abc123", "tags": ["CC:cost-center-123"]},
+    }
+
+    with patch.object(config, "_sign_request", return_value=({}, b"")) as mock_sign:
+        config.sign_request(
+            headers={},
+            litellm_params={},
+            request_data=body,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/model/m/invoke",
+            model="anthropic.claude-3-5-sonnet",
+        )
+
+    signed_request_data = mock_sign.call_args.kwargs["request_data"]
+    assert signed_request_data["metadata"] == {"user_id": "user_abc123"}
