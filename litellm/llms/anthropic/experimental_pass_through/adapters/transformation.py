@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import json
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -45,6 +46,90 @@ def truncate_tool_name(name: str) -> str:
     # Create deterministic hash from full name to avoid collisions
     name_hash = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
     return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
+
+
+# Pattern: mcp__<server_name>__<tool_name>
+# Server name and tool name may contain letters, digits, dashes, single
+# underscores — but the double-underscore separator is the boundary marker.
+_MCP_NAMESPACE_PATTERN = re.compile(r"^mcp__([^_]+(?:_[^_]+)*)__(.+)$")
+
+
+# Pattern matching the wallet/MCP-style validation error returned by
+# claude-agent-sdk when a tool call is missing a required field. Example:
+#   "Input validation error: 'to' is a required property"
+_VALIDATION_REQUIRED_FIELD_PATTERN = re.compile(
+    r"(?:Input |MCP )?validation error[s]?[:\s]+'([^']+)' is a required property",
+    re.IGNORECASE,
+)
+# Companion pattern for the wrapped MCP variant the SDK emits, e.g.
+#   "<tool_use_error>Error: No such tool available: transfer</tool_use_error>"
+_NO_SUCH_TOOL_PATTERN = re.compile(
+    r"No such tool available[:\s]+(\S+)",
+    re.IGNORECASE,
+)
+
+# Hints appended to tool_result error messages on routes that go through
+# the Anthropic→OpenAI passthrough. Empirically, Gemini-flash-lite
+# tends to loop or give up on the raw error text; adding a concrete
+# corrective instruction breaks the loop. The hint is intentionally
+# explicit about WHERE to find the missing value (the user's prompt),
+# which is the model's blind spot per the audit in #12.
+_VALIDATION_HINT_TEMPLATE = (
+    "\n\nCORRECTION: your previous tool_use call did not include the "
+    "required '{field}' argument. Look in the user's original message "
+    "for the value (e.g. recipient address, token symbol, amount, chain "
+    "name). Re-emit the tool_use with the same name but include the "
+    "'{field}' field populated. Do not ask the user for information "
+    "that is already in their message."
+)
+
+
+def augment_tool_result_error_for_correction(content: str) -> str:
+    """If a tool_result message contains a 'required property' validation
+    error or a 'No such tool available' error, append a corrective hint
+    that nudges weaker models toward fixing the call instead of looping
+    or asking the user for already-provided info.
+
+    Pure string transformation; no behaviour for non-error tool_results.
+    See cryptitalk-wallet-litellm#12 for the failure mode this addresses.
+    """
+    if not content or not isinstance(content, str):
+        return content
+    m = _VALIDATION_REQUIRED_FIELD_PATTERN.search(content)
+    if m is not None:
+        field = m.group(1)
+        if _VALIDATION_HINT_TEMPLATE.format(field=field) not in content:
+            return content + _VALIDATION_HINT_TEMPLATE.format(field=field)
+    return content
+
+
+def strip_mcp_namespace(name: str) -> str:
+    """Strip the ``mcp__<server>__`` prefix from a tool name.
+
+    claude-agent-sdk's MCP-server tool registration produces names of the
+    form ``mcp__<server>__<tool>`` (e.g., ``mcp__wallet__transfer``).
+    Some downstream model providers — Gemini-2.5-flash-lite in particular —
+    intermittently drop the prefix and emit only the base tool name (e.g.,
+    ``transfer``). Without rewriting on the gateway side, the SDK then
+    fails the tool lookup with ``No such tool available``.
+
+    Solution: strip the prefix in the request to the model, store the
+    forward mapping (``transfer`` -> ``mcp__wallet__transfer``), and
+    restore the full name on the response side before returning to the
+    SDK. Same general pattern as truncate_tool_name's mapping table.
+
+    Args:
+        name: The original tool name (possibly mcp__-prefixed)
+
+    Returns:
+        The base tool name with the ``mcp__<server>__`` prefix removed,
+        or the original name unchanged if no prefix is present.
+    """
+    match = _MCP_NAMESPACE_PATTERN.match(name)
+    if match is None:
+        return name
+    base = match.group(2)
+    return base or name
 
 
 def create_tool_name_mapping(
@@ -477,7 +562,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 tool_result = ChatCompletionToolMessage(
                                     role="tool",
                                     tool_call_id=content.get("tool_use_id", ""),
-                                    content=str(content.get("content", "")),
+                                    content=augment_tool_result_error_for_correction(
+                                        str(content.get("content", ""))
+                                    ),
                                 )
                                 self._add_cache_control_if_applicable(
                                     content, tool_result, model
@@ -496,7 +583,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                         tool_result = ChatCompletionToolMessage(
                                             role="tool",
                                             tool_call_id=content.get("tool_use_id", ""),
-                                            content=c,
+                                            content=augment_tool_result_error_for_correction(
+                                                c
+                                            ),
                                         )
                                         self._add_cache_control_if_applicable(
                                             content, tool_result, model
@@ -509,7 +598,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 tool_call_id=content.get(
                                                     "tool_use_id", ""
                                                 ),
-                                                content=c.get("text", ""),
+                                                content=augment_tool_result_error_for_correction(
+                                                    c.get("text", "")
+                                                ),
                                             )
                                             self._add_cache_control_if_applicable(
                                                 content, tool_result, model
@@ -866,6 +957,30 @@ class LiteLLMAnthropicMessagesAdapter:
             "type",
         ]
 
+        # First pass: detect MCP-namespace-strip collisions. If two tools
+        # would strip to the same base name (e.g., mcp__wallet__balance and
+        # mcp__bank__balance both strip to "balance"), we must NOT strip
+        # — collisions would corrupt the tool_name_mapping reverse lookup.
+        _strip_candidates: Dict[str, str] = {}  # original_name -> stripped_name
+        _strip_collision: set = set()  # original_names that collide
+        _stripped_counts: Dict[str, int] = {}
+        for idx, tool in enumerate(tools):
+            tool_type = tool.get("type", "")
+            if any(tool_type.startswith(t.value) for t in ANTHROPIC_HOSTED_TOOLS):
+                continue
+            raw = tool.get("name")
+            if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+                continue
+            orig = str(raw)
+            stripped = strip_mcp_namespace(orig)
+            if stripped != orig:
+                _strip_candidates[orig] = stripped
+                _stripped_counts[stripped] = _stripped_counts.get(stripped, 0) + 1
+        # Mark any candidate whose stripped name appears more than once.
+        for orig, stripped in _strip_candidates.items():
+            if _stripped_counts.get(stripped, 0) > 1:
+                _strip_collision.add(orig)
+
         for idx, tool in enumerate(tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
             tool_type = tool.get("type", "")
@@ -881,9 +996,20 @@ class LiteLLMAnthropicMessagesAdapter:
                 original_name = f"litellm_unnamed_tool_{idx}"
             else:
                 original_name = str(raw_name)
-            truncated_name = truncate_tool_name(original_name)
+            # Strip MCP namespace prefix unless it would collide. Then
+            # truncate. The mapping table records short<->original so the
+            # response-side restorer can reverse it back to the SDK's
+            # expected name.
+            if original_name in _strip_collision:
+                stripped_name = original_name
+            else:
+                stripped_name = strip_mcp_namespace(original_name)
+            truncated_name = truncate_tool_name(stripped_name)
 
-            # Store mapping if name was truncated
+            # Store mapping if name changed (either MCP-prefix-stripped or
+            # truncated). On the response side, the tool_use.name returned
+            # by the model will be looked up here to restore the full
+            # SDK-registered name.
             if truncated_name != original_name:
                 tool_name_mapping[truncated_name] = original_name
 

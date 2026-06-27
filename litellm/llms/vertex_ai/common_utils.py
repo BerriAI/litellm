@@ -580,6 +580,42 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
+def _rewrap_bare_field_schema(parameters: dict) -> dict:
+    """Rewrap claude-agent-sdk style "bare field" tool schemas in place.
+
+    The Anthropic Messages API tool ``input_schema`` is documented as a JSON
+    Schema object with ``type``, ``properties``, ``required``. Some SDKs
+    (notably ``claude-agent-sdk``'s ``@tool`` decorator) emit a non-conformant
+    convenience shape that puts field definitions at the top level with
+    per-field ``required: true`` flags::
+
+        {"to": {"type": "string", "required": true}, "amount": {...}}
+
+    Anthropic's own API tolerates this. Gemini's strict Schema validator
+    does not — without rewrapping, the downstream ``filter_schema_fields``
+    call below strips the whole schema down to ``{"type": "object"}``,
+    causing the model to hallucinate field names when calling the tool.
+    """
+    if not isinstance(parameters, dict) or not parameters:
+        return parameters
+    if parameters.get("type") == "object" and "properties" in parameters:
+        return parameters
+    # Detect the bare-field shape: every value is a dict with a "type" key.
+    if not all(isinstance(v, dict) and "type" in v for v in parameters.values()):
+        return parameters
+    properties: dict = {}
+    required: list = []
+    for field, defn in parameters.items():
+        defn_copy = {k: v for k, v in defn.items() if k != "required"}
+        if defn.get("required") is True:
+            required.append(field)
+        properties[field] = defn_copy
+    out: dict = {"type": "object", "properties": properties}
+    if required:
+        out["required"] = required
+    return out
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -593,6 +629,9 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     Returns:
         parameters: dict - the input parameters, modified in place
     """
+    # Pre-rewrap claude-agent-sdk bare-field schemas before strict filtering.
+    parameters = _rewrap_bare_field_schema(parameters)
+
     # Get valid fields from Schema TypedDict
     valid_schema_fields = set(get_type_hints(Schema).keys())
 
