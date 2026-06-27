@@ -47,6 +47,14 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     reset_vcr_diag_dir,
     vcr_config_dict,
 )
+from tests.fake_openai_endpoint import ensure_fake_openai_endpoint  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def fake_openai_endpoint():
+    ensure_fake_openai_endpoint()
+    yield
+
 
 # Per-item respx detection (``apply_vcr_auto_marker_to_items``) auto-skips
 # tests whose ``@pytest.mark.respx`` marker or ``respx_mock`` fixture
@@ -57,14 +65,13 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 # blacklisting was masking valid cache opportunities.
 
 # Files where VCR replay breaks the test:
-# - ``test_assistants.py``: polls fresh per-session run IDs that no cassette
-#   can match, so every CI run re-records and the suite times out.
 # - ``test_router_caching.py``: asserts upstream returns a *new* id per call,
 #   which a deterministic cassette replay violates.
 _VCR_INCOMPATIBLE_FILES = frozenset(
     {
-        "test_assistants.py",
         "test_router_caching.py",
+        # Hits the local fake OpenAI endpoint on 127.0.0.1; nothing to record.
+        "test_fake_openai_endpoint.py",
     }
 )
 

@@ -162,11 +162,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
         sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
       ].filter(Boolean);
-      return (
-        <Tooltip title={tooltipParts.join(" • ")}>
-          {sessionTypeBadge}
-        </Tooltip>
-      );
+      return <Tooltip title={tooltipParts.join(" • ")}>{sessionTypeBadge}</Tooltip>;
     },
   },
   {
@@ -331,7 +327,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     },
   },
   {
-    header: "Key Name",
+    header: "Key Alias",
     accessorKey: "metadata.user_api_key_alias",
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "-")}>

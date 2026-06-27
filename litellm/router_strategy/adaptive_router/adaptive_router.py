@@ -55,6 +55,7 @@ from litellm.router_strategy.adaptive_router.update_queue import (
 _SESSION_STATE_SWEEP_THRESHOLD: int = 1024
 # Same pattern for the owner cache.
 _OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
+from litellm.repositories.table_repositories import AdaptiveRouterStateRepository
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
     AdaptiveRouterConfig,
@@ -113,7 +114,7 @@ class AdaptiveRouter:
         if prisma_client is None:
             return
         try:
-            rows = await prisma_client.db.litellm_adaptiverouterstate.find_many(
+            rows = await AdaptiveRouterStateRepository(prisma_client).table.find_many(
                 where={"router_name": self.router_name}
             )
             loaded = 0
@@ -125,9 +126,7 @@ class AdaptiveRouter:
                     continue
                 if row.model_name not in self.config.available_models:
                     continue
-                self._cells[(rt, row.model_name)] = BanditCell(
-                    alpha=row.alpha, beta=row.beta
-                )
+                self._cells[(rt, row.model_name)] = BanditCell(alpha=row.alpha, beta=row.beta)
                 loaded += 1
             verbose_router_logger.info(
                 "AdaptiveRouter[%s]: loaded %d cells from DB",
@@ -164,15 +163,11 @@ class AdaptiveRouter:
         attribution is enforced post-call via the owner cache (see
         `claim_or_check_owner`).
         """
-        user_text = (
-            get_last_user_message(cast(List[AllMessageValues], messages or [])) or ""
-        )
+        user_text = get_last_user_message(cast(List[AllMessageValues], messages or [])) or ""
 
         request_type = classify_prompt(user_text)
         min_quality_tier = self._extract_min_quality_tier(request_kwargs)
-        chosen_model = await self.pick_model(
-            request_type=request_type, min_quality_tier=min_quality_tier
-        )
+        chosen_model = await self.pick_model(request_type=request_type, min_quality_tier=min_quality_tier)
         verbose_router_logger.debug(
             "AdaptiveRouter[%s]: classified=%s -> chose %s",
             self.router_name,
@@ -200,10 +195,7 @@ class AdaptiveRouter:
         """Thompson-sample across eligible models. Stateless per-turn."""
         eligible = self._eligible_models(min_quality_tier)
         if not eligible:
-            raise ValueError(
-                f"AdaptiveRouter[{self.router_name}]: no models meet "
-                f"min_quality_tier={min_quality_tier}"
-            )
+            raise ValueError(f"AdaptiveRouter[{self.router_name}]: no models meet min_quality_tier={min_quality_tier}")
 
         cells = {m: self._cells[(request_type, m)] for m in eligible}
         costs = {m: self.model_to_cost.get(m, 0.0) for m in eligible}
@@ -254,9 +246,7 @@ class AdaptiveRouter:
     async def get_state_snapshot(self) -> Dict[str, Any]:
         """In-memory snapshot for the introspection endpoint. Cheap; no DB hit."""
         cells = []
-        for (rt, model), cell in sorted(
-            self._cells.items(), key=lambda kv: (kv[0][0].value, kv[0][1])
-        ):
+        for (rt, model), cell in sorted(self._cells.items(), key=lambda kv: (kv[0][0].value, kv[0][1])):
             total = cell.alpha + cell.beta
             cells.append(
                 {
@@ -326,8 +316,7 @@ class AdaptiveRouter:
         return [
             m
             for m in self.config.available_models
-            if (self.model_to_prefs.get(m) or _default_prefs()).quality_tier
-            >= min_quality_tier
+            if (self.model_to_prefs.get(m) or _default_prefs()).quality_tier >= min_quality_tier
         ]
 
     # ---- Session state ---------------------------------------------------
@@ -377,9 +366,7 @@ class AdaptiveRouter:
         """Apply one turn, push session snapshot + bandit deltas to the queue."""
         state = self.get_or_create_session_state(session_id, model_name, request_type)
         delta = apply_turn(state, turn)
-        verbose_router_logger.debug(
-            "AdaptiveRouter[%s]: record_turn delta=%s", self.router_name, delta
-        )
+        verbose_router_logger.debug("AdaptiveRouter[%s]: record_turn delta=%s", self.router_name, delta)
 
         # Strip the raw conversation content before persisting. The
         # last_user/assistant_content and tool_call_history fields are only
@@ -395,9 +382,7 @@ class AdaptiveRouter:
             "pending_tool_calls",
         ):
             snapshot.pop(sensitive, None)
-        await self.queue.add_session_state(
-            session_id, self.router_name, model_name, snapshot
-        )
+        await self.queue.add_session_state(session_id, self.router_name, model_name, snapshot)
 
         d_alpha, d_beta = self._compute_bandit_delta(delta)
         verbose_router_logger.debug(
@@ -413,9 +398,7 @@ class AdaptiveRouter:
             # back to the session's original type so closing pleasantries don't
             # misattribute the reward.
             attribution_type = (
-                request_type
-                if request_type != RequestType.GENERAL
-                else RequestType(state.classified_type)
+                request_type if request_type != RequestType.GENERAL else RequestType(state.classified_type)
             )
             cell_key = (attribution_type, model_name)
             self._cells[cell_key] = apply_delta(self._cells[cell_key], d_alpha, d_beta)
@@ -442,13 +425,5 @@ class AdaptiveRouter:
         - exhaustion                 -> 0 (uptime issue, tracked separately later)
         """
         d_alpha = float(delta.satisfaction)
-        d_beta = (
-            float(
-                delta.misalignment
-                + delta.stagnation
-                + delta.disengagement
-                + delta.failure
-            )
-            + 0.5 * delta.loop
-        )
+        d_beta = float(delta.misalignment + delta.stagnation + delta.disengagement + delta.failure) + 0.5 * delta.loop
         return d_alpha, d_beta

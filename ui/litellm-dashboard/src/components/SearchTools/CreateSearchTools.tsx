@@ -3,8 +3,8 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Button, TextInput } from "@tremor/react";
 import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
-import Image from "next/image";
 import React, { useState } from "react";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import NotificationsManager from "../molecules/notifications_manager";
 import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
 import SearchConnectionTest from "./SearchConnectionTest";
@@ -13,7 +13,7 @@ import { AvailableSearchProvider, SearchTool } from "./types";
 const { TextArea } = Input;
 
 // Search provider logos folder path (matches existing provider logo pattern)
-const searchProviderLogosFolder = "../ui/assets/logos/";
+const searchProviderLogosFolder = "/ui/assets/logos/";
 
 // Helper function to get logo path for a search provider
 const getSearchProviderLogo = (providerName: string): string => {
@@ -28,12 +28,13 @@ interface SearchProviderLabelProps {
 
 const SearchProviderLabel: React.FC<SearchProviderLabelProps> = ({ providerName, displayName }) => (
   <div style={{ display: "flex", alignItems: "center" }}>
-    <Image
-      src={getSearchProviderLogo(providerName)}
+    {/* eslint-disable-next-line @next/next/no-img-element */}
+    <img
+      src={resolveLogoSrc(getSearchProviderLogo(providerName))}
       alt=""
-      width={20}
-      height={20}
       style={{
+        width: "20px",
+        height: "20px",
         marginRight: "8px",
         objectFit: "contain",
       }}
@@ -68,10 +69,7 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
   const [connectionTestId, setConnectionTestId] = useState<string>("");
 
   // Fetch available search providers
-  const {
-    data: providersResponse,
-    isLoading: isLoadingProviders,
-  } = useQuery({
+  const { data: providersResponse, isLoading: isLoadingProviders } = useQuery({
     queryKey: ["searchProviders"],
     queryFn: () => {
       if (!accessToken) throw new Error("Access Token required");
@@ -97,8 +95,8 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
         },
         search_tool_info: formValues.description
           ? {
-            description: formValues.description,
-          }
+              description: formValues.description,
+            }
           : undefined,
       };
 
@@ -333,4 +331,3 @@ const CreateSearchTool: React.FC<CreateSearchToolProps> = ({
 };
 
 export default CreateSearchTool;
-

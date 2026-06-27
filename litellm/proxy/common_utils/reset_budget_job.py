@@ -14,6 +14,16 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.table_repositories import (
+    EndUserRepository,
+    TagRepository,
+    TeamMembershipRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.services import ServiceTypes
 
 
@@ -63,14 +73,10 @@ class ResetBudgetJob:
         try:
             from litellm.proxy.proxy_server import spend_counter_cache
 
-            spend_counter_cache.in_memory_cache.set_cache(
-                key=counter_key, value=0.0, ttl=60
-            )
+            spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.0, ttl=60)
             if spend_counter_cache.redis_cache is not None:
                 try:
-                    await spend_counter_cache.redis_cache.async_set_cache(
-                        key=counter_key, value=0.0, ttl=60
-                    )
+                    await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=0.0, ttl=60)
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to reset spend counter %s in Redis: %s. "
@@ -79,9 +85,7 @@ class ResetBudgetJob:
                         redis_err,
                     )
         except Exception as e:
-            verbose_proxy_logger.warning(
-                "Failed to reset spend counter %s: %s", counter_key, e
-            )
+            verbose_proxy_logger.warning("Failed to reset spend counter %s: %s", counter_key, e)
 
     @staticmethod
     async def _invalidate_user_api_key_cache_entry(cache_key: str) -> None:
@@ -134,9 +138,7 @@ class ResetBudgetJob:
             rows = await table.find_many(where=where)
         except Exception as e:
             rows = []
-            verbose_proxy_logger.warning(
-                "Failed to fetch %s for counter invalidation: %s", log_subject, e
-            )
+            verbose_proxy_logger.warning("Failed to fetch %s for counter invalidation: %s", log_subject, e)
 
         update_result = await table.update_many(where=where, data={"spend": 0})
 
@@ -151,23 +153,19 @@ class ResetBudgetJob:
 
         return update_result
 
-    async def reset_budget_for_litellm_team_members(
-        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
-    ):
+    async def reset_budget_for_litellm_team_members(self, budgets_to_reset: List[LiteLLM_BudgetTableFull]):
         """
         Resets the budget for all LiteLLM Team Members if their budget has expired
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_teammembership,
+            table=TeamMembershipRepository(self.prisma_client).table,
             counter_key_fn=lambda m: f"spend:team_member:{m.user_id}:{m.team_id}",
             log_subject="team memberships",
             cache_key_fn=lambda m: f"{m.team_id}_{m.user_id}",
         )
 
-    async def reset_budget_for_keys_linked_to_budgets(
-        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
-    ):
+    async def reset_budget_for_keys_linked_to_budgets(self, budgets_to_reset: List[LiteLLM_BudgetTableFull]):
         """
         Resets the spend for keys linked to budget tiers that are being reset.
 
@@ -176,22 +174,20 @@ class ResetBudgetJob:
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_verificationtoken,
+            table=VerificationTokenRepository(self.prisma_client).table,
             counter_key_fn=lambda k: f"spend:key:{k.token}",
             log_subject="keys",
             extra_where={"budget_duration": None, "spend": {"gt": 0}},
             cache_key_fn=lambda k: k.token,
         )
 
-    async def reset_budget_for_orgs_linked_to_budgets(
-        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
-    ):
+    async def reset_budget_for_orgs_linked_to_budgets(self, budgets_to_reset: List[LiteLLM_BudgetTableFull]):
         """
         Resets the spend for orgs linked to budget tiers that are being reset.
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_organizationtable,
+            table=OrganizationRepository(self.prisma_client).table,
             counter_key_fn=lambda o: f"spend:org:{o.organization_id}",
             log_subject="orgs",
             extra_where={"spend": {"gt": 0}},
@@ -201,9 +197,7 @@ class ResetBudgetJob:
             ],
         )
 
-    async def reset_budget_for_tags_linked_to_budgets(
-        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
-    ):
+    async def reset_budget_for_tags_linked_to_budgets(self, budgets_to_reset: List[LiteLLM_BudgetTableFull]):
         """
         Resets the spend for tags linked to budget tiers that are being reset.
 
@@ -217,7 +211,7 @@ class ResetBudgetJob:
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_tagtable,
+            table=TagRepository(self.prisma_client).table,
             counter_key_fn=lambda t: f"spend:tag:{t.tag_name}",
             log_subject="tags",
             extra_where={"spend": {"gt": 0}},
@@ -243,9 +237,7 @@ class ResetBudgetJob:
 
             if budgets_to_reset is not None and len(budgets_to_reset) > 0:
                 for budget in budgets_to_reset:
-                    budget = await ResetBudgetJob._reset_budget_reset_at_date(
-                        budget, now
-                    )
+                    budget = await ResetBudgetJob._reset_budget_reset_at_date(budget, now)
 
                 await self.prisma_client.update_data(
                     query_type="update_many",
@@ -253,11 +245,7 @@ class ResetBudgetJob:
                     table_name="budget",
                 )
 
-                budget_ids_to_reset = [
-                    budget.budget_id
-                    for budget in budgets_to_reset
-                    if budget.budget_id is not None
-                ]
+                budget_ids_to_reset = [budget.budget_id for budget in budgets_to_reset if budget.budget_id is not None]
 
                 endusers_to_reset = await self.prisma_client.get_data(
                     table_name="enduser",
@@ -269,43 +257,26 @@ class ResetBudgetJob:
                 # default budget via litellm.max_end_user_budget_id.  These
                 # users are enforced in-memory but never had budget_id
                 # persisted, so the query above misses them.
-                if (
-                    litellm.max_end_user_budget_id is not None
-                    and litellm.max_end_user_budget_id in budget_ids_to_reset
-                ):
-                    default_budget_endusers = (
-                        await self._get_endusers_with_no_budget_id()
-                    )
+                if litellm.max_end_user_budget_id is not None and litellm.max_end_user_budget_id in budget_ids_to_reset:
+                    default_budget_endusers = await self._get_endusers_with_no_budget_id()
                     if default_budget_endusers:
                         if endusers_to_reset is None:
                             endusers_to_reset = default_budget_endusers
                         else:
                             endusers_to_reset.extend(default_budget_endusers)
 
-                await self.reset_budget_for_litellm_team_members(
-                    budgets_to_reset=budgets_to_reset
-                )
+                await self.reset_budget_for_litellm_team_members(budgets_to_reset=budgets_to_reset)
 
-                await self.reset_budget_for_keys_linked_to_budgets(
-                    budgets_to_reset=budgets_to_reset
-                )
+                await self.reset_budget_for_keys_linked_to_budgets(budgets_to_reset=budgets_to_reset)
 
-                await self.reset_budget_for_orgs_linked_to_budgets(
-                    budgets_to_reset=budgets_to_reset
-                )
+                await self.reset_budget_for_orgs_linked_to_budgets(budgets_to_reset=budgets_to_reset)
 
-                await self.reset_budget_for_tags_linked_to_budgets(
-                    budgets_to_reset=budgets_to_reset
-                )
+                await self.reset_budget_for_tags_linked_to_budgets(budgets_to_reset=budgets_to_reset)
 
             if endusers_to_reset is not None and len(endusers_to_reset) > 0:
                 for enduser in endusers_to_reset:
                     try:
-                        updated_enduser = (
-                            await ResetBudgetJob._reset_budget_for_enduser(
-                                enduser=enduser
-                            )
-                        )
+                        updated_enduser = await ResetBudgetJob._reset_budget_for_enduser(enduser=enduser)
                         if updated_enduser is not None:
                             updated_endusers.append(updated_enduser)
                         else:
@@ -317,9 +288,7 @@ class ResetBudgetJob:
                             )
                     except Exception as e:
                         failed_endusers.append({"enduser": enduser, "error": str(e)})
-                        verbose_proxy_logger.exception(
-                            "Failed to reset budget for enduser: %s", enduser
-                        )
+                        verbose_proxy_logger.exception("Failed to reset budget for enduser: %s", enduser)
 
                 verbose_proxy_logger.debug(
                     "Updated users %s",
@@ -346,26 +315,14 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "num_budgets_found": (
-                            len(budgets_to_reset) if budgets_to_reset else 0
-                        ),
-                        "budgets_found": json.dumps(
-                            budgets_to_reset, indent=4, default=str
-                        ),
-                        "num_endusers_found": (
-                            len(endusers_to_reset) if endusers_to_reset else 0
-                        ),
-                        "endusers_found": json.dumps(
-                            endusers_to_reset, indent=4, default=str
-                        ),
+                        "num_budgets_found": (len(budgets_to_reset) if budgets_to_reset else 0),
+                        "budgets_found": json.dumps(budgets_to_reset, indent=4, default=str),
+                        "num_endusers_found": (len(endusers_to_reset) if endusers_to_reset else 0),
+                        "endusers_found": json.dumps(endusers_to_reset, indent=4, default=str),
                         "num_endusers_updated": len(updated_endusers),
-                        "endusers_updated": json.dumps(
-                            updated_endusers, indent=4, default=str
-                        ),
+                        "endusers_updated": json.dumps(updated_endusers, indent=4, default=str),
                         "num_endusers_failed": len(failed_endusers),
-                        "endusers_failed": json.dumps(
-                            failed_endusers, indent=4, default=str
-                        ),
+                        "endusers_failed": json.dumps(failed_endusers, indent=4, default=str),
                     },
                 )
             )
@@ -380,18 +337,10 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "num_budgets_found": (
-                            len(budgets_to_reset) if budgets_to_reset else 0
-                        ),
-                        "budgets_found": json.dumps(
-                            budgets_to_reset, indent=4, default=str
-                        ),
-                        "num_endusers_found": (
-                            len(endusers_to_reset) if endusers_to_reset else 0
-                        ),
-                        "endusers_found": json.dumps(
-                            endusers_to_reset, indent=4, default=str
-                        ),
+                        "num_budgets_found": (len(budgets_to_reset) if budgets_to_reset else 0),
+                        "budgets_found": json.dumps(budgets_to_reset, indent=4, default=str),
+                        "num_endusers_found": (len(endusers_to_reset) if endusers_to_reset else 0),
+                        "endusers_found": json.dumps(endusers_to_reset, indent=4, default=str),
                     },
                 )
             )
@@ -406,7 +355,7 @@ class ResetBudgetJob:
         rely on the default budget (litellm.max_end_user_budget_id) applied
         in-memory during auth checks.
         """
-        rows = await self.prisma_client.db.litellm_endusertable.find_many(
+        rows = await EndUserRepository(self.prisma_client).table.find_many(
             where={
                 "budget_id": None,
                 "spend": {"gt": 0},
@@ -414,9 +363,7 @@ class ResetBudgetJob:
         )
         return [LiteLLM_EndUserTable(**row.dict()) for row in rows]
 
-    async def _write_key_reset_updates(
-        self, updated_keys: List[LiteLLM_VerificationToken]
-    ) -> None:
+    async def _write_key_reset_updates(self, updated_keys: List[LiteLLM_VerificationToken]) -> None:
         """
         Write per-row {spend, budget_reset_at} updates for keys.
 
@@ -438,9 +385,7 @@ class ResetBudgetJob:
             )
         await batcher.commit()
 
-    async def _write_user_reset_updates(
-        self, updated_users: List[LiteLLM_UserTable]
-    ) -> None:
+    async def _write_user_reset_updates(self, updated_users: List[LiteLLM_UserTable]) -> None:
         """
         Write per-row {spend, budget_reset_at} updates for users.
 
@@ -459,9 +404,7 @@ class ResetBudgetJob:
             )
         await batcher.commit()
 
-    async def _write_team_reset_updates(
-        self, updated_teams: List[LiteLLM_TeamTable]
-    ) -> None:
+    async def _write_team_reset_updates(self, updated_teams: List[LiteLLM_TeamTable]) -> None:
         """
         Write per-row {spend, budget_reset_at} updates for teams.
 
@@ -493,32 +436,22 @@ class ResetBudgetJob:
             keys_to_reset = await self.prisma_client.get_data(
                 table_name="key", query_type="find_all", expires=now, reset_at=now
             )
-            verbose_proxy_logger.debug(
-                "Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str)
-            )
+            verbose_proxy_logger.debug("Keys to reset %s", json.dumps(keys_to_reset, indent=4, default=str))
             updated_keys: List[LiteLLM_VerificationToken] = []
             failed_keys = []
             if keys_to_reset is not None and len(keys_to_reset) > 0:
                 for key in keys_to_reset:
                     try:
-                        updated_key = await ResetBudgetJob._reset_budget_for_key(
-                            key=key, current_time=now
-                        )
+                        updated_key = await ResetBudgetJob._reset_budget_for_key(key=key, current_time=now)
                         if updated_key is not None:
                             updated_keys.append(updated_key)
                         else:
-                            failed_keys.append(
-                                {"key": key, "error": "Returned None without exception"}
-                            )
+                            failed_keys.append({"key": key, "error": "Returned None without exception"})
                     except Exception as e:
                         failed_keys.append({"key": key, "error": str(e)})
-                        verbose_proxy_logger.exception(
-                            "Failed to reset budget for key: %s", key
-                        )
+                        verbose_proxy_logger.exception("Failed to reset budget for key: %s", key)
 
-                verbose_proxy_logger.debug(
-                    "Updated keys %s", json.dumps(updated_keys, indent=4, default=str)
-                )
+                verbose_proxy_logger.debug("Updated keys %s", json.dumps(updated_keys, indent=4, default=str))
 
                 if updated_keys:
                     await self._write_key_reset_updates(updated_keys=updated_keys)
@@ -529,9 +462,7 @@ class ResetBudgetJob:
 
             end_time = time.time()
             if len(failed_keys) > 0:  # If any keys failed to reset
-                raise Exception(
-                    f"Failed to reset {len(failed_keys)} keys: {json.dumps(failed_keys, default=str)}"
-                )
+                raise Exception(f"Failed to reset {len(failed_keys)} keys: {json.dumps(failed_keys, default=str)}")
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -576,17 +507,13 @@ class ResetBudgetJob:
         start_time = time.time()
         users_to_reset: Optional[List[LiteLLM_UserTable]] = None
         try:
-            users_to_reset = await self.prisma_client.get_data(
-                table_name="user", query_type="find_all", reset_at=now
-            )
+            users_to_reset = await self.prisma_client.get_data(table_name="user", query_type="find_all", reset_at=now)
             updated_users: List[LiteLLM_UserTable] = []
             failed_users = []
             if users_to_reset is not None and len(users_to_reset) > 0:
                 for user in users_to_reset:
                     try:
-                        updated_user = await ResetBudgetJob._reset_budget_for_user(
-                            user=user, current_time=now
-                        )
+                        updated_user = await ResetBudgetJob._reset_budget_for_user(user=user, current_time=now)
                         if updated_user is not None:
                             updated_users.append(updated_user)
                         else:
@@ -598,27 +525,19 @@ class ResetBudgetJob:
                             )
                     except Exception as e:
                         failed_users.append({"user": user, "error": str(e)})
-                        verbose_proxy_logger.exception(
-                            "Failed to reset budget for user: %s", user
-                        )
+                        verbose_proxy_logger.exception("Failed to reset budget for user: %s", user)
 
-                verbose_proxy_logger.debug(
-                    "Updated users %s", json.dumps(updated_users, indent=4, default=str)
-                )
+                verbose_proxy_logger.debug("Updated users %s", json.dumps(updated_users, indent=4, default=str))
                 if updated_users:
                     await self._write_user_reset_updates(updated_users=updated_users)
                     for u in updated_users:
                         user_id = getattr(u, "user_id", None)
                         if user_id:
-                            await self._invalidate_spend_counter(
-                                f"spend:user:{user_id}"
-                            )
+                            await self._invalidate_spend_counter(f"spend:user:{user_id}")
 
             end_time = time.time()
             if len(failed_users) > 0:  # If any users failed to reset
-                raise Exception(
-                    f"Failed to reset {len(failed_users)} users: {json.dumps(failed_users, default=str)}"
-                )
+                raise Exception(f"Failed to reset {len(failed_users)} users: {json.dumps(failed_users, default=str)}")
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -629,13 +548,9 @@ class ResetBudgetJob:
                     end_time=end_time,
                     event_metadata={
                         "num_users_found": len(users_to_reset) if users_to_reset else 0,
-                        "users_found": json.dumps(
-                            users_to_reset, indent=4, default=str
-                        ),
+                        "users_found": json.dumps(users_to_reset, indent=4, default=str),
                         "num_users_updated": len(updated_users),
-                        "users_updated": json.dumps(
-                            updated_users, indent=4, default=str
-                        ),
+                        "users_updated": json.dumps(updated_users, indent=4, default=str),
                         "num_users_failed": len(failed_users),
                         "users_failed": json.dumps(failed_users, indent=4, default=str),
                     },
@@ -653,9 +568,7 @@ class ResetBudgetJob:
                     end_time=end_time,
                     event_metadata={
                         "num_users_found": len(users_to_reset) if users_to_reset else 0,
-                        "users_found": json.dumps(
-                            users_to_reset, indent=4, default=str
-                        ),
+                        "users_found": json.dumps(users_to_reset, indent=4, default=str),
                     },
                 )
             )
@@ -669,17 +582,13 @@ class ResetBudgetJob:
         start_time = time.time()
         teams_to_reset: Optional[List[LiteLLM_TeamTable]] = None
         try:
-            teams_to_reset = await self.prisma_client.get_data(
-                table_name="team", query_type="find_all", reset_at=now
-            )
+            teams_to_reset = await self.prisma_client.get_data(table_name="team", query_type="find_all", reset_at=now)
             updated_teams: List[LiteLLM_TeamTable] = []
             failed_teams = []
             if teams_to_reset is not None and len(teams_to_reset) > 0:
                 for team in teams_to_reset:
                     try:
-                        updated_team = await ResetBudgetJob._reset_budget_for_team(
-                            team=team, current_time=now
-                        )
+                        updated_team = await ResetBudgetJob._reset_budget_for_team(team=team, current_time=now)
                         if updated_team is not None:
                             updated_teams.append(updated_team)
                         else:
@@ -691,27 +600,19 @@ class ResetBudgetJob:
                             )
                     except Exception as e:
                         failed_teams.append({"team": team, "error": str(e)})
-                        verbose_proxy_logger.exception(
-                            "Failed to reset budget for team: %s", team
-                        )
+                        verbose_proxy_logger.exception("Failed to reset budget for team: %s", team)
 
-                verbose_proxy_logger.debug(
-                    "Updated teams %s", json.dumps(updated_teams, indent=4, default=str)
-                )
+                verbose_proxy_logger.debug("Updated teams %s", json.dumps(updated_teams, indent=4, default=str))
                 if updated_teams:
                     await self._write_team_reset_updates(updated_teams=updated_teams)
                     for t in updated_teams:
                         team_id = getattr(t, "team_id", None)
                         if team_id:
-                            await self._invalidate_spend_counter(
-                                f"spend:team:{team_id}"
-                            )
+                            await self._invalidate_spend_counter(f"spend:team:{team_id}")
 
             end_time = time.time()
             if len(failed_teams) > 0:  # If any teams failed to reset
-                raise Exception(
-                    f"Failed to reset {len(failed_teams)} teams: {json.dumps(failed_teams, default=str)}"
-                )
+                raise Exception(f"Failed to reset {len(failed_teams)} teams: {json.dumps(failed_teams, default=str)}")
 
             asyncio.create_task(
                 self.proxy_logging_obj.service_logging_obj.async_service_success_hook(
@@ -722,13 +623,9 @@ class ResetBudgetJob:
                     end_time=end_time,
                     event_metadata={
                         "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
-                        "teams_found": json.dumps(
-                            teams_to_reset, indent=4, default=str
-                        ),
+                        "teams_found": json.dumps(teams_to_reset, indent=4, default=str),
                         "num_teams_updated": len(updated_teams),
-                        "teams_updated": json.dumps(
-                            updated_teams, indent=4, default=str
-                        ),
+                        "teams_updated": json.dumps(updated_teams, indent=4, default=str),
                         "num_teams_failed": len(failed_teams),
                         "teams_failed": json.dumps(failed_teams, indent=4, default=str),
                     },
@@ -746,9 +643,7 @@ class ResetBudgetJob:
                     end_time=end_time,
                     event_metadata={
                         "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
-                        "teams_found": json.dumps(
-                            teams_to_reset, indent=4, default=str
-                        ),
+                        "teams_found": json.dumps(teams_to_reset, indent=4, default=str),
                     },
                 )
             )
@@ -767,24 +662,16 @@ class ResetBudgetJob:
         reset_at_str = window.get("reset_at")
         if not reset_at_str:
             return False
-        reset_at = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(
-            tzinfo=None
-        )
+        reset_at = datetime.fromisoformat(reset_at_str.replace("Z", "+00:00")).replace(tzinfo=None)
         if reset_at > now:
             return False
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.0)
         if spend_counter_cache.redis_cache is not None:
             try:
-                await spend_counter_cache.redis_cache.async_set_cache(
-                    key=counter_key, value=0.0
-                )
+                await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=0.0)
             except Exception as redis_err:
-                verbose_proxy_logger.warning(
-                    "Failed to reset Redis counter %s: %s", counter_key, redis_err
-                )
-        window["reset_at"] = get_budget_reset_time(
-            budget_duration=window["budget_duration"]
-        ).isoformat()
+                verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
+        window["reset_at"] = get_budget_reset_time(budget_duration=window["budget_duration"]).isoformat()
         return True
 
     async def reset_budget_windows(self) -> None:
@@ -806,8 +693,7 @@ class ResetBudgetJob:
         # --- Keys ---
         try:
             key_rows = await self.prisma_client.db.query_raw(
-                'SELECT token, budget_limits FROM "LiteLLM_VerificationToken" '
-                "WHERE budget_limits IS NOT NULL"
+                'SELECT token, budget_limits FROM "LiteLLM_VerificationToken" WHERE budget_limits IS NOT NULL'
             )
             for row in key_rows:
                 raw = row["budget_limits"]
@@ -816,28 +702,21 @@ class ResetBudgetJob:
                 windows: list = raw if isinstance(raw, list) else json.loads(raw)
                 changed = False
                 for window in windows:
-                    counter_key = (
-                        f"spend:key:{row['token']}:window:{window['budget_duration']}"
-                    )
-                    if await ResetBudgetJob._reset_expired_window(
-                        window, counter_key, spend_counter_cache, now
-                    ):
+                    counter_key = f"spend:key:{row['token']}:window:{window['budget_duration']}"
+                    if await ResetBudgetJob._reset_expired_window(window, counter_key, spend_counter_cache, now):
                         changed = True
                 if changed:
-                    await self.prisma_client.db.litellm_verificationtoken.update(
+                    await VerificationTokenRepository(self.prisma_client).table.update(
                         where={"token": row["token"]},
                         data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
                     )
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Failed to reset budget windows for keys: %s", e
-            )
+            verbose_proxy_logger.exception("Failed to reset budget windows for keys: %s", e)
 
         # --- Teams ---
         try:
             team_rows = await self.prisma_client.db.query_raw(
-                'SELECT team_id, budget_limits FROM "LiteLLM_TeamTable" '
-                "WHERE budget_limits IS NOT NULL"
+                'SELECT team_id, budget_limits FROM "LiteLLM_TeamTable" WHERE budget_limits IS NOT NULL'
             )
             for row in team_rows:
                 raw = row["budget_limits"]
@@ -847,19 +726,15 @@ class ResetBudgetJob:
                 changed = False
                 for window in windows:
                     counter_key = f"spend:team:{row['team_id']}:window:{window['budget_duration']}"
-                    if await ResetBudgetJob._reset_expired_window(
-                        window, counter_key, spend_counter_cache, now
-                    ):
+                    if await ResetBudgetJob._reset_expired_window(window, counter_key, spend_counter_cache, now):
                         changed = True
                 if changed:
-                    await self.prisma_client.db.litellm_teamtable.update(
+                    await TeamRepository(self.prisma_client).table.update(
                         where={"team_id": row["team_id"]},
                         data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
                     )
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Failed to reset budget windows for teams: %s", e
-            )
+            verbose_proxy_logger.exception("Failed to reset budget windows for teams: %s", e)
 
     @staticmethod
     async def _reset_budget_common(
@@ -884,32 +759,20 @@ class ResetBudgetJob:
                     get_budget_reset_time,
                 )
 
-                item.budget_reset_at = get_budget_reset_time(
-                    budget_duration=item.budget_duration
-                )
+                item.budget_reset_at = get_budget_reset_time(budget_duration=item.budget_duration)
             return item
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error resetting budget for %s: %s. Item: %s", item_type, e, item
-            )
+            verbose_proxy_logger.exception("Error resetting budget for %s: %s. Item: %s", item_type, e, item)
             raise e
 
     @staticmethod
-    async def _reset_budget_for_team(
-        team: LiteLLM_TeamTable, current_time: datetime
-    ) -> Optional[LiteLLM_TeamTable]:
-        await ResetBudgetJob._reset_budget_common(
-            item=team, current_time=current_time, item_type="team"
-        )
+    async def _reset_budget_for_team(team: LiteLLM_TeamTable, current_time: datetime) -> Optional[LiteLLM_TeamTable]:
+        await ResetBudgetJob._reset_budget_common(item=team, current_time=current_time, item_type="team")
         return team
 
     @staticmethod
-    async def _reset_budget_for_user(
-        user: LiteLLM_UserTable, current_time: datetime
-    ) -> Optional[LiteLLM_UserTable]:
-        await ResetBudgetJob._reset_budget_common(
-            item=user, current_time=current_time, item_type="user"
-        )
+    async def _reset_budget_for_user(user: LiteLLM_UserTable, current_time: datetime) -> Optional[LiteLLM_UserTable]:
+        await ResetBudgetJob._reset_budget_common(item=user, current_time=current_time, item_type="user")
         return user
 
     @staticmethod
@@ -919,9 +782,7 @@ class ResetBudgetJob:
         try:
             enduser.spend = 0.0
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error resetting budget for enduser: %s. Item: %s", e, enduser
-            )
+            verbose_proxy_logger.exception("Error resetting budget for enduser: %s. Item: %s", e, enduser)
             raise e
         return enduser
 
@@ -935,13 +796,9 @@ class ResetBudgetJob:
                     get_budget_reset_time,
                 )
 
-                budget.budget_reset_at = get_budget_reset_time(
-                    budget_duration=budget.budget_duration
-                )
+                budget.budget_reset_at = get_budget_reset_time(budget_duration=budget.budget_duration)
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error resetting budget_reset_at for budget: %s. Item: %s", e, budget
-            )
+            verbose_proxy_logger.exception("Error resetting budget_reset_at for budget: %s. Item: %s", e, budget)
             raise e
         return budget
 
@@ -949,7 +806,5 @@ class ResetBudgetJob:
     async def _reset_budget_for_key(
         key: LiteLLM_VerificationToken, current_time: datetime
     ) -> Optional[LiteLLM_VerificationToken]:
-        await ResetBudgetJob._reset_budget_common(
-            item=key, current_time=current_time, item_type="key"
-        )
+        await ResetBudgetJob._reset_budget_common(item=key, current_time=current_time, item_type="key")
         return key

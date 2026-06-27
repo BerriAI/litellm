@@ -2,6 +2,7 @@
 Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
+import json
 import os
 import re
 import sys
@@ -20,7 +21,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrail,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
@@ -894,3 +895,153 @@ class TestToolPermissionGuardrailIntegration:
         is_allowed, rule_id, _ = guardrail._check_tool_permission("Read")
         assert is_allowed is False
         assert rule_id == "deny_read"
+
+
+class TestToolPermissionGuardrailInMemoryUpdate:
+    """Regression: an in-memory params update (PUT /guardrails path) must rebuild
+    the compiled rule maps, not just self.rules, so the new rules are enforced
+    without reinitializing the guardrail."""
+
+    def _bash(self, command):
+        return ChatCompletionMessageToolCall(
+            function={"name": "Bash", "arguments": json.dumps({"command": command})},
+            type="function",
+        )
+
+    def test_update_in_memory_recompiles_added_param_pattern(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tp",
+            rules=[{"id": "native-bash", "tool_name": r"^Bash$", "decision": "allow"}],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+        # No pattern yet: any Bash command is allowed.
+        assert (
+            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
+            is True
+        )
+
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(
+                guardrail="tool_permission",
+                mode=["pre_call", "post_call"],
+                default_action="deny",
+                on_disallowed_action="block",
+                rules=[
+                    {
+                        "id": "native-bash",
+                        "tool_name": r"^Bash$",
+                        "decision": "allow",
+                        "allowed_param_patterns": {
+                            "command": r"^(?!(echo blockme)$).*$"
+                        },
+                    }
+                ],
+            )
+        )
+
+        # The compiled map must be rebuilt, and enforcement must reflect it.
+        assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
+        assert (
+            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
+            is False
+        )
+        assert (
+            guardrail._get_permission_for_tool_call(self._bash("echo hello"))[0] is True
+        )
+
+    def test_update_in_memory_recompiles_tool_name_target(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tp",
+            rules=[],
+            default_action="allow",
+            on_disallowed_action="block",
+        )
+        # No rules: default_action allow lets Bash through.
+        assert guardrail._get_permission_for_tool_call(self._bash("echo x"))[0] is True
+
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(
+                guardrail="tool_permission",
+                mode=["pre_call", "post_call"],
+                default_action="allow",
+                on_disallowed_action="block",
+                rules=[{"id": "deny-bash", "tool_name": r"^Bash$", "decision": "deny"}],
+            )
+        )
+
+        # A newly added deny rule (new id) must match -> its compiled target was rebuilt.
+        assert "deny-bash" in guardrail._compiled_rule_targets
+        assert guardrail._get_permission_for_tool_call(self._bash("echo x"))[0] is False
+
+    def test_update_in_memory_preserves_rules_when_rules_absent(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tp",
+            rules=[
+                {
+                    "id": "native-bash",
+                    "tool_name": r"^Bash$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"command": r"^(?!(echo blockme)$).*$"},
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+        assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
+
+        # A partial update that does not carry `rules` must NOT wipe the existing
+        # ruleset / compiled maps.
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(
+                guardrail="tool_permission",
+                mode=["pre_call", "post_call"],
+                default_action="deny",
+                on_disallowed_action="block",
+            )
+        )
+
+        assert len(guardrail.rules) == 1
+        assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
+        assert (
+            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
+            is False
+        )
+
+    def test_update_in_memory_rejects_invalid_regex_and_keeps_previous_rules(self):
+        """Regression: a live update whose rules contain an invalid regex must be
+        rejected atomically. The bad rule must not leak in as a compiled-target
+        wildcard (match-all), and the previously enforced ruleset must survive."""
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tp",
+            rules=[{"id": "deny-secret", "tool_name": r"^Secret$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="block",
+        )
+        # Baseline: only "Secret" is denied; any other tool is allowed.
+        assert guardrail._check_tool_permission("Secret")[0] is False
+        assert guardrail._check_tool_permission("Other")[0] is True
+
+        with pytest.raises(ValueError):
+            guardrail.update_in_memory_litellm_params(
+                LitellmParams(
+                    guardrail="tool_permission",
+                    mode=["pre_call", "post_call"],
+                    default_action="allow",
+                    on_disallowed_action="block",
+                    rules=[
+                        {
+                            "id": "deny-secret",
+                            "tool_name": r"^Secret$",
+                            "decision": "deny",
+                        },
+                        {"id": "bad", "tool_name": "[unclosed", "decision": "deny"},
+                    ],
+                )
+            )
+
+        # The bad rule must not have leaked in, and the prior ruleset must hold.
+        assert "bad" not in guardrail._compiled_rule_targets
+        assert all(rule.id != "bad" for rule in guardrail.rules)
+        assert guardrail._check_tool_permission("Other")[0] is True
+        assert guardrail._check_tool_permission("Secret")[0] is False

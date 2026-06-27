@@ -16,9 +16,7 @@ describe("HelpLink", () => {
   });
 
   it("should render custom children text", () => {
-    renderWithProviders(
-      <HelpLink href="https://docs.example.com">Custom docs link</HelpLink>
-    );
+    renderWithProviders(<HelpLink href="https://docs.example.com">Custom docs link</HelpLink>);
 
     expect(screen.getByText("Custom docs link")).toBeInTheDocument();
   });
@@ -58,9 +56,7 @@ describe("HelpIcon", () => {
 
   it("should show learn more link when learnMoreHref is provided", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <HelpIcon content="Help text" learnMoreHref="https://docs.example.com" />
-    );
+    renderWithProviders(<HelpIcon content="Help text" learnMoreHref="https://docs.example.com" />);
     await user.hover(screen.getByRole("button", { name: /help information/i }));
     expect(screen.getByText("Learn more")).toBeInTheDocument();
   });
@@ -68,11 +64,7 @@ describe("HelpIcon", () => {
   it("should use custom learn more text when provided", async () => {
     const user = userEvent.setup();
     renderWithProviders(
-      <HelpIcon
-        content="Help text"
-        learnMoreHref="https://docs.example.com"
-        learnMoreText="Read docs"
-      />
+      <HelpIcon content="Help text" learnMoreHref="https://docs.example.com" learnMoreText="Read docs" />,
     );
 
     await user.hover(screen.getByRole("button", { name: /help information/i }));

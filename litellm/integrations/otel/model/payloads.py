@@ -34,6 +34,7 @@ __all__ = [
     "RequestIdentity",
     "GuardrailSpanData",
     "LLMCallSpanData",
+    "LLMCost",
     "LLMRequestParams",
     "LLMUsage",
     "MCPToolCallSpanData",
@@ -92,6 +93,49 @@ class LLMUsage:
 
 
 @dataclass(frozen=True)
+class LLMCost:
+    """Per-component cost breakdown, from the StandardLoggingPayload
+    ``cost_breakdown`` (``litellm.types.utils.CostBreakdown``).
+
+    Each field is the USD cost of one component, or ``None`` when the source did
+    not report it — so the mapper omits absent components instead of emitting 0.
+    The final (post-discount/post-margin) total is carried separately on
+    ``LLMCallSpanData.response_cost``. Free-form ``additional_costs`` are not
+    surfaced here: span attributes are scalar and there is no agreed key shape
+    for them yet.
+    """
+
+    input: float | None = None
+    output: float | None = None
+    cache_read: float | None = None
+    cache_creation: float | None = None
+    tool_usage: float | None = None
+    original: float | None = None
+    discount_amount: float | None = None
+    discount_percent: float | None = None
+    margin_fixed_amount: float | None = None
+    margin_percent: float | None = None
+    margin_total_amount: float | None = None
+
+    @classmethod
+    def from_breakdown(cls, breakdown: Mapping[str, object] | None) -> "LLMCost":
+        b = breakdown or {}
+        return cls(
+            input=as_float(b.get("input_cost")),
+            output=as_float(b.get("output_cost")),
+            cache_read=as_float(b.get("cache_read_cost")),
+            cache_creation=as_float(b.get("cache_creation_cost")),
+            tool_usage=as_float(b.get("tool_usage_cost")),
+            original=as_float(b.get("original_cost")),
+            discount_amount=as_float(b.get("discount_amount")),
+            discount_percent=as_float(b.get("discount_percent")),
+            margin_fixed_amount=as_float(b.get("margin_fixed_amount")),
+            margin_percent=as_float(b.get("margin_percent")),
+            margin_total_amount=as_float(b.get("margin_total_amount")),
+        )
+
+
+@dataclass(frozen=True)
 class SpanError:
     error_type: str | None = None
     message: str | None = None
@@ -143,14 +187,10 @@ class GuardrailSpanData:
     error: SpanError | None = None
 
     # Guardrail statuses that mean the guardrail did not pass the request through.
-    _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset(
-        {"guardrail_intervened", "guardrail_failed_to_respond"}
-    )
+    _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset({"guardrail_intervened", "guardrail_failed_to_respond"})
 
     @classmethod
-    def from_logging_entry(
-        cls, entry: "StandardLoggingGuardrailInformation"
-    ) -> "GuardrailSpanData":
+    def from_logging_entry(cls, entry: "StandardLoggingGuardrailInformation") -> "GuardrailSpanData":
         """Build from one ``standard_logging_guardrail_information`` entry.
 
         Reads the canonical, provider-agnostic ``StandardLoggingGuardrailInformation``
@@ -235,9 +275,7 @@ class ToolDefinition:
 
     name: str
     description: str | None = None
-    parameters_json: str | None = (
-        None  # JSON-serialized schema (str so it's an AttrValue)
-    )
+    parameters_json: str | None = None  # JSON-serialized schema (str so it's an AttrValue)
 
 
 @dataclass(frozen=True)
@@ -255,6 +293,7 @@ class LLMCallSpanData:
     server: ServerInfo | None
     identity: RequestIdentity
     is_streaming: bool | None = None
+    cost: LLMCost = field(default_factory=LLMCost)
     tools: tuple[ToolDefinition, ...] = ()
     # Raw messages and response, needed by vendor mappers (OpenInference,
     # Langfuse, Weave) that stamp message-level attributes. ``messages_in`` is
@@ -277,9 +316,7 @@ class LLMCallSpanData:
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response = payload.get("response")
-        response = cast(
-            Mapping[str, object], raw_response if isinstance(raw_response, dict) else {}
-        )
+        response = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
         choices_out = _dicts(response.get("choices"))
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
@@ -302,6 +339,7 @@ class LLMCallSpanData:
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
+            cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
             is_streaming=as_bool(payload.get("stream")),
@@ -340,7 +378,7 @@ class MCPToolCallSpanData:
     def from_standard_logging_payload(
         cls, payload: "StandardLoggingPayload", capture_content: bool = False
     ) -> "MCPToolCallSpanData":
-        meta = cast(Mapping[str, object], payload.get("mcp_tool_call_metadata") or {})
+        meta = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
             method=MCPMethod.TOOLS_CALL.value,
@@ -348,14 +386,10 @@ class MCPToolCallSpanData:
             server_name=as_str(meta.get("mcp_server_name")),
             session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
-                _json_or_none(meta.get("arguments"))
-                if capture_content and meta.get("arguments") is not None
-                else None
+                _json_or_none(meta.get("arguments")) if capture_content and meta.get("arguments") is not None else None
             ),
             result_json=(
-                _json_or_none(meta.get("result"))
-                if capture_content and meta.get("result") is not None
-                else None
+                _json_or_none(meta.get("result")) if capture_content and meta.get("result") is not None else None
             ),
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
@@ -363,13 +397,22 @@ class MCPToolCallSpanData:
         )
 
 
+def _mcp_tool_call_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """The MCP gateway's tool-call metadata, which lives under
+    ``StandardLoggingPayload.metadata`` (a ``StandardLoggingMetadata`` key), not
+    at the payload's top level."""
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    meta = metadata.get("mcp_tool_call_metadata")
+    return meta if isinstance(meta, Mapping) else {}
+
+
 def is_mcp_tool_call(payload: Mapping[str, object]) -> bool:
     """Whether a closed request's payload is an MCP tool call rather than an LLM
     call — true when the MCP gateway stamped its tool-call metadata, or the call
     type says so on a path that hasn't populated the metadata yet."""
-    return bool(payload.get("mcp_tool_call_metadata")) or (
-        payload.get("call_type") == "call_mcp_tool"
-    )
+    return bool(_mcp_tool_call_metadata(payload)) or (payload.get("call_type") == "call_mcp_tool")
 
 
 # --- service event_metadata sanitization ------------------------------------ #
@@ -389,9 +432,7 @@ _SENSITIVE_METADATA_SUBSTRINGS: tuple[str, ...] = (
 # Keys that carry raw call-site internals — live objects, full kwargs/args. The
 # operation name is already the span's ``call_type``, so ``function_name`` is
 # redundant.
-_DROP_METADATA_KEYS: frozenset = frozenset(
-    {"function_kwargs", "function_args", "function_name"}
-)
+_DROP_METADATA_KEYS: frozenset = frozenset({"function_kwargs", "function_args", "function_name"})
 _MAX_METADATA_VALUE_LEN = 1024
 _MAX_METADATA_ITEMS = 32
 

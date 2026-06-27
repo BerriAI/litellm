@@ -39,9 +39,7 @@ PRESET_BY_CALLBACK: dict[str, Preset] = {
 #: routing). Only integrations that support dynamic credentials appear here —
 #: Arize-Phoenix/Langtrace/Levo/AgentOps don't, so they use the logger's
 #: default tracer.
-DYNAMIC_HEADERS_BY_CALLBACK: dict[
-    str, Callable[[StandardCallbackDynamicParams], dict[str, str]]
-] = {
+DYNAMIC_HEADERS_BY_CALLBACK: dict[str, Callable[[StandardCallbackDynamicParams], dict[str, str]]] = {
     "arize": arize_dynamic_headers,
     "langfuse_otel": langfuse_dynamic_headers,
     "weave_otel": weave_dynamic_headers,

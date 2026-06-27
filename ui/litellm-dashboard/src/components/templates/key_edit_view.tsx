@@ -19,6 +19,7 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
@@ -289,11 +290,19 @@ export function KeyEditView({
         values.duration = null;
       }
 
-      // Include multi-window budget limits (filter out incomplete entries)
+      // Reconcile multi-window budget limits from the editor state, dropping
+      // incomplete entries (no max_budget). Sending [] tells the backend to clear
+      // all stored windows, so only send it when the user removed every window;
+      // when entries remain but are still incomplete, omit the field so the saved
+      // windows are left untouched (JSON.stringify drops the undefined key).
       const validWindows = budgetLimits.filter(
         (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
       );
-      values.budget_limits = validWindows.length > 0 ? validWindows : undefined;
+      if (validWindows.length > 0) {
+        values.budget_limits = validWindows;
+      } else if (budgetLimits.length === 0) {
+        values.budget_limits = [];
+      }
 
       await onSubmit(values);
     } finally {
@@ -394,11 +403,11 @@ export function KeyEditView({
                   }
                 }}
               >
-                <Select.Option value="default" label="Default">
+                <Select.Option value="default" label="Full Access">
                   <div style={{ padding: "4px 0" }}>
-                    <div style={{ fontWeight: 500 }}>Default</div>
+                    <div style={{ fontWeight: 500 }}>Full Access</div>
                     <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                      Can call AI APIs + Management routes
+                      Can call all routes (AI APIs, Management, and read-only)
                     </div>
                   </div>
                 </Select.Option>
@@ -618,6 +627,7 @@ export function KeyEditView({
           value={form.getFieldValue("mcp_servers_and_groups")}
           accessToken={accessToken || ""}
           placeholder="Select MCP servers or access groups (optional)"
+          allowNoMcpServers
         />
       </Form.Item>
 
@@ -637,7 +647,9 @@ export function KeyEditView({
           <div className="mb-6">
             <MCPToolPermissions
               accessToken={accessToken || ""}
-              selectedServers={form.getFieldValue("mcp_servers_and_groups")?.servers || []}
+              selectedServers={(form.getFieldValue("mcp_servers_and_groups")?.servers || []).filter(
+                (s: string) => s !== NO_MCP_SERVERS_SENTINEL,
+              )}
               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
             />

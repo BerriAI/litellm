@@ -83,21 +83,14 @@ class OpenInferenceMapper:
             **collect(cls._LLM_CALL_ATTRS, data),
             **collect(cls._BLOB_ATTRS, data),
             **cls._messages("llm.input_messages", "input.value", data.messages_in),
-            **cls._messages(
-                "llm.output_messages", "output.value", output_messages(data)
-            ),
+            **cls._messages("llm.output_messages", "output.value", output_messages(data)),
             **cls._tools(data),
         }
 
     @staticmethod
-    def _messages(
-        prefix: str, value_key: str, messages: Sequence[object]
-    ) -> AttributeMap:
+    def _messages(prefix: str, value_key: str, messages: Sequence[object]) -> AttributeMap:
         """Per-message ``{prefix}.{idx}.message.*`` keys + the ``value_key`` blob."""
-        parsed = [
-            (m.get("role") if isinstance(m, dict) else None, message_content(m))
-            for m in messages
-        ]
+        parsed = [(m.get("role") if isinstance(m, dict) else None, message_content(m)) for m in messages]
         attrs = drop_none(
             {
                 key: value
@@ -112,9 +105,7 @@ class OpenInferenceMapper:
             }
         )
         if parsed:
-            attrs[value_key] = json.dumps(
-                [{"role": role, "content": content} for role, content in parsed]
-            )
+            attrs[value_key] = json.dumps([{"role": role, "content": content} for role, content in parsed])
         return attrs
 
     @classmethod

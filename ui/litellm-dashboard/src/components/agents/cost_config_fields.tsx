@@ -6,12 +6,7 @@ const CostConfigFields: React.FC = () => {
   return (
     <>
       {AGENT_FORM_CONFIG.cost.fields.map((field) => (
-        <Form.Item
-          key={field.name}
-          label={field.label}
-          name={field.name}
-          tooltip={field.tooltip}
-        >
+        <Form.Item key={field.name} label={field.label} name={field.name} tooltip={field.tooltip}>
           <Input placeholder={field.placeholder} type="number" step="0.000001" />
         </Form.Item>
       ))}
@@ -20,4 +15,3 @@ const CostConfigFields: React.FC = () => {
 };
 
 export default CostConfigFields;
-

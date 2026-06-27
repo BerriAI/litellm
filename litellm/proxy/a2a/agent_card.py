@@ -97,9 +97,7 @@ def _filter_capabilities(upstream_capabilities: Any) -> Dict[str, Any]:
     if not isinstance(upstream_capabilities, dict):
         return {}
     return {
-        key: value
-        for key, value in upstream_capabilities.items()
-        if key in _ALLOWED_CAPABILITY_KEYS and bool(value)
+        key: value for key, value in upstream_capabilities.items() if key in _ALLOWED_CAPABILITY_KEYS and bool(value)
     }
 
 

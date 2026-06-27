@@ -35,8 +35,13 @@ async def test_attempt_db_reconnect_should_succeed(mock_proxy_logging):
     client = PrismaClient(
         database_url="mock://test", proxy_logging_obj=mock_proxy_logging
     )
-    client.db.recreate_prisma_client = AsyncMock(return_value=None)
-    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+    client.db.recreate_prisma_client = AsyncMock(return_value=True)
+    # Probe fails (connection genuinely broken) so the direct path proceeds to
+    # recreate; the post-recreate smoke test then succeeds. A healthy probe
+    # would instead skip the recreate (covered in test_prisma_client_reconnect).
+    client.db.query_raw = AsyncMock(
+        side_effect=[ConnectionError("probe failed"), [{"result": 1}]]
+    )
     client._start_engine_watcher = AsyncMock()
 
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
@@ -46,8 +51,10 @@ async def test_attempt_db_reconnect_should_succeed(mock_proxy_logging):
         )
 
     assert result is True
-    client.db.recreate_prisma_client.assert_awaited_once_with("postgresql://test")
-    client.db.query_raw.assert_awaited_once_with("SELECT 1")
+    client.db.recreate_prisma_client.assert_awaited_once_with(
+        "postgresql://test", expected_generation=0
+    )
+    assert client.db.query_raw.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -179,15 +186,21 @@ async def test_run_reconnect_cycle_watchdog_should_use_recreate_prisma_client(
     client.db.disconnect = AsyncMock(
         side_effect=AssertionError("disconnect must not be called")
     )
-    client.db.recreate_prisma_client = AsyncMock(return_value=None)
-    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+    client.db.recreate_prisma_client = AsyncMock(return_value=True)
+    # Probe fails so we proceed to recreate (and verify disconnect is never
+    # used — issue #26191); the post-recreate smoke test then succeeds.
+    client.db.query_raw = AsyncMock(
+        side_effect=[ConnectionError("probe failed"), [{"result": 1}]]
+    )
     client._start_engine_watcher = AsyncMock()
 
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
         await client._run_reconnect_cycle(timeout_seconds=None)
 
-    client.db.recreate_prisma_client.assert_awaited_once_with("postgresql://test")
-    client.db.query_raw.assert_awaited_once_with("SELECT 1")
+    client.db.recreate_prisma_client.assert_awaited_once_with(
+        "postgresql://test", expected_generation=0
+    )
+    assert client.db.query_raw.await_count == 2
     client.db.disconnect.assert_not_awaited()
 
 
@@ -201,15 +214,22 @@ async def test_run_reconnect_cycle_watchdog_should_use_default_timeout_budget(
     client._db_watchdog_reconnect_timeout_seconds = 0.1
     client._start_engine_watcher = AsyncMock()
 
-    async def _slow_recreate(_db_url):
+    async def _slow_recreate(_db_url, **_kwargs):
         await asyncio.sleep(0.08)
 
-    async def _slow_query(_query: str):
+    probe_calls = {"n": 0}
+
+    async def _probe_fails_then_slow_smoke(_query: str):
+        probe_calls["n"] += 1
+        if probe_calls["n"] == 1:
+            # Probe fails fast so the cycle proceeds to the slow recreate +
+            # smoke test, whose combined time must exceed the overall budget.
+            raise ConnectionError("probe failed")
         await asyncio.sleep(0.08)
         return [{"result": 1}]
 
     client.db.recreate_prisma_client = AsyncMock(side_effect=_slow_recreate)
-    client.db.query_raw = AsyncMock(side_effect=_slow_query)
+    client.db.query_raw = AsyncMock(side_effect=_probe_fails_then_slow_smoke)
 
     with (
         pytest.raises(asyncio.TimeoutError),
@@ -227,15 +247,22 @@ async def test_run_reconnect_cycle_timeout_should_use_single_overall_budget(
     )
     client._start_engine_watcher = AsyncMock()
 
-    async def _slow_recreate(_db_url):
+    async def _slow_recreate(_db_url, **_kwargs):
         await asyncio.sleep(0.08)
 
-    async def _slow_query(_query: str):
+    probe_calls = {"n": 0}
+
+    async def _probe_fails_then_slow_smoke(_query: str):
+        probe_calls["n"] += 1
+        if probe_calls["n"] == 1:
+            # Probe fails fast so the cycle proceeds to the slow recreate +
+            # smoke test, whose combined time must exceed the overall budget.
+            raise ConnectionError("probe failed")
         await asyncio.sleep(0.08)
         return [{"result": 1}]
 
     client.db.recreate_prisma_client = AsyncMock(side_effect=_slow_recreate)
-    client.db.query_raw = AsyncMock(side_effect=_slow_query)
+    client.db.query_raw = AsyncMock(side_effect=_probe_fails_then_slow_smoke)
 
     with (
         pytest.raises(asyncio.TimeoutError),

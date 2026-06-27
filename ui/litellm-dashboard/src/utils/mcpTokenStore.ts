@@ -27,11 +27,7 @@ function storageKey(serverId: string, userId?: string | null): string {
   return `${KEY_PREFIX}${userPart}:${serverId}`;
 }
 
-export function setToken(
-  serverId: string,
-  data: TokenInput,
-  userId?: string | null,
-): void {
+export function setToken(serverId: string, data: TokenInput, userId?: string | null): void {
   if (typeof window === "undefined") return;
   const stored: StoredToken = {
     access_token: data.access_token,
@@ -46,10 +42,7 @@ export function setToken(
   }
 }
 
-export function getToken(
-  serverId: string,
-  userId?: string | null,
-): StoredToken | null {
+export function getToken(serverId: string, userId?: string | null): StoredToken | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.sessionStorage.getItem(storageKey(serverId, userId));

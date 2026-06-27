@@ -18,9 +18,8 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
   disabled = false,
 }) => {
   const [selectedGuardrails, setSelectedGuardrails] = useState<string[]>(Object.keys(value));
-  const [guardrailSettings, setGuardrailSettings] = useState<
-    Record<string, { request_fields?: string[]; response_fields?: string[] } | null>
-  >(value);
+  const [guardrailSettings, setGuardrailSettings] =
+    useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>(value);
 
   // Sync external value changes
   useEffect(() => {
@@ -47,7 +46,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
   const handleFieldChange = (
     guardrailName: string,
     fieldType: "request_fields" | "response_fields",
-    fields: string[]
+    fields: string[],
   ) => {
     const currentSettings = guardrailSettings[guardrailName] || {};
     const newSettings = {
@@ -94,13 +93,20 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
         description={
           <div className="space-y-2">
             <div>
-              Optionally specify which fields to check. If left empty, the entire request/response is sent to the guardrail.
+              Optionally specify which fields to check. If left empty, the entire request/response is sent to the
+              guardrail.
             </div>
             <div className="text-xs space-y-1 mt-2">
               <div className="font-medium">Common Examples:</div>
-              <div>• <code className="bg-gray-100 px-1 rounded">query</code> - Single field</div>
-              <div>• <code className="bg-gray-100 px-1 rounded">documents[*].text</code> - All text in documents array</div>
-              <div>• <code className="bg-gray-100 px-1 rounded">messages[*].content</code> - All message contents</div>
+              <div>
+                • <code className="bg-gray-100 px-1 rounded">query</code> - Single field
+              </div>
+              <div>
+                • <code className="bg-gray-100 px-1 rounded">documents[*].text</code> - All text in documents array
+              </div>
+              <div>
+                • <code className="bg-gray-100 px-1 rounded">messages[*].content</code> - All message contents
+              </div>
             </div>
           </div>
         }
@@ -131,9 +137,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
         <div className="mt-6 space-y-4">
           <div className="flex items-center justify-between mb-3">
             <div className="text-sm font-medium text-gray-700">Field Targeting (Optional)</div>
-            <div className="text-xs text-gray-500">
-              💡 Tip: Leave empty to check entire payload
-            </div>
+            <div className="text-xs text-gray-500">💡 Tip: Leave empty to check entire payload</div>
           </div>
           {selectedGuardrails.map((guardrailName) => (
             <Card key={guardrailName} className="p-4 bg-gray-50">
@@ -143,17 +147,19 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-xs text-gray-600 flex items-center">
                       Request Fields (pre_call)
-                      <Tooltip title={
-                        <div>
-                          <div className="font-medium mb-1">Specify which request fields to check</div>
-                          <div className="text-xs space-y-1">
-                            <div>Examples:</div>
-                            <div>• query</div>
-                            <div>• documents[*].text</div>
-                            <div>• messages[*].content</div>
+                      <Tooltip
+                        title={
+                          <div>
+                            <div className="font-medium mb-1">Specify which request fields to check</div>
+                            <div className="text-xs space-y-1">
+                              <div>Examples:</div>
+                              <div>• query</div>
+                              <div>• documents[*].text</div>
+                              <div>• messages[*].content</div>
+                            </div>
                           </div>
-                        </div>
-                      }>
+                        }
+                      >
                         <InfoCircleOutlined className="ml-1 text-gray-400" />
                       </Tooltip>
                     </label>
@@ -196,16 +202,18 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-xs text-gray-600 flex items-center">
                       Response Fields (post_call)
-                      <Tooltip title={
-                        <div>
-                          <div className="font-medium mb-1">Specify which response fields to check</div>
-                          <div className="text-xs space-y-1">
-                            <div>Examples:</div>
-                            <div>• results[*].text</div>
-                            <div>• choices[*].message.content</div>
+                      <Tooltip
+                        title={
+                          <div>
+                            <div className="font-medium mb-1">Specify which response fields to check</div>
+                            <div className="text-xs space-y-1">
+                              <div>Examples:</div>
+                              <div>• results[*].text</div>
+                              <div>• choices[*].message.content</div>
+                            </div>
                           </div>
-                        </div>
-                      }>
+                        }
+                      >
                         <InfoCircleOutlined className="ml-1 text-gray-400" />
                       </Tooltip>
                     </label>
@@ -243,4 +251,3 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
 };
 
 export default PassThroughGuardrailsSection;
-

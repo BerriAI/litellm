@@ -1,13 +1,14 @@
 """Regression: a guardrail block on a passthrough endpoint must still emit the
 otel guardrail span.
 
-Before the fix the post-call guardrail recorded its
-``standard_logging_guardrail_information`` onto a throwaway ``hook_data`` dict,
-which the failure handler discarded. So ``pass_through_request`` forwarded a
-``request_data`` without it to ``post_call_failure_hook`` and the otel guardrail
-span (emitted from that hook) was present on allow but missing on block. The
-unified path always has it. These tests drive the real ``pass_through_request``
-with a real ``ProxyLogging`` + a real otel V2 logger and assert the span is
+The span is emitted from the guardrail-recording path the moment a guardrail
+finishes (``add_standard_logging_guardrail_information_to_request_data`` ->
+``emit_guardrail_span``), routed through the proxy's registered otel V2 logger,
+rather than from a post-call hook that does not fire on every path. A block
+raises out of the post-call hook before any later hook runs, so the recording
+path is the only place the span is reliably produced. These tests drive the real
+``pass_through_request`` with a real ``ProxyLogging`` + a real otel V2 logger
+registered as the proxy's ``open_telemetry_logger`` and assert the span is
 emitted on both allow and block.
 """
 
@@ -141,6 +142,7 @@ async def _drive(response_text: str):
         ),
         patch(f"{_PT_MOD}._is_streaming_response", return_value=False),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch("litellm.proxy.proxy_server.open_telemetry_logger", otel),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch(f"{_PT_MOD}.pass_through_endpoint_logging", mock_pt_logging),
         patch(f"{_PT_MOD}.get_async_httpx_client", return_value=mock_async_client_obj),

@@ -14,11 +14,7 @@ import {
   Switch,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
-import {
-  getGeneralSettingsCall,
-  updateConfigFieldSetting,
-  deleteConfigFieldSetting,
-} from "./networking";
+import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "./networking";
 import { InputNumber } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
@@ -29,7 +25,6 @@ interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
   userID: string | null;
-  modelData: any;
 }
 
 interface generalSettingsItem {
@@ -40,7 +35,7 @@ interface generalSettingsItem {
   stored_in_db: boolean | null;
 }
 
-const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData }) => {
+const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID }) => {
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
 
   useEffect(() => {
@@ -117,23 +112,13 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
         </TabList>
         <TabPanels className="px-8 py-6">
           <TabPanel>
-            <RouterSettings
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
           </TabPanel>
           <TabPanel>
             <RoutingGroups />
           </TabPanel>
           <TabPanel>
-            <Fallbacks
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
           </TabPanel>
           <TabPanel>
             <Card>

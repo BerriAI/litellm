@@ -5,14 +5,12 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
-  pull-requests: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -20,6 +18,10 @@ concurrency:
 
 jobs:
   proxy-endpoints:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: >-
@@ -42,6 +44,7 @@ jobs:
         tests/test_litellm/proxy/rag_endpoints
         tests/test_litellm/proxy/realtime_endpoints
         tests/test_litellm/proxy/ui_crud_endpoints
+        tests/test_litellm/proxy/utils
       workers: 2
       reruns: 2
       artifact-name: proxy-endpoints
@@ -51,6 +54,10 @@ jobs:
   # is independent and its coverage artifact is uploaded separately.
   # See: https://www.notion.so/36c43b8acdab81ee845fd5365128a2fc
   proxy-server:
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: tests/test_litellm/proxy/proxy_server
