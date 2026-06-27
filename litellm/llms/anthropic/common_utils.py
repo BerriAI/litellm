@@ -26,6 +26,23 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 
+_BEDROCK_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
+_INFERENCE_PROFILE_MINOR_RE = re.compile(r":\d+$")
+_DATED_RELEASE_SUFFIX_RE = re.compile(r"-\d{8}$")
+_DOTTED_VERSION_RE = re.compile(r"(\d)\.(\d)")
+
+
+def _strip_bedrock_id_suffixes(model: str) -> str:
+    """Reduce a full Bedrock model id to its base cost-map key by rewriting a
+    dotted family version then peeling a trailing ``-vN:rev`` and ``-YYYYMMDD``
+    in that order, so the real ``-<date>-v1:0`` shape (e.g.
+    ``us.anthropic.claude-sonnet-4-6-20251101-v1:0``) resolves rather than only
+    the date or version in isolation."""
+    return _DATED_RELEASE_SUFFIX_RE.sub(
+        "",
+        _BEDROCK_VERSION_SUFFIX_RE.sub("", _DOTTED_VERSION_RE.sub(r"\1-\2", model)),
+    )
+
 
 def is_anthropic_oauth_key(value: Optional[str]) -> bool:
     """Check if a value contains an Anthropic OAuth token (sk-ant-oat*)."""
@@ -244,38 +261,6 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return False
 
     @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model (Opus 4.6 or Sonnet 4.6)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-                "sonnet-4-6",
-                "sonnet_4_6",
-                "sonnet-4.6",
-                "sonnet_4.6",
-            )
-        )
-
-    @staticmethod
-    def _is_claude_4_7_model(model: str) -> bool:
-        """Check if the model is a Claude 4.7 model (Opus 4.7)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-7",
-                "opus_4_7",
-                "opus-4.7",
-                "opus_4.7",
-            )
-        )
-
-    @staticmethod
     def _supports_sampling_params(model: str) -> bool:
         """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
         rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
@@ -336,27 +321,42 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _model_map_lookup_candidates(model: str) -> List[str]:
-        """Model-map keys to try for ``model``, stripping bedrock/vertex
-        prefixes so a provider-routed Claude still resolves to its entry."""
-        candidates = [model]
-        for prefix in (
+        """Model-map keys to try for ``model``: the id itself, the same id with a
+        bedrock/vertex routing prefix removed, the Bedrock base model, and each of
+        those normalized by stripping a Bedrock version suffix (``-v1:0`` fully or
+        just the ``:0`` inference-profile minor), stripping a dated-release suffix
+        (``-20260205``), or rewriting a dotted family version to hyphens
+        (``4.6`` -> ``4-6``). Lets any reasonable alias (e.g.
+        ``bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0``,
+        ``claude-sonnet-4-6-20260219`` or ``claude-sonnet-4.6``) resolve to its base
+        cost-map entry so the capability flag on that entry stays authoritative."""
+        prefixes = (
             "bedrock/converse/",
             "bedrock/invoke/",
             "bedrock/",
             "vertex_ai/",
-        ):
-            if model.startswith(prefix):
-                candidates.append(model[len(prefix) :])
+        )
+        deprefixed = tuple(model[len(p) :] for p in prefixes if model.startswith(p))
         try:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
             base = BedrockModelInfo.get_base_model(model)
-            if base:
-                candidates.append(base)
-                candidates.append(f"bedrock/{base}")
         except Exception:
-            pass
-        return candidates
+            base = None
+        bedrock_base = (base, f"bedrock/{base}") if base else ()
+        primary = (model, *deprefixed, *bedrock_base)
+        normalized = tuple(
+            stripped
+            for cand in primary
+            for stripped in (
+                _BEDROCK_VERSION_SUFFIX_RE.sub("", cand),
+                _INFERENCE_PROFILE_MINOR_RE.sub("", cand),
+                _DATED_RELEASE_SUFFIX_RE.sub("", cand),
+                _DOTTED_VERSION_RE.sub(r"\1-\2", cand),
+                _strip_bedrock_id_suffixes(cand),
+            )
+        )
+        return list(dict.fromkeys((*primary, *normalized)))
 
     @staticmethod
     def _get_model_capability(model: str, key: str) -> Optional[bool]:
@@ -403,19 +403,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
-        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``.
+        """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
-        Driven by the ``supports_adaptive_thinking`` flag in the model map; the
-        4.6/4.7 name checks remain only as a fallback for provider-routed ids
-        whose map entries predate the flag.
+        Sourced solely from the model cost map's ``supports_adaptive_thinking`` flag,
+        resolved through provider prefixes. A model that resolves to no mapped entry
+        (an unmapped alias or a future release not yet in the map) is treated as
+        non-adaptive until a ``fallback_generalizations`` rule covers it.
         """
-        if AnthropicModelInfo._supports_model_capability(
+        return AnthropicModelInfo._supports_model_capability(
             model, "supports_adaptive_thinking"
-        ):
-            return True
-        return AnthropicModelInfo._is_claude_4_6_model(
-            model
-        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+        )
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
