@@ -7,7 +7,7 @@ Admins use the management endpoints to read and update input_policy / output_pol
 
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
@@ -292,6 +292,46 @@ async def list_overrides_for_tool(
         return []
 
 
+def _canonical_tool_name(name: str) -> str:
+    """Canonical form for tool-name matching: case- and whitespace-insensitive.
+
+    Blocklist and policy lookups compare canonical names so a blocked tool
+    cannot be reached via case or surrounding-whitespace variants of its name.
+    """
+    return name.strip().lower()
+
+
+_INPUT_POLICY_RESTRICTIVENESS: dict[str, int] = {
+    "untrusted": 0,
+    "trusted": 1,
+    "blocked": 2,
+}
+_OUTPUT_POLICY_RESTRICTIVENESS: dict[str, int] = {"trusted": 0, "untrusted": 1}
+
+
+def _policies_by_canonical_name(
+    rows: list[Any], attr: str, restrictiveness: dict[str, int]
+) -> dict[str, str]:
+    """Map canonical tool name -> policy from DB rows.
+
+    Rows are sorted least- to most-restrictive so that when several rows
+    collapse to one canonical name (e.g. "exec_shell" and "Exec_Shell"), the
+    dict's last write keeps the strictest policy. Otherwise a looser variant
+    could silently override a block.
+    """
+    return {
+        _canonical_tool_name(cast(str, getattr(row, "tool_name", ""))): cast(
+            str, getattr(row, attr, "untrusted") or "untrusted"
+        )
+        for row in sorted(
+            rows,
+            key=lambda r: restrictiveness.get(
+                cast(str, getattr(r, attr, "untrusted") or "untrusted"), 0
+            ),
+        )
+    }
+
+
 class ToolPolicyRegistry:
     """
     In-memory registry of tool policies synced from DB.
@@ -315,26 +355,26 @@ class ToolPolicyRegistry:
                 lambda: ToolRepository(prisma_client).table.find_many(),
                 reason="sync_tool_policy_from_db_tools_lookup_failure",
             )
-            self._tool_input_policies = {
-                row.tool_name: getattr(row, "input_policy", "untrusted") or "untrusted"
-                for row in tools
-            }
-            self._tool_output_policies = {
-                row.tool_name: getattr(row, "output_policy", "untrusted") or "untrusted"
-                for row in tools
-            }
+            self._tool_input_policies = _policies_by_canonical_name(
+                tools, "input_policy", _INPUT_POLICY_RESTRICTIVENESS
+            )
+            self._tool_output_policies = _policies_by_canonical_name(
+                tools, "output_policy", _OUTPUT_POLICY_RESTRICTIVENESS
+            )
 
             perms = await call_with_db_reconnect_retry(
                 prisma_client,
                 lambda: ObjectPermissionRepository(prisma_client).table.find_many(),
                 reason="sync_tool_policy_from_db_perms_lookup_failure",
             )
-            self._blocked_tools_by_op_id = {}
-            for row in perms:
-                op_id = getattr(row, "object_permission_id", None)
-                blocked = getattr(row, "blocked_tools", None) or []
-                if op_id:
-                    self._blocked_tools_by_op_id[op_id] = list(blocked)
+            self._blocked_tools_by_op_id = {
+                op_id: [
+                    _canonical_tool_name(t)
+                    for t in cast(list[str], getattr(row, "blocked_tools", None) or [])
+                ]
+                for row in perms
+                if (op_id := getattr(row, "object_permission_id", None))
+            }
 
             self._initialized = True
             verbose_proxy_logger.info(
@@ -349,10 +389,14 @@ class ToolPolicyRegistry:
             raise
 
     def get_input_policy(self, tool_name: str) -> str:
-        return self._tool_input_policies.get(tool_name, "untrusted")
+        return self._tool_input_policies.get(
+            _canonical_tool_name(tool_name), "untrusted"
+        )
 
     def get_output_policy(self, tool_name: str) -> str:
-        return self._tool_output_policies.get(tool_name, "untrusted")
+        return self._tool_output_policies.get(
+            _canonical_tool_name(tool_name), "untrusted"
+        )
 
     def get_effective_policies(
         self,
@@ -370,13 +414,16 @@ class ToolPolicyRegistry:
         for op_id in (object_permission_id, team_object_permission_id):
             if op_id and op_id.strip():
                 blocked.update(self._blocked_tools_by_op_id.get(op_id.strip(), []))
-        result: Dict[str, str] = {}
-        for name in tool_names:
-            if name in blocked:
-                result[name] = "blocked"
-            else:
-                result[name] = self._tool_input_policies.get(name, "untrusted")
-        return result
+        return {
+            name: (
+                "blocked"
+                if _canonical_tool_name(name) in blocked
+                else self._tool_input_policies.get(
+                    _canonical_tool_name(name), "untrusted"
+                )
+            )
+            for name in tool_names
+        }
 
 
 _tool_policy_registry: Optional[ToolPolicyRegistry] = None

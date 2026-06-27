@@ -294,6 +294,62 @@ async def test_tool_policy_registry_not_initialized_returns_untrusted():
 
 
 @pytest.mark.asyncio
+async def test_tool_policy_registry_blocklist_matches_name_variants():
+    """Regression for #30732: a blocked tool must not be reachable via case or
+    surrounding-whitespace variants of its name. The blocklist comparison used
+    exact string matching, so 'Exec_Shell' / 'exec_shell ' bypassed a block on
+    'exec_shell'."""
+    prisma = MagicMock()
+    prisma.db.litellm_tooltable.find_many = AsyncMock(
+        return_value=[_mock_tool_row("exec_shell", input_policy="blocked")]
+    )
+    prisma.db.litellm_objectpermissiontable.find_many = AsyncMock(
+        return_value=[_mock_perm_row("op-key-1", ["fetch_url"])]
+    )
+    registry = ToolPolicyRegistry()
+    await registry.sync_tool_policy_from_db(prisma)
+
+    variants = ["exec_shell", "Exec_Shell", "EXEC_SHELL", "exec_shell ", " exec_shell"]
+    result = registry.get_effective_policies(variants)
+    assert all(verdict == "blocked" for verdict in result.values())
+    # Result keys preserve the original (un-normalized) request names.
+    assert set(result.keys()) == set(variants)
+
+    # Per-key blocklist (object permission) must also catch variants.
+    result_key = registry.get_effective_policies(
+        ["Fetch_URL", "fetch_url "], object_permission_id="op-key-1"
+    )
+    assert result_key["Fetch_URL"] == "blocked"
+    assert result_key["fetch_url "] == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_tool_policy_registry_canonical_collision_keeps_most_restrictive():
+    """Follow-up to #30732: when two rows collapse to the same canonical name
+    (exec_shell blocked, Exec_Shell untrusted), the looser policy must not
+    override the block via last-write-wins in the synced dict."""
+    prisma = MagicMock()
+    prisma.db.litellm_tooltable.find_many = AsyncMock(
+        return_value=[
+            _mock_tool_row("exec_shell", input_policy="blocked"),
+            _mock_tool_row("Exec_Shell", input_policy="untrusted"),
+        ]
+    )
+    prisma.db.litellm_objectpermissiontable.find_many = AsyncMock(return_value=[])
+    registry = ToolPolicyRegistry()
+    await registry.sync_tool_policy_from_db(prisma)
+
+    assert registry.get_input_policy("exec_shell") == "blocked"
+    assert registry.get_input_policy("EXEC_SHELL") == "blocked"
+    result = registry.get_effective_policies(["exec_shell", "Exec_Shell"])
+    assert result["exec_shell"] == "blocked"
+    assert result["Exec_Shell"] == "blocked"
+
+    # Direct policy lookups normalize too.
+    assert registry.get_input_policy("Exec_Shell") == "blocked"
+
+
+@pytest.mark.asyncio
 async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
     """`ToolPolicyRegistry.sync_tool_policy_from_db` self-heals across one
     ClientNotConnectedError on the tools read — the perms read still fires
@@ -325,10 +381,7 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_first_read():
     assert len(invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_tools_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_tools_lookup_failure"
     assert registry.is_initialized()
 
 
@@ -361,7 +414,4 @@ async def test_sync_tool_policy_from_db_retries_on_transport_error_second_read()
     assert len(perms_invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "sync_tool_policy_from_db_perms_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "sync_tool_policy_from_db_perms_lookup_failure"
