@@ -138,7 +138,9 @@ try:
     import weakref
 
     # Robust auth lookup keyed by session_object.
-    _session_obj_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
+    _session_obj_auth_storage: (
+        "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]"
+    ) = weakref.WeakKeyDictionary()
 
     active_mcp_session_var: contextvars.ContextVar[Optional[_McpServerSession]] = (
         contextvars.ContextVar("active_mcp_session", default=None)
@@ -516,12 +518,7 @@ if MCP_AVAILABLE:
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
-        global \
-            _SESSION_MANAGERS_INITIALIZED, \
-            _session_manager_cm, \
-            _session_manager_stateful_cm, \
-            _sse_session_manager_cm, \
-            _stateful_auth_context_cleanup_task
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm, _stateful_auth_context_cleanup_task
 
         # Use async lock to prevent concurrent initialization
         async with _INITIALIZATION_LOCK:
@@ -550,12 +547,7 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global \
-            _SESSION_MANAGERS_INITIALIZED, \
-            _session_manager_cm, \
-            _session_manager_stateful_cm, \
-            _sse_session_manager_cm, \
-            _stateful_auth_context_cleanup_task
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm, _stateful_auth_context_cleanup_task
 
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")
@@ -626,6 +618,18 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            if getattr(
+                getattr(user_api_key_auth, "object_permission", None),
+                "mcp_tool_search_enabled",
+                False,
+            ):
+                from mcp.types import Tool
+                from litellm.proxy._experimental.mcp_server.tool_search import (
+                    get_virtual_tool_definitions,
+                )
+
+                return [Tool(**d) for d in get_virtual_tool_definitions()]
+
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
             tools = await _list_mcp_tools(

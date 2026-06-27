@@ -122,6 +122,17 @@ class TestGetVirtualToolDefinitions:
         for tool in get_virtual_tool_definitions():
             assert tool.get("description"), f"{tool['name']} missing description"
 
+    def test_definitions_construct_mcp_protocol_tool(self) -> None:
+        """The MCP protocol list_tools handler builds mcp.types.Tool(**d) from
+        each definition, so the dict keys must stay valid Tool fields."""
+        from mcp.types import Tool
+
+        built = [Tool(**d) for d in get_virtual_tool_definitions()]
+        assert {t.name for t in built} == {
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            MCP_TOOL_CALL_TOOL_NAME,
+        }
+
 
 class TestListToolRestApiWithToolSearch:
     @pytest.mark.asyncio
