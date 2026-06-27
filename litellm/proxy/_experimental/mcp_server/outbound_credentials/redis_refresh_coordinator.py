@@ -46,9 +46,7 @@ class DistributedLock(Protocol):
     it still holds this caller's ``token`` (so it cannot delete a lock another worker re-acquired
     after PX-expiry); ``is_held`` is ``EXISTS`` (so a waiter can poll without taking the lock)."""
 
-    async def acquire(
-        self, key: str, token: str, ttl_seconds: float
-    ) -> LockAcquisition: ...
+    async def acquire(self, key: str, token: str, ttl_seconds: float) -> LockAcquisition: ...
 
     async def release(self, key: str, token: str) -> None: ...
 
