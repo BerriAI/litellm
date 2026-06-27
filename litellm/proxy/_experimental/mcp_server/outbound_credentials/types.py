@@ -25,6 +25,8 @@ union (see `result.py`), not `expression.Result`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Literal
 
@@ -59,6 +61,19 @@ class AuthSpecKind(str, Enum):
     aws_sigv4 = "aws_sigv4"  # AWS SigV4 per-request signing (e.g. Bedrock AgentCore)
 
 
+@dataclass(frozen=True, slots=True)
+class Unauthorized:
+    """A 401 plus the optional challenge a client needs to recover.
+
+    ``detail`` is the human message; ``www_authenticate`` and ``body`` carry a scheme-specific
+    challenge (e.g. BYOK's provisioning prompt) so the edge can reproduce it verbatim.
+    """
+
+    detail: str
+    www_authenticate: str | None = None
+    body: Mapping[str, str] | None = None
+
+
 @tagged_union(frozen=True)
 class CredError:
     """Why a credential could not be produced. Fail-closed: an arm yields this or an `httpx.Auth`.
@@ -76,7 +91,7 @@ class CredError:
         "not_implemented",
     ] = tag()
 
-    unauthorized: str = (
+    unauthorized: Unauthorized = (
         case()
     )  # no usable credential for this (subject, server) -> 401 challenge
     misconfigured: str = (
@@ -96,8 +111,17 @@ class CredError:
     )  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
 
     @staticmethod
-    def of_unauthorized(detail: str) -> CredError:
-        return CredError(unauthorized=detail)
+    def of_unauthorized(
+        detail: str,
+        *,
+        www_authenticate: str | None = None,
+        body: Mapping[str, str] | None = None,
+    ) -> CredError:
+        return CredError(
+            unauthorized=Unauthorized(
+                detail=detail, www_authenticate=www_authenticate, body=body
+            )
+        )
 
     @staticmethod
     def of_misconfigured(detail: str) -> CredError:
@@ -125,7 +149,7 @@ class CredError:
         # only while that stays true (a `case _` would defeat reportMatchNotExhaustive).
         match self.tag:
             case "unauthorized":
-                return f"unauthorized: {self.unauthorized}"
+                return f"unauthorized: {self.unauthorized.detail}"
             case "misconfigured":
                 return f"misconfigured: {self.misconfigured}"
             case "upstream_unavailable":
