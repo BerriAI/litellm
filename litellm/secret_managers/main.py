@@ -207,10 +207,7 @@ def get_secret(
             # https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-cloud-providers#using-custom-actions
             actions_id_token_request_url = os.getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
             actions_id_token_request_token = os.getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
-            if (
-                actions_id_token_request_url is None
-                or actions_id_token_request_token is None
-            ):
+            if actions_id_token_request_url is None or actions_id_token_request_token is None:
                 raise ValueError(
                     "ACTIONS_ID_TOKEN_REQUEST_URL or ACTIONS_ID_TOKEN_REQUEST_TOKEN not found in environment"
                 )
@@ -278,10 +275,7 @@ def get_secret(
             raise ValueError("Unsupported OIDC provider")
 
     try:
-        if (
-            _should_read_secret_from_secret_manager()
-            and litellm.secret_manager_client is not None
-        ):
+        if _should_read_secret_from_secret_manager() and litellm.secret_manager_client is not None:
             try:
                 client = litellm.secret_manager_client
                 key_manager = "local"
@@ -319,9 +313,7 @@ def get_secret(
         else:
             secret = os.environ.get(secret_name)
             secret_value_as_bool = str_to_bool(secret) if secret is not None else None
-            if secret_value_as_bool is not None and isinstance(
-                secret_value_as_bool, bool
-            ):
+            if secret_value_as_bool is not None and isinstance(secret_value_as_bool, bool):
                 return secret_value_as_bool
             else:
                 return secret

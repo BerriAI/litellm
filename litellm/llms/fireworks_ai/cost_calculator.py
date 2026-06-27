@@ -72,9 +72,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         base_model = get_base_model_for_pricing(model_name=model)
 
         ## GET MODEL INFO
-        model_info = get_model_info(
-            model=base_model, custom_llm_provider="fireworks_ai"
-        )
+        model_info = get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
     ## CALCULATE INPUT COST
 

@@ -927,3 +927,80 @@ def test_custom_latency_buckets():
                 REGISTRY.unregister(collector)
             except Exception:
                 pass
+
+
+class TestSetTeamMembersMetric:
+    """litellm_team_members_metric tracks the current member count per team."""
+
+    def _gauge_value(self, team_id, team_alias):
+        return REGISTRY.get_sample_value(
+            "litellm_team_members_metric",
+            {"team": team_id, "team_alias": team_alias},
+        )
+
+    def test_metric_initialized(self, prometheus_logger):
+        assert hasattr(prometheus_logger, "litellm_team_members_metric")
+        assert prometheus_logger.litellm_team_members_metric is not None
+
+    @pytest.mark.parametrize("count", [0, 1, 3, 7])
+    def test_sets_gauge_to_member_count(self, prometheus_logger, count):
+        from litellm.proxy._types import LiteLLM_TeamTable, Member
+
+        team = LiteLLM_TeamTable(
+            team_id="team-a",
+            team_alias="Acme",
+            members_with_roles=[
+                Member(user_id=f"u{i}", role="user") for i in range(count)
+            ],
+        )
+        prometheus_logger.set_team_members_metric(team)
+        assert self._gauge_value("team-a", "Acme") == float(count)
+
+    def test_gauge_reflects_latest_count_not_delta(self, prometheus_logger):
+        """Re-emitting overwrites with the authoritative count (set, not inc/dec)."""
+        from litellm.proxy._types import LiteLLM_TeamTable, Member
+
+        members = [Member(user_id=f"u{i}", role="user") for i in range(4)]
+        team = LiteLLM_TeamTable(
+            team_id="team-b", team_alias="Beta", members_with_roles=members
+        )
+        prometheus_logger.set_team_members_metric(team)
+        assert self._gauge_value("team-b", "Beta") == 4.0
+
+        # Drop two members and re-emit: gauge must read 2, not 4 and not -2.
+        team.members_with_roles = members[:2]
+        prometheus_logger.set_team_members_metric(team)
+        assert self._gauge_value("team-b", "Beta") == 2.0
+
+    def test_none_alias_falls_back_to_empty_string(self, prometheus_logger):
+        from litellm.proxy._types import LiteLLM_TeamTable, Member
+
+        team = LiteLLM_TeamTable(
+            team_id="team-c",
+            team_alias=None,
+            members_with_roles=[Member(user_id="solo", role="admin")],
+        )
+        prometheus_logger.set_team_members_metric(team)
+        assert self._gauge_value("team-c", "") == 1.0
+
+    def test_teams_isolated_by_label(self, prometheus_logger):
+        from litellm.proxy._types import LiteLLM_TeamTable, Member
+
+        team_one = LiteLLM_TeamTable(
+            team_id="team-1",
+            team_alias="One",
+            members_with_roles=[Member(user_id="a", role="user")],
+        )
+        team_two = LiteLLM_TeamTable(
+            team_id="team-2",
+            team_alias="Two",
+            members_with_roles=[
+                Member(user_id="b", role="user"),
+                Member(user_id="c", role="user"),
+                Member(user_id="d", role="user"),
+            ],
+        )
+        prometheus_logger.set_team_members_metric(team_one)
+        prometheus_logger.set_team_members_metric(team_two)
+        assert self._gauge_value("team-1", "One") == 1.0
+        assert self._gauge_value("team-2", "Two") == 3.0
