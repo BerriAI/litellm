@@ -169,6 +169,14 @@ class _PlanAgenticCallback(CustomLogger):
         return self._plan
 
 
+class _StubExecuteHandler(BaseLLMHTTPHandler):
+    """Handler whose agentic-plan execution is stubbed to a dict so the
+    _execute_anthropic_agentic_plan return path can be exercised in isolation."""
+
+    async def _execute_anthropic_agentic_plan(self, **kwargs):
+        return _anthropic_response()
+
+
 class TestCallAgenticCompletionHooksWrapping:
     """Regression tests: every agentic-loop return path must wrap the dict
     response in a fake stream when the request was a converted stream."""
@@ -196,6 +204,24 @@ class TestCallAgenticCompletionHooksWrapping:
     @pytest.mark.asyncio
     async def test_terminate_path_wraps(self):
         plan = AgenticLoopPlan(terminate=True, stop_reason="done")
+        logging_obj = _converted_stream_logging_obj(_PlanAgenticCallback(plan))
+
+        result = await _run_hooks(self.handler, logging_obj)
+
+        assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+
+    @pytest.mark.asyncio
+    async def test_anthropic_plan_execution_path_wraps(self):
+        plan = AgenticLoopPlan(run_agentic_loop=True)
+        logging_obj = _converted_stream_logging_obj(_PlanAgenticCallback(plan))
+
+        result = await _run_hooks(_StubExecuteHandler(), logging_obj)
+
+        assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+
+    @pytest.mark.asyncio
+    async def test_tail_path_wraps_when_no_loop_runs(self):
+        plan = AgenticLoopPlan(run_agentic_loop=False)
         logging_obj = _converted_stream_logging_obj(_PlanAgenticCallback(plan))
 
         result = await _run_hooks(self.handler, logging_obj)
