@@ -23,6 +23,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     BlockTeamRequest,
@@ -2445,6 +2446,23 @@ async def _add_team_members_to_team(
     return updated_team, updated_users, updated_team_memberships
 
 
+def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
+    """Update the Prometheus team members gauge after a membership change.
+
+    No-ops when the Prometheus callback is not registered, and never lets a
+    metric failure break the team add/delete request.
+    """
+    prometheus_logger = PrometheusLogger.get_instance()
+    if prometheus_logger is None:
+        return
+    try:
+        prometheus_logger.set_team_members_metric(team)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Prometheus: failed to emit team members metric: %s", str(e)
+        )
+
+
 async def _validate_and_populate_member_user_info(
     member: Member,
     prisma_client: PrismaClient,
@@ -2665,6 +2683,9 @@ async def team_member_add(
         raise HTTPException(
             status_code=404, detail={"error": f"Team with id {data.team_id} not found"}
         )
+
+    _emit_team_members_metric(complete_team_data)
+
     return TeamAddMemberResponse(
         **updated_team.model_dump(),
         updated_users=updated_users,
@@ -2791,6 +2812,8 @@ async def team_member_delete(
         },
         data={"members_with_roles": json.dumps(_db_new_team_members)},  # type: ignore
     )
+
+    _emit_team_members_metric(existing_team_row)
 
     ## DELETE TEAM ID from USER ROW, IF EXISTS ##
     # get user row
