@@ -140,13 +140,13 @@ class LangFuseHandler:
         If no dynamic parameters are provided, it uses the `globalLangfuseLogger` values
         """
         # only use dynamic params if langfuse credentials are passed dynamically
+        # Guard against None to handle the case where no per-request params are passed
+        params = standard_callback_dynamic_params or {}
         return LangfuseLoggingConfig(
-            langfuse_secret=standard_callback_dynamic_params.get("langfuse_secret")
-            or standard_callback_dynamic_params.get("langfuse_secret_key"),
-            langfuse_public_key=standard_callback_dynamic_params.get(
-                "langfuse_public_key"
-            ),
-            langfuse_host=standard_callback_dynamic_params.get("langfuse_host"),
+            langfuse_secret=params.get("langfuse_secret")
+            or params.get("langfuse_secret_key"),
+            langfuse_public_key=params.get("langfuse_public_key"),
+            langfuse_host=params.get("langfuse_host"),
         )
 
     @staticmethod
@@ -159,12 +159,14 @@ class LangFuseHandler:
         Returns:
             bool: True if the dynamic langfuse credentials are passed, False otherwise
         """
+        # Guard against None to handle the case where no per-request params are passed (credentials come from env vars)
+        params = standard_callback_dynamic_params or {}
 
         if (
-            standard_callback_dynamic_params.get("langfuse_host") is not None
-            or standard_callback_dynamic_params.get("langfuse_public_key") is not None
-            or standard_callback_dynamic_params.get("langfuse_secret") is not None
-            or standard_callback_dynamic_params.get("langfuse_secret_key") is not None
+            params.get("langfuse_host") is not None
+            or params.get("langfuse_public_key") is not None
+            or params.get("langfuse_secret") is not None
+            or params.get("langfuse_secret_key") is not None
         ):
             return True
         return False
