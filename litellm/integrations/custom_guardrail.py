@@ -1108,23 +1108,26 @@ def _sync_guardrail_info_to_logging_obj(
     """
     if logging_obj is None:
         return
-    slg_info = (
+    meta_src = (
         request_data.get("metadata") or request_data.get("litellm_metadata") or {}
-    ).get("standard_logging_guardrail_information")
-    if slg_info is None:
+    )
+    slg_info = meta_src.get("standard_logging_guardrail_information")
+    if not slg_info:
         return
-    entries = slg_info if isinstance(slg_info, list) else [slg_info]
+    entries: list = slg_info if isinstance(slg_info, list) else [slg_info]
+    mcd = getattr(logging_obj, "model_call_details", None) or {}
     candidates = [
         getattr(logging_obj, "litellm_params", None),
-        (getattr(logging_obj, "model_call_details", None) or {}).get("litellm_params"),
+        mcd.get("litellm_params"),
     ]
     for lp in candidates:
         if not isinstance(lp, dict):
             continue
         if lp.get("metadata") is None:
             lp["metadata"] = {}
-        meta = lp["metadata"]
-        existing = meta.setdefault("standard_logging_guardrail_information", [])
+        existing = lp["metadata"].setdefault(
+            "standard_logging_guardrail_information", []
+        )
         for entry in entries:
             if entry not in existing:
                 existing.append(entry)
