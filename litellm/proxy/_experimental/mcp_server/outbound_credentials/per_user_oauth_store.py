@@ -131,7 +131,9 @@ def _runtime_backend_and_coordinator() -> tuple[
         return None, None
     codec = OAuthTokenCacheCodec(
         encrypt_value_helper,
-        lambda blob: decrypt_value_helper(blob, "mcp_per_user_token"),
+        lambda blob: decrypt_value_helper(
+            blob, "mcp_per_user_token", exception_type="debug"
+        ),
     )
     # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) and the
     # Redis client from init_async_client() is partially typed - both are untyped-boundary casts.
