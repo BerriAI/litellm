@@ -16938,8 +16938,10 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_context import (
+            scoped_toolset_id,
+        )
         from litellm.proxy._experimental.mcp_server.server import (
-            _mcp_active_toolset_id,
             handle_streamable_http_mcp,
         )
 
@@ -16958,13 +16960,10 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
         scope = dict(request.scope)
         scope["path"] = "/mcp"
 
-        token = _mcp_active_toolset_id.set(toolset.toolset_id)
-        try:
+        async with scoped_toolset_id(toolset.toolset_id):
             return await _stream_mcp_asgi_response(
                 handle_streamable_http_mcp, scope, request.receive
             )
-        finally:
-            _mcp_active_toolset_id.reset(token)
 
     except HTTPException as e:
         raise e
@@ -17121,8 +17120,10 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 
         # 3. Toolset name (cached)
         if prisma_client is not None:
+            from litellm.proxy._experimental.mcp_server.mcp_context import (
+                scoped_toolset_id,
+            )
             from litellm.proxy._experimental.mcp_server.server import (
-                _mcp_active_toolset_id,
                 handle_streamable_http_mcp,
             )
 
@@ -17133,13 +17134,10 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
                 scope = dict(request.scope)
                 scope["_original_path"] = scope.get("path", "")
                 scope["path"] = "/mcp"
-                token = _mcp_active_toolset_id.set(toolset.toolset_id)
-                try:
+                async with scoped_toolset_id(toolset.toolset_id):
                     return await _stream_mcp_asgi_response(
                         handle_streamable_http_mcp, scope, request.receive
                     )
-                finally:
-                    _mcp_active_toolset_id.reset(token)
 
         # 4. MCP access group tag (cached)
         if await _is_mcp_access_group_cached(mcp_server_name):

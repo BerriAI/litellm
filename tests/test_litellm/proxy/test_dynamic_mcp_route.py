@@ -540,3 +540,73 @@ async def test_toolset_mcp_route_unexpected_exception_returns_500_without_traceb
     assert exc_info.value.detail == "Internal server error"
     assert "db-host" not in str(exc_info.value.detail)
     assert "traceback" not in str(exc_info.value.detail).lower()
+
+
+# ---------------------------------------------------------------------------
+# Context isolation: _mcp_active_toolset_id reset on cancellation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_toolset_id_reset_after_cancellation():
+    """_mcp_active_toolset_id must be None after the route handler is cancelled."""
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.mcp_context import (
+        _mcp_active_toolset_id,
+    )
+    from litellm.proxy.proxy_server import toolset_mcp_route
+
+    fake_toolset = MagicMock()
+    fake_toolset.toolset_id = "ts-cancel"
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_toolset_by_name_cached = AsyncMock(return_value=fake_toolset)
+
+    async def raise_cancelled(fn, scope, receive):
+        raise asyncio.CancelledError()
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_PRISMA, new=MagicMock()),
+        patch(_STREAM_ASGI, new=AsyncMock(side_effect=raise_cancelled)),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await toolset_mcp_route(
+                "cancel_toolset", _make_request("/toolset/cancel_toolset/mcp")
+            )
+
+    assert _mcp_active_toolset_id.get() is None
+
+
+@pytest.mark.asyncio
+async def test_dynamic_mcp_route_toolset_id_reset_after_cancellation():
+    """_mcp_active_toolset_id must be None after dynamic_mcp_route is cancelled."""
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.mcp_context import (
+        _mcp_active_toolset_id,
+    )
+    from litellm.proxy.proxy_server import dynamic_mcp_route
+
+    fake_toolset = MagicMock()
+    fake_toolset.toolset_id = "ts-dyn-cancel"
+
+    fake_mgr = MagicMock()
+    fake_mgr.get_mcp_server_by_name = MagicMock(return_value=None)
+    fake_mgr.get_toolset_by_name_cached = AsyncMock(return_value=fake_toolset)
+
+    async def raise_cancelled(fn, scope, receive):
+        raise asyncio.CancelledError()
+
+    with (
+        patch(_MCP_MANAGER, fake_mgr),
+        patch(_PRISMA, new=MagicMock()),
+        patch(_STREAM_ASGI, new=AsyncMock(side_effect=raise_cancelled)),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await dynamic_mcp_route(
+                "cancel_toolset", _make_request("/cancel_toolset/mcp")
+            )
+
+    assert _mcp_active_toolset_id.get() is None

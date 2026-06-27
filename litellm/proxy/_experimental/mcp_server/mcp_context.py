@@ -5,8 +5,9 @@ Lives in its own module to avoid circular imports between
 mcp_server_manager.py and server.py.
 """
 
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from typing import Optional
+from typing import AsyncIterator, Optional
 
 # Set server-side in proxy_server.py route handlers when a request arrives via
 # /toolset/{name}/mcp or the toolset fallback in dynamic_mcp_route.
@@ -25,3 +26,12 @@ _mcp_gateway_initialize_instructions: ContextVar[Optional[str]] = ContextVar(
 _mcp_gateway_server_name: ContextVar[Optional[str]] = ContextVar(
     "_mcp_gateway_server_name", default=None
 )
+
+
+@asynccontextmanager
+async def scoped_toolset_id(toolset_id: str) -> AsyncIterator[None]:
+    token = _mcp_active_toolset_id.set(toolset_id)
+    try:
+        yield
+    finally:
+        _mcp_active_toolset_id.reset(token)
