@@ -516,6 +516,112 @@ def test_gemini_session_update_defaults_to_audio_modality():
     assert setup_payload["generationConfig"]["responseModalities"] == ["AUDIO"]
 
 
+def test_gemini_subsequent_session_update_is_dropped_not_resent_as_setup():
+    """Regression: Gemini Live accepts exactly one ``setup`` message; a second
+    one closes the socket with ``1007 Request contains an invalid argument``.
+
+    Once the initial setup has been sent (``session_configuration_request`` is
+    set), a follow-up session.update must be dropped rather than forwarded as
+    another setup. Forwarding it tore the session down before the first turn,
+    which surfaced to callers as silence after the first response and 1011s.
+    """
+    config = GeminiRealtimeConfig()
+    initial_setup = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-2.5-flash",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+                "inputAudioTranscription": {},
+            }
+        }
+    )
+    follow_up = {
+        "type": "session.update",
+        "session": {"instructions": "Updated instructions", "temperature": 0.4},
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(follow_up),
+        "gemini-2.5-flash",
+        session_configuration_request=initial_setup,
+    )
+
+    assert messages == [], (
+        "a session.update after the initial setup must be dropped, never "
+        "forwarded as a second setup (Gemini Live rejects it with 1007)"
+    )
+
+
+def test_gemini_subsequent_session_update_with_new_tools_is_dropped():
+    """Regression: even a follow-up session.update that *differs* from the initial
+    setup (e.g. registers tools after connect) must be dropped.
+
+    The previous dedup only skipped follow-ups identical to the initial setup; a
+    changed one was merged and re-sent as a second setup, still hitting the 1007.
+    Tools must instead ride on the first session.update.
+    """
+    config = GeminiRealtimeConfig()
+    initial_setup = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-2.5-flash",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+            }
+        }
+    )
+    follow_up = {
+        "type": "session.update",
+        "session": {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "terminate_call",
+                        "description": "End the call.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(follow_up),
+        "gemini-2.5-flash",
+        session_configuration_request=initial_setup,
+    )
+
+    assert messages == []
+
+
+def test_gemini_subsequent_guardrail_session_update_dropped_with_warning(caplog):
+    """A dropped follow-up carrying ``turn_detection.create_response=False`` (the
+    transcription-guardrail signal) is still dropped, but warns so operators know
+    the guardrail cannot gate the model's auto-response mid-session on Gemini.
+    """
+    import logging
+
+    config = GeminiRealtimeConfig()
+    initial_setup = json.dumps({"setup": {"model": "models/gemini-2.5-flash"}})
+    follow_up = {
+        "type": "session.update",
+        "session": {"turn_detection": {"type": "server_vad", "create_response": False}},
+    }
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        messages = config.transform_realtime_request(
+            json.dumps(follow_up),
+            "gemini-2.5-flash",
+            session_configuration_request=initial_setup,
+        )
+
+    assert messages == []
+    assert any(
+        "Dropping subsequent session.update" in record.message
+        for record in caplog.records
+    )
+
+
 @pytest.mark.parametrize(
     "model",
     [
