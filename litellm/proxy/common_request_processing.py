@@ -36,6 +36,7 @@ from litellm.constants import (
     STREAM_SSE_DATA_PREFIX,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.websearch_interception.tools import is_web_search_tool
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -918,7 +919,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return custom_headers
 
-    async def common_processing_pre_call_logic(
+    async def common_processing_pre_call_logic(  # noqa: PLR0915
         self,
         request: Request,
         general_settings: dict,
@@ -1099,6 +1100,32 @@ class ProxyBaseLLMRequestProcessing:
             and self.data["model"] in user_api_key_dict.aliases
         ):
             self.data["model"] = user_api_key_dict.aliases[self.data["model"]]
+
+        ### WEB SEARCH REDIRECT ###
+        # if request only contains web_search tools, check for redirect:
+        # 1. per-deployment force: always redirect to `force_websearch_model`
+        # 2. global fallback: redirect to `websearch_fallback_model` only when
+        #    the current model group does not support web search
+        if (
+            isinstance(self.data.get("model"), str)
+            and llm_router is not None
+            and self.data.get("tools")
+            and all(
+                isinstance(t, dict) and is_web_search_tool(t)
+                for t in self.data["tools"]
+            )
+        ):
+            for dep in llm_router.get_model_list(model_name=self.data["model"]) or []:
+                if model := dep.get("litellm_params", {}).get("force_websearch_model"):
+                    self.data["model"] = model
+                    break
+                if (
+                    (dep_model := dep.get("litellm_params", {}).get("model", ""))
+                    and not litellm.supports_web_search(dep_model)
+                    and (model := getattr(litellm, "websearch_fallback_model", None))
+                ):
+                    self.data["model"] = model
+                    break
 
         self.data["litellm_call_id"] = request.headers.get(
             "x-litellm-call-id", str(uuid.uuid4())

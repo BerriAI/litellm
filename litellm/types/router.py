@@ -236,6 +236,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
+    force_websearch_model: Optional[str] = None
     model_info: Optional[Dict] = None
     mock_response: Optional[Union[str, ModelResponse, Exception, Any]] = None
 
@@ -365,6 +366,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     drop_params: Optional[bool]
     ## RESPONSES API → CHAT COMPLETIONS BRIDGE ##
     use_chat_completions_api: Optional[bool]
+    ## WEB SEARCH REDIRECT ##
+    force_websearch_model: Optional[str]
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##

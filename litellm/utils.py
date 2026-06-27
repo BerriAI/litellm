@@ -5715,7 +5715,7 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost
             # tracking the cost is better than attributing 0 cost to it.
             return True
-        elif custom_llm_provider == "github":
+        elif custom_llm_provider in ("github", "github_copilot"):
             # Allow github/<model> aliases to reuse existing provider metadata.
             return True
         else:
