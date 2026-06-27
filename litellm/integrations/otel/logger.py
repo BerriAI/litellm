@@ -17,6 +17,7 @@ from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
     request_root_span,
+    resolve_mcp_span_context,
     resolve_parent_context,
     resolve_request_span_context,
     set_request_baggage,
@@ -260,10 +261,12 @@ class OpenTelemetryV2(CustomLogger):
 
         MCP tool calls reach the success/failure callbacks like any other request
         (with ``call_type`` ``call_mcp_tool``), but they are not LLM calls and have
-        no ``pre_call`` carrier — so they get their own CLIENT span here, parented
-        to the request's server span. Returns whether it handled the event, so the
-        caller skips the LLM-call path. The whole span is emitted at once (there is
-        no boundary to open it at), deduped on the call id by the emitter.
+        no ``pre_call`` carrier — so they get their own CLIENT span here. Per the MCP
+        semconv it parents to the trace context the client propagated in
+        ``params._meta`` (or starts a new root) and links the transport span, rather
+        than nesting under the HTTP/session span. Returns whether it handled the
+        event, so the caller skips the LLM-call path. The whole span is emitted at
+        once (there is no boundary to open it at), deduped on the call id.
         """
         raw_payload = kwargs.get("standard_logging_object")
         if not raw_payload or not is_mcp_tool_call(cast(Mapping[str, object], raw_payload)):
@@ -277,12 +280,14 @@ class OpenTelemetryV2(CustomLogger):
         # as a phantom LLM span.
         if data.identity.call_id:
             self._open_llm_calls.pop(data.identity.call_id, None)
+        parent_context, links = resolve_mcp_span_context()
         self._emitter.emit(
             SpanRole.MCP_TOOL_CALL,
             data,
-            parent_context=resolve_request_span_context(),
+            parent_context=parent_context,
             start_time_ns=to_ns(start_time),
             end_time_ns=to_ns(end_time),
+            links=links,
         )
         return True
 
@@ -296,8 +301,10 @@ class OpenTelemetryV2(CustomLogger):
 
         Like a tool call, listing reaches the success/failure callbacks (here with
         ``call_type`` ``list_mcp_tools``) with no ``pre_call`` carrier, so it gets its
-        own CLIENT span parented to the request's server span. Returns whether it
-        handled the event so the caller skips the LLM-call path.
+        own CLIENT span. Per the MCP semconv it parents to the ``params._meta`` trace
+        context (or starts a new root) and links the transport span, rather than
+        nesting under the HTTP/session span. Returns whether it handled the event so
+        the caller skips the LLM-call path.
         """
         raw_payload = kwargs.get("standard_logging_object")
         if not raw_payload or not is_mcp_list_tools(cast(Mapping[str, object], raw_payload)):
@@ -308,12 +315,14 @@ class OpenTelemetryV2(CustomLogger):
         )
         if data.identity.call_id:
             self._open_llm_calls.pop(data.identity.call_id, None)
+        parent_context, links = resolve_mcp_span_context()
         self._emitter.emit(
             SpanRole.MCP_LIST_TOOLS,
             data,
-            parent_context=resolve_request_span_context(),
+            parent_context=parent_context,
             start_time_ns=to_ns(start_time),
             end_time_ns=to_ns(end_time),
+            links=links,
         )
         return True
 

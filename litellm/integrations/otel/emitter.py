@@ -4,7 +4,7 @@ from collections import OrderedDict
 from typing import Callable, Sequence
 
 from opentelemetry.context import Context
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace import Link, Span, Tracer
 from opentelemetry.trace.status import Status, StatusCode
 
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
@@ -77,18 +77,21 @@ class SpanEmitter:
         start_time_ns: int | None = None,
         *,
         tracer: Tracer | None = None,
+        links: Sequence[Link] | None = None,
     ) -> Span:
         """Start a span for ``role`` without dedup or attribute mapping.
 
         For callers that own and manage their own span lifecycle. ``tracer``
         overrides the bound tracer for this span only, used for per-request
-        multi-tenant credential routing.
+        multi-tenant credential routing. ``links`` records related-but-not-parent
+        spans (e.g. the transport span of an MCP message, per MCP semconv).
         """
         return (tracer or self._tracer).start_span(
             name,
             context=parent_context,
             kind=to_otel_span_kind(SPAN_REGISTRY[role].kind),
             start_time=start_time_ns,
+            links=list(links) if links else None,
         )
 
     def _seen(self, dedup_key: str | None, role: SpanRole) -> bool:
@@ -119,11 +122,14 @@ class SpanEmitter:
         start_time_ns: int | None = None,
         end_time_ns: int | None = None,
         tracer: Tracer | None = None,
+        links: Sequence[Link] | None = None,
     ) -> Span | None:
         """Emit one complete span: dedup, start, map attributes, status, end.
 
         Return the span, or ``None`` if it was deduplicated away. ``tracer``
         overrides the bound tracer for this span, used for per-request routing.
+        ``links`` records related-but-not-parent spans (the transport span of an
+        MCP message).
         """
         # LLM-call and MCP tool-call spans carry a dedup key (their request's
         # call id), so a sync+async double-firing coalesces. ``isinstance`` narrows
@@ -141,6 +147,7 @@ class SpanEmitter:
             parent_context=parent_context,
             start_time_ns=start_time_ns,
             tracer=tracer,
+            links=links,
         )
         self.finish_span(role, span, data, end_time_ns=end_time_ns)
         return span

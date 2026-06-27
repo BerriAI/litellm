@@ -6447,3 +6447,49 @@ class TestStreamableHttpAuthErrorMapping:
             m.get("type") == "http.response.start" and m.get("status") == 500
             for m in sent
         )
+
+
+class TestMCPMetaTraceCarrier:
+    """`_mcp_meta_trace_carrier` extracts the W3C trace context the MCP client
+    propagated in the request's params._meta (SEP-414) so the otel_v2 MCP span can
+    parent to the client's span. Exercises the real MCP SDK `RequestParams.Meta`
+    shape (extra='allow' preserves the unprefixed keys), not just an injected
+    carrier."""
+
+    def test_extracts_w3c_keys_and_excludes_other_meta(self):
+        from types import SimpleNamespace
+
+        from mcp.types import RequestParams
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_meta_trace_carrier,
+        )
+
+        meta = RequestParams.Meta.model_validate(
+            {
+                "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+                "tracestate": "rojo=1",
+                "baggage": "userId=alice",
+                "progressToken": "p1",
+            }
+        )
+        carrier = _mcp_meta_trace_carrier(SimpleNamespace(meta=meta))
+        assert carrier == {
+            "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+            "tracestate": "rojo=1",
+            "baggage": "userId=alice",
+        }
+
+    def test_none_when_no_trace_context(self):
+        from types import SimpleNamespace
+
+        from mcp.types import RequestParams
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_meta_trace_carrier,
+        )
+
+        assert _mcp_meta_trace_carrier(None) is None
+        assert _mcp_meta_trace_carrier(SimpleNamespace(meta=None)) is None
+        only_progress = RequestParams.Meta.model_validate({"progressToken": "p1"})
+        assert _mcp_meta_trace_carrier(SimpleNamespace(meta=only_progress)) is None

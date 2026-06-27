@@ -27,9 +27,11 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
-from litellm.integrations.otel.plumbing.context import (
+from litellm.integrations.otel.plumbing.context import (  # noqa: E402
+    reset_mcp_message_trace_carrier,
+    set_mcp_message_trace_carrier,
     set_request_root_span,
-)  # noqa: E402
+)
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
@@ -53,8 +55,10 @@ def _reset_request_root_span():
     from litellm.integrations.otel.plumbing import context as _otel_context
 
     _otel_context._request_root_span.set(None)
+    _otel_context._mcp_message_trace_carrier.set(None)
     yield
     _otel_context._request_root_span.set(None)
+    _otel_context._mcp_message_trace_carrier.set(None)
 
 
 def _payload(**overrides):
@@ -423,6 +427,99 @@ def test_mcp_list_tools_emits_client_span():
     assert GenAI.OPERATION_NAME not in span.attributes
     assert "gen_ai.tool.name" not in span.attributes
     assert "mcp.session.id" not in span.attributes
+
+
+_MCP_SPAN_CASES = [
+    (_mcp_payload, "tools/call get_weather"),
+    (_mcp_list_payload, "tools/list"),
+]
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_roots_and_links_transport_without_propagated_context(
+    make_payload, span_name
+):
+    """MCP and the HTTP transport are independent lifecycles (one streamable-HTTP
+    session multiplexes many messages), so per the MCP semconv the message span
+    must NOT nest under the session/transport span — that is what made it render
+    skewed at the session's start. With no propagated ``params._meta`` context it
+    starts its own root trace and records the transport span as a *link*, never
+    the parent."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": make_payload()}, None, None, None
+        )
+    )
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.parent is None
+    assert span.context.trace_id != transport.get_span_context().trace_id
+    assert [link.context.span_id for link in span.links] == [
+        transport.get_span_context().span_id
+    ]
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_parents_to_propagated_meta_trace_context(make_payload, span_name):
+    """When the client propagates W3C trace context in the request's
+    ``params._meta`` (SEP-414), the MCP span parents to it (one distributed trace)
+    and still links the transport span — never falling through to the
+    ambient/session span."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    token = set_mcp_message_trace_carrier(
+        {"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"}
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": make_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.context.trace_id == 0x11111111111111111111111111111111
+    assert span.parent is not None
+    assert span.parent.span_id == 0x2222222222222222
+    assert [link.context.span_id for link in span.links] == [
+        transport.get_span_context().span_id
+    ]
+
+
+def test_mcp_span_malformed_traceparent_starts_root():
+    """A malformed traceparent in ``params._meta`` must not crash or parent to a
+    bogus span: the propagator ignores it, so the span starts its own root trace and
+    still links the transport span."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    token = set_mcp_message_trace_carrier({"traceparent": "not-a-valid-traceparent"})
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": _mcp_list_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == "tools/list")
+    assert span.parent is None
+    assert [link.context.span_id for link in span.links] == [
+        transport.get_span_context().span_id
+    ]
 
 
 def test_pre_call_idempotent_keeps_first_span():
