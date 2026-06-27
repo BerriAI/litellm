@@ -64,7 +64,8 @@ class AuthorizationCodeRefresher:
     the rotated triple for ``(user, server)`` - the v1 ``store_user_oauth_credential`` write, which
     stays. Returns ``None`` (the arm challenges) when there is no refresh_token, the server lacks a
     token endpoint, or the grant fails; never a stale or partial token. A rotated refresh_token from
-    the response replaces the old one; an omitted one is carried forward.
+    the response replaces the old one; an omitted one is carried forward, as are the recorded scopes
+    when the response omits ``scope``.
     """
 
     def __init__(
@@ -107,13 +108,14 @@ class AuthorizationCodeRefresher:
             rotated if isinstance(rotated, str) and rotated else token.refresh_token
         )
         expires_in = _parse_expires_in(body.get("expires_in"))
-        scopes = _parse_scopes(body.get("scope"))
+        scopes = _parse_scopes(body.get("scope")) or token.scopes
 
         await self._persist(
-            user_id, server_id, access_token, new_refresh, expires_in, scopes
+            user_id, server_id, access_token, new_refresh, expires_in, scopes or None
         )
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,
             refresh_token=new_refresh,
+            scopes=scopes,
         )

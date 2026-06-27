@@ -154,3 +154,31 @@ async def test_unrotated_refresh_token_is_carried_forward():
     )  # response omitted refresh_token -> reuse the old one
     assert token.expires_at is None  # no expires_in -> no known expiry
     assert persisted[0][3] == "keep-rt"
+
+
+@pytest.mark.asyncio
+async def test_unrecorded_scope_is_carried_forward():
+    persisted = []
+    refresher = _refresher(body={"access_token": "new-at"}, persist_sink=persisted)
+    token = await refresher.refresh(
+        "a", "s", OAuthToken("old", refresh_token="rt", scopes=("read", "write"))
+    )
+    assert token is not None
+    # response omitted "scope" -> the user's recorded grant is preserved, not dropped
+    assert token.scopes == ("read", "write")
+    assert persisted[0][5] == ("read", "write")
+
+
+@pytest.mark.asyncio
+async def test_returned_scope_overrides_prior_when_present():
+    persisted = []
+    refresher = _refresher(
+        body={"access_token": "new-at", "scope": "read"},
+        persist_sink=persisted,
+    )
+    token = await refresher.refresh(
+        "a", "s", OAuthToken("old", refresh_token="rt", scopes=("read", "write"))
+    )
+    assert token is not None
+    assert token.scopes == ("read",)  # a present scope replaces the prior grant
+    assert persisted[0][5] == ("read",)

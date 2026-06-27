@@ -33,6 +33,12 @@ def _iso_to_epoch(expires_at: str) -> float | None:
     return dt.timestamp()
 
 
+def _to_scopes(raw: object) -> tuple[str, ...]:
+    if isinstance(raw, (list, tuple)):
+        return tuple(s for s in raw if isinstance(s, str))
+    return ()
+
+
 def _to_oauth_token(payload: dict[str, object]) -> OAuthToken | None:
     access_token = payload.get("access_token")
     if not isinstance(access_token, str):
@@ -43,6 +49,7 @@ def _to_oauth_token(payload: dict[str, object]) -> OAuthToken | None:
         access_token=access_token,
         expires_at=_iso_to_epoch(expires_at) if isinstance(expires_at, str) else None,
         refresh_token=refresh_token if isinstance(refresh_token, str) else None,
+        scopes=_to_scopes(payload.get("scopes")),
     )
 
 
