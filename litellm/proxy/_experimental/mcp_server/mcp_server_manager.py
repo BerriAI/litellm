@@ -70,6 +70,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    AuthorizationCodeConfig,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
@@ -1965,6 +1968,7 @@ class MCPServerManager:
         stdio_env: Optional[Dict[str, str]] = None,
         subject_token: Optional[str] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        cred_provider: Optional[UpstreamCredentialProvider] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -1988,11 +1992,17 @@ class MCPServerManager:
         """
         transport = server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else to_server_spec(server)
-        # A per-request override is the caller-supplied credential v1 turns into the upstream
-        # auth, so it must win; defer those to v1 (this defer falls away once the per-user modes
-        # stop writing mcp_auth_header). An inbound header already in extra_headers is handled on
-        # the v2 path below, not here.
-        if spec is not None and mcp_auth_header:
+        provider = cred_provider or self._cred_provider
+        # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
+        # so it wins - except for authorization_code, whose per-user token the v2 resolver owns. A
+        # caller must not be able to substitute another user's stored credential, so we keep the v2
+        # spec and ignore the override there; the REST tools preview supplies its not-yet-persisted
+        # token through the resolver (cred_provider), never this path.
+        if (
+            spec is not None
+            and mcp_auth_header
+            and not isinstance(spec.config, AuthorizationCodeConfig)
+        ):
             spec = None
         auth_value = (
             await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token)
@@ -2070,7 +2080,7 @@ class MCPServerManager:
             server_url = server.url or ""
 
             if spec is not None:
-                match await self._cred_provider.resolve_credentials(
+                match await provider.resolve_credentials(
                     to_subject(user_api_key_auth, subject_token), spec
                 ):
                     case Ok(auth):

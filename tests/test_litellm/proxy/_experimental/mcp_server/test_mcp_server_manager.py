@@ -139,6 +139,43 @@ class TestMCPServerManager:
         assert client.stdio_config["env"]["NODE_ENV"] == "test"
         assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
 
+    @pytest.mark.asyncio
+    async def test_caller_auth_header_cannot_bypass_v2_for_authorization_code(self):
+        """A caller-supplied per-request override must not substitute the stored authorization_code
+        token: _create_mcp_client keeps the v2 spec and resolves through the injected provider
+        rather than deferring to the v1 caller-override path."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
+            Ok,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        calls = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                calls.append((subject.subject_id, server.server_id))
+                return Ok(StaticHeaderAuth("stored-token"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="authz-srv",
+            name="authz",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2,  # oauth2 + no client creds + not delegate -> authorization_code
+        )
+
+        client = await manager._create_mcp_client(
+            server, mcp_auth_header="Bearer caller-supplied-token"
+        )
+
+        # the v2 resolver ran (the caller override did NOT defer to v1); the stored token wins
+        assert calls == [("", "authz-srv")]
+        assert client is not None
+
     async def test_create_mcp_client_stdio_injects_npm_config_cache(self):
         """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
         and preserves user-provided NPM_CONFIG_CACHE when present."""

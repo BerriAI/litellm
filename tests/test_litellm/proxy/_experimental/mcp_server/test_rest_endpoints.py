@@ -271,21 +271,20 @@ class TestExecuteWithMcpClient:
         )
 
     @pytest.mark.asyncio
-    async def test_interactive_oauth_routes_forwarded_token_to_mcp_auth_header(
+    async def test_interactive_oauth_resolves_forwarded_token_via_presented_store(
         self, monkeypatch
     ):
         """Interactive authorization_code preview (oauth2, no client credentials): the forwarded
-        just-authorized token must be routed to mcp_auth_header so _create_mcp_client takes the v1
-        per-request-override path and uses it directly, instead of the v2 resolver fail-closing on
-        the not-yet-persisted credential. The "Bearer " scheme is stripped since the oauth2 client
-        re-adds it."""
+        just-authorized token is resolved THROUGH the v2 resolver via a one-shot presented store
+        (cred_provider), not the caller-override path. The bare token (Bearer stripped) is the
+        upstream credential and is not also forwarded in extra_headers."""
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
             return None
 
         async def fake_create_client(*args, **kwargs):
-            captured["mcp_auth_header"] = kwargs.get("mcp_auth_header")
+            captured.update(kwargs)
             return object()
 
         monkeypatch.setattr(
@@ -318,22 +317,27 @@ class TestExecuteWithMcpClient:
         )
 
         assert result["status"] == "ok"
-        assert captured["mcp_auth_header"] == "forwarded-user-token"
+        # Resolved via the v2 resolver, never the caller-override header
+        assert captured["mcp_auth_header"] is None
+        provider = captured["cred_provider"]
+        assert provider is not None
+        token = await provider._oauth_token_store.fetch("u", "s")
+        assert token is not None and token.access_token == "forwarded-user-token"
+        # The resolver supplies the bearer, so it is not also forwarded as a caller header
+        extra_headers = captured.get("extra_headers") or {}
+        assert not any(k.lower() == "authorization" for k in extra_headers)
 
     @pytest.mark.asyncio
-    async def test_m2m_does_not_route_forwarded_token_to_mcp_auth_header(
-        self, monkeypatch
-    ):
-        """M2M (client_credentials) must NOT route the forwarded header to mcp_auth_header - it stays
-        on the auto-fetch path. to_server_spec returns None for M2M, so the interactive shortcut is
-        skipped and mcp_auth_header remains None (the incoming header is dropped, as before)."""
+    async def test_m2m_does_not_build_presented_store(self, monkeypatch):
+        """M2M (client_credentials): to_server_spec returns None, so no presented provider is built;
+        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before)."""
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
             return None
 
         async def fake_create_client(*args, **kwargs):
-            captured["mcp_auth_header"] = kwargs.get("mcp_auth_header")
+            captured.update(kwargs)
             return object()
 
         monkeypatch.setattr(
@@ -367,23 +371,20 @@ class TestExecuteWithMcpClient:
         )
 
         assert result["status"] == "ok"
+        assert captured.get("cred_provider") is None
         assert captured["mcp_auth_header"] is None
 
     @pytest.mark.asyncio
-    async def test_token_exchange_does_not_route_forwarded_token_to_mcp_auth_header(
-        self, monkeypatch
-    ):
-        """OBO / token-exchange (auth_type oauth2_token_exchange, not oauth2) must NOT route the
-        forwarded header to mcp_auth_header - resolve_mcp_auth performs the exchange on the v1 path.
-        The guard's auth_type == oauth2 check excludes it, so mcp_auth_header stays None (setting it
-        would short-circuit the exchange, since resolve_mcp_auth returns mcp_auth_header first)."""
+    async def test_token_exchange_does_not_build_presented_store(self, monkeypatch):
+        """OBO / token-exchange (auth_type oauth2_token_exchange, not oauth2): excluded by the
+        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs."""
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
             return None
 
         async def fake_create_client(*args, **kwargs):
-            captured["mcp_auth_header"] = kwargs.get("mcp_auth_header")
+            captured.update(kwargs)
             return object()
 
         monkeypatch.setattr(
@@ -416,7 +417,7 @@ class TestExecuteWithMcpClient:
         )
 
         assert result["status"] == "ok"
-        assert captured["mcp_auth_header"] is None
+        assert captured.get("cred_provider") is None
 
     @pytest.mark.asyncio
     async def test_catches_exception_group(self, monkeypatch):
