@@ -174,29 +174,37 @@ class AnthropicMessagesHandler(BaseTranslation):
                     flush=True,
                 )
                 if slg_info is not None:
-                    try:
-                        lp = litellm_logging_obj.litellm_params
-                        if not isinstance(lp, dict):
-                            lp = {}
-                            litellm_logging_obj.litellm_params = lp
-                        if lp.get("metadata") is None:
-                            lp["metadata"] = {}
-                        log_meta = lp["metadata"]
-                        existing = log_meta.get(
-                            "standard_logging_guardrail_information"
+                    for _lp in [
+                        getattr(litellm_logging_obj, "litellm_params", None),
+                        (litellm_logging_obj.model_call_details or {}).get(
+                            "litellm_params"
                         )
-                        if existing is None:
-                            log_meta["standard_logging_guardrail_information"] = (
-                                slg_info
+                        if hasattr(litellm_logging_obj, "model_call_details")
+                        else None,
+                    ]:
+                        if not isinstance(_lp, dict):
+                            continue
+                        try:
+                            if _lp.get("metadata") is None:
+                                _lp["metadata"] = {}
+                            log_meta = _lp["metadata"]
+                            existing = log_meta.get(
+                                "standard_logging_guardrail_information"
                             )
-                        elif isinstance(existing, list):
-                            for entry in (
-                                slg_info if isinstance(slg_info, list) else [slg_info]
-                            ):
-                                if entry not in existing:
-                                    existing.append(entry)
-                    except (KeyError, AttributeError):
-                        pass
+                            if existing is None:
+                                log_meta["standard_logging_guardrail_information"] = (
+                                    slg_info
+                                )
+                            elif isinstance(existing, list):
+                                for entry in (
+                                    slg_info
+                                    if isinstance(slg_info, list)
+                                    else [slg_info]
+                                ):
+                                    if entry not in existing:
+                                        existing.append(entry)
+                        except (KeyError, AttributeError):
+                            pass
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
