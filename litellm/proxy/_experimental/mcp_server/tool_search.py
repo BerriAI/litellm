@@ -75,7 +75,7 @@ def get_virtual_tool_definitions() -> list[dict[str, Any]]:
 async def handle_mcp_tool_search(
     query: str,
     top_k: int,
-    user_api_key_dict: "UserAPIKeyAuth",
+    user_api_key_dict: UserAPIKeyAuth,
     client_ip: Optional[str] = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
@@ -101,7 +101,7 @@ async def handle_mcp_tool_search(
 async def handle_mcp_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
-    user_api_key_dict: "UserAPIKeyAuth",
+    user_api_key_dict: UserAPIKeyAuth,
     client_ip: Optional[str] = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import (

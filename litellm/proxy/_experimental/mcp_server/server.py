@@ -10,8 +10,8 @@ import contextvars
 import hashlib
 import json
 import time
-import types
 import traceback
+import types
 import uuid
 from datetime import datetime
 from typing import (
@@ -37,13 +37,17 @@ from starlette.types import Message, Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
@@ -58,10 +62,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_name,
     get_server_prefix,
     iter_known_server_prefixes,
-)
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -124,9 +124,12 @@ def _write_byok_cred_cache(
 # TODO: Make this a util function for litellm client usage
 MCP_AVAILABLE: bool = True
 try:
+    import weakref
+
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
     from mcp.server.lowlevel.helper_types import ReadResourceContents
+    from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
         GetPromptResult,
@@ -134,8 +137,6 @@ try:
         TextResourceContents,
         Tool,
     )
-    from mcp.server.session import ServerSession as _McpServerSession
-    import weakref
 
     # Robust auth lookup keyed by session_object.
     _session_obj_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
@@ -255,14 +256,14 @@ def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
 
 if MCP_AVAILABLE:
     from mcp.server import Server
-    from mcp.server.lowlevel.server import NotificationOptions
-    from mcp.server.models import InitializationOptions
 
     # Import auth context variables and middleware
     from mcp.server.auth.middleware.auth_context import (
         AuthContextMiddleware,
         auth_context_var,
     )
+    from mcp.server.lowlevel.server import NotificationOptions
+    from mcp.server.models import InitializationOptions
 
     try:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -632,6 +633,7 @@ if MCP_AVAILABLE:
                 False,
             ):
                 from mcp.types import Tool
+
                 from litellm.proxy._experimental.mcp_server.tool_search import (
                     get_virtual_tool_definitions,
                 )
@@ -678,11 +680,12 @@ if MCP_AVAILABLE:
             HTTPException: If tool not found or arguments missing
         """
         from fastapi import Request
+        from mcp.server.lowlevel.server import request_ctx
+        from mcp.types import CallToolResult
+
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
-        from mcp.types import CallToolResult
-        from mcp.server.lowlevel.server import request_ctx
 
         req_ctx = request_ctx.get(None)
         _session_reset_token = None
