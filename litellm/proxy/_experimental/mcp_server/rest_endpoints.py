@@ -1034,8 +1034,54 @@ if MCP_AVAILABLE:
                 None if server_model.has_client_credentials else oauth2_headers
             )
 
+            # Interactive authorization_code tools preview: the operator holds a just-authorized
+            # token but it is not persisted yet. Resolve it through the v2 resolver via a one-shot
+            # presented store - the same path runtime uses for the stored token - rather than the
+            # caller-override path _create_mcp_client refuses for authorization_code. The bare token
+            # becomes the upstream credential, so it is not also forwarded as a caller header. Gated
+            # to the v2-mapped oauth2 case (to_server_spec non-None); M2M (client_credentials),
+            # delegate/passthrough, and token-exchange are unaffected.
+            from litellm.proxy._experimental.mcp_server.outbound_credentials import (  # noqa: PLC0415
+                UpstreamCredentialProvider,
+            )
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                to_server_spec,
+            )
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (  # noqa: PLC0415
+                OAuthToken,
+            )
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.presented_token_store import (  # noqa: PLC0415
+                PresentedOAuthTokenStore,
+            )
+
+            forwarded_authorization = (
+                effective_oauth2_headers.get("Authorization")
+                if effective_oauth2_headers
+                else None
+            )
+            is_interactive_authz_code = (
+                server_model.auth_type == MCPAuth.oauth2
+                and forwarded_authorization is not None
+                and to_server_spec(server_model) is not None
+            )
+            preview_cred_provider = (
+                UpstreamCredentialProvider(
+                    oauth_token_store=PresentedOAuthTokenStore(
+                        OAuthToken(
+                            access_token=forwarded_authorization[7:]
+                            if forwarded_authorization[:7].lower() == "bearer "
+                            else forwarded_authorization
+                        )
+                    )
+                )
+                if is_interactive_authz_code
+                else None
+            )
+
             merged_headers = merge_mcp_headers(
-                extra_headers=effective_oauth2_headers,
+                extra_headers=(
+                    None if preview_cred_provider else effective_oauth2_headers
+                ),
                 static_headers=request.static_headers,
             )
 
@@ -1044,6 +1090,7 @@ if MCP_AVAILABLE:
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=merged_headers,
                 stdio_env=stdio_env,
+                cred_provider=preview_cred_provider,
             )
 
             return await operation(client)
