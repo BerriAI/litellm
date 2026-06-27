@@ -22,9 +22,7 @@ class BlockUsersResponse(BaseModel):
 
 
 class UnblockUsersResponse(BaseModel):
-    blocked_users: List[str] = Field(
-        description="User IDs that remain blocked after this unblock call"
-    )
+    blocked_users: List[str] = Field(description="User IDs that remain blocked after this unblock call")
 
 
 class DeleteCustomersResponse(BaseModel):
