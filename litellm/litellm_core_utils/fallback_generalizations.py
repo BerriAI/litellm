@@ -57,8 +57,7 @@ def _compile_rules() -> List[Tuple[Pattern, Dict]]:
         model_info = rule.get(MODEL_INFO_FIELD)
         if not isinstance(pattern, str) or not isinstance(model_info, dict):
             verbose_logger.warning(
-                "LiteLLM: skipping malformed fallback generalization rule %s "
-                "(needs string '%s' and dict '%s').",
+                "LiteLLM: skipping malformed fallback generalization rule %s (needs string '%s' and dict '%s').",
                 rule.get("name", pattern),
                 PATTERN_FIELD,
                 MODEL_INFO_FIELD,
@@ -68,8 +67,7 @@ def _compile_rules() -> List[Tuple[Pattern, Dict]]:
             compiled.append((re.compile(pattern, re.IGNORECASE), model_info))
         except re.error as e:
             verbose_logger.warning(
-                "LiteLLM: skipping fallback generalization rule with invalid "
-                "regex %r: %s",
+                "LiteLLM: skipping fallback generalization rule with invalid regex %r: %s",
                 pattern,
                 e,
             )

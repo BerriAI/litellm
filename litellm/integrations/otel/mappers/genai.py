@@ -10,7 +10,12 @@ table: one lambda per mapping operation, applied against the typed span data.
 from typing import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
-from litellm.integrations.otel.mappers.utils import collect, drop_none
+from litellm.integrations.otel.mappers.utils import (
+    collect,
+    drop_none,
+    output_messages,
+    serialize_messages,
+)
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
@@ -30,7 +35,6 @@ from litellm.integrations.otel.model.spans import db_system
 
 
 class GenAIMapper:
-
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         GenAI.PROVIDER_NAME: lambda d: d.provider or None,
@@ -42,16 +46,14 @@ class GenAIMapper:
         GenAI.REQUEST_FREQUENCY_PENALTY: lambda d: d.request_params.frequency_penalty,
         GenAI.REQUEST_PRESENCE_PENALTY: lambda d: d.request_params.presence_penalty,
         GenAI.REQUEST_STOP_SEQUENCES: lambda d: (
-            list(d.request_params.stop_sequences)
-            if d.request_params.stop_sequences
-            else None
+            list(d.request_params.stop_sequences) if d.request_params.stop_sequences else None
         ),
         GenAI.REQUEST_SEED: lambda d: d.request_params.seed,
+        GenAI.INPUT_MESSAGES: lambda d: serialize_messages(d.messages_in),
+        GenAI.OUTPUT_MESSAGES: lambda d: serialize_messages(output_messages(d)),
         GenAI.RESPONSE_MODEL: lambda d: d.response_model,
         GenAI.RESPONSE_ID: lambda d: d.response_id,
-        GenAI.RESPONSE_FINISH_REASONS: lambda d: (
-            list(d.finish_reasons) if d.finish_reasons else None
-        ),
+        GenAI.RESPONSE_FINISH_REASONS: lambda d: list(d.finish_reasons) if d.finish_reasons else None,
         GenAI.USAGE_INPUT_TOKENS: lambda d: d.usage.input_tokens,
         GenAI.USAGE_OUTPUT_TOKENS: lambda d: d.usage.output_tokens,
         Error.TYPE: lambda d: d.error.error_type if d.error else None,
@@ -63,6 +65,20 @@ class GenAIMapper:
         # routing) onto the boundary-born LLM span — stamp it directly here.
         LiteLLM.PROVIDER_MODEL: lambda d: d.identity.provider_model or None,
         f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,
+        # Per-component cost breakdown (from the StandardLoggingPayload
+        # ``cost_breakdown``). Each component is omitted when the source didn't
+        # report it, so spans stay sparse rather than carrying zeros.
+        f"{LiteLLM.COST_PREFIX}input": lambda d: d.cost.input,
+        f"{LiteLLM.COST_PREFIX}output": lambda d: d.cost.output,
+        f"{LiteLLM.COST_PREFIX}cache_read": lambda d: d.cost.cache_read,
+        f"{LiteLLM.COST_PREFIX}cache_creation": lambda d: d.cost.cache_creation,
+        f"{LiteLLM.COST_PREFIX}tool_usage": lambda d: d.cost.tool_usage,
+        f"{LiteLLM.COST_PREFIX}original": lambda d: d.cost.original,
+        f"{LiteLLM.COST_PREFIX}discount_amount": lambda d: d.cost.discount_amount,
+        f"{LiteLLM.COST_PREFIX}discount_percent": lambda d: d.cost.discount_percent,
+        f"{LiteLLM.COST_PREFIX}margin_fixed_amount": lambda d: d.cost.margin_fixed_amount,
+        f"{LiteLLM.COST_PREFIX}margin_percent": lambda d: d.cost.margin_percent,
+        f"{LiteLLM.COST_PREFIX}margin_total_amount": lambda d: d.cost.margin_total_amount,
         LiteLLM.REQUEST_STREAMING: lambda d: d.is_streaming,
     }
 
@@ -150,10 +166,5 @@ class GenAIMapper:
             attrs[DB.SYSTEM_NAME] = system
             if data.call_type:
                 attrs[DB.OPERATION_NAME] = data.call_type
-        attrs.update(
-            {
-                f"{LiteLLM.METADATA_PREFIX}{key}": value
-                for key, value in data.event_metadata.items()
-            }
-        )
+        attrs.update({f"{LiteLLM.METADATA_PREFIX}{key}": value for key, value in data.event_metadata.items()})
         return attrs

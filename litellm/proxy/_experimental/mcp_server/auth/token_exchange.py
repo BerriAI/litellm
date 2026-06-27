@@ -49,9 +49,7 @@ class TokenExchangeHandler:
         )
         # WeakValueDictionary so locks are GC'd once no coroutine holds a reference,
         # preventing unbounded growth with many rotating user tokens.
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
-            weakref.WeakValueDictionary()
-        )
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
     def _get_lock(self, cache_key: str) -> asyncio.Lock:
         lock = self._locks.get(cache_key)
@@ -118,8 +116,7 @@ class TokenExchangeHandler:
         data: Dict[str, str] = {
             "grant_type": TOKEN_EXCHANGE_GRANT_TYPE,
             "subject_token": subject_token,
-            "subject_token_type": server.subject_token_type
-            or DEFAULT_SUBJECT_TOKEN_TYPE,
+            "subject_token_type": server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
             "client_id": server.client_id,
             "client_secret": server.client_secret,
         }
@@ -146,8 +143,7 @@ class TokenExchangeHandler:
                 exc.response.status_code,
             )
             raise ValueError(
-                f"Token exchange for MCP server '{server.server_id}' "
-                f"failed with status {exc.response.status_code}"
+                f"Token exchange for MCP server '{server.server_id}' failed with status {exc.response.status_code}"
             ) from exc
 
         body = response.json()
@@ -159,18 +155,11 @@ class TokenExchangeHandler:
 
         access_token = body.get("access_token")
         if not access_token:
-            raise ValueError(
-                f"Token exchange response for MCP server '{server.server_id}' "
-                f"missing 'access_token'"
-            )
+            raise ValueError(f"Token exchange response for MCP server '{server.server_id}' missing 'access_token'")
 
         raw_expires_in = body.get("expires_in")
         try:
-            expires_in = (
-                int(raw_expires_in)
-                if raw_expires_in is not None
-                else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-            )
+            expires_in = int(raw_expires_in) if raw_expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
         except (TypeError, ValueError):
             expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
 

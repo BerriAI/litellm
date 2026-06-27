@@ -3,8 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from litellm.proxy._types import MCPAuthType, MCPTransportType
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransportType
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = Dict[str, Any]
@@ -36,12 +35,12 @@ class MCPServer(BaseModel):
     disallowed_tools: Optional[List[str]] = None
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
-    allowed_params: Optional[Dict[str, List[str]]] = (
-        None  # map of tool names to allowed parameter lists
-    )
-    static_headers: Optional[Dict[str, str]] = (
-        None  # static headers to forward to the MCP server
-    )
+    allowed_params: Optional[Dict[str, List[str]]] = None  # map of tool names to allowed parameter lists
+    static_headers: Optional[Dict[str, str]] = None  # static headers to forward to the MCP server
+    # Admin-configured env vars. Each entry is {name, value, scope, description}.
+    # scope=="global" values are interpolated into static_headers using ${NAME}.
+    # scope=="user" values must be supplied per-user.
+    env_vars: Optional[List[Dict[str, Any]]] = None
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
@@ -109,6 +108,7 @@ class MCPServer(BaseModel):
     # Defaults to the token's expires_in minus the expiry buffer, or
     # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
+    timeout: Optional[float] = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
     # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two

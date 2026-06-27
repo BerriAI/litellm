@@ -37,11 +37,7 @@ class TogetherAIRerankConfig:
 
             # Get document data if it exists
             document_data = result.get("document", {})
-            document = (
-                RerankResponseDocument(text=str(document_data.get("text", "")))
-                if document_data
-                else None
-            )
+            document = RerankResponseDocument(text=str(document_data.get("text", ""))) if document_data else None
 
             # Create typed result
             rerank_result = RerankResponseResult(

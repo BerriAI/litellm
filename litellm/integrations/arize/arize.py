@@ -195,20 +195,14 @@ class ArizeLogger(OpenTelemetry):
         # the suggested param is `arize_space_key`
         #########################################################
         if standard_callback_dynamic_params.get("arize_space_id"):
-            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
-                "arize_space_id"
-            )
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get("arize_space_id")
         if standard_callback_dynamic_params.get("arize_space_key"):
-            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
-                "arize_space_key"
-            )
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get("arize_space_key")
 
         #########################################################
         # `api_key` handling
         #########################################################
         if standard_callback_dynamic_params.get("arize_api_key"):
-            dynamic_headers["api_key"] = standard_callback_dynamic_params.get(
-                "arize_api_key"
-            )
+            dynamic_headers["api_key"] = standard_callback_dynamic_params.get("arize_api_key")
 
         return dynamic_headers

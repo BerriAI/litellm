@@ -38,17 +38,24 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
-# Create a new branch for your feature
-git checkout -b your-feature-branch
+# Create a new branch for your feature (see "Commit and Branch Conventions" below)
+git checkout -b feature/your-feature
 
 # Install development dependencies
 make install-dev
+
+# Install git hooks that enforce commit + branch conventions (one-time, opt-in)
+make install-hooks
 
 # Verify your setup works
 make help
 ```
 
 That's it! Your local development environment is ready.
+
+## Commit and Branch Conventions
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) and branches follow [Conventional Branches](https://conventional-branch.github.io/). Run `make install-hooks` once per clone to enable the local git hooks that enforce these — see the [contributor docs](https://docs.litellm.ai/docs/extras/contributing_code#commit-and-branch-conventions) for the full type list, examples, the protected-branch bypass list, and how to opt out.
 
 ### 2. Development Workflow
 
@@ -67,12 +74,12 @@ make lint
 # Run unit tests to ensure nothing is broken
 make test-unit
 
-# Commit your changes
+# Commit your changes (must follow Conventional Commits — see above)
 git add .
-git commit -m "Your descriptive commit message"
+git commit -m "feat(scope): your descriptive commit message"
 
-# Push and create a PR
-git push origin your-feature-branch
+# Push and create a PR (branch must follow Conventional Branches — see above)
+git push origin feature/your-feature
 ```
 
 ## Adding Testing
@@ -147,7 +154,7 @@ Individual linting commands:
 ```bash
 make format-check       # Check Black formatting
 make lint-ruff          # Run Ruff linting
-make lint-mypy          # Run MyPy type checking
+make lint-basedpyright  # Run basedpyright type checking
 make check-circular-imports    # Check for circular imports
 make check-import-safety       # Check import safety
 ```
@@ -209,7 +216,7 @@ LiteLLM follows the [Google Python Style Guide](https://google.github.io/stylegu
 Our automated quality checks include:
 - **Black** for consistent code formatting
 - **Ruff** for linting and code quality
-- **MyPy** for static type checking
+- **basedpyright** for static type checking
 - **Circular import detection**
 - **Import safety validation**
 
@@ -223,7 +230,7 @@ If `make lint` fails:
 
 1. **Formatting issues**: Run `make format` to auto-fix
 2. **Ruff issues**: Check the output and fix manually
-3. **MyPy issues**: Add proper type hints
+3. **basedpyright issues**: Add proper type hints
 4. **Circular imports**: Refactor import dependencies
 5. **Import safety**: Fix any unprotected imports
 
@@ -238,7 +245,7 @@ If `make test-unit` fails:
 
 ### 3. Common Development Tips
 
-- **Use type hints**: MyPy requires proper type annotations
+- **Use type hints**: basedpyright requires proper type annotations
 - **Write descriptive commit messages**: Help reviewers understand your changes
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path

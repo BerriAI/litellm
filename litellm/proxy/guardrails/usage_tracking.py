@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import (
+    DailyGuardrailMetricsRepository,
+    SpendLogGuardrailIndexRepository,
+)
 
 
 def _guardrail_status_to_action(status: Optional[str]) -> str:
@@ -36,9 +40,7 @@ def _parse_guardrail_info_from_payload(payload: Dict[str, Any]) -> List[Dict[str
             return []
     if not isinstance(meta, dict):
         return []
-    info = meta.get("guardrail_information") or meta.get(
-        "standard_logging_guardrail_information"
-    )
+    info = meta.get("guardrail_information") or meta.get("standard_logging_guardrail_information")
     if not isinstance(info, list):
         return []
     return info
@@ -85,9 +87,7 @@ async def process_spend_logs_guardrail_usage(
         date_key = _date_str(start_time)
 
         for entry in _parse_guardrail_info_from_payload(payload):
-            guardrail_id = (
-                entry.get("guardrail_id") or entry.get("guardrail_name") or ""
-            )
+            guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
             if not guardrail_id:
                 continue
             key = (guardrail_id, date_key)
@@ -132,21 +132,19 @@ async def process_spend_logs_guardrail_usage(
                     }
                 )
             try:
-                await prisma_client.db.litellm_spendlogguardrailindex.create_many(
+                await SpendLogGuardrailIndexRepository(prisma_client).table.create_many(
                     data=index_data,
                     skip_duplicates=True,
                 )
             except Exception as e:
-                verbose_proxy_logger.debug(
-                    "Guardrail usage tracking: index create_many skipped: %s", e
-                )
+                verbose_proxy_logger.debug("Guardrail usage tracking: index create_many skipped: %s", e)
 
         # Upsert daily guardrail metrics (counts only; latency/score dropped)
         for (guardrail_id, date_key), agg in daily_guardrail.items():
             n = int(agg["requests_evaluated"])
             if n == 0:
                 continue
-            await prisma_client.db.litellm_dailyguardrailmetrics.upsert(
+            await DailyGuardrailMetricsRepository(prisma_client).table.upsert(
                 where={
                     "guardrail_id_date": {
                         "guardrail_id": guardrail_id,
@@ -171,6 +169,4 @@ async def process_spend_logs_guardrail_usage(
                 },
             )
     except Exception as e:
-        verbose_proxy_logger.warning(
-            "Guardrail usage tracking failed (non-fatal): %s", e
-        )
+        verbose_proxy_logger.warning("Guardrail usage tracking failed (non-fatal): %s", e)

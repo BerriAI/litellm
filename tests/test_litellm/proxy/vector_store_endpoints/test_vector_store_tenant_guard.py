@@ -107,6 +107,75 @@ async def test_vector_store_file_create_forces_path_id_over_body_id():
 
 
 @pytest.mark.asyncio
+async def test_vector_store_file_list_resolves_managed_vector_store_before_team_fallback():
+    import base64
+
+    from litellm.proxy.vector_store_files_endpoints.endpoints import (
+        vector_store_file_list,
+    )
+
+    captured_data = {}
+
+    async def fake_base_process(self, **kwargs):
+        captured_data.update(self.data)
+        return {"ok": True}
+
+    raw_vector_store_id = (
+        "litellm_proxy:vector_store;"
+        "unified_id,managed-vs;"
+        "target_model_names,managed-deployment;"
+        "provider_resource_id,vs_provider_native;"
+        "model_id,managed-deployment"
+    )
+    vector_store_id = (
+        base64.urlsafe_b64encode(raw_vector_store_id.encode()).decode().rstrip("=")
+    )
+
+    request = _mock_request()
+    request.method = "GET"
+    request.query_params = {"limit": "10"}
+    request.url.path = f"/v1/vector_stores/{vector_store_id}/files"
+
+    llm_router = MagicMock()
+
+    def get_credentials(model_id):
+        return {
+            "api_key": f"sk-{model_id}",
+            "api_base": "https://api.openai.com/v1",
+            "custom_llm_provider": "openai",
+            "model": f"openai/{model_id}",
+        }
+
+    llm_router.get_deployment_credentials_with_provider.side_effect = get_credentials
+
+    with (
+        patch(
+            "litellm.proxy.vector_store_files_endpoints.endpoints.assert_user_can_access_vector_store_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", llm_router),
+        patch(
+            "litellm.proxy.vector_store_files_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+            new=fake_base_process,
+        ),
+    ):
+        response = await vector_store_file_list(
+            vector_store_id=vector_store_id,
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=UserAPIKeyAuth(team_models=["team-openai"]),
+        )
+
+    assert response == {"ok": True}
+    assert captured_data["vector_store_id"] == "vs_provider_native"
+    assert captured_data["api_key"] == "sk-managed-deployment"
+    assert captured_data["model"] == "openai/managed-deployment"
+    llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
+        model_id="managed-deployment"
+    )
+
+
+@pytest.mark.asyncio
 async def test_vector_store_file_create_denies_other_team_path_store():
     from litellm.proxy.vector_store_files_endpoints.endpoints import (
         vector_store_file_create,
