@@ -2233,9 +2233,10 @@ class BaseLLMHTTPHandler:
             kwargs=kwargs,
         )
 
-        return self._maybe_websearch_fake_stream_wrap(
+        return self._maybe_wrap_in_fake_stream(
             final_response if final_response is not None else initial_response,
             logging_obj,
+            "anthropic_messages",
         )
 
     def anthropic_messages_handler(
@@ -5507,42 +5508,6 @@ class BaseLLMHTTPHandler:
             **kwargs_for_followup,
         )
 
-    @staticmethod
-    def _maybe_websearch_fake_stream_wrap(
-        response: Any,
-        logging_obj: Optional["LiteLLMLoggingObj"],
-    ) -> Any:
-        """
-        When websearch interception converted stream=True to stream=False for
-        the initial request, re-wrap the final dict as SSE for the client.
-        """
-        from typing import cast
-
-        from litellm._logging import verbose_logger
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-            FakeAnthropicMessagesStreamIterator,
-        )
-        from litellm.types.llms.anthropic_messages.anthropic_response import (
-            AnthropicMessagesResponse,
-        )
-
-        if logging_obj is None:
-            return response
-        if not logging_obj.model_call_details.get(
-            "websearch_interception_converted_stream", False
-        ):
-            return response
-        if hasattr(response, "__aiter__"):
-            return response
-        if not isinstance(response, dict):
-            return response
-
-        verbose_logger.debug(
-            "WebSearchInterception: converting agentic loop response to fake stream"
-        )
-        return FakeAnthropicMessagesStreamIterator(
-            response=cast(AnthropicMessagesResponse, response)
-        )
     def _maybe_wrap_in_fake_stream(
         self,
         response: Any,
@@ -5726,7 +5691,6 @@ class BaseLLMHTTPHandler:
                         callback=callback,
                     )
 
-                return self._maybe_websearch_fake_stream_wrap(
                 return self._maybe_wrap_in_fake_stream(
                     await self._execute_anthropic_agentic_plan(
                         plan=plan,
@@ -5755,10 +5719,6 @@ class BaseLLMHTTPHandler:
                     str(e),
                 )
 
-        if api_surface == "anthropic_messages":
-            wrapped = self._maybe_websearch_fake_stream_wrap(response, logging_obj)
-            if wrapped is not response:
-                return wrapped
         # Check if we need to convert response to fake stream
         # This happens when:
         # 1. Stream was originally True but converted to False for WebSearch interception
