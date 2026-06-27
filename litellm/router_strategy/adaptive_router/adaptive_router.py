@@ -110,7 +110,7 @@ class AdaptiveRouter:
                 self._cells[(rt, model)] = initial_cell(prefs, rt)
 
     async def load_state_from_db(self, prisma_client: Any) -> None:
-        """Override cold-start cells with persisted state. Called once at startup."""
+        """Merge persisted deltas onto the cold-start prior. Called once at startup."""
         if prisma_client is None:
             return
         try:
@@ -126,8 +126,16 @@ class AdaptiveRouter:
                     continue
                 if row.model_name not in self.config.available_models:
                     continue
+                # Persisted alpha/beta are accumulated DELTAS — the flusher writes
+                # increments, not absolute posteriors (for multi-pod safety). Merge
+                # them onto the cold-start prior so the tier bias is preserved AND the
+                # Beta stays valid (prior.beta >= 0.5, so a satisfaction-only delta of
+                # beta=0 can never reload as Beta(alpha, 0) and crash thompson_sample).
+                prefs = self.model_to_prefs.get(row.model_name) or _default_prefs()
+                prior = initial_cell(prefs, rt)
                 self._cells[(rt, row.model_name)] = BanditCell(
-                    alpha=row.alpha, beta=row.beta
+                    alpha=prior.alpha + row.alpha,
+                    beta=prior.beta + row.beta,
                 )
                 loaded += 1
             verbose_router_logger.info(

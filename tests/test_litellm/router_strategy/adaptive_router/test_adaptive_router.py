@@ -233,7 +233,7 @@ async def test_record_turn_failure_increments_beta():
 
 
 @pytest.mark.asyncio
-async def test_load_state_from_db_overrides_cold_start():
+async def test_load_state_from_db_merges_deltas_onto_cold_start():
     r = _make_router()
     cold = r._cells[(RequestType.GENERAL, "fast")]
 
@@ -247,8 +247,10 @@ async def test_load_state_from_db_overrides_cold_start():
     prisma.db.litellm_adaptiverouterstate.find_many = AsyncMock(return_value=[fake_row])
     await r.load_state_from_db(prisma)
 
+    # Persisted alpha/beta are accumulated DELTAS, so the loader merges them
+    # onto the cold-start prior rather than overwriting it.
     new_cell = r._cells[(RequestType.GENERAL, "fast")]
-    assert (new_cell.alpha, new_cell.beta) == (42.0, 13.0)
+    assert (new_cell.alpha, new_cell.beta) == (cold.alpha + 42.0, cold.beta + 13.0)
     assert (new_cell.alpha, new_cell.beta) != (cold.alpha, cold.beta)
 
 
@@ -275,8 +277,8 @@ async def test_load_state_from_db_handles_unknown_request_type():
     )
     await r.load_state_from_db(prisma)
 
-    # Unknown skipped; good applied.
-    assert r._cells[(RequestType.GENERAL, "fast")].alpha == 7.0
+    # Unknown skipped; good row's delta is merged onto the prior.
+    assert r._cells[(RequestType.GENERAL, "fast")].alpha == cold.alpha + 7.0
     # Other request types kept their cold-start values.
     assert r._cells[(RequestType.WRITING, "fast")] == cold or True
 
