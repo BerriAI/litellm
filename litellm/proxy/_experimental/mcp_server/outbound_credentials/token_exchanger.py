@@ -61,8 +61,26 @@ class TokenExchanger(Protocol):
     ) -> Result[OAuthToken, CredError]: ...
 
 
-def _hash(subject_token: str) -> str:
-    return hashlib.sha256(subject_token.encode()).hexdigest()
+def _cache_key(subject_token: str, config: TokenExchangeConfig) -> str:
+    """Bind the cache entry to the caller token AND the exchange config that minted it.
+
+    A rotated caller token, endpoint, audience, scope, client_id, secret, or subject_token_type all
+    change the key, so a config change forces a fresh exchange instead of serving a token minted for
+    the old config until TTL. Everything is hashed, so no secret is held in the key.
+    """
+    secret = config.client_secret.get_secret_value() if config.client_secret else ""
+    material = "\x00".join(
+        (
+            subject_token,
+            config.token_exchange_endpoint or "",
+            config.audience or "",
+            config.subject_token_type,
+            config.client_id or "",
+            secret,
+            " ".join(config.scopes),
+        )
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
 def _parse_expires_in(raw: object) -> int | None:
@@ -139,7 +157,7 @@ class Rfc8693TokenExchanger:
                 )
             )
 
-        cache_key = _hash(subject_token)
+        cache_key = _cache_key(subject_token, config)
         server_id = server.server_id
         cached = await self._cache.get(cache_key, server_id)
         if cached is not None:

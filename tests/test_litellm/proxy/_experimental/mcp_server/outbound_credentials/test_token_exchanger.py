@@ -94,6 +94,21 @@ async def test_rotated_caller_token_re_exchanges():
 
 
 @pytest.mark.asyncio
+async def test_rotated_config_re_exchanges_before_ttl():
+    # Same caller token + server, but the operator rotated the audience/scope: the cached token was
+    # minted for the old config, so it must re-exchange (not serve the stale token) before TTL.
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    rotated = _CONFIG.model_copy(update={"audience": "https://new.example.com", "scopes": ("s3",)})
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    await exchanger.exchange("jwt", _SERVER, rotated)
+    assert len(post.calls) == 2
+    _, second_form = post.calls[1]
+    assert second_form["audience"] == "https://new.example.com"
+    assert second_form["scope"] == "s3"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_callers_single_flight_one_exchange():
     release = asyncio.Event()
 
@@ -176,3 +191,55 @@ async def test_audience_and_scope_omitted_when_unset():
     _, form = post.calls[0]
     assert "audience" not in form
     assert "scope" not in form
+
+
+@pytest.mark.asyncio
+async def test_string_expires_in_is_honored():
+    clock = _Clock(1000.0)
+    # "120" parsed as int -> ttl max(120-60, 10) = 60 -> cached until 1060.
+    post = _RecordingPost({"access_token": "x", "expires_in": "120"})
+    exchanger = Rfc8693TokenExchanger(post, clock=clock)
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    clock.now = 1061.0
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"access_token": "x"},
+        {"access_token": "x", "expires_in": "not-a-number"},
+        {"access_token": "x", "expires_in": True},
+    ],
+    ids=["missing", "unparseable", "bool"],
+)
+async def test_unusable_expires_in_falls_back_to_default_ttl(body):
+    clock = _Clock(1000.0)
+    post = _RecordingPost(body)
+    exchanger = Rfc8693TokenExchanger(post, clock=clock, default_ttl_seconds=300.0)
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    clock.now = 1299.0
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    assert len(post.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_distributed_coordinator_refresh_and_reread_use_the_cache():
+    # Mimics the cross-replica coordinator contract: the winner's refresh populates the cache, a
+    # re-entrant refresh sees the fresh entry, and a loser reads it back via reread, all without a
+    # second IdP call.
+    class _ReplayCoordinator:
+        async def run(self, user_id, server_id, refresh, reread):
+            first = await refresh()
+            second = await refresh()
+            via_reread = await reread()
+            assert first is not None and second is not None and via_reread is not None
+            return via_reread
+
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, coordinator=_ReplayCoordinator(), clock=_Clock())
+    result = await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Ok) and result.ok.access_token == "x"
+    assert len(post.calls) == 1
