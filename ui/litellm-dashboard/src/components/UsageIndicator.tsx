@@ -688,7 +688,10 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   }
 
   return (
-    <div className="sticky bottom-0 left-0 bg-white border-t border-gray-200 z-10 px-4 py-2" style={{ width: `${Math.min(width, 220)}px` }}>
+    <div
+      className="sticky bottom-0 left-0 bg-white border-t border-gray-200 z-10 px-4 py-2"
+      style={{ width: `${Math.min(width, 220)}px` }}
+    >
       <CardStyleView />
     </div>
   );
