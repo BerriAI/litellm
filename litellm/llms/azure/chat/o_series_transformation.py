@@ -20,9 +20,57 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info, supports_reasoning
 
 from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
+from .gpt_transformation import AzureOpenAIConfig
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+        api_version: str = "",
+    ) -> dict:
+        """
+        Map OpenAI params for Azure O-Series models.
+
+        O-Series specific translations (e.g. max_tokens -> max_completion_tokens) are
+        handled by the OpenAI o-series mapper. tool_choice and response_format must
+        additionally go through the Azure api_version gating in AzureOpenAIConfig, which
+        the OpenAI mapper is not aware of.
+        """
+        azure_gated_params = {
+            param: value
+            for param, value in non_default_params.items()
+            if param in ("tool_choice", "response_format")
+        }
+
+        optional_params = super().map_openai_params(
+            non_default_params={
+                param: value
+                for param, value in non_default_params.items()
+                if param not in azure_gated_params
+            },
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+
+        if azure_gated_params:
+            # AzureOpenAIO1Config does not inherit from AzureOpenAIConfig, so the
+            # Azure gating is reached via an instance rather than the unbound-self
+            # dispatch used in the GPT-5 path.
+            optional_params = AzureOpenAIConfig().map_openai_params(
+                non_default_params=azure_gated_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+                api_version=api_version,
+            )
+
+        return optional_params
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         Get the supported OpenAI params for the Azure O-Series models

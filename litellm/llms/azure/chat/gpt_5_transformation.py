@@ -131,13 +131,35 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
                     ),
                 )
 
+        azure_gated_params = {
+            param: value
+            for param, value in non_default_params.items()
+            if param in ("tool_choice", "response_format")
+        }
+
         result = OpenAIGPT5Config.map_openai_params(
             self,
-            non_default_params=non_default_params,
+            non_default_params={
+                param: value
+                for param, value in non_default_params.items()
+                if param not in azure_gated_params
+            },
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
         )
+
+        # tool_choice and response_format need Azure's api_version gating, which the
+        # OpenAI gpt-5 mapper does not apply.
+        if azure_gated_params:
+            result = AzureOpenAIConfig.map_openai_params(
+                self,
+                non_default_params=azure_gated_params,
+                optional_params=result,
+                model=model,
+                drop_params=drop_params,
+                api_version=api_version,
+            )
 
         # Only drop reasoning_effort='none' for models that don't support it
         result_effort = _get_effort_level(result.get("reasoning_effort"))
