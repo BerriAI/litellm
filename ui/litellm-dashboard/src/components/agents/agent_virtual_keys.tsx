@@ -1,8 +1,9 @@
 import React from "react";
-import { Title, Text } from "@tremor/react";
-import { Button, Tooltip } from "antd";
+import { Button, Tooltip, Typography } from "antd";
 import { KeyOutlined } from "@ant-design/icons";
 import { KeyResponse } from "../key_team_helpers/key_list";
+
+const { Title, Text } = Typography;
 
 interface AgentVirtualKeysProps {
   keys: KeyResponse[];
@@ -13,11 +14,11 @@ interface AgentVirtualKeysProps {
 const AgentVirtualKeys: React.FC<AgentVirtualKeysProps> = ({ keys, isLoading, onKeyClick }) => {
   return (
     <div style={{ marginTop: 24 }}>
-      <Title>Virtual Keys</Title>
+      <Title level={4}>Virtual Keys</Title>
       {isLoading ? (
-        <Text className="mt-2">Loading keys...</Text>
+        <Text className="mt-2 block">Loading keys...</Text>
       ) : keys.length === 0 ? (
-        <Text className="mt-2 text-gray-500">No virtual key assigned to this agent.</Text>
+        <Text className="mt-2 block text-gray-500">No virtual key assigned to this agent.</Text>
       ) : (
         <div className="mt-3 flex flex-col gap-2">
           {keys.map((key) => (

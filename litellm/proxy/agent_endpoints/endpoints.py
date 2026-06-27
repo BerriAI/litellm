@@ -69,7 +69,7 @@ def _build_merged_agent_card(
 router = APIRouter()
 
 
-async def _attach_keys_to_agents(agents: List[AgentResponse], prisma_client) -> None:
+async def _attach_keys_to_agents(agents: list[AgentResponse], prisma_client) -> None:
     """Attach each agent's virtual keys, derived from the key table's agent_id
     foreign key. Mirrors how spend is joined into the agent response so the UI
     never has to cross-reference a full key dump client-side. Only non-secret
@@ -80,7 +80,7 @@ async def _attach_keys_to_agents(agents: List[AgentResponse], prisma_client) -> 
     key_rows = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"agent_id": {"in": agent_ids}},
     )
-    keys_by_agent: Dict[str, List[AgentKeySummary]] = {}
+    keys_by_agent: dict[str, list[AgentKeySummary]] = {}
     for row in key_rows:
         keys_by_agent.setdefault(row.agent_id, []).append(
             AgentKeySummary(
@@ -94,13 +94,13 @@ async def _attach_keys_to_agents(agents: List[AgentResponse], prisma_client) -> 
 
 
 def _redact_sensitive_agent_fields(
-    agents: List[AgentResponse],
-) -> List[AgentResponse]:
+    agents: list[AgentResponse],
+) -> list[AgentResponse]:
     """
     Return copies of the given agents with sensitive configuration fields
     redacted.  The original objects are not modified.
     """
-    redacted: List[AgentResponse] = []
+    redacted: list[AgentResponse] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
         copy.static_headers = None
