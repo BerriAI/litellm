@@ -5930,6 +5930,47 @@ class BaseLLMHTTPHandler:
         new_query = parsed.query + ("&" if parsed.query else "") + urlencode(extras)
         return urlunparse(parsed._replace(query=new_query))
 
+    @staticmethod
+    async def _open_realtime_backend_ws(
+        websockets_module: Any,
+        url: str,
+        headers: dict,
+        ssl_context: Any,
+        *,
+        open_timeout: float = 8.0,
+        max_attempts: int = 3,
+    ) -> Any:
+        """Open the backend realtime websocket, retrying a hung open handshake.
+
+        The upstream Live handshake (e.g. Gemini Live) intermittently hangs on
+        open; waiting longer never recovers a hung attempt, but a fresh attempt
+        almost always connects in ~1s. So bound each attempt with ``open_timeout``
+        and retry, instead of surfacing one slow handshake to the caller as a
+        fatal 1011. A bounded attempt that timed out already spaced out the
+        retry, so no extra backoff is needed. Deterministic rejections (auth /
+        handshake status) are not retried.
+        """
+        last_exc: Optional[BaseException] = None
+        for _ in range(max_attempts):
+            try:
+                return await websockets_module.connect(
+                    url,
+                    additional_headers=headers,
+                    max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                    ssl=ssl_context,
+                    open_timeout=open_timeout,
+                )
+            except websockets_module.exceptions.InvalidStatusCode:
+                raise  # auth / 4xx is deterministic; retrying cannot help
+            except (
+                TimeoutError,
+                OSError,
+                websockets_module.exceptions.WebSocketException,
+            ) as e:
+                last_exc = e
+        assert last_exc is not None  # loop only exits via return or a captured exc
+        raise last_exc
+
     async def async_realtime(
         self,
         model: str,
@@ -5962,12 +6003,10 @@ class BaseLLMHTTPHandler:
                 ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
-            async with websockets.connect(  # type: ignore
-                url,
-                additional_headers=headers,
-                max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                ssl=ssl_context,
-            ) as backend_ws:
+            backend_ws = await self._open_realtime_backend_ws(
+                websockets, url, headers, ssl_context
+            )
+            async with backend_ws:
                 # Auto-send session setup if the provider requires it
                 # (e.g. Gemini/Vertex AI Live needs a `setup` message before any realtime_input)
                 _session_config: Optional[str] = None

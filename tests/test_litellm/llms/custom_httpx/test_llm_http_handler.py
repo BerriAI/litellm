@@ -1170,3 +1170,85 @@ def test_async_compact_handler_sends_json_when_not_signed():
     )
     assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
     assert "data" not in kwargs
+
+
+class _FakeWSExceptions:
+    class WebSocketException(Exception):
+        pass
+
+    class InvalidStatusCode(WebSocketException):
+        def __init__(self) -> None:
+            super().__init__("HTTP 403")
+
+
+class _FakeWebsocketsModule:
+    """Stand-in for the ``websockets`` module so the realtime backend-open retry
+    can be exercised without a real network handshake (dependency injection,
+    no monkeypatching)."""
+
+    def __init__(self, outcomes):
+        # outcomes: list where each item is either an Exception to raise or a
+        # sentinel object to return as the "connected" websocket.
+        self._outcomes = list(outcomes)
+        self.exceptions = _FakeWSExceptions
+        self.attempts = 0
+        self.open_timeouts: list = []
+
+    async def connect(self, *args, **kwargs):
+        self.attempts += 1
+        self.open_timeouts.append(kwargs.get("open_timeout"))
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.mark.asyncio
+async def test_realtime_backend_open_retries_then_succeeds():
+    """A hung/slow open handshake is retried; a later fresh attempt connects.
+
+    Regression for intermittent ``1011 timed out during opening handshake``:
+    the proxy used to surface a single slow upstream handshake to the caller as
+    a fatal 1011 with no retry.
+    """
+    sentinel = object()
+    fake = _FakeWebsocketsModule(
+        [TimeoutError("timed out during opening handshake"), sentinel]
+    )
+
+    result = await BaseLLMHTTPHandler._open_realtime_backend_ws(
+        fake, "wss://backend.example/live", {"Authorization": "Bearer x"}, None
+    )
+
+    assert result is sentinel
+    assert fake.attempts == 2
+    # Each attempt must be bounded by a finite open_timeout (not the default/None).
+    assert all(t is not None and t > 0 for t in fake.open_timeouts)
+
+
+@pytest.mark.asyncio
+async def test_realtime_backend_open_raises_after_max_attempts():
+    """When every attempt times out, the final error propagates (so the caller
+    still closes the client socket) rather than looping forever."""
+    fake = _FakeWebsocketsModule([TimeoutError("hang")] * 2)
+
+    with pytest.raises(TimeoutError):
+        await BaseLLMHTTPHandler._open_realtime_backend_ws(
+            fake, "wss://backend.example/live", {}, None, max_attempts=2
+        )
+
+    assert fake.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_realtime_backend_open_does_not_retry_auth_failure():
+    """A deterministic handshake-status rejection (auth/4xx) must not be retried;
+    retrying cannot help and only delays the error."""
+    fake = _FakeWebsocketsModule([_FakeWSExceptions.InvalidStatusCode()])
+
+    with pytest.raises(_FakeWSExceptions.WebSocketException):
+        await BaseLLMHTTPHandler._open_realtime_backend_ws(
+            fake, "wss://backend.example/live", {}, None
+        )
+
+    assert fake.attempts == 1
