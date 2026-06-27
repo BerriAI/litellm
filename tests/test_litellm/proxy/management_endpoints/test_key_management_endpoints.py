@@ -5845,13 +5845,12 @@ async def test_generate_key_with_router_settings(monkeypatch):
         generate_key_fn,
     )
 
-    # Test router_settings with sample data
-    # Using valid UpdateRouterConfig fields (retry_policy is not a valid field,
-    # but model_group_retry_policy is, which also tests nested dict serialization)
+    # model_group_retry_policy maps a model group to a RetryPolicy, exercising
+    # nested-model serialization through the key record
     router_settings_data = {
         "routing_strategy": "usage-based",
         "num_retries": 3,
-        "model_group_retry_policy": {"max_retries": 5},
+        "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
     }
 
     request_data = GenerateKeyRequest(
