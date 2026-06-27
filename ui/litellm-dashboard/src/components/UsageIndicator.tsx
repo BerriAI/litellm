@@ -687,9 +687,8 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
     return null;
   }
 
-  // Fixed positioning with proper spacing from edges
   return (
-    <div className="fixed bottom-4 left-4 z-50" style={{ width: `${Math.min(width, 220)}px` }}>
+    <div className="px-4 py-2" style={{ boxSizing: "border-box", width: `${Math.min(width, 220)}px` }}>
       <CardStyleView />
     </div>
   );
