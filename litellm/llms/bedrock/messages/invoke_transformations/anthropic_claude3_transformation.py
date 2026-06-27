@@ -240,8 +240,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Check if the model supports extended thinking beta headers on Bedrock.
 
-        On 3rd-party platforms (e.g., Amazon Bedrock), extended thinking is only
-        supported on: Claude Opus 4.5, Claude Opus 4.1, Opus 4, or Sonnet 4.
+        On 3rd-party platforms (e.g., Amazon Bedrock), extended thinking is supported
+        on the adaptive-thinking models (sourced from the cost map) plus the legacy
+        non-adaptive set: Claude Opus 4.5, Claude Opus 4.1, Opus 4, or Sonnet 4.
 
         Ref: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
 
@@ -251,10 +252,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         Returns:
             True if the model supports extended thinking on Bedrock
         """
-        model_lower = model.lower()
+        if AnthropicModelInfo._is_adaptive_thinking_model(model):
+            return True
 
-        # Supported models on Bedrock for extended thinking
-        supported_patterns = [
+        model_lower = model.lower()
+        non_adaptive_patterns = [
             "opus-4.5",
             "opus_4.5",
             "opus-4-5",
@@ -267,24 +269,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             "opus_4",  # Opus 4
             "sonnet-4",
             "sonnet_4",  # Sonnet 4
-            "sonnet-4.6",
-            "sonnet_4.6",
-            "sonnet-4-6",
-            "sonnet_4_6",
-            "opus-4.6",
-            "opus_4.6",
-            "opus-4-6",
-            "opus_4_6",
-            "opus-4.7",
-            "opus_4.7",
-            "opus-4-7",
-            "opus_4_7",
-            "fable-5",
-            "fable_5",
-            "fable.5",
         ]
 
-        return any(pattern in model_lower for pattern in supported_patterns)
+        return any(pattern in model_lower for pattern in non_adaptive_patterns)
 
     def _ensure_thinking_for_clear_thinking_context_management(
         self,

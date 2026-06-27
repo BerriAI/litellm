@@ -26,6 +26,10 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 
+_CLAUDE_FAMILY_VERSION_RE = re.compile(
+    r"(?:opus|sonnet|haiku)[._-](\d+)[._-](\d{1,2})(?!\d)", re.IGNORECASE
+)
+
 
 def is_anthropic_oauth_key(value: Optional[str]) -> bool:
     """Check if a value contains an Anthropic OAuth token (sk-ant-oat*)."""
@@ -244,63 +248,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return False
 
     @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model (Opus 4.6 or Sonnet 4.6)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-                "sonnet-4-6",
-                "sonnet_4_6",
-                "sonnet-4.6",
-                "sonnet_4.6",
-            )
-        )
+    def _claude_version_at_least(model: str, major: int, minor: int) -> bool:
+        """Whether ``model`` names a Claude family model of version >= ``major.minor``.
 
-    @staticmethod
-    def _is_claude_4_7_model(model: str) -> bool:
-        """Check if the model is a Claude 4.7 model (Opus 4.7)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-7",
-                "opus_4_7",
-                "opus-4.7",
-                "opus_4.7",
-            )
-        )
-
-    @staticmethod
-    def _is_claude_4_8_model(model: str) -> bool:
-        """Check if the model is a Claude 4.8 model (Opus 4.8)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-8",
-                "opus_4_8",
-                "opus-4.8",
-                "opus_4.8",
-            )
-        )
-
-    @staticmethod
-    def _is_claude_fable_5_model(model: str) -> bool:
-        """Check if the model is a Claude Fable 5 model."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "fable-5",
-                "fable_5",
-                "fable.5",
-            )
-        )
+        Parses the modern ``<family>-<major>-<minor>`` naming (``-``/``_``/``.``
+        separators, optional provider prefixes), e.g. ``us.anthropic.claude-opus-4-6``
+        or ``claude-sonnet-4.6``. A ``minor`` is at most two digits, so an eight-digit
+        date suffix (``claude-opus-4-20250514``, the non-adaptive Opus 4.0) is not
+        misread as a minor version. Legacy ``claude-<major>-<minor>-<family>`` names
+        (3.x) and anything without a parseable family version return False.
+        """
+        match = _CLAUDE_FAMILY_VERSION_RE.search(model)
+        if match is None:
+            return False
+        return (int(match.group(1)), int(match.group(2))) >= (major, minor)
 
     @staticmethod
     def _supports_sampling_params(model: str) -> bool:
@@ -430,24 +391,21 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
-        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``.
+        """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
-        Driven by the ``supports_adaptive_thinking`` flag in the model map; the
-        4.6/4.7/4.8 and Fable 5 name checks remain only as a fallback for
-        provider-routed ids whose map entries predate the flag (e.g. an
-        ``us.anthropic.claude-fable-5`` alias that is not a known LiteLLM
-        provider alias).
+        The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
+        entry resolved through provider prefixes. As a graceful fallback for
+        provider-prefixed names that resolve to no mapped entry (e.g.
+        ``bedrock/invoke/us.anthropic.claude-opus-4-7``), a Claude family version of
+        >= 4.6 also qualifies. Single-number families like Fable 5 carry no parseable
+        minor, so their unmapped aliases rely on the cost map alone until a
+        ``fallback_generalizations`` rule covers them.
         """
         if AnthropicModelInfo._supports_model_capability(
             model, "supports_adaptive_thinking"
         ):
             return True
-        return (
-            AnthropicModelInfo._is_claude_4_6_model(model)
-            or AnthropicModelInfo._is_claude_4_7_model(model)
-            or AnthropicModelInfo._is_claude_4_8_model(model)
-            or AnthropicModelInfo._is_claude_fable_5_model(model)
-        )
+        return AnthropicModelInfo._claude_version_at_least(model, 4, 6)
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None

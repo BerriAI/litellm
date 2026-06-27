@@ -1656,16 +1656,16 @@ async def test_unified_bedrock_messages_sse_usage_and_cost_claude_sonnet_46():
         "us.anthropic.claude-opus-4-8",
         "global.anthropic.claude-opus-4-7-v1:0",
         "us.anthropic.claude-fable-5",
-        "us.anthropic.claude-fable-5-preview-2099",
+        "global.anthropic.claude-fable-5",
     ],
 )
 def test_bedrock_clear_thinking_injects_adaptive_with_effort_for_adaptive_models(model):
     """clear_thinking_20251015 without a top-level ``thinking`` field must inject
     ``thinking.type=adaptive`` plus ``output_config.effort`` on adaptive-thinking
     models (Opus 4.7/4.8, Fable 5). The legacy ``thinking.type=enabled`` shape is
-    rejected by Bedrock for these models (issue #29188). Fable 5 must be gated in
-    by ``_supports_extended_thinking_on_bedrock``; without its patterns the helper
-    returns early and never injects, including for unmapped Fable 5 aliases."""
+    rejected by Bedrock for these models (issue #29188). Detection is sourced from
+    the cost-map ``supports_adaptive_thinking`` flag (with a version fallback for
+    unmapped provider-prefixed Opus aliases like the dated/versioned 4.7 above)."""
     cfg = AmazonAnthropicClaudeMessagesConfig()
     request = {
         "max_tokens": 32000,
