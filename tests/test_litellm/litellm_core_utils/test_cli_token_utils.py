@@ -3,14 +3,13 @@ Unit tests for CLI token utilities
 """
 
 import json
-import os
-import tempfile
-from pathlib import Path
 from unittest.mock import mock_open, patch
 
-import pytest
 
-from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+from litellm.litellm_core_utils.cli_token_utils import (
+    get_litellm_gateway_api_key,
+    get_stored_base_url,
+)
 
 
 class TestCLITokenUtils:
@@ -87,3 +86,35 @@ class TestCLITokenUtils:
             result = get_litellm_gateway_api_key()
 
             assert result is None
+
+
+class TestGetStoredBaseUrl:
+    """Test reading the proxy base URL stored by `lite login`"""
+
+    def test_returns_stored_base_url(self):
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value={"key": "sk-test", "base_url": "https://llm.acme.com"},
+        ):
+            assert get_stored_base_url() == "https://llm.acme.com"
+
+    def test_returns_none_when_no_token_file(self):
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value=None,
+        ):
+            assert get_stored_base_url() is None
+
+    def test_returns_none_when_base_url_missing(self):
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value={"key": "sk-old-token"},
+        ):
+            assert get_stored_base_url() is None
+
+    def test_returns_none_when_base_url_empty(self):
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value={"key": "sk-test", "base_url": ""},
+        ):
+            assert get_stored_base_url() is None

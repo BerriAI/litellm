@@ -1,10 +1,13 @@
 # stdlib imports
+import os
 from typing import Optional
 
 # third party imports
 import click
+from click import ParameterSource
 
 from litellm._version import version as litellm_version
+from litellm.litellm_core_utils.cli_token_utils import get_stored_base_url
 from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.agents import agent_commands
@@ -19,6 +22,8 @@ from .commands.models import models
 from .commands.teams import teams
 from .commands.users import users
 from .interface import interactive_shell
+
+DEFAULT_BASE_URL = "http://localhost:4000"
 
 
 def print_version(base_url: str, api_key: Optional[str]):
@@ -37,6 +42,25 @@ def print_version(base_url: str, api_key: Optional[str]):
         click.echo(f"Could not retrieve server version: {e}")
 
 
+def _eager_version_base_url(ctx: click.Context) -> str:
+    """Resolve the base URL for `--version`, which can fire before --base-url is parsed."""
+    return (
+        ctx.params.get("base_url")
+        or os.environ.get("LITELLM_PROXY_URL")
+        or get_stored_base_url()
+        or DEFAULT_BASE_URL
+    )
+
+
+def _print_version_callback(
+    ctx: click.Context, param: click.Parameter, value: bool
+) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+    print_version(_eager_version_base_url(ctx), ctx.params.get("api_key"))
+    ctx.exit()
+
+
 @click.group(invoke_without_command=True)
 @click.option(
     "--version",
@@ -45,23 +69,13 @@ def print_version(base_url: str, api_key: Optional[str]):
     is_eager=True,
     expose_value=False,
     help="Show the LiteLLM Proxy CLI and server version and exit.",
-    callback=lambda ctx, param, value: (
-        (
-            print_version(
-                ctx.params.get("base_url") or "http://localhost:4000",
-                ctx.params.get("api_key"),
-            )
-            or ctx.exit()
-        )
-        if value and not ctx.resilient_parsing
-        else None
-    ),
+    callback=_print_version_callback,
 )
 @click.option(
     "--base-url",
     envvar="LITELLM_PROXY_URL",
     show_envvar=True,
-    default="http://localhost:4000",
+    default=DEFAULT_BASE_URL,
     help="Base URL of the LiteLLM proxy server",
 )
 @click.option(
@@ -75,12 +89,22 @@ def cli(ctx: click.Context, base_url: str, api_key: Optional[str]) -> None:
     """LiteLLM Proxy CLI - Manage your LiteLLM proxy server"""
     ctx.ensure_object(dict)
 
+    base_url_is_default = (
+        ctx.get_parameter_source("base_url") == ParameterSource.DEFAULT
+    )
+    if base_url_is_default:
+        stored_base_url = get_stored_base_url()
+        if stored_base_url:
+            base_url = stored_base_url
+            base_url_is_default = False
+
     # If no API key provided via flag or environment variable, try to load from saved token.
     # Pass base_url so we only use the stored key when it was issued for this server.
     if api_key is None:
         api_key = get_stored_api_key(expected_base_url=base_url)
 
     ctx.obj["base_url"] = base_url
+    ctx.obj["base_url_is_default"] = base_url_is_default
     ctx.obj["api_key"] = api_key
 
     # If no subcommand was invoked, start interactive mode

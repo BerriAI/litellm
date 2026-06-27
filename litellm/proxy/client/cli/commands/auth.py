@@ -538,6 +538,36 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
             return None
 
 
+def _can_prompt_for_input() -> bool:
+    return sys.stdin.isatty()
+
+
+def _normalize_base_url_input(value: str) -> str:
+    cleaned = value.strip().rstrip("/")
+    if not cleaned.startswith(("http://", "https://")):
+        raise click.UsageError("The proxy URL must start with http:// or https://")
+    return cleaned
+
+
+def _resolve_login_base_url(ctx: click.Context) -> str:
+    """Return the proxy URL to log in against, prompting when it was never chosen.
+
+    The prompt only fires when the URL is the hardcoded localhost fallback (no
+    flag, no LITELLM_PROXY_URL, no URL stored by a previous login) and stdin is
+    a terminal, so configured and scripted invocations never see it.
+    """
+    base_url = ctx.obj["base_url"]
+    if not ctx.obj.get("base_url_is_default") or not _can_prompt_for_input():
+        return base_url
+
+    entered = click.prompt(
+        "LiteLLM proxy URL", default=base_url, value_proc=_normalize_base_url_input
+    )
+    ctx.obj["base_url"] = entered
+    ctx.obj["base_url_is_default"] = False
+    return entered
+
+
 @click.command(name="login")
 @click.pass_context
 def login(ctx: click.Context):
@@ -545,10 +575,18 @@ def login(ctx: click.Context):
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
     from litellm.proxy.client.cli.interface import show_commands
 
-    base_url = ctx.obj["base_url"]
+    base_url = _resolve_login_base_url(ctx)
 
     try:
         cli_sso_flow = _start_cli_sso_flow(base_url=base_url)
+    except (requests.RequestException, ValueError) as e:
+        raise click.ClickException(
+            f"Could not start an SSO login with the LiteLLM proxy at {base_url}: {e}. "
+            "Check that the URL points at your LiteLLM proxy, or change it with "
+            "--base-url or LITELLM_PROXY_URL."
+        )
+
+    try:
         key_id = cli_sso_flow["login_id"]
         poll_secret = cli_sso_flow["poll_secret"]
         user_code = cli_sso_flow["user_code"]
