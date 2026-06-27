@@ -53,6 +53,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
     CiscoAIDefenseGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
+    HeadroomGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -119,6 +122,7 @@ class SupportedGuardrailIntegrations(Enum):
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
+    HEADROOM = "headroom"
 
 
 class Role(Enum):
@@ -865,6 +869,7 @@ class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
+    HeadroomGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
