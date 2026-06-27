@@ -151,3 +151,12 @@ def test_fetch_jwt_uses_owned_client_not_shared_pool(monkeypatch):
     result = _fetch_agentops_jwt("api-key")
     assert result == {"token": "jwt-123"}
     assert closed["n"] == 1  # the owned client was closed
+
+
+def test_agentops_endpoint_points_at_live_host():
+    # Regression: the OTLP endpoint must be the resolvable AgentOps host. The
+    # deprecated otlp.agentops.cloud domain no longer resolves (NXDOMAIN), so
+    # spans silently failed to export with a NameResolutionError. Pin the host
+    # so a typo or stale domain can never ship again.
+    assert _AGENTOPS_ENDPOINT == "https://otlp.agentops.ai/v1/traces"
+    assert "agentops.cloud" not in _AGENTOPS_ENDPOINT

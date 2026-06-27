@@ -23,7 +23,7 @@ from litellm.integrations.otel.model.config import (
 )
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 
-_AGENTOPS_ENDPOINT = "https://otlp.agentops.cloud/v1/traces"
+_AGENTOPS_ENDPOINT = "https://otlp.agentops.ai/v1/traces"
 _AGENTOPS_AUTH_ENDPOINT = "https://api.agentops.ai/v3/auth/token"
 _AGENTOPS_EXPORTER_KIND = "agentops"
 
