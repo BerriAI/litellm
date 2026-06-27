@@ -76,6 +76,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.litellm_core_utils.reasoning_effort_utils import (
+    reasoning_effort_from_thinking_budget,
+)
 from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
@@ -716,11 +719,8 @@ class LiteLLMAnthropicMessagesAdapter:
         Anthropic thinking format: {'type': 'enabled'|'disabled', 'budget_tokens': int}
         OpenAI reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'default'
 
-        Mapping:
-        - budget_tokens >= 10000 -> 'high'
-        - budget_tokens >= 5000  -> 'medium'
-        - budget_tokens >= 2000  -> 'low'
-        - budget_tokens < 2000   -> 'minimal'
+        ``budget_tokens`` is bucketed via the shared
+        ``reasoning_effort_from_thinking_budget`` thresholds.
         """
         if not isinstance(thinking, dict):
             return None
@@ -730,15 +730,9 @@ class LiteLLMAnthropicMessagesAdapter:
         if thinking_type == "disabled":
             return None
         elif thinking_type == "enabled":
-            budget_tokens = thinking.get("budget_tokens", 0)
-            if budget_tokens >= 10000:
-                return "high"
-            elif budget_tokens >= 5000:
-                return "medium"
-            elif budget_tokens >= 2000:
-                return "low"
-            else:
-                return "minimal"
+            return reasoning_effort_from_thinking_budget(
+                thinking.get("budget_tokens", 0)
+            )
         elif thinking_type == "adaptive":
             # Adaptive thinking: effort is controlled by output_config.effort,
             # not budget_tokens. Return a default; caller should override with

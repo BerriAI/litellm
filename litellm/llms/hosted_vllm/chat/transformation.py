@@ -20,6 +20,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
+from litellm.litellm_core_utils.reasoning_effort_utils import (
+    reasoning_effort_from_thinking_budget,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -115,15 +118,11 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         if thinking is not None and isinstance(thinking, dict):
             if thinking.get("type") == "enabled":
                 if "reasoning_effort" not in non_default_params:
-                    budget_tokens = thinking.get("budget_tokens", 0)
-                    if budget_tokens >= 10000:
-                        non_default_params["reasoning_effort"] = "high"
-                    elif budget_tokens >= 5000:
-                        non_default_params["reasoning_effort"] = "medium"
-                    elif budget_tokens >= 2000:
-                        non_default_params["reasoning_effort"] = "low"
-                    else:
-                        non_default_params["reasoning_effort"] = "minimal"
+                    non_default_params["reasoning_effort"] = (
+                        reasoning_effort_from_thinking_budget(
+                            thinking.get("budget_tokens", 0)
+                        )
+                    )
 
         return super().map_openai_params(
             non_default_params, optional_params, model, drop_params
