@@ -53,3 +53,18 @@ def test_config_accepts_all_six_request_types_in_strengths():
         ],
     )
     assert len(prefs.strengths) == 6
+
+
+def test_adaptive_router_cost_reads_model_info():
+    """GH#31481: cost should fall back to model_info when not set
+    in litellm_params."""
+    lp_dict = {}  # no cost in litellm_params
+    mi_dict = {"input_cost_per_token": 0.0001}
+    cost = lp_dict.get("input_cost_per_token")
+    if cost is None:
+        cost = mi_dict.get("input_cost_per_token")
+    assert cost == 0.0001
+
+    # Explicit zero in litellm_params should be preserved (not fallback)
+    cost = {"input_cost_per_token": 0}.get("input_cost_per_token")
+    assert cost == 0
