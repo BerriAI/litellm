@@ -17236,6 +17236,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/rust_control_plane/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Callback Logs
+         * @description Replay a batch of finished logging payloads through the callback fan-out.
+         *
+         *     Admin-only: the payloads write spend logs and trigger every callback, so this
+         *     is a trusted internal route, not a public surface.
+         */
+        post: operations["ingest_callback_logs_v1_rust_control_plane_logs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/search": {
         parameters: {
             query?: never;
@@ -21102,10 +21125,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with
-             * @default chat
+             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -21511,6 +21533,54 @@ export interface components {
         CallbackDelete: {
             /** Callback Name */
             callback_name: string;
+        };
+        /**
+         * CallbackLogFailure
+         * @description A record that failed to replay, identified by its index in the batch.
+         */
+        CallbackLogFailure: {
+            /** Error */
+            error: string;
+            /** Index */
+            index: number;
+        };
+        /**
+         * CallbackLogRecord
+         * @description A single finished logging event to replay through the callbacks.
+         */
+        CallbackLogRecord: {
+            /** Error */
+            error?: string | null;
+            /** Standard Logging Payload */
+            standard_logging_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "failure";
+        };
+        /**
+         * CallbackLogsRequest
+         * @description A batch of logging events posted by an external producer.
+         */
+        CallbackLogsRequest: {
+            /** Records */
+            records: components["schemas"]["CallbackLogRecord"][];
+        };
+        /**
+         * CallbackLogsResponse
+         * @description Per-batch result: counts plus per-record failure detail so the caller can
+         *     distinguish a transient callback error from a structurally bad payload.
+         */
+        CallbackLogsResponse: {
+            /** Failed */
+            failed: number;
+            /** Failures */
+            failures?: components["schemas"]["CallbackLogFailure"][];
+            /** Processed */
+            processed: number;
         };
         /** CallbacksByType */
         CallbacksByType: {
@@ -22355,6 +22425,11 @@ export interface components {
              * @description CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.
              */
             mcp_trusted_proxy_ranges?: string[] | null;
+            /**
+             * Mcp Xff Num Trusted Hops
+             * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
+             */
+            mcp_xff_num_trusted_hops?: number | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -30768,6 +30843,11 @@ export interface components {
              */
             allowed_models?: string[] | null;
             /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
+            /**
              * Max Budget In Team
              * @description Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits
              */
@@ -32225,6 +32305,11 @@ export interface components {
             end_user_tpm_limit?: number | null;
             /** Expires */
             expires?: string | null;
+            /**
+             * Is Session Token
+             * @default false
+             */
+            is_session_token: boolean;
             /** Jwt Claims */
             jwt_claims?: {
                 [key: string]: unknown;
@@ -54673,6 +54758,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_callback_logs_v1_rust_control_plane_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallbackLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallbackLogsResponse"];
                 };
             };
             /** @description Validation Error */

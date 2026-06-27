@@ -63,7 +63,7 @@ proxy = [
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.26.0,<2.0",
     "litellm-proxy-extras==0.4.74",
-    "litellm-enterprise==0.1.43",
+    "litellm-enterprise==0.1.44",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
     "polars>=1.38.1,<2.0",
@@ -148,7 +148,6 @@ litellm-proxy = "litellm.proxy.client.cli:cli"
 dev = [
     "diff-cover==9.7.2",
     "flake8==7.3.0",
-    "black==26.3.1",
     "basedpyright==1.39.7",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
@@ -329,4 +328,3 @@ pytest_add_cli_args = [
 [tool.coverage.run]
 source = ["litellm"]
 relative_files = true
-

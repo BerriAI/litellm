@@ -7,7 +7,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 jobs:
@@ -111,4 +111,4 @@ jobs:
         if: ${{ !cancelled() && steps.changed.outputs.has_files == 'true' }}
         run: |
           npx eslint . -f json -o "$RUNNER_TEMP/lint-report.json" || true
-          node scripts/check-lint-budgets.mjs "$RUNNER_TEMP/lint-report.json" eslint-budgets.json
+          node scripts/check-lint-budgets.mjs "$RUNNER_TEMP/lint-report.json" eslint-budgets.json --check eslint-metrics.json
