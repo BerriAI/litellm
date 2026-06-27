@@ -39,3 +39,38 @@ def test_transform_request_drops_stream_chunk_size(config, model):
     )
 
     assert "stream_chunk_size" not in json.dumps(request_body)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "mistral.mistral-7b-instruct-v0:2",
+        "amazon.titan-text-express-v1",
+        "ai21.j2-ultra-v1",
+        "meta.llama3-8b-instruct-v1:0",
+    ],
+)
+def test_transform_request_drops_internal_mcp_params(model):
+    """skip_mcp_handler, _skip_mcp_handler and mcp_handler_context are
+    LiteLLM-internal MCP control flags, not Bedrock inference parameters. The
+    invoke path splats inference_params straight into the request body, so
+    without filtering they reach AWS and the request is rejected with
+    'extraneous key is not permitted'. Regression for
+    https://github.com/BerriAI/litellm/issues/30371."""
+    request_body = AmazonInvokeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "max_tokens": 10,
+            "skip_mcp_handler": True,
+            "_skip_mcp_handler": True,
+            "mcp_handler_context": {"server": "x"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    serialized = json.dumps(request_body)
+    assert "skip_mcp_handler" not in serialized
+    assert "mcp_handler_context" not in serialized
+    assert "max_tokens" in serialized
