@@ -1782,7 +1782,7 @@ class BaseAnthropicChatTest(ABC):
             custom_llm_provider=provider,
             reasoning_effort="high",
         )
-        assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+        assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 10000}
 
         assert "reasoning_effort" not in optional_params
 

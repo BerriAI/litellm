@@ -1910,8 +1910,8 @@ def test_as_system_content_blocks_handles_each_shape():
         (5000, "medium"),
         (9999, "medium"),
         (10000, "high"),
-        (23999, "high"),
-        (24000, "xhigh"),
+        (19999, "high"),
+        (20000, "xhigh"),
         (50000, "xhigh"),
     ],
 )

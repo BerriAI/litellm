@@ -2493,9 +2493,9 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
 
     # ``minimal`` floors at ANTHROPIC_MIN_THINKING_BUDGET_TOKENS (1024).
     test_cases = [
-        ("low", 1024),
-        ("medium", 2048),
-        ("high", 4096),
+        ("low", 2000),
+        ("medium", 5000),
+        ("high", 10000),
         ("minimal", 1024),
     ]
 
@@ -2820,7 +2820,7 @@ def test_reasoning_effort_garbage_raises_bad_request(effort):
 
 @pytest.mark.parametrize(
     "effort,expected_budget",
-    [("xhigh", 8192), ("max", 16384)],
+    [("xhigh", 20000), ("max", 40000)],
 )
 def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
     effort, expected_budget

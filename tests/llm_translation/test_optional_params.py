@@ -1839,7 +1839,7 @@ def test_anthropic_unified_reasoning_content(model, provider):
         custom_llm_provider=provider,
         reasoning_effort="high",
     )
-    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 10000}
 
 
 def test_azure_response_format(monkeypatch):
