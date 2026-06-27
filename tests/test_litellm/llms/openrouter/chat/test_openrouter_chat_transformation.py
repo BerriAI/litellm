@@ -141,8 +141,6 @@ def test_openrouter_transform_request_with_cache_control():
         ]
     }
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -173,9 +171,6 @@ def test_openrouter_transform_request_with_cache_control():
         litellm_params={},
         headers={},
     )
-
-    print("\n=== Transformed Request ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
 
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 2
@@ -218,8 +213,6 @@ def test_openrouter_transform_request_with_cache_control_list_content():
         ]
     }
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -244,9 +237,6 @@ def test_openrouter_transform_request_with_cache_control_list_content():
         litellm_params={},
         headers={},
     )
-
-    print("\n=== Transformed Request (List Content) ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
 
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 2
@@ -284,8 +274,6 @@ def test_openrouter_transform_request_with_cache_control_gemini():
         ]
     }
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -303,9 +291,6 @@ def test_openrouter_transform_request_with_cache_control_gemini():
         litellm_params={},
         headers={},
     )
-
-    print("\n=== Transformed Request (Gemini) ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
 
     assert "messages" in transformed_request
     assert len(transformed_request["messages"]) == 1
@@ -325,8 +310,6 @@ def test_openrouter_transform_request_multiple_cache_controls():
     When a message has 5 content blocks with cache_control at message level,
     only the 5th block should have cache_control, not all 5 blocks.
     """
-    import json
-
     config = OpenrouterConfig()
 
     messages = [
@@ -351,17 +334,14 @@ def test_openrouter_transform_request_multiple_cache_controls():
         headers={},
     )
 
-    print("\n=== Transformed Request (Multiple Blocks) ===")
-    print(json.dumps(transformed_request, indent=4, default=str))
-
     system_message = transformed_request["messages"][0]
     assert len(system_message["content"]) == 5
 
     # Only the last block should have cache_control
     for i in range(4):
-        assert (
-            "cache_control" not in system_message["content"][i]
-        ), f"Block {i} should not have cache_control"
+        assert "cache_control" not in system_message["content"][i], (
+            f"Block {i} should not have cache_control"
+        )
 
     assert system_message["content"][4]["cache_control"] == {"type": "ephemeral"}
     assert "cache_control" not in system_message
@@ -453,6 +433,133 @@ def test_openrouter_cost_tracking_non_streaming():
         ]
         == 0.00015
     )
+
+
+def test_openrouter_cost_tracking_ignores_invalid_cost():
+    from unittest.mock import Mock, patch
+    from litellm.types.utils import ModelResponse, Choices, Message, Usage
+
+    config = OpenrouterConfig()
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "gen-123",
+        "model": "openrouter/anthropic/claude-sonnet-4.5",
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 20,
+            "total_tokens": 30,
+            "cost": "N/A",
+        },
+    }
+    mock_response.headers = {}
+
+    model_response = ModelResponse(
+        id="gen-123",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="Hello!", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model="openrouter/anthropic/claude-sonnet-4.5",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+
+    with patch.object(
+        OpenAIGPTConfig, "transform_response", return_value=model_response
+    ):
+        result = config.transform_response(
+            model="openrouter/anthropic/claude-sonnet-4.5",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    additional_headers = result._hidden_params.get("additional_headers", {})
+    assert "llm_provider-x-litellm-response-cost" not in additional_headers
+
+
+def test_openrouter_transform_response_non_json_2xx_error():
+    from unittest.mock import Mock, patch
+    from litellm.types.utils import ModelResponse
+
+    raw_response = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/plain", "x-request-id": "req_test"},
+        content=(b"         \n\n" * 100) + b". ",
+        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+    )
+
+    with patch.object(OpenAIGPTConfig, "transform_response") as parent_transform:
+        with pytest.raises(OpenRouterException) as exc_info:
+            OpenrouterConfig().transform_response(
+                model="openrouter/z-ai/glm-5.1",
+                raw_response=raw_response,
+                model_response=ModelResponse(),
+                logging_obj=Mock(),
+                request_data={},
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+    parent_transform.assert_not_called()
+    assert "OpenRouter returned a non-JSON response" in str(exc_info.value)
+    assert "Original Response" in str(exc_info.value)
+    assert "." in str(exc_info.value)
+    assert exc_info.value.status_code == 502
+
+
+def test_openrouter_transform_response_embedded_error_before_parent_parse():
+    from unittest.mock import Mock, patch
+    from litellm.types.utils import ModelResponse
+
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "error": {
+                "message": "upstream provider rate limited",
+                "code": 429,
+                "metadata": {"headers": {"retry-after": "5"}},
+            }
+        },
+        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+    )
+
+    with patch.object(OpenAIGPTConfig, "transform_response") as parent_transform:
+        with pytest.raises(OpenRouterException) as exc_info:
+            OpenrouterConfig().transform_response(
+                model="openrouter/z-ai/glm-5.1",
+                raw_response=raw_response,
+                model_response=ModelResponse(),
+                logging_obj=Mock(),
+                request_data={},
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
+
+    parent_transform.assert_not_called()
+    assert "upstream provider rate limited" in str(exc_info.value)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers == {"retry-after": "5"}
 
 
 def test_openrouter_cost_tracking_streaming():

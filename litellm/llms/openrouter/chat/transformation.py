@@ -201,6 +201,9 @@ class OpenrouterConfig(OpenAIGPTConfig):
         Returns:
             ModelResponse: The transformed response with cost information.
         """
+        response_json = self._get_response_json(raw_response)
+        self._raise_if_error_response(response_json=response_json)
+
         # Call parent transform_response to get the standard ModelResponse
         model_response = super().transform_response(
             model=model,
@@ -218,12 +221,10 @@ class OpenrouterConfig(OpenAIGPTConfig):
 
         # Extract cost from OpenRouter response body
         # OpenRouter returns cost information in the usage object when usage.include=true
-        try:
-            response_json = raw_response.json()
-            if "usage" in response_json and response_json["usage"]:
-                response_cost = response_json["usage"].get("cost")
-                if response_cost is not None:
-                    # Store cost in hidden params for the cost calculator to use
+        if "usage" in response_json and response_json["usage"]:
+            response_cost = response_json["usage"].get("cost")
+            if response_cost is not None:
+                try:
                     if not hasattr(model_response, "_hidden_params"):
                         model_response._hidden_params = {}
                     if "additional_headers" not in model_response._hidden_params:
@@ -231,11 +232,56 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     model_response._hidden_params["additional_headers"][
                         "llm_provider-x-litellm-response-cost"
                     ] = float(response_cost)
-        except Exception:
-            # If we can't extract cost, continue without it - don't fail the response
-            pass
+                except Exception:
+                    # Cost tracking should never fail an otherwise valid response.
+                    pass
 
         return model_response
+
+    def _get_response_json(self, raw_response: httpx.Response) -> dict:
+        try:
+            response_json = raw_response.json()
+        except Exception as e:
+            status_code = raw_response.status_code
+            if 200 <= status_code < 300:
+                status_code = 502
+            response_text = raw_response.text
+            response_preview = (response_text.strip() or response_text)[:500]
+            raise OpenRouterException(
+                message=(
+                    "OpenRouter returned a non-JSON response - {}, "
+                    "Original Response: {!r}".format(str(e), response_preview)
+                ),
+                status_code=status_code,
+                headers=raw_response.headers,
+            )
+        return response_json
+
+    def _raise_if_error_response(self, response_json: dict) -> None:
+        error_response = response_json.get("error")
+        if not isinstance(error_response, dict):
+            return
+
+        metadata = error_response.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        status_code = error_response.get("code", 500)
+        if not isinstance(status_code, int):
+            status_code = 500
+
+        error_message = OpenRouterErrorMessage(
+            message="Message: {}, Metadata: {}".format(
+                error_response.get("message", "Unknown error"),
+                metadata,
+            ),
+            code=status_code,
+            metadata=metadata,
+        )
+        raise OpenRouterException(
+            message=error_message["message"],
+            status_code=error_message["code"],
+            headers=error_message["metadata"].get("headers", {}),
+        )
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
