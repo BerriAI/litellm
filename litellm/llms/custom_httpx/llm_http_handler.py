@@ -3508,8 +3508,10 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
-    # 8 MiB; a 256 KiB multiple, which GCS requires for every non-final chunk.
-    _RESUMABLE_CHUNK_SIZE = 8 * 1024 * 1024
+    # 32 MiB (a 256 KiB multiple, which GCS requires for every non-final chunk).
+    # Larger chunks mean fewer sequential round-trips on a multi-GB upload, which
+    # is what pushes total upload time past client/LB timeouts.
+    _RESUMABLE_CHUNK_SIZE = 32 * 1024 * 1024
 
     @staticmethod
     def _iter_resumable_chunks(byte_iter: Iterator[bytes], chunk_size: int) -> Iterator[bytes]:
