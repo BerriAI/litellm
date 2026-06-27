@@ -1,5 +1,7 @@
 """Tests for the cross-replica refresh coordinator: winner refreshes, losers wait then re-read."""
 
+import asyncio
+
 import pytest
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
@@ -18,7 +20,9 @@ class _FakeLock:
         self._acquired = acquired
         self._held = list(held_sequence)
         self.acquire_calls = []
+        self.extend_calls = []
         self.released = []
+        self.extended = asyncio.Event()
 
     async def acquire(self, key, token, ttl_seconds):
         self.acquire_calls.append((key, token, ttl_seconds))
@@ -26,6 +30,11 @@ class _FakeLock:
 
     async def release(self, key, token):
         self.released.append((key, token))
+
+    async def extend(self, key, token, ttl_seconds):
+        self.extend_calls.append((key, token, ttl_seconds))
+        self.extended.set()
+        return True
 
     async def is_held(self, key):
         return self._held.pop(0) if self._held else False
@@ -85,6 +94,44 @@ async def test_winner_releases_even_when_refresh_raises():
 
 
 @pytest.mark.asyncio
+async def test_winner_renews_the_lock_while_refresh_runs():
+    lock = _FakeLock(acquired=LockAcquisition.ACQUIRED)
+    refresh_finished = asyncio.Event()
+    sleep_started = asyncio.Event()
+    sleep_can_finish = asyncio.Event()
+    sleep_count = 0
+
+    async def sleep(seconds):
+        nonlocal sleep_count
+        sleep_count += 1
+        assert seconds == 5.0
+        sleep_started.set()
+        if sleep_count > 1:
+            await asyncio.Event().wait()
+            return
+        await sleep_can_finish.wait()
+
+    async def refresh():
+        await refresh_finished.wait()
+        return OAuthToken(access_token="new")
+
+    async def reread():
+        return None
+
+    coord = RedisRefreshCoordinator(lock, new_token=lambda: "tok", sleep=sleep)
+    task = asyncio.create_task(coord.run("u", "s", refresh, reread))
+    await sleep_started.wait()
+    sleep_can_finish.set()
+    await lock.extended.wait()
+    refresh_finished.set()
+
+    result = await task
+    assert result is not None and result.access_token == "new"
+    assert lock.extend_calls == [(_KEY, "tok", 10.0)]
+    assert lock.released == [(_KEY, "tok")]
+
+
+@pytest.mark.asyncio
 async def test_loser_waits_for_the_holder_then_rereads_persisted_token():
     clock = _Clock()
     lock = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=[True, True, False])
@@ -97,14 +144,10 @@ async def test_loser_waits_for_the_holder_then_rereads_persisted_token():
     async def reread():
         return OAuthToken(access_token="persisted-by-winner")
 
-    coord = RedisRefreshCoordinator(
-        lock, clock=clock, sleep=_advancing_sleep(clock), wait_timeout_seconds=100.0
-    )
+    coord = RedisRefreshCoordinator(lock, clock=clock, sleep=_advancing_sleep(clock), wait_timeout_seconds=100.0)
     result = await coord.run("u", "s", refresh, reread)
     assert result is not None and result.access_token == "persisted-by-winner"
-    assert (
-        refresh_calls == []
-    )  # the loser never refreshes - it reads the winner's result
+    assert refresh_calls == []  # the loser never refreshes - it reads the winner's result
     assert lock.released == []  # ...and never releases a lock it does not own
 
 

@@ -24,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.dual_cache_toke
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     CachedOAuthTokenStore,
     OAuthToken,
+    OAuthTokenStore,
     RefreshCoordinator,
     RefreshingTokenStore,
     TokenCacheBackend,
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 _DEFAULT_TTL_SECONDS = 300.0
 
 ServerLookup = Callable[[str], "MCPServer | None"]
+StoreBuilder = Callable[[ServerLookup], tuple[OAuthTokenStore, bool]]
 
 
 async def _read_credential(user_id: str, server_id: str) -> dict[str, object] | None:
@@ -112,8 +114,14 @@ async def _post_token_endpoint(url: str, form: dict[str, str]) -> dict[str, obje
         return body  # pyright: ignore
 
 
-def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None]:
-    """The cross-replica cache + coordinator when Redis is wired, else ``(None, None)`` so the
+def _redis_cache_is_available() -> bool:
+    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+
+    return user_api_key_cache.redis_cache is not None
+
+
+def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:
+    """The cross-replica cache + coordinator when Redis is wired, else ``(None, None, False)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
     """
     from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: PLC0415
@@ -124,7 +132,7 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
 
     redis_cache = user_api_key_cache.redis_cache
     if redis_cache is None:
-        return None, None
+        return None, None, False
     codec = OAuthTokenCacheCodec(
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
@@ -139,16 +147,23 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
     )
     backend = DualCacheTokenCacheBackend(cache, codec)
     coordinator = RedisRefreshCoordinator(lock)
-    return backend, coordinator
+    return backend, coordinator, True
+
+
+def _build_per_user_oauth_token_store(
+    server_lookup: ServerLookup,
+) -> tuple[CachedOAuthTokenStore, bool]:
+    backend, coordinator, uses_redis = _runtime_backend_and_coordinator()
+    refresher = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
+    refreshing = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher, coordinator=coordinator)
+    return CachedOAuthTokenStore(refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS, backend=backend), uses_redis
 
 
 def build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> CachedOAuthTokenStore:
-    backend, coordinator = _runtime_backend_and_coordinator()
-    refresher = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
-    refreshing = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher, coordinator=coordinator)
-    return CachedOAuthTokenStore(refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS, backend=backend)
+    store, _uses_redis = _build_per_user_oauth_token_store(server_lookup)
+    return store
 
 
 class LazyPerUserOAuthTokenStore:
@@ -156,14 +171,25 @@ class LazyPerUserOAuthTokenStore:
 
     The chain's cache/lock collaborators are LiteLLM runtime globals not available when the resolver
     is constructed at import time, so construction is deferred to the first request (by when they are
-    wired). Built once, then reused.
+    wired). A no-Redis chain is replaced once Redis becomes available.
     """
 
-    def __init__(self, server_lookup: ServerLookup) -> None:
+    def __init__(
+        self,
+        server_lookup: ServerLookup,
+        *,
+        store_builder: StoreBuilder = _build_per_user_oauth_token_store,
+        redis_available: Callable[[], bool] = _redis_cache_is_available,
+    ) -> None:
         self._server_lookup = server_lookup
-        self._store: CachedOAuthTokenStore | None = None
+        self._store_builder = store_builder
+        self._redis_available = redis_available
+        self._store: OAuthTokenStore | None = None
+        self._uses_redis = False
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
-        if self._store is None:
-            self._store = build_per_user_oauth_token_store(self._server_lookup)
-        return await self._store.fetch(user_id, server_id)
+        store = self._store
+        if store is None or (not self._uses_redis and self._redis_available()):
+            store, self._uses_redis = self._store_builder(self._server_lookup)
+            self._store = store
+        return await store.fetch(user_id, server_id)

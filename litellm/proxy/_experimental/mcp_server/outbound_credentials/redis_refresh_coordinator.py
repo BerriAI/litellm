@@ -2,11 +2,11 @@
 
 Plugs into the foundation's ``RefreshingTokenStore`` via the ``RefreshCoordinator`` seam. A ``SET NX
 PX`` lock elects one worker to run the refresh while the rest wait for it and re-read the token it
-persisted - so a rotating refresh_token is used once across the fleet, not once per worker. The lock
-auto-expires (``PX``), so a crashed holder can't wedge refresh; a loser that times out (or whose
-holder crashed mid-refresh) falls back to a re-read, and the surrounding store re-checks expiry on the
-next fetch, so a crash self-heals rather than serving stale forever. Reading needs no lock, so losers
-don't serialize behind each other. The lock is injected (a thin Redis ``SET NX``/``DEL``/``EXISTS``
+persisted - so a rotating refresh_token is used once across the fleet, not once per worker. The holder
+renews the ``PX`` lease while refresh is running, and the lock still auto-expires if it crashes; a
+loser that times out (or whose holder crashed mid-refresh) falls back to a re-read, and the surrounding
+store re-checks expiry on the next fetch, so a crash self-heals rather than serving stale forever.
+Reading needs no lock, so losers don't serialize behind each other. The lock is injected (a thin Redis
 wrapper in production, a fake in tests).
 
 The lock is a single-flight optimization, not a correctness mutex, so it fails open: when the lock
@@ -22,6 +22,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from enum import Enum
 from typing import Protocol
 
@@ -44,9 +45,12 @@ class DistributedLock(Protocol):
     """A best-effort cross-replica lock. ``acquire`` is ``SET key token NX PX ttl`` reported as a
     ``LockAcquisition`` (won / held by another / backend error); ``release`` deletes the key only if
     it still holds this caller's ``token`` (so it cannot delete a lock another worker re-acquired
-    after PX-expiry); ``is_held`` is ``EXISTS`` (so a waiter can poll without taking the lock)."""
+    after PX-expiry); ``extend`` refreshes the ``PX`` lease only for the owner; ``is_held`` is
+    ``EXISTS`` (so a waiter can poll without taking the lock)."""
 
     async def acquire(self, key: str, token: str, ttl_seconds: float) -> LockAcquisition: ...
+
+    async def extend(self, key: str, token: str, ttl_seconds: float) -> bool: ...
 
     async def release(self, key: str, token: str) -> None: ...
 
@@ -89,10 +93,7 @@ class RedisRefreshCoordinator:
         token = self._new_token()
         match await self._lock.acquire(key, token, self._lock_ttl_seconds):
             case LockAcquisition.ACQUIRED:
-                try:
-                    return await refresh()
-                finally:
-                    await self._lock.release(key, token)
+                return await self._refresh_with_lease_renewal(key, token, refresh)
             case LockAcquisition.ERROR:
                 # No election happened (lock backend down), so waiting would just re-read the
                 # still-expired token. Refresh anyway; worst case is an extra refresh, not a stale bearer.
@@ -105,3 +106,30 @@ class RedisRefreshCoordinator:
                 while self._clock() < deadline and await self._lock.is_held(key):
                     await self._sleep(self._poll_interval_seconds)
                 return await reread()
+
+    async def _refresh_with_lease_renewal(
+        self,
+        key: str,
+        token: str,
+        refresh: Callable[[], Awaitable[OAuthToken | None]],
+    ) -> OAuthToken | None:
+        refresh_task = asyncio.ensure_future(refresh())
+        renewal_task = asyncio.create_task(self._renew_lease_until_done(key, token, refresh_task))
+        try:
+            return await refresh_task
+        finally:
+            renewal_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await renewal_task
+            await self._lock.release(key, token)
+
+    async def _renew_lease_until_done(
+        self,
+        key: str,
+        token: str,
+        refresh_task: asyncio.Future[OAuthToken | None],
+    ) -> None:
+        while not refresh_task.done():
+            await self._sleep(self._lock_ttl_seconds / 2)
+            if not refresh_task.done() and not await self._lock.extend(key, token, self._lock_ttl_seconds):
+                return

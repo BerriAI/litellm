@@ -1,12 +1,12 @@
-"""Concrete ``DistributedLock`` over a Redis client: ``SET NX PX`` / compare-and-delete / ``EXISTS``.
+"""Concrete ``DistributedLock`` over a Redis client: ``SET NX PX`` / owner-only renew / delete.
 
 The cross-replica lock the ``RedisRefreshCoordinator`` elects refreshers with. ``acquire`` is an
 atomic ``SET key token NX PX ttl`` (only the first caller wins; the entry self-expires so a crashed
-holder can't wedge refresh). ``release`` deletes the key only when it still holds this caller's token
-(a compare-and-delete Lua script), so a holder whose lock already PX-expired and was re-acquired by
-another worker cannot delete the new holder's lock. ``is_held`` is ``EXISTS``. Every key is run
-through the injected ``namespace_key`` before it reaches Redis, so a deployment's lock keys carry the
-same namespace its cache keys do and cannot collide with another deployment sharing the Redis backend.
+holder can't wedge refresh). ``extend`` renews the lease only when the token still matches, and
+``release`` deletes the key only when it still holds this caller's token, so a holder whose lock already
+PX-expired and was re-acquired by another worker cannot delete the new holder's lock. ``is_held`` is
+``EXISTS``. Every key is run through the injected ``namespace_key`` before it reaches Redis, so lock
+keys carry the same namespace as cache keys and cannot collide with another deployment sharing Redis.
 
 The Redis client is injected (in production the async client from LiteLLM's ``RedisCache``), so the
 lock is unit-testable with a fake. A transport error on ``acquire`` returns ``LockAcquisition.ERROR`` -
@@ -27,6 +27,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_c
 # Delete the key only if it still holds this caller's token, so a holder whose lock already expired
 # (PX) and was re-acquired by another worker cannot delete the new holder's lock.
 _RELEASE_IF_OWNER = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+_EXTEND_IF_OWNER = (
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
+)
 
 
 class RedisCommands(Protocol):
@@ -58,6 +61,22 @@ class RedisDistributedLock:
             verbose_logger.warning("RedisDistributedLock.acquire failed: %s", exc)
             return LockAcquisition.ERROR
         return LockAcquisition.ACQUIRED if result is not None else LockAcquisition.HELD
+
+    async def extend(self, key: str, token: str, ttl_seconds: float) -> bool:
+        try:
+            result = await self._client.eval(
+                _EXTEND_IF_OWNER,
+                1,
+                self._namespace_key(key),
+                token,
+                str(int(ttl_seconds * 1000)),
+            )
+        # Degrade on any Redis client error: redis.exceptions narrows only via an import that
+        # is Unknown under basedpyright, and the lock must never crash the resolve path.
+        except Exception as exc:  # noqa: BLE001
+            verbose_logger.warning("RedisDistributedLock.extend failed: %s", exc)
+            return False
+        return result == 1
 
     async def release(self, key: str, token: str) -> None:
         try:
