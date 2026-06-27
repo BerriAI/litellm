@@ -3,7 +3,7 @@ import binascii
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -38,6 +38,9 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials
+
+if TYPE_CHECKING:
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _is_global_env_var_scope(scope: Any) -> bool:
@@ -1220,6 +1223,91 @@ async def resolve_valid_user_oauth_token(
     if not refreshed or not refreshed.get("access_token"):
         return None
     return refreshed
+
+
+async def resolve_user_oauth_access_token(
+    user_id: str | None,
+    server: "MCPServer",
+    prefetched_creds: dict[str, dict[str, object]] | None = None,
+) -> str | None:
+    """Resolve a user's valid OAuth2 access token for a server: Redis cache, else DB + refresh.
+
+    The egress token-resolution core shared by v1's header builder and the v2 ``OAuthTokenStore``
+    adapter. Redis fast-path (skipped when ``prefetched_creds`` is supplied), else a DB read through
+    ``resolve_valid_user_oauth_token`` (which refreshes an expired token when a ``refresh_token`` is
+    stored), re-warming the Redis cache with the per-server TTL. Returns ``None`` when there is no
+    usable token; any error is swallowed to ``None`` so a transient failure reads as "not
+    authorized" rather than raising.
+    """
+    server_id = getattr(server, "server_id", None)
+    if not user_id or not server_id:
+        return None
+    try:
+        from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+            _compute_per_user_token_ttl,
+            mcp_per_user_token_cache,
+        )
+
+        if prefetched_creds is None:
+            cached_token = await mcp_per_user_token_cache.get(user_id, server_id)
+            if cached_token is not None:
+                return cached_token
+
+        prisma_client = None
+        if prefetched_creds is not None:
+            cred = prefetched_creds.get(server_id)
+        else:
+            from litellm.proxy.utils import get_prisma_client_or_throw
+
+            prisma_client = get_prisma_client_or_throw(
+                "Database not connected. Connect a database to use OAuth2 MCP tools."
+            )
+            cred = await get_user_oauth_credential(prisma_client, user_id, server_id)
+
+        if not cred or not cred.get("access_token"):
+            return None
+
+        cred = await resolve_valid_user_oauth_token(
+            user_id=user_id,
+            server=server,
+            cred=cred,
+            prisma_client=prisma_client,
+        )
+        if cred is None:
+            # Refresh failed or token expired with no usable refresh_token — clear the stale
+            # Redis entry so the next request doesn't reuse it.
+            await mcp_per_user_token_cache.delete(user_id, server_id)
+            return None
+
+        access_token: str = cred["access_token"]
+        if prefetched_creds is None:
+            ttl = _compute_per_user_token_ttl(
+                server, _remaining_token_seconds(cred.get("expires_at"))
+            )
+            await mcp_per_user_token_cache.set(user_id, server_id, access_token, ttl)
+        return access_token
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "resolve_user_oauth_access_token: failed for user=%s server=%s: %s",
+            user_id,
+            server_id,
+            e,
+        )
+    return None
+
+
+def _remaining_token_seconds(expires_at: str | None) -> int | None:
+    """Seconds until ``expires_at`` (ISO 8601), or None when absent/past/unparseable."""
+    if not expires_at:
+        return None
+    try:
+        exp_dt = datetime.fromisoformat(expires_at)
+    except (ValueError, TypeError):
+        return None
+    if exp_dt.tzinfo is None:
+        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+    remaining = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
+    return remaining if remaining > 0 else None
 
 
 async def approve_mcp_server(

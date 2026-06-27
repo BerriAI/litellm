@@ -31,15 +31,20 @@ class OAuthToken:
     with each mode); it is never minted into a header directly. ``repr`` masks both secrets so a
     stray log line cannot leak them (the values are still plain ``str`` for the header path, since
     ``SecretStr`` resolves as unknown under this repo's basedpyright).
+
+    ``scopes`` is the recorded grant. A refresh response that omits ``scope`` (RFC 6749 §5.1: an
+    omitted ``scope`` means unchanged) carries the prior value forward, so a refresh never silently
+    drops it; the resolver itself does not read it.
     """
 
     access_token: str
     expires_at: float | None = None
     refresh_token: str | None = None
+    scopes: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         has_refresh = self.refresh_token is not None
-        return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh})"
+        return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh}, scopes={self.scopes!r})"
 
 
 class TokenStoreUnavailable(Exception):

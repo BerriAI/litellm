@@ -63,8 +63,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     raise_public,
+    raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
+    LazyPerUserOAuthTokenStore,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    AuthorizationCodeConfig,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -186,6 +193,10 @@ def _should_strip_caller_authorization(
     Strip rules:
     - **M2M (client_credentials) servers**: never forward the caller's
       ``Authorization`` — the proxy fetches its own upstream token.
+    - **Migrated per-user OAuth (authorization_code) servers**: never forward
+      the caller's ``Authorization`` — the v2 resolver injects the stored
+      per-user token, so a caller-supplied bearer cannot override another
+      user's stored credential. Delegate / pass-through keep forwarding it.
     - **OAuth pass-through servers**: strip when the ``Authorization``
       header is actually the LiteLLM API key — either because admission
       validated it (``user_api_key_auth.api_key`` is set) and the caller
@@ -197,6 +208,15 @@ def _should_strip_caller_authorization(
       forwarded, so we keep it.
     """
     if mcp_server.has_client_credentials:
+        return True
+    if (
+        mcp_server.auth_type == MCPAuth.oauth2
+        and to_server_spec(mcp_server) is not None
+    ):
+        # Migrated per-user OAuth (authorization_code): the v2 resolver injects the
+        # stored token, so a caller-forwarded Authorization must not be forwarded
+        # upstream — it would override another user's stored credential. Delegate and
+        # pass-through return None from to_server_spec and keep forwarding the bearer.
         return True
     if not mcp_server.is_oauth_passthrough:
         return False
@@ -215,6 +235,18 @@ def _should_strip_caller_authorization(
     return admission_consumed_authorization_as_litellm_key or (
         user_api_key_auth is None and not has_explicit_litellm_admission_header
     )
+
+
+def _without_authorization(
+    headers: Optional[dict[str, str]],
+) -> Optional[dict[str, str]]:
+    """A copy of ``headers`` with any ``Authorization`` key removed (case-insensitive), or
+    None if nothing remains. Drops only the credential, keeping other forwarded headers.
+    """
+    if not headers:
+        return None
+    filtered = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+    return filtered or None
 
 
 def _extract_upstream_auth_failure(
@@ -523,7 +555,9 @@ class MCPServerManager:
         return None
 
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
-        self._cred_provider = cred_provider or UpstreamCredentialProvider()
+        self._cred_provider = cred_provider or UpstreamCredentialProvider(
+            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id)
+        )
         self.registry: Dict[str, MCPServer] = {}
         self.config_mcp_servers: Dict[str, MCPServer] = {}
         """
@@ -1934,6 +1968,7 @@ class MCPServerManager:
         stdio_env: Optional[Dict[str, str]] = None,
         subject_token: Optional[str] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        cred_provider: Optional[UpstreamCredentialProvider] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -1957,11 +1992,17 @@ class MCPServerManager:
         """
         transport = server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else to_server_spec(server)
-        # A per-request override is the caller-supplied credential v1 turns into the upstream
-        # auth, so it must win; defer those to v1 (this defer falls away once the per-user modes
-        # stop writing mcp_auth_header). An inbound header already in extra_headers is handled on
-        # the v2 path below, not here.
-        if spec is not None and mcp_auth_header:
+        provider = cred_provider or self._cred_provider
+        # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
+        # so it wins - except for authorization_code, whose per-user token the v2 resolver owns. A
+        # caller must not be able to substitute another user's stored credential, so we keep the v2
+        # spec and ignore the override there; the REST tools preview supplies its not-yet-persisted
+        # token through the resolver (cred_provider), never this path.
+        if (
+            spec is not None
+            and mcp_auth_header
+            and not isinstance(spec.config, AuthorizationCodeConfig)
+        ):
             spec = None
         auth_value = (
             await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token)
@@ -2039,7 +2080,7 @@ class MCPServerManager:
             server_url = server.url or ""
 
             if spec is not None:
-                match await self._cred_provider.resolve_credentials(
+                match await provider.resolve_credentials(
                     to_subject(user_api_key_auth, subject_token), spec
                 ):
                     case Ok(auth):
@@ -2059,6 +2100,10 @@ class MCPServerManager:
                         ):
                             resolved_auth = None
                     case Error(err):
+                        if err.tag == "unauthorized":
+                            # The arm signals a missing per-user token semantically; raise the
+                            # per-server OAuth challenge here, where the full MCPServer is in hand.
+                            raise_user_oauth_challenge(server)
                         raise_public(err)
                 return MCPClient(
                     server_url=server_url,
@@ -3499,6 +3544,16 @@ class MCPServerManager:
                 extra_headers = None
             else:
                 extra_headers = oauth2_headers
+                # Migrated authorization_code: the v2 resolver injects the stored per-user
+                # token, so drop the caller-forwarded Authorization (apply-if-absent would
+                # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
+                # via _should_strip_caller_authorization to match _prepare_mcp_server_headers.
+                if extra_headers and _should_strip_caller_authorization(
+                    mcp_server=mcp_server,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                ):
+                    extra_headers = _without_authorization(extra_headers)
 
         if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -3670,6 +3725,22 @@ class MCPServerManager:
 
         return mcp_server
 
+    async def has_user_oauth_token(
+        self, server: MCPServer, user_api_key_auth: Optional[UserAPIKeyAuth]
+    ) -> bool:
+        """Whether the v2 resolver can produce a per-user token for this server right now.
+
+        This is the preemptive 401's existence check, routed through the same resolver that drives
+        the egress so every authorization_code resolution (egress and the discovery challenge) runs
+        through v2. Returns False for a server the resolver does not own (a None spec).
+        """
+        spec = to_server_spec(server)
+        if spec is None:
+            return False
+        return await self._cred_provider.has_user_token(
+            to_subject(user_api_key_auth, None), spec
+        )
+
     async def _resolve_oauth2_headers_for_tool_call(
         self,
         mcp_server: MCPServer,
@@ -3682,6 +3753,12 @@ class MCPServerManager:
             or oauth2_headers
             or user_api_key_auth is None
         ):
+            return oauth2_headers
+
+        if to_server_spec(mcp_server) is not None:
+            # Migrated to v2: the resolver owns this server's per-user token (inject or fail-closed
+            # 401). Building it into extra_headers here would let the v2 graft defer to it and
+            # shadow the resolver, double-resolving and hiding the per-server challenge.
             return oauth2_headers
 
         user_id = getattr(user_api_key_auth, "user_id", None)
