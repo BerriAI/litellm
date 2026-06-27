@@ -677,3 +677,169 @@ async def test_get_customer_daily_activity_service_account_key_is_rejected(monke
     assert exc_info.value.status_code == 401
     assert "Admin-only endpoint" in str(exc_info.value.detail)
     get_daily_activity_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Characterization (golden-master) tests.
+#
+# These lock the EXACT JSON body every customer-object endpoint returns today,
+# so a type-safety refactor of the handlers is only allowed to land if it
+# reproduces these byte for byte. The input below is what a Prisma row's
+# .model_dump() yields (full nested budget incl. audit fields + object_permission
+# incl. reverse relations); the expected output is what the live endpoint emits.
+# ---------------------------------------------------------------------------
+
+_FULL_DB_ROW = {
+    "user_id": "c1",
+    "blocked": False,
+    "alias": "Acme",
+    "spend": 1.5,
+    "allowed_model_region": None,
+    "default_model": None,
+    "budget_id": "b1",
+    "object_permission_id": "p1",
+    "litellm_budget_table": {
+        "budget_id": "b1",
+        "max_budget": 10.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "30d",
+        "allowed_models": [],
+        "budget_reset_at": "2024-02-01T00:00:00",
+        "created_at": "2024-01-01T00:00:00",
+        "created_by": "admin",
+        "updated_at": "2024-01-02T00:00:00",
+        "updated_by": "admin",
+    },
+    "object_permission": {
+        "object_permission_id": "p1",
+        "mcp_servers": ["s1"],
+        "mcp_access_groups": [],
+        "mcp_tool_permissions": None,
+        "vector_stores": [],
+        "agents": [],
+        "agent_access_groups": [],
+        "models": [],
+        "mcp_toolsets": None,
+        "blocked_tools": [],
+        "search_tools": [],
+        "teams": [{"team_id": "t1"}],
+        "users": [{"user_id": "x"}],
+        "end_users": [],
+        "organizations": [],
+        "verification_tokens": [],
+    },
+}
+
+_EXPECTED_CUSTOMER = {
+    "user_id": "c1",
+    "blocked": False,
+    "alias": "Acme",
+    "spend": 1.5,
+    "allowed_model_region": None,
+    "default_model": None,
+    "budget_id": "b1",
+    "litellm_budget_table": {
+        "budget_id": "b1",
+        "soft_budget": None,
+        "max_budget": 10.0,
+        "max_parallel_requests": None,
+        "tpm_limit": None,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "30d",
+        "allowed_models": [],
+        "budget_reset_at": "2024-02-01T00:00:00",
+        "created_at": "2024-01-01T00:00:00",
+    },
+    "object_permission_id": "p1",
+    "object_permission": {
+        "object_permission_id": "p1",
+        "mcp_servers": ["s1"],
+        "mcp_access_groups": [],
+        "mcp_tool_permissions": None,
+        "vector_stores": [],
+        "agents": [],
+        "agent_access_groups": [],
+        "models": [],
+        "mcp_toolsets": None,
+        "blocked_tools": [],
+        "search_tools": [],
+    },
+}
+
+
+def _row(dump: dict) -> MagicMock:
+    row = MagicMock()
+    row.model_dump.return_value = dump
+    return row
+
+
+def test_char_info_body(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row(_FULL_DB_ROW)
+    )
+    response = client.get(
+        "/customer/info?end_user_id=c1", headers={"Authorization": "Bearer k"}
+    )
+    assert response.status_code == 200
+    assert response.json() == _EXPECTED_CUSTOMER
+
+
+def test_char_list_body(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[_row(_FULL_DB_ROW)]
+    )
+    response = client.get("/customer/list", headers={"Authorization": "Bearer k"})
+    assert response.status_code == 200
+    assert response.json() == [_EXPECTED_CUSTOMER]
+
+
+def test_char_new_body(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(
+        return_value=_row(_FULL_DB_ROW)
+    )
+    response = client.post(
+        "/customer/new", json={"user_id": "c1"}, headers={"Authorization": "Bearer k"}
+    )
+    assert response.status_code == 200
+    assert response.json() == _EXPECTED_CUSTOMER
+
+
+def test_char_update_body(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False})
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(
+        return_value=_row(_FULL_DB_ROW)
+    )
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "c1", "alias": "Acme"},
+        headers={"Authorization": "Bearer k"},
+    )
+    assert response.status_code == 200
+    assert response.json() == _EXPECTED_CUSTOMER
+
+
+def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[
+            LiteLLM_EndUserTable(user_id="c1", blocked=False),
+            LiteLLM_EndUserTable(user_id="c2", blocked=False),
+        ]
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=2)
+    response = client.post(
+        "/customer/delete",
+        json={"user_ids": ["c1", "c2"]},
+        headers={"Authorization": "Bearer k"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "deleted_customers": 2,
+        "message": "Successfully deleted customers with ids: ['c1', 'c2']",
+    }
