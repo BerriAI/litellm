@@ -167,12 +167,6 @@ class AnthropicMessagesHandler(BaseTranslation):
                 slg_info = (
                     data.get("metadata") or data.get("litellm_metadata") or {}
                 ).get("standard_logging_guardrail_information")
-                print(
-                    f"[headroom-propagate] slg_info={slg_info is not None} "
-                    f"logging_obj_type={type(litellm_logging_obj).__name__} "
-                    f"has_model_call_details={hasattr(litellm_logging_obj, 'model_call_details')}",
-                    flush=True,
-                )
                 if slg_info is not None:
                     for _lp in [
                         getattr(litellm_logging_obj, "litellm_params", None),
