@@ -1500,7 +1500,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
-        provider = params.get("custom_llm_provider", "Unknown")
+        provider = params.get("custom_llm_provider") or "Unknown"
 
         common_attrs = {
             "gen_ai.operation.name": (
@@ -1538,7 +1538,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 duration_s, attributes=common_attrs
             )
             if (
-                response_obj
+                isinstance(response_obj, dict)
                 and (usage := response_obj.get("usage"))
                 and self._token_usage_histogram
             ):
@@ -1627,7 +1627,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         # Get completion tokens from response_obj
         completion_tokens = None
-        if response_obj and (usage := response_obj.get("usage")):
+        if isinstance(response_obj, dict) and (usage := response_obj.get("usage")):
             completion_tokens = usage.get("completion_tokens")
 
         if completion_tokens is None or completion_tokens <= 0:
@@ -1743,6 +1743,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if not self.config.enable_events:
             return
 
+        if not isinstance(response_obj, dict):
+            return
+
         # NOTE: Semantic logs (gen_ai.content.prompt/completion events) have compatibility issues
         # with OTEL SDK >= 1.39.0 due to breaking changes in PR #4676:
         # - LogRecord moved from opentelemetry.sdk._logs to opentelemetry.sdk._logs._internal
@@ -1761,8 +1764,8 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
-            "custom_llm_provider", "Unknown"
-        )
+            "custom_llm_provider"
+        ) or "Unknown"
 
         if self._gen_ai_semconv_latest_experimental:
             self._emit_inference_details_event(
@@ -1785,7 +1788,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 attrs["id"] = msg["id"]
             capture_event_content = self._capture_in_event()
             if capture_event_content and msg.get("content"):
-                attrs["gen_ai.prompt"] = msg["content"]
+                content = msg["content"]
+                if isinstance(content, str):
+                    attrs["gen_ai.prompt"] = content
+                else:
+                    attrs["gen_ai.prompt"] = safe_dumps(content)
 
             body = msg.copy()
             if not capture_event_content:
@@ -1814,7 +1821,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             body_msg = choice.get("message", {})
             capture_event_content = self._capture_in_event()
             if capture_event_content and body_msg.get("content"):
-                attrs["message.content"] = body_msg["content"]
+                completion_content = body_msg["content"]
+                if isinstance(completion_content, str):
+                    attrs["message.content"] = completion_content
+                else:
+                    attrs["message.content"] = safe_dumps(completion_content)
             body = {
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
@@ -2329,7 +2340,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
 
             # The Generative AI Provider: Azure, OpenAI, etc.
-            provider_name = litellm_params.get("custom_llm_provider", "Unknown")
+            provider_name = litellm_params.get("custom_llm_provider") or "Unknown"
             # Latest-experimental semconv replaced gen_ai.system with
             # gen_ai.provider.name; emit only the conformant key in that mode.
             if self._gen_ai_semconv_latest_experimental:
@@ -2394,7 +2405,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # the litellm call ID so every call type can be correlated
             # across LiteLLM UI, Phoenix traces, and provider logs (Issue #8).
             response_id = (
-                response_obj.get("id") if response_obj else None
+                response_obj.get("id") if isinstance(response_obj, dict) else None
             ) or standard_logging_payload.get("id")
             if response_id:
                 self.safe_set_attribute(
@@ -2412,14 +2423,14 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 )
 
             # The model used to generate the response.
-            if response_obj and response_obj.get("model"):
+            if isinstance(response_obj, dict) and response_obj.get("model"):
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_RESPONSE_MODEL.value,
                     value=response_obj.get("model"),
                 )
 
-            usage = response_obj and response_obj.get("usage")
+            usage = isinstance(response_obj, dict) and response_obj.get("usage")
             if usage:
                 self.safe_set_attribute(
                     span=span,
@@ -2523,12 +2534,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             #############################################
             ########## LLM Response Attributes ##########
             #############################################
-            if response_obj is not None:
-                if response_obj.get("choices"):
+            if isinstance(response_obj, dict):
+                choices = response_obj.get("choices")
+                output_items = response_obj.get("output")
+                if choices:
                     transformed_choices = (
-                        self._transform_choices_to_otel_semantic_conventions(
-                            response_obj.get("choices")
-                        )
+                        self._transform_choices_to_otel_semantic_conventions(choices)
                     )
                     self.safe_set_attribute(
                         span=span,
@@ -2537,7 +2548,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     )
 
                     finish_reasons = []
-                    for idx, choice in enumerate(response_obj.get("choices")):
+                    for idx, choice in enumerate(choices):
                         if choice.get("finish_reason"):
                             finish_reasons.append(choice.get("finish_reason"))
 
@@ -2548,9 +2559,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             value=safe_dumps(finish_reasons),
                         )
 
-                    for idx, choice in enumerate(response_obj.get("choices")):
+                    for idx, choice in enumerate(choices):
                         if choice.get("finish_reason"):
-                            message = choice.get("message")
+                            message = choice.get("message") or {}
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
                                 kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
@@ -2561,12 +2572,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                                         value=value,
                                     )
 
-                elif response_obj.get("output"):
+                elif output_items:
                     # Responses API: ResponsesAPIResponse has an "output"
                     # list instead of "choices".  Each item with
                     # type="message" contains a "content" list of
                     # OutputText objects (type="output_text").
-                    output_items = response_obj.get("output")
                     output_messages = self._transform_responses_api_output_to_otel(
                         output_items
                     )
@@ -2786,7 +2796,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             # gen_ai.* / metadata.* attributes — duplicating them here doubles
             # storage and adds noise (Issue #3).
             litellm_params = kwargs.get("litellm_params", {}) or {}
-            custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
+            custom_llm_provider = litellm_params.get("custom_llm_provider") or "Unknown"
 
             _raw_response = kwargs.get("original_response")
             _additional_args = kwargs.get("additional_args", {}) or {}
