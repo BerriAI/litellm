@@ -39,9 +39,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         BaseImageGenerationConfig.__init__(self)
         VertexLLM.__init__(self)
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Imagen API supported parameters
         """
@@ -135,19 +133,11 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_location = (
-            self.safe_get_vertex_ai_location(litellm_params)
-            or self._resolve_vertex_location()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
-            raise ValueError(
-                "vertex_project and vertex_location are required for Vertex AI"
-            )
+            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
         base_url = get_vertex_base_url(vertex_location)
 
@@ -173,14 +163,8 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_credentials = (
-            self.safe_get_vertex_ai_credentials(litellm_params)
-            or self._resolve_vertex_credentials()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,

@@ -20,9 +20,7 @@ if TYPE_CHECKING:
 import litellm
 
 
-def _compute_cache_only_cost(
-    model_info: "ModelInfo", usage: "Usage", service_tier: str | None = None
-) -> float:
+def _compute_cache_only_cost(model_info: "ModelInfo", usage: "Usage", service_tier: str | None = None) -> float:
     """
     Return only the cache-related portion of the prompt cost (cache read + cache write).
 
@@ -40,9 +38,7 @@ def _compute_cache_only_cost(
         cache_creation_cost,
         cache_creation_cost_above_1hr,
         cache_read_cost,
-    ) = _get_token_base_cost(
-        model_info=model_info, usage=usage, service_tier=service_tier
-    )
+    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
 
     cache_cost = float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
 
@@ -52,9 +48,7 @@ def _compute_cache_only_cost(
     ):
         cache_cost += calculate_cache_writing_cost(
             cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
-            cache_creation_token_details=prompt_tokens_details[
-                "cache_creation_token_details"
-            ],
+            cache_creation_token_details=prompt_tokens_details["cache_creation_token_details"],
             cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
             cache_creation_cost=cache_creation_cost,
         )
@@ -62,9 +56,7 @@ def _compute_cache_only_cost(
     return cache_cost
 
 
-def cost_per_token(
-    model: str, usage: "Usage", service_tier: str | None = None
-) -> Tuple[float, float]:
+def cost_per_token(model: str, usage: "Usage", service_tier: str | None = None) -> Tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
 
@@ -86,9 +78,7 @@ def cost_per_token(
 
     # Apply provider_specific_entry multipliers for geo/speed routing
     try:
-        model_info = litellm.get_model_info(
-            model=model, custom_llm_provider="anthropic"
-        )
+        model_info = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
         provider_specific_entry: dict = model_info.get("provider_specific_entry") or {}
 
         multiplier = 1.0
@@ -102,9 +92,7 @@ def cost_per_token(
             multiplier *= provider_specific_entry.get("fast", 1.0)
 
         if multiplier != 1.0:
-            cache_cost = _compute_cache_only_cost(
-                model_info=model_info, usage=usage, service_tier=service_tier
-            )
+            cache_cost = _compute_cache_only_cost(model_info=model_info, usage=usage, service_tier=service_tier)
             prompt_cost = (prompt_cost - cache_cost) * multiplier + cache_cost
             completion_cost *= multiplier
     except Exception:
@@ -156,9 +144,7 @@ def get_cost_for_anthropic_web_search(
 
     if usage is None:
         return 0.0
-    web_search_requests = _get_web_search_requests(
-        getattr(usage, "server_tool_use", None)
-    )
+    web_search_requests = _get_web_search_requests(getattr(usage, "server_tool_use", None))
     if web_search_requests is None:
         return 0.0
 
@@ -166,9 +152,7 @@ def get_cost_for_anthropic_web_search(
     search_context_pricing: SearchContextCostPerQuery = (
         model_info.get("search_context_cost_per_query") or SearchContextCostPerQuery()
     )
-    cost_per_web_search_request = search_context_pricing.get(
-        "search_context_size_medium", 0.0
-    )
+    cost_per_web_search_request = search_context_pricing.get("search_context_size_medium", 0.0)
     if cost_per_web_search_request is None or cost_per_web_search_request == 0.0:
         return 0.0
 

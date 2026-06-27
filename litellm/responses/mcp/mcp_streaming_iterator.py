@@ -41,9 +41,7 @@ async def create_mcp_list_tools_events(
         for tool in mcp_tools_with_litellm_proxy:
             if isinstance(tool, dict) and "server_url" in tool:
                 server_url = tool.get("server_url")
-                if isinstance(server_url, str) and server_url.startswith(
-                    "litellm_proxy/mcp/"
-                ):
+                if isinstance(server_url, str) and server_url.startswith("litellm_proxy/mcp/"):
                     server_name = server_url.split("/")[-1]
                     mcp_servers.append(server_name)
 
@@ -88,9 +86,7 @@ async def create_mcp_list_tools_events(
             first_tool = mcp_tools_with_litellm_proxy[0]
             if isinstance(first_tool, dict):
                 server_label_value = first_tool.get("server_label", "")
-                server_label = (
-                    str(server_label_value) if server_label_value is not None else ""
-                )
+                server_label = str(server_label_value) if server_label_value is not None else ""
 
         # Format tools for OpenAI output_item.done format
         formatted_tools = []
@@ -269,7 +265,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.should_auto_execute = self._should_auto_execute_tools()
 
         # Streaming state management
-        self.phase = "initial_response"  # initial_response -> mcp_discovery -> tool_execution -> follow_up_response -> finished
+        self.phase = (
+            "initial_response"  # initial_response -> mcp_discovery -> tool_execution -> follow_up_response -> finished
+        )
         self.finished = False
 
         # Event queues and generation flags
@@ -278,15 +276,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         )
         self.tool_execution_events: List[ResponsesAPIStreamingResponse] = []
         self.mcp_discovery_generated = True  # Events are already generated
-        self.mcp_events = (
-            mcp_events  # Store the initial MCP events for backward compatibility
-        )
+        self.mcp_events = mcp_events  # Store the initial MCP events for backward compatibility
         self.tool_server_map = tool_server_map
 
         # Iterator references
-        self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = (
-            base_iterator  # Will be created when needed
-        )
+        self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = base_iterator  # Will be created when needed
         self.follow_up_iterator: Optional[Any] = None
 
         # Response collection for tool execution
@@ -295,9 +289,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         # Set up model metadata (will be updated when we get the real iterator)
         self.model = self.original_request_params.get("model", "unknown")
         self.litellm_metadata = {}
-        self.custom_llm_provider = self.original_request_params.get(
-            "custom_llm_provider", None
-        )
+        self.custom_llm_provider = self.original_request_params.get("custom_llm_provider", None)
         self.litellm_call_id = self.original_request_params.get("litellm_call_id")
         self.litellm_trace_id = self.original_request_params.get("litellm_trace_id")
 
@@ -334,15 +326,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         if raw_headers_from_request:
             headers_obj = Headers(raw_headers_from_request)
-            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
-                headers_obj
-            )
-            self.mcp_server_auth_headers = (
-                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
-            )
-            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
-                headers_obj
-            )
+            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            self.mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
 
         # Also check if headers are provided in tools array (from request body)
         tools = self.original_request_params.get("tools")
@@ -353,10 +339,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     if tool_headers and isinstance(tool_headers, dict):
                         # Merge tool headers into mcp_server_auth_headers
                         headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = (
-                            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
-                                headers_obj_from_tool
-                            )
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                            headers_obj_from_tool
                         )
 
                         if tool_mcp_server_auth_headers:
@@ -369,9 +353,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                             ) in tool_mcp_server_auth_headers.items():
                                 if server_alias not in self.mcp_server_auth_headers:
                                     self.mcp_server_auth_headers[server_alias] = {}
-                                self.mcp_server_auth_headers[server_alias].update(
-                                    headers_dict
-                                )
+                                self.mcp_server_auth_headers[server_alias].update(headers_dict)
 
                         # Also merge raw headers
                         if self.raw_headers is None:
@@ -384,9 +366,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             LiteLLM_Proxy_MCP_Handler,
         )
 
-        return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(
-            self.mcp_tools_with_litellm_proxy
-        )
+        return LiteLLM_Proxy_MCP_Handler._should_auto_execute_tools(self.mcp_tools_with_litellm_proxy)
 
     def __aiter__(self):
         return self
@@ -489,9 +469,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         response_obj = getattr(chunk, "response", None)
                         if response_obj and hasattr(response_obj, "id"):
                             self._cached_response_id = response_obj.id
-                            verbose_logger.debug(
-                                f"Cached response ID: {self._cached_response_id}"
-                            )
+                            verbose_logger.debug(f"Cached response ID: {self._cached_response_id}")
 
                     # After emitting response.output_item.added, transition to MCP discovery
                     if not self.initial_events_emitted and hasattr(chunk, "type"):
@@ -519,9 +497,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                         raise
             else:
                 # base_iterator is not async iterable (likely a ResponsesAPIResponse)
-                if self.should_auto_execute and isinstance(
-                    self.base_iterator, ResponsesAPIResponse
-                ):
+                if self.should_auto_execute and isinstance(self.base_iterator, ResponsesAPIResponse):
                     self.collected_response = self.base_iterator
                     self.phase = "tool_execution"
                     await self._generate_tool_execution_events()
@@ -534,9 +510,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         """Check if this chunk indicates the response is completed"""
         from litellm.types.llms.openai import ResponsesAPIStreamEvents
 
-        return (
-            getattr(chunk, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-        )
+        return getattr(chunk, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
     async def _process_base_iterator_chunk(self) -> ResponsesAPIStreamingResponse:
         """
@@ -552,9 +526,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             response_obj = getattr(chunk, "response", None)
             if response_obj and hasattr(response_obj, "id"):
                 if response_obj.id != self._cached_response_id:
-                    verbose_logger.debug(
-                        f"Updating response ID from {response_obj.id} to {self._cached_response_id}"
-                    )
+                    verbose_logger.debug(f"Updating response ID from {response_obj.id} to {self._cached_response_id}")
                     response_obj.id = self._cached_response_id
 
         # If auto-execution is enabled, check for completed responses
@@ -582,15 +554,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Use the pre-fetched all_tools from original_request_params (no re-processing needed)
             params_for_llm = {}
             for key, value in params.items():
-                params_for_llm[key] = (
-                    value  # Copy all params as-is since tools are already processed
-                )
+                params_for_llm[key] = value  # Copy all params as-is since tools are already processed
 
-            tools_count = (
-                len(params_for_llm.get("tools", []))
-                if params_for_llm.get("tools")
-                else 0
-            )
+            tools_count = len(params_for_llm.get("tools", [])) if params_for_llm.get("tools") else 0
             verbose_logger.debug(f"Making LLM call with {tools_count} tools")
             response = await aresponses(**params_for_llm)
 
@@ -600,12 +566,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 # Copy metadata from the real iterator
                 self.model = getattr(response, "model", self.model)
                 self.litellm_metadata = getattr(response, "litellm_metadata", {})
-                self.custom_llm_provider = getattr(
-                    response, "custom_llm_provider", self.custom_llm_provider
-                )
-                verbose_logger.debug(
-                    f"Created base iterator: {type(self.base_iterator)}"
-                )
+                self.custom_llm_provider = getattr(response, "custom_llm_provider", self.custom_llm_provider)
+                verbose_logger.debug(f"Created base iterator: {type(self.base_iterator)}")
             else:
                 # Non-streaming response - this shouldn't happen but handle it
                 verbose_logger.warning(f"Got non-streaming response: {type(response)}")
@@ -632,11 +594,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Extract tool calls from the response
             if self.collected_response is not None:
-                tool_calls = (
-                    LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(
-                        self.collected_response
-                    )
-                )  # type: ignore[arg-type]
+                tool_calls = LiteLLM_Proxy_MCP_Handler._extract_tool_calls_from_response(self.collected_response)  # type: ignore[arg-type]
             else:
                 tool_calls = []
             if not tool_calls:
