@@ -8,6 +8,12 @@ holder crashed mid-refresh) falls back to a re-read, and the surrounding store r
 next fetch, so a crash self-heals rather than serving stale forever. Reading needs no lock, so losers
 don't serialize behind each other. The lock is injected (a thin Redis ``SET NX``/``DEL``/``EXISTS``
 wrapper in production, a fake in tests).
+
+The lock is a single-flight optimization, not a correctness mutex, so it fails open: when the lock
+backend is unreachable, ``acquire`` reports ``ERROR`` (distinct from ``HELD``) and this coordinator
+refreshes anyway rather than wait on a holder that may not exist and then serve a still-expired token.
+That degrades a Redis outage to the no-coordinator behavior (each worker may refresh), never a stale
+bearer the upstream would 401.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
+from enum import Enum
 from typing import Protocol
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
@@ -22,12 +29,22 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
 )
 
 
-class DistributedLock(Protocol):
-    """A best-effort cross-replica lock. ``acquire`` is ``SET key NX PX ttl`` (only the first caller
-    wins, the entry self-expires); ``release`` is ``DEL``; ``is_held`` is ``EXISTS`` (so a waiter can
-    poll without taking the lock)."""
+class LockAcquisition(Enum):
+    """Outcome of a best-effort ``acquire``. ``ERROR`` is kept distinct from ``HELD`` so a caller can
+    tell "someone else is refreshing" (wait and re-read) from "the lock backend is down" (no election
+    happened, so refresh anyway) instead of conflating both into a single ``False``."""
 
-    async def acquire(self, key: str, ttl_seconds: float) -> bool: ...
+    ACQUIRED = "acquired"  # won the election; this worker refreshes
+    HELD = "held"  # another worker holds it; wait then re-read
+    ERROR = "error"  # lock backend unreachable; holder unknown, so refresh anyway
+
+
+class DistributedLock(Protocol):
+    """A best-effort cross-replica lock. ``acquire`` is ``SET key NX PX ttl`` reported as a
+    ``LockAcquisition`` (won / held by another / backend error); ``release`` is ``DEL``; ``is_held``
+    is ``EXISTS`` (so a waiter can poll without taking the lock)."""
+
+    async def acquire(self, key: str, ttl_seconds: float) -> LockAcquisition: ...
 
     async def release(self, key: str) -> None: ...
 
@@ -65,16 +82,21 @@ class RedisRefreshCoordinator:
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
         key = self._key(user_id, server_id)
-        if await self._lock.acquire(key, self._lock_ttl_seconds):
-            try:
+        match await self._lock.acquire(key, self._lock_ttl_seconds):
+            case LockAcquisition.ACQUIRED:
+                try:
+                    return await refresh()
+                finally:
+                    await self._lock.release(key)
+            case LockAcquisition.ERROR:
+                # No election happened (lock backend down), so waiting would just re-read the
+                # still-expired token. Refresh anyway; worst case is an extra refresh, not a stale bearer.
                 return await refresh()
-            finally:
-                await self._lock.release(key)
-
-        # Another worker holds the lock; wait for it to finish (release or PX-expiry), then read the
-        # token it persisted - the winner wrote the fresh token to the store, so a plain re-read sees
-        # it without us refreshing again.
-        deadline = self._clock() + self._wait_timeout_seconds
-        while self._clock() < deadline and await self._lock.is_held(key):
-            await self._sleep(self._poll_interval_seconds)
-        return await reread()
+            case LockAcquisition.HELD:
+                # Another worker holds the lock; wait for it to finish (release or PX-expiry), then read
+                # the token it persisted - the winner wrote the fresh token to the store, so a plain
+                # re-read sees it without us refreshing again.
+                deadline = self._clock() + self._wait_timeout_seconds
+                while self._clock() < deadline and await self._lock.is_held(key):
+                    await self._sleep(self._poll_interval_seconds)
+                return await reread()
