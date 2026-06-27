@@ -1780,20 +1780,7 @@ async def update_team(
             data, user_api_key_dict, entity="team"
         )
 
-        if data.models is not None:
-            from litellm.proxy.proxy_server import llm_router
-            if llm_router is not None:
-                translated_models = []
-                for m in data.models:
-                    if m.startswith(f"model_name_{data.team_id}_"):
-                        model_info = llm_router.get_model_info(m)
-                        if model_info and isinstance(model_info, dict):
-                            team_public = model_info.get("team_public_model_name")
-                            if team_public:
-                                translated_models.append(team_public)
-                                continue
-                    translated_models.append(m)
-                data.models = list(dict.fromkeys(translated_models))
+
 
         if data.soft_budget is not None:
             max_budget_to_check = (
@@ -3030,11 +3017,6 @@ async def team_member_update(
 
     ### update team member spend
     if data.spend is not None:
-        await prisma_client.db.litellm_teammembership.update(
-            where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}},
-            data={"spend": data.spend}
-        )
-
         from litellm.proxy.proxy_server import spend_counter_cache
         if spend_counter_cache is not None:
             _counter_key = f"spend:team_member:{received_user_id}:{data.team_id}"
@@ -3047,8 +3029,18 @@ async def team_member_update(
                     await spend_counter_cache.redis_cache.async_set_cache(
                         key=_counter_key, value=data.spend, ttl=60
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    verbose_proxy_logger.warning(
+                        "Silent Redis failure while updating cache for member %s in team %s: %s",
+                        received_user_id,
+                        data.team_id,
+                        str(e)
+                    )
+
+        await prisma_client.db.litellm_teammembership.update(
+            where={"user_id_team_id": {"user_id": received_user_id, "team_id": data.team_id}},
+            data={"spend": data.spend}
+        )
 
     ### update team member role
     if data.role is not None:
@@ -3724,22 +3716,7 @@ async def team_info(
         # Resolve resources inherited from access groups
         await _resolve_team_access_group_resources(_team_info)
 
-        # TRANSLATE MODEL ROUTING KEYS TO PUBLIC NAMES
-        if _team_info.models is not None:
-            from litellm.proxy.proxy_server import llm_router
-            if llm_router is not None:
-                translated_models = []
-                for m in _team_info.models:
-                    if m.startswith(f"model_name_{team_id}_"):
-                        model_info = llm_router.get_model_info(m)
-                        if model_info and isinstance(model_info, dict):
-                            team_public = model_info.get("team_public_model_name")
-                            if team_public:
-                                translated_models.append(team_public)
-                                continue
-                    translated_models.append(m)
-                # Remove duplicates in case multiple internal keys map to the same public name
-                _team_info.models = list(dict.fromkeys(translated_models))
+
 
         response_object = TeamInfoResponseObject(
             team_id=team_id,
