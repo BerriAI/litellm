@@ -251,6 +251,22 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 message=str(e),
             )
 
+    def _validate_input_param(
+        self, input: Union[str, ResponseInputParam]
+    ) -> Union[str, ResponseInputParam]:
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            filter_value_from_dict,
+        )
+
+        validated_input = super()._validate_input_param(input)
+        if isinstance(validated_input, list):
+            for item in validated_input:
+                if isinstance(item, dict):
+                    filter_value_from_dict(
+                        item, "internal_chat_message_metadata_passthrough"
+                    )
+        return validated_input
+
     def get_complete_url(
         self,
         api_base: Optional[str],

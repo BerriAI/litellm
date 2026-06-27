@@ -320,6 +320,31 @@ class TestGithubCopilotResponsesAPITransformation:
         for param in expected_params:
             assert param in supported, f"{param} should be in supported params"
 
+    def test_transform_request_strips_codex_internal_metadata(self):
+        config = GithubCopilotResponsesAPIConfig()
+        transformed = config.transform_responses_api_request(
+            model="gpt-5.3-codex",
+            input=[
+                {
+                    "role": "user",
+                    "content": "hello",
+                    "internal_chat_message_metadata_passthrough": {"local": True},
+                    "nested": {
+                        "internal_chat_message_metadata_passthrough": "remove-me",
+                        "keep": "value",
+                    },
+                }
+            ],
+            response_api_optional_request_params={"max_output_tokens": 16},
+            litellm_params={},
+            headers={},
+        )
+
+        input_item = transformed["input"][0]
+        assert "internal_chat_message_metadata_passthrough" not in input_item
+        assert "internal_chat_message_metadata_passthrough" not in input_item["nested"]
+        assert input_item["nested"]["keep"] == "value"
+
     def test_handle_reasoning_item_preserves_encrypted_content(self):
         """Test that _handle_reasoning_item preserves encrypted_content for GitHub Copilot.
 
