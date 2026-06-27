@@ -1093,6 +1093,46 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
+def _sync_guardrail_info_to_logging_obj(
+    request_data: dict, logging_obj: object
+) -> None:
+    """Copy standard_logging_guardrail_information from request_data into logging_obj.
+
+    The @log_guardrail_information decorator writes guardrail info to
+    request_data["metadata"] or request_data["litellm_metadata"].  For
+    passthrough routes (/v1/messages, /v1/responses) the spend-log payload is
+    built from logging_obj.litellm_params["metadata"], which is a separate dict
+    that does not share identity with the one in request_data.  This helper
+    bridges that gap so guardrail_information is non-null in spend logs for all
+    routes, not just /v1/chat/completions.
+    """
+    if logging_obj is None:
+        return
+    slg_info = (
+        request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    ).get("standard_logging_guardrail_information")
+    if slg_info is None:
+        return
+    entries = slg_info if isinstance(slg_info, list) else [slg_info]
+    candidates = [
+        getattr(logging_obj, "litellm_params", None),
+        (getattr(logging_obj, "model_call_details", None) or {}).get("litellm_params"),
+    ]
+    for lp in candidates:
+        if not isinstance(lp, dict):
+            continue
+        if lp.get("metadata") is None:
+            lp["metadata"] = {}
+        meta = lp["metadata"]
+        existing = meta.get("standard_logging_guardrail_information")
+        if existing is None:
+            meta["standard_logging_guardrail_information"] = list(entries)
+        elif isinstance(existing, list):
+            for entry in entries:
+                if entry not in existing:
+                    existing.append(entry)
+
+
 def log_guardrail_information(func):
     """
     Decorator to add standard logging guardrail information to any function
@@ -1153,12 +1193,14 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
+        logging_obj = kwargs.get("logging_obj")
         entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = await func(*args, **kwargs)
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
                 return response
-            return self._process_response(
+            result = self._process_response(
                 response=response,
                 request_data=request_data,
                 start_time=start_time.timestamp(),
@@ -1167,10 +1209,13 @@ def log_guardrail_information(func):
                 event_type=event_type,
                 original_inputs=original_inputs,
             )
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+            return result
         except Exception as e:
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
                 raise
-            return self._process_error(
+            result = self._process_error(
                 e=e,
                 request_data=request_data,
                 start_time=start_time.timestamp(),
@@ -1178,6 +1223,8 @@ def log_guardrail_information(func):
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
             )
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+            return result
 
     @functools.wraps(func)
     def sync_wrapper(*args, **kwargs):
@@ -1191,27 +1238,34 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
+        logging_obj = kwargs.get("logging_obj")
         entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = func(*args, **kwargs)
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
                 return response
-            return self._process_response(
+            result = self._process_response(
                 response=response,
                 request_data=request_data,
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
                 original_inputs=original_inputs,
             )
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+            return result
         except Exception as e:
             if _count_recorded_guardrail_entries(request_data) > entries_before:
+                _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
                 raise
-            return self._process_error(
+            result = self._process_error(
                 e=e,
                 request_data=request_data,
                 duration=(datetime.now() - start_time).total_seconds(),
                 event_type=event_type,
             )
+            _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+            return result
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):

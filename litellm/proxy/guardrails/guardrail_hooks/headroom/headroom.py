@@ -74,7 +74,7 @@ class HeadroomGuardrail(CustomGuardrail):
         headers = psr.get("headers")
         if not _is_str_object_dict(headers):
             return False
-        value = headers.get(BYPASS_HEADER) or headers.get(BYPASS_HEADER.lower())
+        value = headers.get(BYPASS_HEADER)
         return str(value).lower() == "true"
 
     async def _call_compress(
@@ -121,13 +121,22 @@ class HeadroomGuardrail(CustomGuardrail):
                 },
             )
 
-        body: object = response.json()
+        try:
+            body: object = response.json()
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Headroom compression service returned non-JSON response",
+                    "body": response.text[:500],
+                },
+            )
         if not _is_str_object_dict(body):
             raise HTTPException(
                 status_code=502,
                 detail={
                     "error": "Headroom compression service returned unexpected response shape",
-                    "body": response.text,
+                    "body": response.text[:500],
                 },
             )
 

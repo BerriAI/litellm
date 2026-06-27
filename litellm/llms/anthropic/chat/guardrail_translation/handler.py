@@ -163,43 +163,6 @@ class AnthropicMessagesHandler(BaseTranslation):
                 logging_obj=litellm_logging_obj,
             )
 
-            if litellm_logging_obj is not None:
-                slg_info = (
-                    data.get("metadata") or data.get("litellm_metadata") or {}
-                ).get("standard_logging_guardrail_information")
-                if slg_info is not None:
-                    for _lp in [
-                        getattr(litellm_logging_obj, "litellm_params", None),
-                        (litellm_logging_obj.model_call_details or {}).get(
-                            "litellm_params"
-                        )
-                        if hasattr(litellm_logging_obj, "model_call_details")
-                        else None,
-                    ]:
-                        if not isinstance(_lp, dict):
-                            continue
-                        try:
-                            if _lp.get("metadata") is None:
-                                _lp["metadata"] = {}
-                            log_meta = _lp["metadata"]
-                            existing = log_meta.get(
-                                "standard_logging_guardrail_information"
-                            )
-                            if existing is None:
-                                log_meta["standard_logging_guardrail_information"] = (
-                                    slg_info
-                                )
-                            elif isinstance(existing, list):
-                                for entry in (
-                                    slg_info
-                                    if isinstance(slg_info, list)
-                                    else [slg_info]
-                                ):
-                                    if entry not in existing:
-                                        existing.append(entry)
-                        except (KeyError, AttributeError):
-                            pass
-
             guardrailed_texts = guardrailed_inputs.get("texts", [])
             guardrailed_tools = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
