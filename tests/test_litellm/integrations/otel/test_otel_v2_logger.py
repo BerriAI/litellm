@@ -387,6 +387,44 @@ def test_mcp_tool_call_metadata_read_from_nested_metadata_not_top_level():
     assert LiteLLM.MCP_SERVER_NAME not in span.attributes
 
 
+def _mcp_list_payload(**overrides):
+    payload = {
+        "call_type": "list_mcp_tools",
+        "status": "success",
+        "litellm_call_id": "mcp_list_1",
+        "metadata": {
+            "user_api_key_team_id": "t1",
+            "spend_logs_metadata": {"mcp_operation": "list_tools"},
+        },
+        "hidden_params": {},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_mcp_list_tools_emits_client_span():
+    """An MCP ``tools/list`` discovery call becomes a CLIENT span named ``tools/list``,
+    carrying only the MCP method and the call id. Per the GenAI MCP semconv the list
+    span omits ``gen_ai.operation.name`` and ``gen_ai.tool.name`` (tool-call-only) and
+    ``mcp.session.id`` (the list path threads no session id), so a naive reuse of the
+    tool-call mapper would wrongly stamp them, and the pre-fix code emitted no span at
+    all for a ``list_mcp_tools`` payload."""
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_list_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/list"
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes["mcp.method.name"] == "tools/list"
+    assert span.attributes[LiteLLM.CALL_ID] == "mcp_list_1"
+    assert span.status.status_code is StatusCode.UNSET
+    # Bug-killers: no span pre-fix (empty exporter -> the unpack above raises), and a
+    # tool-call-shaped fix would leak execute_tool / tool name / session id here.
+    assert GenAI.OPERATION_NAME not in span.attributes
+    assert "gen_ai.tool.name" not in span.attributes
+    assert "mcp.session.id" not in span.attributes
+
+
 def test_pre_call_idempotent_keeps_first_span():
     """A retried call may re-enter ``pre_call`` with the same call id; the first
     span (with the true start time) is kept, not replaced."""

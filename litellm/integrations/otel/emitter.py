@@ -13,6 +13,7 @@ from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPListToolsSpanData,
     MCPToolCallSpanData,
     ServiceSpanData,
 )
@@ -23,6 +24,7 @@ from litellm.integrations.otel.model.spans import (
     SpanRole,
     guardrail_span_name,
     llm_call_span_name,
+    mcp_list_tools_span_name,
     mcp_tool_call_span_name,
     service_span_name,
 )
@@ -33,6 +35,7 @@ from litellm.integrations.otel.model.spans import (
 _NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
     SpanRole.LLM_CALL: llm_call_span_name,
     SpanRole.MCP_TOOL_CALL: mcp_tool_call_span_name,
+    SpanRole.MCP_LIST_TOOLS: mcp_list_tools_span_name,
     SpanRole.GUARDRAIL: guardrail_span_name,
     # DB_CALL and SERVICE are both built from ServiceSpanData; they differ only in
     # span kind (CLIENT vs INTERNAL) and attribute vocabulary, not in naming.
@@ -125,7 +128,11 @@ class SpanEmitter:
         # LLM-call and MCP tool-call spans carry a dedup key (their request's
         # call id), so a sync+async double-firing coalesces. ``isinstance`` narrows
         # the type for mypy and keeps the engine free of duck-typed attribute reads.
-        dedup_key = data.identity.call_id if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData)) else None
+        dedup_key = (
+            data.identity.call_id
+            if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData, MCPListToolsSpanData))
+            else None
+        )
         if self._seen(dedup_key, role):
             return None
         span = self.start_span(
@@ -166,6 +173,7 @@ class SpanEmitter:
                 (
                     LLMCallSpanData,
                     MCPToolCallSpanData,
+                    MCPListToolsSpanData,
                     ServiceSpanData,
                     GuardrailSpanData,
                 ),

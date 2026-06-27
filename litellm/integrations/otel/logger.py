@@ -32,9 +32,11 @@ from litellm.integrations.otel.model.metadata import (
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPListToolsSpanData,
     MCPToolCallSpanData,
     ServiceSpanData,
     SpanError,
+    is_mcp_list_tools,
     is_mcp_tool_call,
 )
 from litellm.integrations.otel.plumbing.metrics import (
@@ -218,6 +220,8 @@ class OpenTelemetryV2(CustomLogger):
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
             return
+        if self._emit_mcp_list_tools(kwargs, start_time, end_time):
+            return
         self._close_llm_call(kwargs, start_time, end_time)
         self._record_metrics(kwargs, response_obj, start_time, end_time)
 
@@ -241,6 +245,8 @@ class OpenTelemetryV2(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         if self._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return
+        if self._emit_mcp_list_tools(kwargs, start_time, end_time):
             return
         self._close_llm_call(kwargs, start_time, end_time)
 
@@ -273,6 +279,37 @@ class OpenTelemetryV2(CustomLogger):
             self._open_llm_calls.pop(data.identity.call_id, None)
         self._emitter.emit(
             SpanRole.MCP_TOOL_CALL,
+            data,
+            parent_context=resolve_request_span_context(),
+            start_time_ns=to_ns(start_time),
+            end_time_ns=to_ns(end_time),
+        )
+        return True
+
+    def _emit_mcp_list_tools(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        """Emit an MCP ``tools/list`` span when the closed request was a discovery call.
+
+        Like a tool call, listing reaches the success/failure callbacks (here with
+        ``call_type`` ``list_mcp_tools``) with no ``pre_call`` carrier, so it gets its
+        own CLIENT span parented to the request's server span. Returns whether it
+        handled the event so the caller skips the LLM-call path.
+        """
+        raw_payload = kwargs.get("standard_logging_object")
+        if not raw_payload or not is_mcp_list_tools(cast(Mapping[str, object], raw_payload)):
+            return False
+        payload = cast("StandardLoggingPayload", raw_payload)
+        data = MCPListToolsSpanData.from_standard_logging_payload(
+            payload, capture_content=self.config.capture_span_content
+        )
+        if data.identity.call_id:
+            self._open_llm_calls.pop(data.identity.call_id, None)
+        self._emitter.emit(
+            SpanRole.MCP_LIST_TOOLS,
             data,
             parent_context=resolve_request_span_context(),
             start_time_ns=to_ns(start_time),
