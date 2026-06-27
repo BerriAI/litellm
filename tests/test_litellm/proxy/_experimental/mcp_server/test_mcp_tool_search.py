@@ -662,3 +662,39 @@ class TestHandleListToolsVirtual:
             MCP_TOOL_SEARCH_TOOL_NAME,
             MCP_TOOL_CALL_TOOL_NAME,
         }
+
+
+class TestMcpServerToolCallErrorHandling:
+    """The protocol tool-call handler must convert virtual-tool errors to an
+    isError CallToolResult instead of letting them raise out of the handler."""
+
+    @pytest.mark.asyncio
+    async def test_virtual_tool_error_returns_iserror_not_raised(self) -> None:
+        from fastapi import HTTPException
+
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(
+            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+                new_callable=AsyncMock,
+                return_value=(uak, None, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._dispatch_virtual_mcp_tool",
+                new_callable=AsyncMock,
+                side_effect=HTTPException(
+                    status_code=403, detail="User not allowed to call this tool"
+                ),
+            ),
+        ):
+            result = await srv.mcp_server_tool_call(
+                name=MCP_TOOL_CALL_TOOL_NAME,
+                arguments={"tool_name": "other-server-tool", "arguments": {}},
+            )
+
+        assert result.isError is True
+        assert "User not allowed to call this tool" in result.content[0].text

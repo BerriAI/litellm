@@ -810,22 +810,24 @@ if MCP_AVAILABLE:
                 f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
             )
 
-            virtual_tool_result = await _dispatch_virtual_mcp_tool(
-                name=name,
-                arguments=arguments,
-                user_api_key_auth=user_api_key_auth,
-                client_ip=_client_ip,
-                mcp_servers=mcp_servers,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-            )
-            if virtual_tool_result is not None:
-                return virtual_tool_result
-
-            host_progress_callback = _capture_host_progress_callback(server)
             try:
+                # Inside this try so virtual-tool errors convert to isError
+                # CallToolResult instead of raising out of the protocol handler.
+                virtual_tool_result = await _dispatch_virtual_mcp_tool(
+                    name=name,
+                    arguments=arguments,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=_client_ip,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                )
+                if virtual_tool_result is not None:
+                    return virtual_tool_result
+
+                host_progress_callback = _capture_host_progress_callback(server)
                 # Create a body date for logging
                 body_data = {"name": name, "arguments": arguments}
                 # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
