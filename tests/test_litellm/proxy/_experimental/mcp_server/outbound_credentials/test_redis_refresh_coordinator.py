@@ -6,6 +6,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
     OAuthToken,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_coordinator import (
+    LockAcquisition,
     RedisRefreshCoordinator,
 )
 
@@ -47,7 +48,7 @@ def _advancing_sleep(clock, step=0.5):
 
 @pytest.mark.asyncio
 async def test_winner_refreshes_then_releases_and_never_rereads():
-    lock = _FakeLock(acquired=True)
+    lock = _FakeLock(acquired=LockAcquisition.ACQUIRED)
     refreshed = OAuthToken(access_token="new")
     reread_calls = []
 
@@ -67,7 +68,7 @@ async def test_winner_refreshes_then_releases_and_never_rereads():
 
 @pytest.mark.asyncio
 async def test_winner_releases_even_when_refresh_raises():
-    lock = _FakeLock(acquired=True)
+    lock = _FakeLock(acquired=LockAcquisition.ACQUIRED)
 
     async def refresh():
         raise RuntimeError("boom")
@@ -83,7 +84,7 @@ async def test_winner_releases_even_when_refresh_raises():
 @pytest.mark.asyncio
 async def test_loser_waits_for_the_holder_then_rereads_persisted_token():
     clock = _Clock()
-    lock = _FakeLock(acquired=False, held_sequence=[True, True, False])
+    lock = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=[True, True, False])
     refresh_calls = []
 
     async def refresh():
@@ -93,23 +94,17 @@ async def test_loser_waits_for_the_holder_then_rereads_persisted_token():
     async def reread():
         return OAuthToken(access_token="persisted-by-winner")
 
-    coord = RedisRefreshCoordinator(
-        lock, clock=clock, sleep=_advancing_sleep(clock), wait_timeout_seconds=100.0
-    )
+    coord = RedisRefreshCoordinator(lock, clock=clock, sleep=_advancing_sleep(clock), wait_timeout_seconds=100.0)
     result = await coord.run("u", "s", refresh, reread)
     assert result is not None and result.access_token == "persisted-by-winner"
-    assert (
-        refresh_calls == []
-    )  # the loser never refreshes - it reads the winner's result
+    assert refresh_calls == []  # the loser never refreshes - it reads the winner's result
     assert lock.released == []  # ...and never holds the lock
 
 
 @pytest.mark.asyncio
 async def test_loser_rereads_after_timeout_if_holder_never_releases():
     clock = _Clock()
-    lock = _FakeLock(
-        acquired=False, held_sequence=[True] * 100
-    )  # holder never releases
+    lock = _FakeLock(acquired=LockAcquisition.HELD, held_sequence=[True] * 100)  # holder never releases
 
     async def refresh():
         return None
@@ -127,3 +122,28 @@ async def test_loser_rereads_after_timeout_if_holder_never_releases():
     result = await coord.run("u", "s", refresh, reread)
     # Gave up waiting (bounded) and returned what's persisted rather than blocking forever.
     assert result is not None and result.access_token == "whatever-is-there"
+
+
+@pytest.mark.asyncio
+async def test_lock_backend_error_refreshes_anyway_instead_of_serving_stale():
+    # Regression: on a total lock-backend outage every worker gets ERROR (not HELD). If ERROR were
+    # treated as "someone else holds it", no worker would refresh and all would re-read the still-
+    # expired token and serve a stale bearer upstream. ERROR must instead refresh anyway.
+    lock = _FakeLock(acquired=LockAcquisition.ERROR)
+    refreshed = OAuthToken(access_token="refreshed-despite-redis-down")
+    refresh_calls = []
+    reread_calls = []
+
+    async def refresh():
+        refresh_calls.append(1)
+        return refreshed
+
+    async def reread():
+        reread_calls.append(1)
+        return OAuthToken(access_token="stale-expired-token")
+
+    result = await RedisRefreshCoordinator(lock).run("u", "s", refresh, reread)
+    assert result is refreshed  # served the fresh token, not the stale re-read
+    assert refresh_calls == [1]
+    assert reread_calls == []  # never fell back to re-reading the expired token
+    assert lock.released == []  # nothing was acquired, so nothing is released

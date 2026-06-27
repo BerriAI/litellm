@@ -5,6 +5,9 @@ import pytest
 from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_distributed_lock import (
     RedisDistributedLock,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_coordinator import (
+    LockAcquisition,
+)
 
 
 class _FakeRedis:
@@ -32,28 +35,24 @@ class _FakeRedis:
 
 
 @pytest.mark.asyncio
-async def test_acquire_uses_set_nx_px_and_reports_success():
+async def test_acquire_uses_set_nx_px_and_reports_acquired():
     redis = _FakeRedis(set_returns=True)
     lock = RedisDistributedLock(redis)
-    assert await lock.acquire("k", 10.0) is True
+    assert await lock.acquire("k", 10.0) is LockAcquisition.ACQUIRED
     assert redis.set_calls == [("k", "1", True, 10000)]  # NX + px in milliseconds
 
 
 @pytest.mark.asyncio
-async def test_acquire_reports_failure_when_key_already_held():
-    # redis SET NX returns None when the key exists -> not acquired.
-    assert (
-        await RedisDistributedLock(_FakeRedis(set_returns=None)).acquire("k", 10.0)
-        is False
-    )
+async def test_acquire_reports_held_when_key_already_held():
+    # redis SET NX returns None when the key exists -> another worker holds it.
+    assert await RedisDistributedLock(_FakeRedis(set_returns=None)).acquire("k", 10.0) is LockAcquisition.HELD
 
 
 @pytest.mark.asyncio
-async def test_acquire_degrades_to_not_acquired_on_redis_error():
-    assert (
-        await RedisDistributedLock(_FakeRedis(raise_on=["set"])).acquire("k", 10.0)
-        is False
-    )
+async def test_acquire_reports_error_on_redis_error_distinct_from_held():
+    # A dead backend must be distinguishable from a busy holder so the coordinator refreshes anyway
+    # instead of waiting and serving a stale token.
+    assert await RedisDistributedLock(_FakeRedis(raise_on=["set"])).acquire("k", 10.0) is LockAcquisition.ERROR
 
 
 @pytest.mark.asyncio
@@ -66,14 +65,9 @@ async def test_release_deletes_the_key():
 @pytest.mark.asyncio
 async def test_is_held_reflects_exists():
     assert await RedisDistributedLock(_FakeRedis(exists_returns=1)).is_held("k") is True
-    assert (
-        await RedisDistributedLock(_FakeRedis(exists_returns=0)).is_held("k") is False
-    )
+    assert await RedisDistributedLock(_FakeRedis(exists_returns=0)).is_held("k") is False
 
 
 @pytest.mark.asyncio
 async def test_is_held_degrades_to_false_on_redis_error():
-    assert (
-        await RedisDistributedLock(_FakeRedis(raise_on=["exists"])).is_held("k")
-        is False
-    )
+    assert await RedisDistributedLock(_FakeRedis(raise_on=["exists"])).is_held("k") is False
