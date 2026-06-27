@@ -205,6 +205,12 @@ class PatchAgentRequest(TypedDict, total=False):
 # Request/Response models for CRUD endpoints
 
 
+class AgentKeySummary(BaseModel):
+    token: str
+    key_alias: Optional[str] = None
+    key_name: Optional[str] = None
+
+
 class AgentResponse(BaseModel):
     agent_id: str
     agent_name: str
@@ -218,6 +224,7 @@ class AgentResponse(BaseModel):
     session_rpm_limit: Optional[int] = None
     static_headers: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
+    keys: Optional[List[AgentKeySummary]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None

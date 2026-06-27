@@ -41787,6 +41787,8 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Filter keys by access group ID */
                 access_group_id?: string | null;
+                /** @description Filter keys by agent ID */
+                agent_id?: string | null;
                 /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
                 substring_matching?: boolean;
             };
@@ -43768,13 +43770,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *         Every rate-limit condition surfaced by litellm — whether it originated from
-             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *         max-iterations, etc.) — is raised as an instance of this class.
+             *     Every rate-limit condition surfaced by litellm — whether it originated from
+             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *     max-iterations, etc.) — is raised as an instance of this class.
              *
-             *         The :attr:`category` attribute lets callers distinguish the source. See
-             *         :class:`RateLimitErrorCategory` for the available values.
+             *     The :attr:`category` attribute lets callers distinguish the source. See
+             *     :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
