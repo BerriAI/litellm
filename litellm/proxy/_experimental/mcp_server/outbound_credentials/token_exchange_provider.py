@@ -38,12 +38,16 @@ async def _post_exchange_endpoint(url: str, form: dict[str, str]) -> dict[str, o
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
         response = await client.post(url, headers=headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
-        body: dict[str, object] = response.json()  # pyright: ignore
+        parsed: object = response.json()  # pyright: ignore
     except Exception as exc:  # noqa: BLE001
         verbose_logger.warning("MCP token exchange request failed: %s", exc)
         return None
-    else:
-        return body  # pyright: ignore
+    if not isinstance(parsed, dict):
+        # A valid-but-non-object JSON body (list/string/number) would crash the field parsing; map it
+        # to a miss so it surfaces as a typed upstream_unavailable, not a 500.
+        verbose_logger.warning("MCP token exchange returned non-object JSON (%s)", type(parsed).__name__)
+        return None
+    return parsed  # pyright: ignore
 
 
 def build_token_exchanger() -> Rfc8693TokenExchanger:

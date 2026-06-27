@@ -51,3 +51,23 @@ async def test_post_parses_json_body_on_success():
     with patch(_HTTP_CLIENT, return_value=_Client()):
         result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"})
     assert result == {"access_token": "x", "expires_in": 60}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [["a", "b"], "a-string", 42], ids=["list", "str", "int"])
+async def test_post_returns_none_on_non_object_json(payload):
+    # A valid-but-non-object JSON body must become a miss, not crash field parsing downstream.
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> object:
+            return payload
+
+    class _Client:
+        async def post(self, url, headers, data):
+            return _Resp()
+
+    with patch(_HTTP_CLIENT, return_value=_Client()):
+        result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"})
+    assert result is None
