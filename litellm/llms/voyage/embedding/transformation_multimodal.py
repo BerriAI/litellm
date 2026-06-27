@@ -63,7 +63,12 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         return "https://api.voyageai.com/v1/multimodalembeddings"
 
     def get_supported_openai_params(self, model: str) -> list:
-        return ["dimensions"]
+        return [
+            "encoding_format",
+            "dimensions",
+            "input_type",
+            "truncation",
+        ]
 
     def map_openai_params(
         self,
@@ -72,8 +77,14 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        if "encoding_format" in non_default_params:
+            optional_params["encoding_format"] = non_default_params["encoding_format"]
         if "dimensions" in non_default_params:
             optional_params["output_dimension"] = non_default_params["dimensions"]
+        if "input_type" in non_default_params:
+            optional_params["input_type"] = non_default_params["input_type"]
+        if "truncation" in non_default_params:
+            optional_params["truncation"] = non_default_params["truncation"]
         return optional_params
 
     def validate_environment(

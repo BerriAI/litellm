@@ -90,9 +90,7 @@ class TestVoyageMultimodalEmbeddings:
         request = config.transform_embedding_request(
             "voyage-multimodal-3.5", "hello", {}, {}
         )
-        assert request["inputs"] == [
-            {"content": [{"type": "text", "text": "hello"}]}
-        ]
+        assert request["inputs"] == [{"content": [{"type": "text", "text": "hello"}]}]
 
     def test_multimodal_embedding_response_transformation(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
@@ -103,9 +101,7 @@ class TestVoyageMultimodalEmbeddings:
         config = VoyageMultimodalEmbeddingConfig()
         response_payload = {
             "object": "list",
-            "data": [
-                {"object": "embedding", "embedding": [0.1, 0.2], "index": 0}
-            ],
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
             "model": "voyage-multimodal-3.5",
             "usage": {
                 "text_tokens": 2,
@@ -143,22 +139,36 @@ class TestVoyageMultimodalEmbeddings:
 
         assert isinstance(config, VoyageMultimodalEmbeddingConfig)
 
-    def test_map_openai_params_dimensions(self):
+    def test_map_openai_params(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
             VoyageMultimodalEmbeddingConfig,
         )
 
         config = VoyageMultimodalEmbeddingConfig()
         assert config.get_supported_openai_params("voyage-multimodal-3.5") == [
-            "dimensions"
+            "encoding_format",
+            "dimensions",
+            "input_type",
+            "truncation",
         ]
         optional_params = config.map_openai_params(
-            {"dimensions": 512}, {}, "voyage-multimodal-3.5", False
+            {
+                "dimensions": 512,
+                "encoding_format": "base64",
+                "input_type": "document",
+                "truncation": False,
+            },
+            {},
+            "voyage-multimodal-3.5",
+            False,
         )
-        assert optional_params == {"output_dimension": 512}
-        assert (
-            config.map_openai_params({}, {}, "voyage-multimodal-3.5", False) == {}
-        )
+        assert optional_params == {
+            "output_dimension": 512,
+            "encoding_format": "base64",
+            "input_type": "document",
+            "truncation": False,
+        }
+        assert config.map_openai_params({}, {}, "voyage-multimodal-3.5", False) == {}
 
     def test_validate_environment_uses_api_key(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
@@ -259,7 +269,12 @@ class TestVoyageMultimodalEmbeddings:
             custom_llm_provider="voyage",
             request_type="embeddings",
         )
-        assert multimodal_params == ["dimensions"]
+        assert multimodal_params == [
+            "encoding_format",
+            "dimensions",
+            "input_type",
+            "truncation",
+        ]
 
         standard_params = get_supported_openai_params(
             model="voyage-3.5",
@@ -304,3 +319,21 @@ class TestVoyageMultimodalEmbeddings:
         assert isinstance(error, VoyageMultimodalEmbeddingError)
         assert error.status_code == 429
         assert error.message == "rate limited"
+
+    def test_voyage_multimodal_3_5_is_registered(self, monkeypatch):
+        import litellm
+
+        original_model_cost = litellm.model_cost
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        try:
+            info = litellm.get_model_info("voyage/voyage-multimodal-3.5")
+            assert info["litellm_provider"] == "voyage"
+            assert info["mode"] == "embedding"
+            assert info["input_cost_per_token"] == 1.2e-07
+            assert info["max_input_tokens"] == 32000
+            assert info["max_tokens"] == 32000
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm.get_model_info.cache_clear()
