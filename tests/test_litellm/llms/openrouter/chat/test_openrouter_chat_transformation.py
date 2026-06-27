@@ -372,7 +372,7 @@ def test_openrouter_cost_tracking_non_streaming():
     Test OpenRouter cost tracking for non-streaming completions.
 
     Verifies:
-    1. Request includes usage.include=true to get cost data
+    1. Request asks for usage accounting via extra_body, not a top-level usage field
     2. Response extracts cost from usage.cost and stores in _hidden_params
     """
     from unittest.mock import Mock, patch
@@ -380,7 +380,6 @@ def test_openrouter_cost_tracking_non_streaming():
 
     config = OpenrouterConfig()
 
-    # Test request adds usage parameter
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-sonnet-4.5",
         messages=[{"role": "user", "content": "Hello"}],
@@ -388,8 +387,8 @@ def test_openrouter_cost_tracking_non_streaming():
         litellm_params={},
         headers={},
     )
-    assert "usage" in transformed_request
-    assert transformed_request["usage"] == {"include": True}
+    assert "usage" not in transformed_request
+    assert transformed_request["extra_body"]["usage"] == {"include": True}
 
     # Test response extracts cost
     mock_response = Mock(spec=httpx.Response)
@@ -460,13 +459,12 @@ def test_openrouter_cost_tracking_streaming():
     Test OpenRouter cost tracking for streaming completions.
 
     Verifies:
-    1. Request includes usage.include=true (same as non-streaming)
+    1. Request asks for usage accounting via extra_body (same as non-streaming)
     2. Streaming chunks preserve usage/cost data in the final chunk
     3. Cost field is accessible in the usage object
     """
     config = OpenrouterConfig()
 
-    # Test request adds usage parameter for streaming
     transformed_request = config.transform_request(
         model="openrouter/anthropic/claude-sonnet-4.5",
         messages=[{"role": "user", "content": "Hello"}],
@@ -474,8 +472,8 @@ def test_openrouter_cost_tracking_streaming():
         litellm_params={},
         headers={},
     )
-    assert "usage" in transformed_request
-    assert transformed_request["usage"] == {"include": True}
+    assert "usage" not in transformed_request
+    assert transformed_request["extra_body"]["usage"] == {"include": True}
 
     # Test streaming chunks preserve cost data
     handler = OpenRouterChatCompletionStreamingHandler(
@@ -526,6 +524,87 @@ def test_openrouter_cost_tracking_streaming():
     # Verify cost field is preserved in the Usage object - this is the key data for cost tracking
     # The chunk_parser converts the dict to a Usage Pydantic model which includes the cost field
     assert result2.usage.cost == 0.0001
+
+
+def test_openrouter_usage_accounting_not_top_level():
+    """
+    Regression: usage accounting must be requested via extra_body, never as a
+    top-level field. A top-level `usage` is rejected by OpenAI-compatible clients
+    with "unexpected keyword argument 'usage'" (e.g. for OpenAI models served
+    through OpenRouter).
+    """
+    transformed_request = OpenrouterConfig().transform_request(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "usage" not in transformed_request
+    assert transformed_request["extra_body"]["usage"] == {"include": True}
+
+
+def test_openrouter_usage_accounting_preserves_user_extra_body():
+    """
+    Regression for the real request path (issue #8425): user-provided OpenRouter
+    params (e.g. provider routing) must land at the top level of the body that
+    ships, and usage accounting must reach that body without clobbering them.
+
+    This drives the full completion path on purpose. `extra_body` is popped in
+    llm_http_handler before `transform_request` runs, so the merge that lifts user
+    params to the top level happens in the handler, not in `transform_request`;
+    asserting on `transform_request` in isolation would test a path production
+    never takes.
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    payload = {
+        "id": "x",
+        "object": "chat.completion",
+        "model": "openai/gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {}
+    mock_response.json.return_value = payload
+    mock_response.text = json.dumps(payload)
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = mock_response
+
+    litellm.completion(
+        model="openrouter/openai/gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        extra_body={"provider": {"order": ["OpenAI"]}},
+        api_key="sk-fake",
+        client=mock_client,
+    )
+
+    shipped_body = json.loads(mock_client.post.call_args.kwargs["data"])
+
+    # User-provided OpenRouter param survives at the top level. It is merged by the
+    # handler, not by transform_request (which never sees extra_body in the real
+    # path), so dropping the handler merge would fail here.
+    assert shipped_body["provider"] == {"order": ["OpenAI"]}
+
+    # Usage accounting reaches the shipped body without clobbering the user param.
+    usage_flag = shipped_body.get("usage") or shipped_body.get("extra_body", {}).get(
+        "usage"
+    )
+    assert usage_flag == {"include": True}
 
 
 def test_openrouter_reasoning_models_allow_reasoning_effort_param():
