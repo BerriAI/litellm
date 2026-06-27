@@ -2711,6 +2711,7 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock request
         mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {}
 
         cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456"
 
@@ -2783,6 +2784,26 @@ class TestCLIKeyRegenerationFlow:
                 result=mock_result,
                 received_response=None,
             )
+
+    @pytest.mark.asyncio
+    async def test_auth_callback_raises_on_oauth_error(self):
+        """Test that auth_callback returns a 401 when the provider redirects with an OAuth error"""
+        from litellm.proxy.management_endpoints.ui_sso import auth_callback
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {
+            "error": "access_denied",
+            "error_description": "User denied consent",
+        }
+
+        with pytest.raises(HTTPException) as exc_info:
+            await auth_callback(request=mock_request, state="test-state")
+
+        assert exc_info.value.status_code == 400
+        assert (
+            exc_info.value.detail
+            == "OAuth error: access_denied, error_description: User denied consent"
+        )
 
     def test_get_redirect_url_does_not_include_existing_key_in_url(self):
         """Test that redirect URL generation does NOT include existing_key in URL"""
