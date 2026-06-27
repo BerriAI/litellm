@@ -461,3 +461,144 @@ class TestCallToolRestApiVirtualTools:
             )
 
         assert exc_info.value.status_code in (400, 403, 404)
+
+
+class TestDispatchVirtualMcpTool:
+    """Covers the SSE/protocol-path interception helper in server.py."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_non_virtual_tool(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _dispatch_virtual_mcp_tool,
+        )
+
+        result = await _dispatch_virtual_mcp_tool(
+            name="github-create_issue",
+            arguments={},
+            user_api_key_auth=UserAPIKeyAuth(api_key="k"),
+            client_ip=None,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_rejects_when_flag_disabled(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _dispatch_virtual_mcp_tool,
+        )
+
+        uak = UserAPIKeyAuth(
+            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=False)
+        )
+        result = await _dispatch_virtual_mcp_tool(
+            name=MCP_TOOL_SEARCH_TOOL_NAME,
+            arguments={"query": "x"},
+            user_api_key_auth=uak,
+            client_ip=None,
+        )
+        assert result is not None
+        assert result.isError is True
+
+    @pytest.mark.asyncio
+    async def test_routes_search_with_client_ip(self) -> None:
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(
+            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            new_callable=AsyncMock,
+            return_value="SEARCH_RESULT",
+        ) as mock_search:
+            result = await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_SEARCH_TOOL_NAME,
+                arguments={"query": "q", "top_k": 3},
+                user_api_key_auth=uak,
+                client_ip="203.0.113.9",
+            )
+
+        assert result == "SEARCH_RESULT"
+        assert mock_search.await_args.kwargs["client_ip"] == "203.0.113.9"
+        assert mock_search.await_args.kwargs["query"] == "q"
+        assert mock_search.await_args.kwargs["top_k"] == 3
+
+    @pytest.mark.asyncio
+    async def test_routes_call_with_client_ip(self) -> None:
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(
+            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call",
+            new_callable=AsyncMock,
+            return_value="CALL_RESULT",
+        ) as mock_call:
+            result = await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_CALL_TOOL_NAME,
+                arguments={"tool_name": "math-add", "arguments": {"a": 1, "b": 2}},
+                user_api_key_auth=uak,
+                client_ip="203.0.113.9",
+            )
+
+        assert result == "CALL_RESULT"
+        assert mock_call.await_args.kwargs["tool_name"] == "math-add"
+        assert mock_call.await_args.kwargs["client_ip"] == "203.0.113.9"
+
+
+class TestCaptureHostProgressCallback:
+    """Covers the host progress-forwarding helper extracted from the tool call path."""
+
+    def test_returns_none_when_request_context_unavailable(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        class _NoCtx:
+            @property
+            def request_context(self):  # type: ignore[no-untyped-def]
+                raise RuntimeError("no context")
+
+        assert _capture_host_progress_callback(_NoCtx()) is None
+
+    def test_returns_none_when_no_progress_token(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = None
+        assert _capture_host_progress_callback(host) is None
+
+    def test_returns_callable_when_token_present(self) -> None:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _capture_host_progress_callback,
+        )
+
+        host = MagicMock()
+        host.request_context.meta.progressToken = "tok12345"
+        host.request_context.session = MagicMock()
+        assert callable(_capture_host_progress_callback(host))
+
+
+class TestHandleListToolsVirtual:
+    """Covers the protocol list_tools early-return when the flag is enabled."""
+
+    @pytest.mark.asyncio
+    async def test_returns_virtual_tools_when_flag_enabled(self) -> None:
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(
+            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+            new_callable=AsyncMock,
+            return_value=(uak, None, None, None, None, None, None),
+        ):
+            tools = await srv.handle_list_tools()
+
+        assert {t.name for t in tools} == {
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            MCP_TOOL_CALL_TOOL_NAME,
+        }
