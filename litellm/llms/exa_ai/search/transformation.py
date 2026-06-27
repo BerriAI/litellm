@@ -159,6 +159,42 @@ class ExaAISearchConfig(BaseSearchConfig):
 
         return result_data
 
+    # Keys excluded when collecting per-result extras: the Exa source keys that
+    # are consumed into canonical SearchResult fields (so they aren't echoed
+    # redundantly), plus the SearchResult field names themselves (so extras can't
+    # collide with the constructor's keyword arguments). Every *other* Exa key is
+    # preserved verbatim via ``extra="allow"`` — highlights, images, and the
+    # deep-search ``output`` summary with its grounding citations.
+    _RESULT_RESERVED_FIELDS = {
+        # consumed Exa source keys
+        "title",
+        "url",
+        "text",
+        "publishedDate",
+        # SearchResult field names
+        "snippet",
+        "date",
+        "last_updated",
+    }
+    _RESPONSE_RESERVED_FIELDS = {"results", "object"}
+
+    @staticmethod
+    def _extract_snippet(result: dict) -> str:
+        """Resolve the snippet from an Exa result.
+
+        Exa only returns ``text`` when ``contents.text`` is requested; when the
+        caller asks for ``contents.highlights`` instead, the content lives under
+        ``highlights`` (a list of strings). Fall back to it so the snippet isn't
+        empty for highlight-based requests.
+        """
+        text = result.get("text")
+        if text:
+            return text
+        highlights = result.get("highlights")
+        if isinstance(highlights, list) and highlights:
+            return "\n".join(str(highlight) for highlight in highlights)
+        return ""
+
     def transform_search_response(
         self,
         raw_response: httpx.Response,
@@ -171,9 +207,14 @@ class ExaAISearchConfig(BaseSearchConfig):
         Exa AI → LiteLLM mappings:
         - results[].title → SearchResult.title
         - results[].url → SearchResult.url
-        - results[].text → SearchResult.snippet
+        - results[].text (or results[].highlights) → SearchResult.snippet
         - results[].publishedDate → SearchResult.date
         - No last_updated field in Exa AI response (set to None)
+
+        All other Exa fields are preserved as-is: per-result extras (e.g.
+        ``highlights``, ``image``, ``author``, ``score``) on each SearchResult,
+        and top-level extras (e.g. ``output`` deep-search summary + grounding,
+        ``costDollars``, ``requestId``) on the SearchResponse.
 
         Args:
             raw_response: Raw httpx response from Exa AI API
@@ -184,19 +225,59 @@ class ExaAISearchConfig(BaseSearchConfig):
         """
         response_json = raw_response.json()
 
-        # Transform results to SearchResult objects
+        raw_results = response_json.get("results", [])
+        if not isinstance(raw_results, list):
+            raw_results = []
+
+        # Transform results to SearchResult objects, preserving any extra fields.
         results = []
-        for result in response_json.get("results", []):
+        for result in raw_results:
+            if not isinstance(result, dict):
+                continue
+            result_extras = {
+                key: value
+                for key, value in result.items()
+                if key not in self._RESULT_RESERVED_FIELDS
+            }
             search_result = SearchResult(
                 title=result.get("title", ""),
                 url=result.get("url", ""),
-                snippet=result.get("text", ""),  # Exa AI uses "text" for content
+                snippet=self._extract_snippet(result),
                 date=result.get("publishedDate"),  # ISO 8601 datetime string
                 last_updated=None,  # Exa AI doesn't provide last_updated in response
+                **result_extras,
             )
             results.append(search_result)
 
-        return SearchResponse(
+        response_extras = {
+            key: value
+            for key, value in response_json.items()
+            if key not in self._RESPONSE_RESERVED_FIELDS
+        }
+        search_response = SearchResponse(
             results=results,
             object="search",
+            **response_extras,
         )
+
+        # Exa reports the authoritative per-query cost under ``costDollars.total``.
+        # Surface it for cost tracking so spend reflects what Exa actually charges
+        # (e.g. ``type: "deep"`` searches), which the static price list cannot
+        # distinguish. Cost tracking falls back to the price list when absent.
+        provider_reported_cost = self._extract_provider_reported_cost(response_json)
+        if provider_reported_cost is not None:
+            search_response._hidden_params["provider_reported_cost"] = (
+                provider_reported_cost
+            )
+
+        return search_response
+
+    @staticmethod
+    def _extract_provider_reported_cost(response_json: dict) -> Optional[float]:
+        """Pull Exa's reported total cost (USD) from the raw response, if present."""
+        cost_dollars = response_json.get("costDollars")
+        if isinstance(cost_dollars, dict):
+            total = cost_dollars.get("total")
+            if isinstance(total, (int, float)):
+                return float(total)
+        return None
