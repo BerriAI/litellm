@@ -654,6 +654,7 @@ snowflake_models: Set = set()
 gradient_ai_models: Set = set()
 llama_models: Set = set()
 nscale_models: Set = set()
+siliconflow_models: Set = set()
 nebius_models: Set = set()
 nebius_embedding_models: Set = set()
 aiml_models: Set = set()
@@ -847,6 +848,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             llama_models.add(key)
         elif value.get("litellm_provider") == "nscale":
             nscale_models.add(key)
+        elif value.get("litellm_provider") == "siliconflow":
+            siliconflow_models.add(key)
         elif value.get("litellm_provider") == "azure_ai":
             azure_ai_models.add(key)
         elif value.get("litellm_provider") == "voyage":
@@ -1062,6 +1065,7 @@ model_list = list(
     | llama_models
     | featherless_ai_models
     | nscale_models
+    | siliconflow_models
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
@@ -1164,6 +1168,7 @@ models_by_provider: dict = {
     "gradient_ai": gradient_ai_models,
     "meta_llama": llama_models,
     "nscale": nscale_models,
+    "siliconflow": siliconflow_models,
     "featherless_ai": featherless_ai_models,
     "deepgram": deepgram_models,
     "elevenlabs": elevenlabs_models,
@@ -1858,6 +1863,9 @@ if TYPE_CHECKING:
         PerplexityChatConfig as _PerplexityChatConfig,
     )
     from .llms.nscale.chat.transformation import NscaleConfig as _NscaleConfig
+    from .llms.siliconflow.chat.transformation import (
+        SiliconFlowConfig as _SiliconFlowConfig,
+    )
     from .llms.watsonx.chat.transformation import (
         IBMWatsonXChatConfig as _IBMWatsonXChatConfig,
     )
@@ -1892,6 +1900,7 @@ if TYPE_CHECKING:
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
     PerplexityChatConfig: Type[_PerplexityChatConfig]
     NscaleConfig: Type[_NscaleConfig]
+    SiliconFlowConfig: Type[_SiliconFlowConfig]
     IBMWatsonXChatConfig: Type[_IBMWatsonXChatConfig]
     IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
     LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
