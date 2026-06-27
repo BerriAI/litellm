@@ -1039,6 +1039,32 @@ if MCP_AVAILABLE:
                 static_headers=request.static_headers,
             )
 
+            # Interactive authorization_code tools preview: the UI forwards the just-authorized token
+            # in oauth2_headers before any per-user credential is persisted. Route it through
+            # mcp_auth_header so _create_mcp_client's per-request-override deferral takes the v1 path
+            # (use the forwarded token directly - no resolver, no fail-closed challenge), exactly as
+            # v1's preview did. Gated to the v2-mapped oauth2 case (to_server_spec non-None ==
+            # authorization_code): M2M (client_credentials) and delegate/passthrough return None from
+            # to_server_spec, and token-exchange is a different auth_type, so all three keep their
+            # existing v1 preview behavior untouched.
+            if (
+                mcp_auth_header is None
+                and server_model.auth_type == MCPAuth.oauth2
+                and oauth2_headers
+            ):
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                    to_server_spec,
+                )
+
+                forwarded_authorization = oauth2_headers.get("Authorization")
+                if forwarded_authorization and to_server_spec(server_model) is not None:
+                    # The oauth2 client re-adds the "Bearer " scheme, so pass the bare token.
+                    mcp_auth_header = (
+                        forwarded_authorization[7:]
+                        if forwarded_authorization[:7].lower() == "bearer "
+                        else forwarded_authorization
+                    )
+
             client = await global_mcp_server_manager._create_mcp_client(
                 server=server_model,
                 mcp_auth_header=mcp_auth_header,
