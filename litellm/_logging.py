@@ -411,12 +411,25 @@ def _disable_debugging():
 
 
 def _enable_debugging():
+    """Enable all LiteLLM verbose loggers.
+    
+    Re-enables output from the package, router, and proxy loggers after they
+    have been disabled.
+    """
     verbose_logger.disabled = False
     verbose_router_logger.disabled = False
     verbose_proxy_logger.disabled = False
 
 
 def print_verbose(print_statement):
+    """Print a statement if verbose mode is enabled, with secrets redacted.
+    
+    This is a legacy function that checks the deprecated set_verbose flag.
+    For new code, use the logging system directly instead.
+    
+    Args:
+        print_statement: The message to print. Will be converted to string.
+    """
     try:
         if set_verbose:
             print(redact_secrets(str(print_statement)))  # noqa: T201

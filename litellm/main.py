@@ -1066,6 +1066,31 @@ def responses_api_bridge_check(
 def _should_allow_input_examples(
     custom_llm_provider: Optional[str], model: str
 ) -> bool:
+    """
+    Determine whether a given model supports input examples in API calls.
+
+    This function checks if the specified LLM provider and model combination
+    supports the `input_examples` parameter, which is used for in-context learning
+    with Claude models. Input examples are currently only supported by Anthropic's
+    native Claude models and Claude models accessed through cloud providers like
+    Azure AI, AWS Bedrock, and Google Vertex AI.
+
+    Args:
+        custom_llm_provider: The LLM provider name (e.g., "anthropic", "azure_ai",
+            "bedrock", "vertex_ai"). Can be None.
+        model: The model identifier string (e.g., "claude-3-opus").
+
+    Returns:
+        bool: True if the model supports input examples, False otherwise.
+
+    Examples:
+        >>> _should_allow_input_examples("anthropic", "claude-3-opus")
+        True
+        >>> _should_allow_input_examples("azure_ai", "claude-3-sonnet")
+        True
+        >>> _should_allow_input_examples("openai", "gpt-4")
+        False
+    """
     if custom_llm_provider == "anthropic":
         return True
     if (
