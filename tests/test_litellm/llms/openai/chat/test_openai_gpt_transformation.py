@@ -4,6 +4,7 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 import os
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -731,3 +732,58 @@ class TestCacheControlPreservationForCustomEndpoint:
             headers={},
         )
         assert all("cache_control" not in m for m in body["messages"])
+
+
+class TestOpenAIShouldFakeStream:
+    """should_fake_stream honors model_info['supports_native_streaming'].
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/30208
+    OpenAI-compatible endpoints that cannot stream natively can be flagged with
+    model_info={"supports_native_streaming": False} to enable client-side fake
+    streaming instead of sending stream=True to an endpoint that rejects it.
+    """
+
+    GET_MODEL_INFO = "litellm.llms.openai.chat.gpt_transformation.get_model_info"
+
+    def setup_method(self):
+        self.config = OpenAIGPTConfig()
+
+    def test_fake_stream_when_native_streaming_unsupported(self):
+        with patch(
+            self.GET_MODEL_INFO, return_value={"supports_native_streaming": False}
+        ):
+            assert (
+                self.config.should_fake_stream(model="openai/no-stream", stream=True)
+                is True
+            )
+
+    def test_no_fake_stream_when_native_streaming_supported(self):
+        with patch(
+            self.GET_MODEL_INFO, return_value={"supports_native_streaming": True}
+        ):
+            assert (
+                self.config.should_fake_stream(model="openai/gpt-4o", stream=True)
+                is False
+            )
+
+    def test_no_fake_stream_when_field_absent(self):
+        with patch(self.GET_MODEL_INFO, return_value={}):
+            assert (
+                self.config.should_fake_stream(model="openai/gpt-4o", stream=True)
+                is False
+            )
+
+    def test_no_fake_stream_and_no_lookup_when_stream_not_requested(self):
+        with patch(self.GET_MODEL_INFO) as mock_get_model_info:
+            assert (
+                self.config.should_fake_stream(model="openai/no-stream", stream=False)
+                is False
+            )
+            mock_get_model_info.assert_not_called()
+
+    def test_no_fake_stream_when_model_info_lookup_fails(self):
+        with patch(self.GET_MODEL_INFO, side_effect=Exception("unknown model")):
+            assert (
+                self.config.should_fake_stream(model="openai/unknown", stream=True)
+                is False
+            )

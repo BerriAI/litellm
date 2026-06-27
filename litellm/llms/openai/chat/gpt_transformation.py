@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _extract_reasoning_content,
@@ -56,7 +57,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
-from litellm.utils import convert_to_model_response_object
+from litellm.utils import convert_to_model_response_object, get_model_info
 
 from ..common_utils import OpenAIError
 
@@ -188,6 +189,32 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
         return base_params + model_specific_params
+
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Fake stream when the model is explicitly marked as not supporting native
+        streaming via model_info (supports_native_streaming=False), e.g. an
+        OpenAI-compatible endpoint that cannot stream.
+        """
+        if stream is not True:
+            return False
+        if model is not None:
+            try:
+                model_info = get_model_info(
+                    model=model, custom_llm_provider=custom_llm_provider
+                )
+                if model_info.get("supports_native_streaming") is False:
+                    return True
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error getting model info in OpenAIGPTConfig.should_fake_stream: {e}"
+                )
+        return False
 
     def _map_openai_params(
         self,
