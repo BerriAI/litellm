@@ -7,7 +7,6 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     ProxyException,
@@ -17,6 +16,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
@@ -1414,7 +1414,7 @@ class MCPRequestHandler:
                     key=cache_key,
                     value=object_permission_id
                     or MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL,
-                    ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+                    ttl=get_management_object_ttl(user_api_key_cache),
                 )
                 if not object_permission_id:
                     return None

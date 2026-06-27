@@ -26,7 +26,6 @@ from litellm.constants import (
     CLI_SESSION_KEY_PREFIX,
     DEFAULT_ACCESS_GROUP_CACHE_TTL,
     DEFAULT_IN_MEMORY_TTL,
-    DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
     EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
 )
@@ -67,7 +66,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    get_management_object_ttl,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
@@ -994,7 +996,7 @@ async def get_default_end_user_budget(
             key=cache_key,
             value=_budget_obj,
             model_type=LiteLLM_BudgetTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return _budget_obj
@@ -1050,7 +1052,7 @@ async def get_team_member_default_budget(
         await user_api_key_cache.async_set_cache(
             key=cache_key,
             value=budget_record.dict(),
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return LiteLLM_BudgetTable(**budget_record.dict())
@@ -1761,7 +1763,7 @@ async def get_user_object(
             key=user_id,
             value=_response,
             model_type=LiteLLM_UserTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         # save to db access time
@@ -1796,7 +1798,7 @@ async def _cache_management_object(
         key=key,
         value=value,
         model_type=model_type,
-        ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+        ttl=get_management_object_ttl(user_api_key_cache),
     )
 
 
@@ -2700,7 +2702,7 @@ async def get_object_permission(
             key=key,
             value=_perm_obj,
             model_type=LiteLLM_ObjectPermissionTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
 
         return _perm_obj
@@ -2765,7 +2767,7 @@ async def get_managed_vector_store_rows_by_uuids(
             key=key,
             value=cached_obj,
             model_type=LiteLLM_ManagedVectorStoresTable,
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
         result.append(cached_obj)
 

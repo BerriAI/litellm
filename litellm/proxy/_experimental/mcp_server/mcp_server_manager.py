@@ -103,6 +103,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
 from litellm.proxy.utils import ProxyLogging
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -1498,7 +1499,6 @@ class MCPServerManager:
         Redis-backed ``DualCache`` in production) so that cache entries are
         shared across workers and cold-cache DB hits are minimised.
         """
-        from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
         from litellm.proxy._experimental.mcp_server.toolset_db import list_mcp_toolsets
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -1524,7 +1524,7 @@ class MCPServerManager:
             await user_api_key_cache.async_set_cache(
                 key=cache_key,
                 value=tool_permissions,
-                ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+                ttl=get_management_object_ttl(user_api_key_cache),
             )
             return tool_permissions
         except Exception as e:
@@ -1581,7 +1581,6 @@ class MCPServerManager:
         deployments.  On a cache hit we reconstruct the ``MCPToolset`` Pydantic object
         so callers can always use attribute access (e.g. ``toolset.toolset_id``).
         """
-        from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
         from litellm.proxy.proxy_server import user_api_key_cache
         from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
@@ -1609,7 +1608,7 @@ class MCPServerManager:
                 if toolset is not None
                 else "__not_found__"
             ),
-            ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+            ttl=get_management_object_ttl(user_api_key_cache),
         )
         return toolset
 

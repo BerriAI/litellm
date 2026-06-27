@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 
 T = TypeVar("T", bound=BaseModel)
@@ -160,3 +161,17 @@ class UserApiKeyCache(DualCache):
         return await super().async_set_cache_pipeline(
             cache_list=normalized, local_only=local_only, **kwargs
         )
+
+
+def get_management_object_ttl(cache: DualCache) -> float:
+    """
+    In-memory TTL for management-object cache writes (keys, teams, users, budgets, ...).
+
+    Honors ``general_settings.user_api_key_cache_ttl``, which ``proxy_server``
+    propagates onto ``default_in_memory_ttl`` at startup, and falls back to
+    ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL`` when no default is configured.
+    """
+    configured: Optional[float] = getattr(cache, "default_in_memory_ttl", None)
+    if configured is not None:
+        return configured
+    return DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
