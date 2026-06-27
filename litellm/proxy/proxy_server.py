@@ -9643,6 +9643,10 @@ async def embeddings(
             version=version,
         )
 
+        if data.get("response_format") in ("text", "srt", "vtt"):
+            from fastapi.responses import Response as FastAPIResponse
+            return FastAPIResponse(content=response.text, media_type="text/plain")
+
         return response
     except Exception as e:
         # Use unified error handler
