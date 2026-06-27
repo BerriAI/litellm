@@ -34,9 +34,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
-def to_subject(
-    user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]
-) -> Subject:
+def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]) -> Subject:
     """Map v1's authenticated principal onto the resolver's Subject.
 
     tenant_id / subject_id are empty for an unauthenticated caller; the per-user arms must reject
@@ -67,18 +65,14 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     (M2M), delegated/passthrough oauth2, token exchange, and SigV4 return None and stay on v1.
     """
     if server.is_byok:
-        return (
-            None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
-        )
+        return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
     resource = server.url or server.server_id
     auth_type = server.auth_type
     match auth_type:
         case None | MCPAuth.none:
             if server.is_oauth_passthrough:
                 return None  # passthrough is not migrated yet -> defer to v1
-            return ServerSpec(
-                server_id=server.server_id, resource=resource, config=NoneConfig()
-            )
+            return ServerSpec(server_id=server.server_id, resource=resource, config=NoneConfig())
         case MCPAuth.api_key:
             return _shared_key_spec(server, resource, "X-API-Key", "")
         case MCPAuth.bearer_token:
@@ -88,9 +82,7 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
         case MCPAuth.authorization:
             return _shared_key_spec(server, resource, "Authorization", "")
         case MCPAuth.basic:
-            return _shared_key_spec(
-                server, resource, "Authorization", "Basic", encode=True
-            )
+            return _shared_key_spec(server, resource, "Authorization", "Basic", encode=True)
         case MCPAuth.oauth2:
             if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
                 return ServerSpec(
@@ -141,11 +133,7 @@ def raise_public(error: CredError) -> NoReturn:
             raise HTTPException(
                 status_code=401,
                 detail=challenge.body if challenge.body is not None else error.summary,
-                headers=(
-                    {"WWW-Authenticate": challenge.www_authenticate}
-                    if challenge.www_authenticate
-                    else None
-                ),
+                headers=({"WWW-Authenticate": challenge.www_authenticate} if challenge.www_authenticate else None),
             )
         case "misconfigured":
             raise HTTPException(status_code=500, detail=error.summary)

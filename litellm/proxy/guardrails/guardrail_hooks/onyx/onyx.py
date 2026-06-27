@@ -77,9 +77,7 @@ class OnyxGuardrail(CustomGuardrail):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
                 detection_message = ", ".join(result["violated_rules"])
-            verbose_proxy_logger.warning(
-                f"Request blocked by Onyx Guard. Violations: {detection_message}."
-            )
+            verbose_proxy_logger.warning(f"Request blocked by Onyx Guard. Violations: {detection_message}.")
             raise HTTPException(
                 status_code=400,
                 detail=f"Request blocked by Onyx Guard. Violations: {detection_message}.",
@@ -94,9 +92,7 @@ class OnyxGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        conversation_id = (
-            logging_obj.litellm_call_id if logging_obj else str(uuid.uuid4())
-        )
+        conversation_id = logging_obj.litellm_call_id if logging_obj else str(uuid.uuid4())
 
         verbose_proxy_logger.info(
             "Running Onyx Guard apply_guardrail hook",

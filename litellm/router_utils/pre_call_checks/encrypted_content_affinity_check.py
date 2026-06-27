@@ -77,9 +77,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         super().__init__()
         self.router = router
         self.enable_global_affinity = enable_global_affinity
-        self.model_group_affinity_config: Dict[str, List[str]] = (
-            model_group_affinity_config or {}
-        )
+        self.model_group_affinity_config: Dict[str, List[str]] = model_group_affinity_config or {}
 
     # ------------------------------------------------------------------
     # Helpers
@@ -92,10 +90,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         if not model_group_affinity_config:
             return False
 
-        return any(
-            "encrypted_content_affinity" in checks
-            for checks in model_group_affinity_config.values()
-        )
+        return any("encrypted_content_affinity" in checks for checks in model_group_affinity_config.values())
 
     def _is_enabled_for_model_group(self, model_group: str) -> bool:
         group_checks = self.model_group_affinity_config.get(model_group)
@@ -137,26 +132,20 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 (
                     model_id,
                     _,
-                ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(
-                    encrypted_content
-                )
+                ) = ResponsesAPIRequestUtils._unwrap_encrypted_content_with_model_id(encrypted_content)
                 if model_id:
                     return model_id
 
         return None
 
     @staticmethod
-    def _find_deployment_by_model_id(
-        healthy_deployments: List[dict], model_id: str
-    ) -> Optional[dict]:
+    def _find_deployment_by_model_id(healthy_deployments: List[dict], model_id: str) -> Optional[dict]:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
                 continue
             deployment_model_id = model_info.get("id")
-            if deployment_model_id is not None and str(deployment_model_id) == str(
-                model_id
-            ):
+            if deployment_model_id is not None and str(deployment_model_id) == str(model_id):
                 return deployment
         return None
 
@@ -204,15 +193,11 @@ class EncryptedContentAffinityCheck(CustomLogger):
         originating = self.router.get_deployment(model_id=model_id)
         if originating is None:
             return [], None
-        boundary = self._encryption_boundary_key(
-            originating.litellm_params.model_dump(exclude_none=True)
-        )
+        boundary = self._encryption_boundary_key(originating.litellm_params.model_dump(exclude_none=True))
         if boundary is None:
             return [], originating
         matches = [
-            d
-            for d in healthy_deployments
-            if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
+            d for d in healthy_deployments if self._encryption_boundary_key(d.get("litellm_params", {})) == boundary
         ]
         return matches, originating
 
@@ -252,9 +237,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         # _get_metadata_variable_name_from_kwargs would pick "litellm_metadata"
         # over "metadata" where tags are actually stored.
         if "litellm_metadata" in request_kwargs:
-            request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = (
-                True
-            )
+            request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
 
         request_input = request_kwargs.get("input")
         model_id = self._extract_model_id_from_input(request_input)
@@ -279,11 +262,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
-        boundary_matches, originating = (
-            self._find_deployments_on_same_encryption_boundary(
-                healthy_deployments=typed_healthy_deployments,
-                model_id=model_id,
-            )
+        boundary_matches, originating = self._find_deployments_on_same_encryption_boundary(
+            healthy_deployments=typed_healthy_deployments,
+            model_id=model_id,
         )
         if boundary_matches:
             verbose_router_logger.debug(
@@ -327,9 +308,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 llm_provider="",
             )
 
-        cooldown = await self._get_origin_cooldown(
-            model_id=model_id, parent_otel_span=parent_otel_span
-        )
+        cooldown = await self._get_origin_cooldown(model_id=model_id, parent_otel_span=parent_otel_span)
 
         if cooldown is not None and str(cooldown.get("status_code")) == "429":
             retry_after = self._cooldown_seconds_remaining(cooldown)
@@ -384,9 +363,5 @@ class EncryptedContentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _cooldown_seconds_remaining(cooldown: CooldownCacheValue) -> int:
-        remaining = (
-            float(cooldown.get("timestamp", 0.0))
-            + float(cooldown.get("cooldown_time", 0.0))
-            - time.time()
-        )
+        remaining = float(cooldown.get("timestamp", 0.0)) + float(cooldown.get("cooldown_time", 0.0)) - time.time()
         return max(1, int(remaining))

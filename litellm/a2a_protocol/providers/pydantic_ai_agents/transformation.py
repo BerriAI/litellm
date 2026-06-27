@@ -41,17 +41,9 @@ class PydanticAITransformation:
             Cleaned object with None values removed
         """
         if isinstance(obj, dict):
-            return {
-                k: PydanticAITransformation._remove_none_values(v)
-                for k, v in obj.items()
-                if v is not None
-            }
+            return {k: PydanticAITransformation._remove_none_values(v) for k, v in obj.items() if v is not None}
         elif isinstance(obj, list):
-            return [
-                PydanticAITransformation._remove_none_values(item)
-                for item in obj
-                if item is not None
-            ]
+            return [PydanticAITransformation._remove_none_values(item) for item in obj if item is not None]
         else:
             return obj
 
@@ -125,9 +117,7 @@ class PydanticAITransformation:
             status = result.get("status", {})
             state = status.get("state", "")
 
-            verbose_logger.debug(
-                f"Pydantic AI: Poll attempt {attempt + 1}/{max_attempts}, state={state}"
-            )
+            verbose_logger.debug(f"Pydantic AI: Poll attempt {attempt + 1}/{max_attempts}, state={state}")
 
             if state == "completed":
                 return poll_data
@@ -136,9 +126,7 @@ class PydanticAITransformation:
 
             await asyncio.sleep(poll_interval)
 
-        raise TimeoutError(
-            f"Task {task_id} did not complete within {max_attempts * poll_interval} seconds"
-        )
+        raise TimeoutError(f"Task {task_id} did not complete within {max_attempts * poll_interval} seconds")
 
     @staticmethod
     async def _send_and_poll_raw(
@@ -211,9 +199,7 @@ class PydanticAITransformation:
             # Need to poll for completion
             task_id = result.get("id")
             if task_id:
-                verbose_logger.info(
-                    f"Pydantic AI: Task {task_id} submitted, polling for completion..."
-                )
+                verbose_logger.info(f"Pydantic AI: Task {task_id} submitted, polling for completion...")
                 response_data = await PydanticAITransformation._poll_for_completion(
                     client=client,
                     endpoint=endpoint,
@@ -222,9 +208,7 @@ class PydanticAITransformation:
                     agent_extra_headers=agent_extra_headers,
                 )
 
-        verbose_logger.info(
-            f"Pydantic AI: Received completed response for request_id={request_id}"
-        )
+        verbose_logger.info(f"Pydantic AI: Received completed response for request_id={request_id}")
 
         return response_data
 
@@ -325,9 +309,7 @@ class PydanticAITransformation:
             Standard A2A non-streaming response format
         """
         # Extract the agent response text
-        full_text, message_id, parts = PydanticAITransformation._extract_response_text(
-            response_data
-        )
+        full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 
         # Build standard A2A message
         a2a_message = {
@@ -424,9 +406,7 @@ class PydanticAITransformation:
             A2A streaming response events
         """
         # Extract the response text from completed task
-        full_text, message_id, parts = PydanticAITransformation._extract_response_text(
-            response_data
-        )
+        full_text, message_id, parts = PydanticAITransformation._extract_response_text(response_data)
 
         # Extract input message from raw response for history
         result = response_data.get("result", {})
@@ -455,9 +435,7 @@ class PydanticAITransformation:
                         "contextId": context_id,
                         "kind": "message",
                         "messageId": input_message_id,
-                        "parts": input_message.get(
-                            "parts", [{"kind": "text", "text": ""}]
-                        ),
+                        "parts": input_message.get("parts", [{"kind": "text", "text": ""}]),
                         "role": "user",
                         "taskId": task_id,
                     }
@@ -539,6 +517,4 @@ class PydanticAITransformation:
         }
         yield completed_event
 
-        verbose_logger.info(
-            f"Pydantic AI: Fake streaming completed for request_id={request_id}"
-        )
+        verbose_logger.info(f"Pydantic AI: Fake streaming completed for request_id={request_id}")

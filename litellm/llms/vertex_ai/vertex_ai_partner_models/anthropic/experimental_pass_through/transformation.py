@@ -93,18 +93,12 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
             # Add context management header if any other edits exist
             if has_other:
-                beta_values.add(
-                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
-                )
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value)
 
         # Check for web search tool
         for tool in tools:
-            if isinstance(tool, dict) and tool.get("type", "").startswith(
-                ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value
-            ):
-                beta_values.add(
-                    ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
-                )
+            if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+                beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value)
                 break
 
         # Check for tool search tools - Vertex AI uses different beta header
@@ -127,9 +121,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         stream: Optional[bool] = None,
     ) -> str:
         if api_base is None:
-            raise ValueError(
-                "api_base is required. Unable to determine the correct api_base for the request."
-            )
+            raise ValueError("api_base is required. Unable to determine the correct api_base for the request.")
         return api_base  # no transformation is needed - handled in validate_environment
 
     def transform_anthropic_messages_request(
@@ -152,9 +144,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
         anthropic_messages_request["anthropic_version"] = "vertex-2023-10-16"
 
-        anthropic_messages_request.pop(
-            "model", None
-        )  # do not pass model in request body to vertex ai
+        anthropic_messages_request.pop("model", None)  # do not pass model in request body to vertex ai
 
         sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 

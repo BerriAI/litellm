@@ -149,13 +149,11 @@ async def anthropic_response(
             async def _passthrough_stream_generator():
                 yield _anthropic_response
 
-            selected_data_generator = (
-                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                    response=_passthrough_stream_generator(),
-                    user_api_key_dict=user_api_key_dict,
-                    request_data=_data,
-                    proxy_logging_obj=proxy_logging_obj,
-                )
+            selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                response=_passthrough_stream_generator(),
+                user_api_key_dict=user_api_key_dict,
+                request_data=_data,
+                proxy_logging_obj=proxy_logging_obj,
             )
 
             return await create_response(
@@ -185,9 +183,7 @@ async def anthropic_response(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(str(e))
         )
 
         # Extract model_id from request metadata (same as success path)
@@ -258,14 +254,10 @@ async def count_tokens(
         messages = data.get("messages", [])
 
         if not model_name:
-            raise HTTPException(
-                status_code=400, detail={"error": "model parameter is required"}
-            )
+            raise HTTPException(status_code=400, detail={"error": "model parameter is required"})
 
         if not messages:
-            raise HTTPException(
-                status_code=400, detail={"error": "messages parameter is required"}
-            )
+            raise HTTPException(status_code=400, detail={"error": "messages parameter is required"})
 
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
@@ -305,13 +297,9 @@ async def count_tokens(
         )
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(
-                str(e)
-            )
+            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(str(e))
         )
-        raise HTTPException(
-            status_code=500, detail={"error": f"Internal server error: {str(e)}"}
-        )
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
 
 
 @router.post(

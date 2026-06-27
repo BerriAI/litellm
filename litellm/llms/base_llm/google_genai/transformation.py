@@ -58,9 +58,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             List of supported parameter names
         """
-        raise NotImplementedError(
-            "get_supported_generate_content_optional_params is not implemented"
-        )
+        raise NotImplementedError("get_supported_generate_content_optional_params is not implemented")
 
     def get_generate_content_request_top_level_fields(self) -> tuple[str, ...]:
         """
@@ -91,9 +89,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         Returns:
             Mapped parameters for the provider
         """
-        raise NotImplementedError(
-            "map_generate_content_optional_params is not implemented"
-        )
+        raise NotImplementedError("map_generate_content_optional_params is not implemented")
 
     @abstractmethod
     def validate_environment(
@@ -201,9 +197,7 @@ class BaseGoogleGenAIGenerateContentConfig(ABC):
         """
         pass
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> Exception:
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]) -> Exception:
         """
         Get the appropriate exception class for the error.
 

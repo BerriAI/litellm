@@ -61,9 +61,7 @@ class BedrockFilesHandler(BaseAWSLLM):
             allow_legacy_cloud_file_ids=allow_legacy_cloud_file_ids,
         )
 
-    def _get_configured_s3_bucket_name(
-        self, litellm_params: Mapping[str, object]
-    ) -> str:
+    def _get_configured_s3_bucket_name(self, litellm_params: Mapping[str, object]) -> str:
         from .transformation import get_configured_s3_bucket_name
 
         return get_configured_s3_bucket_name(litellm_params)
@@ -100,15 +98,11 @@ class BedrockFilesHandler(BaseAWSLLM):
         bucket_name, object_key = self._parse_s3_uri(
             s3_uri=s3_uri,
             configured_bucket_name=configured_bucket_name,
-            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
-                optional_params
-            ),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(optional_params),
         )
 
         # Get AWS credentials
-        aws_region_name = self._get_aws_region_name(
-            optional_params=optional_params, model=""
-        )
+        aws_region_name = self._get_aws_region_name(optional_params=optional_params, model="")
         credentials: Credentials = self.get_credentials(
             aws_access_key_id=optional_params.get("aws_access_key_id"),
             aws_secret_access_key=optional_params.get("aws_secret_access_key"),
@@ -136,9 +130,7 @@ class BedrockFilesHandler(BaseAWSLLM):
             response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
             file_content = response["Body"].read()
         except Exception as e:
-            raise ValueError(
-                f"Failed to download file from S3: {s3_uri}. Error: {str(e)}"
-            )
+            raise ValueError(f"Failed to download file from S3: {s3_uri}. Error: {str(e)}")
 
         # Create mock HTTP response
         mock_response = httpx.Response(
@@ -158,9 +150,7 @@ class BedrockFilesHandler(BaseAWSLLM):
         optional_params: dict,
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
-    ) -> Union[
-        HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
-    ]:
+    ) -> Union[HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]]:
         """
         Download file content from S3 bucket for Bedrock files.
         Supports both sync and async operations.

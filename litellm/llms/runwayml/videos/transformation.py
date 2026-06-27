@@ -97,11 +97,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             seconds = video_create_optional_params["seconds"]
             if seconds is not None:
                 try:
-                    mapped_params["duration"] = (
-                        int(float(seconds))
-                        if isinstance(seconds, str)
-                        else int(seconds)
-                    )
+                    mapped_params["duration"] = int(float(seconds)) if isinstance(seconds, str) else int(seconds)
                 except (ValueError, TypeError):
                     # If conversion fails, use default duration
                     pass
@@ -130,16 +126,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             api_key = api_key or litellm_params.api_key
 
         api_key = (
-            api_key
-            or litellm.api_key
-            or get_secret_str("RUNWAYML_API_SECRET")
-            or get_secret_str("RUNWAYML_API_KEY")
+            api_key or litellm.api_key or get_secret_str("RUNWAYML_API_SECRET") or get_secret_str("RUNWAYML_API_KEY")
         )
 
         if api_key is None:
             raise ValueError(
-                "RunwayML API key is required. Set RUNWAYML_API_SECRET environment variable "
-                "or pass api_key parameter."
+                "RunwayML API key is required. Set RUNWAYML_API_SECRET environment variable or pass api_key parameter."
             )
 
         headers.update(
@@ -238,15 +230,11 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         if "output" in response_data and response_data["output"]:
             # RunwayML returns output as array of URLs when task succeeds
             video_data["output_url"] = (
-                response_data["output"][0]
-                if isinstance(response_data["output"], list)
-                else response_data["output"]
+                response_data["output"][0] if isinstance(response_data["output"], list) else response_data["output"]
             )
 
         if "completedAt" in response_data:
-            video_data["completed_at"] = self._parse_runway_timestamp(
-                response_data.get("completedAt")
-            )
+            video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
 
         if "failureCode" in response_data or "failure" in response_data:
             video_data["error"] = {
@@ -269,9 +257,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_obj = VideoObject(**video_data)  # type: ignore[arg-type]
 
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(
-                video_obj.id, custom_llm_provider, model
-            )
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
 
         # Add usage data for cost tracking
         usage_data = {}
@@ -335,9 +321,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         We'll retrieve the task and extract the video URL.
         """
         original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(
-            original_video_id, field_name="video_id"
-        )
+        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Get task status to retrieve video URL
         url = f"{api_base}/tasks/{encoded_video_id}"
@@ -361,16 +345,12 @@ class RunwayMLVideoConfig(BaseVideoConfig):
             # Check if the video generation failed or is still processing
             status = response_data.get("status", "UNKNOWN")
             if status in ["PENDING", "RUNNING", "THROTTLED"]:
-                raise ValueError(
-                    f"Video is still processing (status: {status}). Please wait and try again."
-                )
+                raise ValueError(f"Video is still processing (status: {status}). Please wait and try again.")
             elif status == "FAILED":
                 failure_reason = response_data.get("failure", "Unknown error")
                 raise ValueError(f"Video generation failed: {failure_reason}")
             else:
-                raise ValueError(
-                    "Video URL not found in response. Video may not be ready yet."
-                )
+                raise ValueError("Video URL not found in response. Video may not be ready yet.")
 
         return video_url
 
@@ -499,9 +479,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         RunwayML uses task cancellation.
         """
         original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(
-            original_video_id, field_name="video_id"
-        )
+        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the URL for task cancellation
         url = f"{api_base}/tasks/{encoded_video_id}/cancel"
@@ -540,9 +518,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         RunwayML uses GET /v1/tasks/{task_id} to retrieve task status.
         """
         original_video_id = extract_original_video_id(video_id)
-        encoded_video_id = encode_url_path_segment(
-            original_video_id, field_name="video_id"
-        )
+        encoded_video_id = encode_url_path_segment(original_video_id, field_name="video_id")
 
         # Construct the full URL for task status retrieval
         url = f"{api_base}/tasks/{encoded_video_id}"
@@ -574,15 +550,11 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         # Add optional fields if present
         if "output" in response_data and response_data["output"]:
             video_data["output_url"] = (
-                response_data["output"][0]
-                if isinstance(response_data["output"], list)
-                else response_data["output"]
+                response_data["output"][0] if isinstance(response_data["output"], list) else response_data["output"]
             )
 
         if "completedAt" in response_data:
-            video_data["completed_at"] = self._parse_runway_timestamp(
-                response_data.get("completedAt")
-            )
+            video_data["completed_at"] = self._parse_runway_timestamp(response_data.get("completedAt"))
 
         if "progress" in response_data:
             video_data["progress"] = response_data["progress"]
@@ -596,27 +568,17 @@ class RunwayMLVideoConfig(BaseVideoConfig):
         video_obj = VideoObject(**video_data)  # type: ignore[arg-type]
 
         if custom_llm_provider and video_obj.id:
-            video_obj.id = encode_video_id_with_provider(
-                video_obj.id, custom_llm_provider, None
-            )
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, None)
 
         return video_obj
 
-    def transform_video_create_character_request(
-        self, name, video, api_base, litellm_params, headers
-    ):
-        raise NotImplementedError(
-            "video create character is not supported for RunwayML"
-        )
+    def transform_video_create_character_request(self, name, video, api_base, litellm_params, headers):
+        raise NotImplementedError("video create character is not supported for RunwayML")
 
     def transform_video_create_character_response(self, raw_response, logging_obj):
-        raise NotImplementedError(
-            "video create character is not supported for RunwayML"
-        )
+        raise NotImplementedError("video create character is not supported for RunwayML")
 
-    def transform_video_get_character_request(
-        self, character_id, api_base, litellm_params, headers
-    ):
+    def transform_video_get_character_request(self, character_id, api_base, litellm_params, headers):
         raise NotImplementedError("video get character is not supported for RunwayML")
 
     def transform_video_get_character_response(self, raw_response, logging_obj):
@@ -655,9 +617,7 @@ class RunwayMLVideoConfig(BaseVideoConfig):
     ):
         raise NotImplementedError("video extension is not supported for RunwayML")
 
-    def transform_video_extension_response(
-        self, raw_response, logging_obj, custom_llm_provider=None
-    ):
+    def transform_video_extension_response(self, raw_response, logging_obj, custom_llm_provider=None):
         raise NotImplementedError("video extension is not supported for RunwayML")
 
     def get_error_class(

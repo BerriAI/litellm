@@ -154,9 +154,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(
-    teams: List[Dict[str, Any]], selected_index: int = 0
-) -> None:
+def display_interactive_team_selection(teams: List[Dict[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console = Console()
 
@@ -270,9 +268,7 @@ def prompt_team_selection_fallback(
                 )
                 return selected_team
             else:
-                click.echo(
-                    f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}"
-                )
+                click.echo(f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
             click.echo("❌ Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
@@ -307,25 +303,14 @@ def _poll_for_ready_data(
                 if status == "ready":
                     return data
                 if status == "pending":
-                    if (
-                        pending_message
-                        and pending_log_every > 0
-                        and attempt % pending_log_every == 0
-                    ):
+                    if pending_message and pending_log_every > 0 and attempt % pending_log_every == 0:
                         click.echo(pending_message)
-                elif (
-                    other_status_message
-                    and other_status_log_every > 0
-                    and attempt % other_status_log_every == 0
-                ):
+                elif other_status_message and other_status_log_every > 0 and attempt % other_status_log_every == 0:
                     click.echo(other_status_message)
             elif http_error_log_every > 0 and attempt % http_error_log_every == 0:
                 click.echo(f"Polling error: HTTP {response.status_code}")
         except requests.RequestException as e:
-            if (
-                connection_error_log_every > 0
-                and attempt % connection_error_log_every == 0
-            ):
+            if connection_error_log_every > 0 and attempt % connection_error_log_every == 0:
                 click.echo(f"Connection error (will retry): {e}")
         time.sleep(poll_interval)
     return None
@@ -369,9 +354,7 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> Dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(
-    base_url: str, key_id: str, poll_secret: str
-) -> Optional[dict]:
+def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Optional[dict]:
     """
     Poll the server for authentication completion and handle team selection.
 
@@ -449,9 +432,7 @@ def _handle_team_selection_during_polling(
         The JWT token with the selected team, or None if selection was skipped
     """
     if not teams:
-        click.echo(
-            "ℹ️ No teams found. You can create or join teams using the web interface."
-        )
+        click.echo("ℹ️ No teams found. You can create or join teams using the web interface.")
         return None
 
     click.echo("\n" + "=" * 60)
@@ -528,9 +509,7 @@ def _render_and_prompt_for_team_selection(teams: List[Dict[str, Any]]) -> Option
                 click.echo(f"\n✅ Selected team: {team_alias} ({team_id})")
                 return team_id
 
-            click.echo(
-                f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}"
-            )
+            click.echo(f"❌ Invalid selection. Please enter a number between 1 and {len(teams)}")
         except ValueError:
             click.echo("❌ Invalid input. Please enter a number or 'skip'")
         except KeyboardInterrupt:
@@ -553,9 +532,7 @@ def login(ctx: click.Context):
         poll_secret = cli_sso_flow["poll_secret"]
         user_code = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode(
-            {"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id}
-        )
+        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
@@ -568,9 +545,7 @@ def login(ctx: click.Context):
         # Poll for authentication completion
         click.echo("Waiting for authentication...")
 
-        auth_result = _poll_for_authentication(
-            base_url=base_url, key_id=key_id, poll_secret=poll_secret
-        )
+        auth_result = _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret)
 
         if auth_result:
             api_key = auth_result["api_key"]
@@ -638,9 +613,7 @@ def whoami():
     click.echo(f"Token age: {age_hours:.1f} hours")
 
     if age_hours > CLI_JWT_EXPIRATION_HOURS:
-        click.echo(
-            f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired."
-        )
+        click.echo(f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
 
 
 # Export functions for use by other CLI commands

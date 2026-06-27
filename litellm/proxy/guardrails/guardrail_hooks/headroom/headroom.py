@@ -42,15 +42,10 @@ class HeadroomGuardrail(CustomGuardrail):
         api_key: str | None = None,
         model: str | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks
-        | list[GuardrailEventHooks]
-        | Mode
-        | None = None,
+        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
     ):
-        self.headroom_api_base = (
-            api_base or get_secret_str("HEADROOM_API_BASE") or ""
-        ).rstrip("/")
+        self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
             raise ValueError(
                 "Headroom guardrail requires an API base URL. "
@@ -180,9 +175,7 @@ class HeadroomGuardrail(CustomGuardrail):
             return inputs
 
         if self._should_bypass(request_data):
-            verbose_proxy_logger.debug(
-                "Headroom: %s header set; skipping compression", BYPASS_HEADER
-            )
+            verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
             return inputs
 
         structured_messages = inputs.get("structured_messages")

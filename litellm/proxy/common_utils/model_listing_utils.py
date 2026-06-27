@@ -61,19 +61,14 @@ class TeamModelNameTranslator:
         Empty when disabled via the legacy flag, the router is absent, or the
         router model list is malformed.
         """
-        if llm_router is None or not TeamModelNameTranslator._is_enabled(
-            general_settings
-        ):
+        if llm_router is None or not TeamModelNameTranslator._is_enabled(general_settings):
             return {}
         router_model_list = llm_router.get_model_list()
         if not isinstance(router_model_list, list):
             return {}
         return dict(
             pair
-            for pair in (
-                TeamModelNameTranslator._internal_public_pair(model)
-                for model in router_model_list
-            )
+            for pair in (TeamModelNameTranslator._internal_public_pair(model) for model in router_model_list)
             if pair is not None
         )
 
@@ -111,16 +106,10 @@ class TeamModelNameTranslator:
         internal key. Both ids are identical for unmapped names (globals,
         access-group keys).
         """
-        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
-            llm_router, general_settings
-        )
+        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
         if not internal_to_public:
             return [(name, name) for name in model_names]
-        return list(
-            TeamModelNameTranslator._response_to_lookup_map(
-                model_names, internal_to_public
-            ).items()
-        )
+        return list(TeamModelNameTranslator._response_to_lookup_map(model_names, internal_to_public).items())
 
     @staticmethod
     def translate_listing(
@@ -133,10 +122,7 @@ class TeamModelNameTranslator:
         while preserving order; unmapped names pass through.
         """
         return [
-            entry[0]
-            for entry in TeamModelNameTranslator.listing_entries(
-                model_names, llm_router, general_settings
-            )
+            entry[0] for entry in TeamModelNameTranslator.listing_entries(model_names, llm_router, general_settings)
         ]
 
     @staticmethod
@@ -157,11 +143,9 @@ class TeamModelNameTranslator:
         unchanged when it is not an accessible public team name (already-internal
         names and globals pass through).
         """
-        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(
-            llm_router, general_settings
-        )
+        internal_to_public = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
         if not internal_to_public:
             return model_id
-        return TeamModelNameTranslator._response_to_lookup_map(
-            available_models, internal_to_public
-        ).get(model_id, model_id)
+        return TeamModelNameTranslator._response_to_lookup_map(available_models, internal_to_public).get(
+            model_id, model_id
+        )

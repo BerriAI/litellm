@@ -55,9 +55,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         resolved_api_key = self.get_api_key(api_key)
         if not resolved_api_key:
-            raise ValueError(
-                "GEMINI_API_KEY is required for Google AI Studio file operations"
-            )
+            raise ValueError("GEMINI_API_KEY is required for Google AI Studio file operations")
 
         headers["x-goog-api-key"] = resolved_api_key
         return headers
@@ -91,9 +89,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         url = "{}/{}".format(api_base, endpoint)
         return url
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
         return []
 
     def map_openai_params(
@@ -140,11 +136,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         headers.update(extracted_data["headers"])  # Add any custom headers
 
         # Initial metadata request body
-        initial_data = {
-            "file": {
-                "display_name": extracted_data["filename"] or str(int(time.time()))
-            }
-        }
+        initial_data = {"file": {"display_name": extracted_data["filename"] or str(int(time.time()))}}
 
         # Step 2: Actual file upload data
         upload_headers = {
@@ -182,9 +174,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
             return OpenAIFileObject(
                 id=response_object["uri"],  # Gemini uses URI as identifier
-                bytes=int(
-                    response_object["sizeBytes"]
-                ),  # Gemini doesn't return file size
+                bytes=int(response_object["sizeBytes"]),  # Gemini doesn't return file size
                 created_at=int(
                     time.mktime(
                         time.strptime(
@@ -227,10 +217,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
         file_part = self._normalize_gemini_file_id(file_id)
 
-        api_base = (
-            self.get_api_base(litellm_params.get("api_base"))
-            or "https://generativelanguage.googleapis.com"
-        )
+        api_base = self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
         api_base = api_base.rstrip("/")
 
         url = f"{api_base}/v1beta/{file_part}"
@@ -262,9 +249,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if normalized_file_id.startswith("files/"):
             normalized_file_id = normalized_file_id.removeprefix("files/")
 
-        encoded_file_id = encode_url_path_segment(
-            normalized_file_id, field_name="file_id"
-        )
+        encoded_file_id = encode_url_path_segment(normalized_file_id, field_name="file_id")
 
         return f"files/{encoded_file_id}"
 
@@ -306,11 +291,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 object="file",
                 purpose="user_data",
                 status=status,
-                status_details=(
-                    str(response_json.get("error", ""))
-                    if gemini_state == "FAILED"
-                    else None
-                ),
+                status_details=(str(response_json.get("error", "")) if gemini_state == "FAILED" else None),
             )
         except Exception as e:
             verbose_logger.exception(f"Error parsing file retrieve response: {str(e)}")
@@ -390,9 +371,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file listing"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
 
     def transform_list_files_response(
         self,
@@ -400,9 +379,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> List[OpenAIFileObject]:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file listing"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
 
     def transform_file_content_request(
         self,
@@ -410,9 +387,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file content retrieval"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
 
     def transform_file_content_response(
         self,
@@ -420,6 +395,4 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
-        raise NotImplementedError(
-            "GoogleAIStudioFilesHandler does not support file content retrieval"
-        )
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")

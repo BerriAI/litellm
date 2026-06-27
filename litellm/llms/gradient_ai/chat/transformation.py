@@ -20,9 +20,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
     include_retrieval_info: Optional[bool] = None
     include_guardrails_info: Optional[bool] = None
     provide_citations: Optional[bool] = None
-    retrieval_method: Optional[
-        Literal["rewrite", "step_back", "sub_queries", "none"]
-    ] = None
+    retrieval_method: Optional[Literal["rewrite", "step_back", "sub_queries", "none"]] = None
 
     def __init__(
         self,
@@ -110,10 +108,7 @@ class GradientAIConfig(OpenAILikeChatConfig):
 
         if api_base and api_base != GRADIENT_AI_SERVERLESS_ENDPOINT:
             complete_url = f"{api_base}/api/v1/chat/completions"
-        elif (
-            gradient_ai_endpoint
-            and gradient_ai_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT
-        ):
+        elif gradient_ai_endpoint and gradient_ai_endpoint != GRADIENT_AI_SERVERLESS_ENDPOINT:
             complete_url = f"{gradient_ai_endpoint}/api/v1/chat/completions"
 
         return complete_url

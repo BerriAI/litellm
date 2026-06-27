@@ -33,9 +33,7 @@ def detect_content_type(content: str) -> str:
     sample = stripped[:5000]
     keyword_matches = len(_CODE_KEYWORDS.findall(sample))
     lines = sample.split("\n")
-    indented_lines = sum(
-        1 for line in lines if line.startswith(("    ", "\t")) and line.strip()
-    )
+    indented_lines = sum(1 for line in lines if line.startswith(("    ", "\t")) and line.strip())
 
     # If we see multiple code keywords or significant indentation, it's likely code
     if keyword_matches >= 3 or (indented_lines > len(lines) * 0.3 and len(lines) > 5):

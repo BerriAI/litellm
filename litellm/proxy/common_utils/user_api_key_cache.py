@@ -67,9 +67,7 @@ class UserApiKeyCache(DualCache):
     ) -> Union[Any, Optional[BaseModel]]:
         if model_type is None and "model_type" in kwargs:
             model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
-        cached = super().get_cache(
-            key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs
-        )
+        cached = super().get_cache(key=key, parent_otel_span=parent_otel_span, local_only=local_only, **kwargs)
         if model_type is None:
             return cached
         if cached is None:
@@ -77,8 +75,7 @@ class UserApiKeyCache(DualCache):
         decoded = CacheCodec.deserialize(cached, model_type=model_type)
         if decoded is None:
             verbose_proxy_logger.error(
-                "UserApiKeyCache.get_cache failed to deserialize cached value for "
-                "key=%r model_type=%s",
+                "UserApiKeyCache.get_cache failed to deserialize cached value for key=%r model_type=%s",
                 key,
                 getattr(model_type, "__name__", str(model_type)),
             )
@@ -125,8 +122,7 @@ class UserApiKeyCache(DualCache):
         decoded = CacheCodec.deserialize(cached, model_type=model_type)
         if decoded is None:
             verbose_proxy_logger.error(
-                "UserApiKeyCache.async_get_cache failed to deserialize cached value for "
-                "key=%r model_type=%s",
+                "UserApiKeyCache.async_get_cache failed to deserialize cached value for key=%r model_type=%s",
                 key,
                 getattr(model_type, "__name__", str(model_type)),
             )
@@ -136,16 +132,12 @@ class UserApiKeyCache(DualCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
-        return super().set_cache(
-            key=key, value=payload, local_only=local_only, **kwargs
-        )
+        return super().set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):  # type: ignore[override]
         model_type = cast(Optional[Type[BaseModel]], kwargs.pop("model_type", None))
         payload = CacheCodec.serialize(value, model_type=model_type)
-        return await super().async_set_cache(
-            key=key, value=payload, local_only=local_only, **kwargs
-        )
+        return await super().async_set_cache(key=key, value=payload, local_only=local_only, **kwargs)
 
     async def async_set_cache_pipeline(  # type: ignore[override]
         self, cache_list: list, local_only: bool = False, **kwargs
@@ -154,13 +146,8 @@ class UserApiKeyCache(DualCache):
         Batch writes with the same Codec boundary as ``async_set_cache`` without
         ``model_type``: ``BaseModel`` values become JSON-safe dicts; dicts/scalars unchanged.
         """
-        normalized = [
-            (key, CacheCodec.serialize(value, model_type=None))
-            for key, value in cache_list
-        ]
-        return await super().async_set_cache_pipeline(
-            cache_list=normalized, local_only=local_only, **kwargs
-        )
+        normalized = [(key, CacheCodec.serialize(value, model_type=None)) for key, value in cache_list]
+        return await super().async_set_cache_pipeline(cache_list=normalized, local_only=local_only, **kwargs)
 
 
 def get_management_object_ttl(cache: DualCache) -> float:

@@ -21,13 +21,9 @@ def wipe_directory(directory: str) -> None:
             os.remove(filepath)
             deleted += 1
         except OSError as e:
-            verbose_proxy_logger.warning(
-                f"Failed to delete stale prometheus file {filepath}: {e}"
-            )
+            verbose_proxy_logger.warning(f"Failed to delete stale prometheus file {filepath}: {e}")
     if deleted:
-        verbose_proxy_logger.info(
-            f"Prometheus cleanup: wiped {deleted} stale .db files from {directory}"
-        )
+        verbose_proxy_logger.info(f"Prometheus cleanup: wiped {deleted} stale .db files from {directory}")
 
 
 def mark_worker_exit(worker_pid: int) -> None:
@@ -38,10 +34,6 @@ def mark_worker_exit(worker_pid: int) -> None:
         from prometheus_client import multiprocess
 
         multiprocess.mark_process_dead(worker_pid)
-        verbose_proxy_logger.info(
-            f"Prometheus cleanup: marked worker {worker_pid} as dead"
-        )
+        verbose_proxy_logger.info(f"Prometheus cleanup: marked worker {worker_pid} as dead")
     except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Failed to mark prometheus worker {worker_pid} as dead: {e}"
-        )
+        verbose_proxy_logger.warning(f"Failed to mark prometheus worker {worker_pid} as dead: {e}")

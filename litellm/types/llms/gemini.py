@@ -103,9 +103,7 @@ class BidiGenerateContentRealtimeInput(TypedDict, total=False):
 StartOfSpeechSensitivityEnum = Literal[
     "START_SENSITIVITY_UNSPECIFIED", "START_SENSITIVITY_HIGH", "START_SENSITIVITY_LOW"
 ]
-EndOfSpeechSensitivityEnum = Literal[
-    "END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"
-]
+EndOfSpeechSensitivityEnum = Literal["END_SENSITIVITY_UNSPECIFIED", "END_SENSITIVITY_HIGH", "END_SENSITIVITY_LOW"]
 
 
 class AutomaticActivityDetection(TypedDict, total=False):

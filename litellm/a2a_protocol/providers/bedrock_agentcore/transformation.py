@@ -50,9 +50,7 @@ def _filter_reserved_headers(
     dropped: list = []
     for k, v in agent_extra_headers.items():
         k_lower = k.lower()
-        if k_lower in _RESERVED_EXACT_HEADERS or any(
-            k_lower.startswith(prefix) for prefix in _RESERVED_PREFIX_HEADERS
-        ):
+        if k_lower in _RESERVED_EXACT_HEADERS or any(k_lower.startswith(prefix) for prefix in _RESERVED_PREFIX_HEADERS):
             dropped.append(k)
             continue
         filtered[k] = v
@@ -115,11 +113,7 @@ class BedrockAgentCoreA2ATransformation:
             agentcore_model = model
 
         # Build optional_params from litellm_params (everything except model and custom_llm_provider)
-        optional_params = {
-            k: v
-            for k, v in litellm_params.items()
-            if k not in ("model", "custom_llm_provider")
-        }
+        optional_params = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
 
         agentcore_config = AmazonAgentCoreConfig()
 
@@ -200,7 +194,5 @@ class BedrockAgentCoreA2ATransformation:
                     event = json.loads(data_str)
                     yield event
                 except json.JSONDecodeError:
-                    verbose_logger.debug(
-                        f"BedrockAgentCore A2A: Skipping non-JSON SSE line: {data_str[:100]}"
-                    )
+                    verbose_logger.debug(f"BedrockAgentCore A2A: Skipping non-JSON SSE line: {data_str[:100]}")
                     continue

@@ -89,9 +89,7 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     id: str
     model: Optional[str]  # This represents the Model type from Anthropic
     role: Optional[Literal["assistant"]]
-    stop_reason: Optional[
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
-    ]
+    stop_reason: Optional[Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]]
     stop_sequence: Optional[str]
     type: Optional[Literal["message"]]
     usage: Optional[AnthropicUsage]

@@ -62,11 +62,7 @@ class QualifireGuardrail(CustomGuardrail):
             assertions: Custom assertions to validate against the output
             on_flagged: Action when content is flagged: "block" or "monitor"
         """
-        self.qualifire_api_key = (
-            api_key
-            or get_secret_str("QUALIFIRE_API_KEY")
-            or os.environ.get("QUALIFIRE_API_KEY")
-        )
+        self.qualifire_api_key = api_key or get_secret_str("QUALIFIRE_API_KEY") or os.environ.get("QUALIFIRE_API_KEY")
         self.qualifire_api_base = (
             api_base
             or get_secret_str("QUALIFIRE_BASE_URL")
@@ -88,9 +84,7 @@ class QualifireGuardrail(CustomGuardrail):
             self.prompt_injections = True
 
         # Initialize async HTTP client for direct API calls
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         super().__init__(**kwargs)
 
@@ -108,9 +102,7 @@ class QualifireGuardrail(CustomGuardrail):
             ]
         )
 
-    def _convert_messages_to_api_format(
-        self, messages: List[AllMessageValues]
-    ) -> List[Dict[str, Any]]:
+    def _convert_messages_to_api_format(self, messages: List[AllMessageValues]) -> List[Dict[str, Any]]:
         """
         Convert LiteLLM messages to Qualifire API format.
         Supports tool calls for tool_selection_quality_check.
@@ -176,9 +168,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         return api_messages
 
-    def _convert_tools_to_api_format(
-        self, tools: Optional[List[Any]]
-    ) -> Optional[List[Dict[str, Any]]]:
+    def _convert_tools_to_api_format(self, tools: Optional[List[Any]]) -> Optional[List[Dict[str, Any]]]:
         """
         Convert OpenAI-format tools to Qualifire API format.
 
@@ -422,9 +412,7 @@ class QualifireGuardrail(CustomGuardrail):
             HTTPException: If content is blocked
         """
         # Get dynamic params from request body (allows runtime overrides)
-        dynamic_params = self.get_guardrail_dynamic_request_body_params(
-            request_data=request_data
-        )
+        dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
 
         # Extract messages from structured_messages or request_data
         messages: Optional[List[AllMessageValues]] = inputs.get("structured_messages")
@@ -451,9 +439,7 @@ class QualifireGuardrail(CustomGuardrail):
             if texts:
                 messages = [{"role": "user", "content": texts[-1] if texts else ""}]  # type: ignore
             else:
-                verbose_proxy_logger.debug(
-                    "Qualifire Guardrail: No messages or texts found, skipping"
-                )
+                verbose_proxy_logger.debug("Qualifire Guardrail: No messages or texts found, skipping")
                 return inputs
 
         # Get available tools from request_data for tool_selection_quality_check

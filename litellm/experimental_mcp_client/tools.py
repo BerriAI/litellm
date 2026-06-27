@@ -90,9 +90,7 @@ async def load_mcp_tools(
     """
     tools = await session.list_tools()
     if format == "openai":
-        return [
-            transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools.tools
-        ]
+        return [transform_mcp_tool_to_openai_tool(mcp_tool=tool) for tool in tools.tools]
     return tools.tools
 
 
@@ -148,10 +146,8 @@ async def call_openai_tool(
     Returns:
         The result of the MCP tool call.
     """
-    mcp_tool_call_request_params = (
-        transform_openai_tool_call_request_to_mcp_tool_call_request(
-            openai_tool=openai_tool,
-        )
+    mcp_tool_call_request_params = transform_openai_tool_call_request_to_mcp_tool_call_request(
+        openai_tool=openai_tool,
     )
     return await call_mcp_tool(
         session=session,

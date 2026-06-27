@@ -53,9 +53,7 @@ class PipelineStep(BaseModel):
         if v is None:
             return None
         if v not in VALID_PIPELINE_ACTIONS:
-            raise ValueError(
-                f"Invalid action '{v}'. Must be one of: {sorted(VALID_PIPELINE_ACTIONS)}"
-            )
+            raise ValueError(f"Invalid action '{v}'. Must be one of: {sorted(VALID_PIPELINE_ACTIONS)}")
         return v
 
 
@@ -79,9 +77,7 @@ class GuardrailPipeline(BaseModel):
     @classmethod
     def validate_mode(cls, v: str) -> str:
         if v not in VALID_PIPELINE_MODES:
-            raise ValueError(
-                f"Invalid mode '{v}'. Must be one of: {sorted(VALID_PIPELINE_MODES)}"
-            )
+            raise ValueError(f"Invalid mode '{v}'. Must be one of: {sorted(VALID_PIPELINE_MODES)}")
         return v
 
 

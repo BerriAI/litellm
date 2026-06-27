@@ -22,9 +22,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 ServerLookup = Callable[[str], "MCPServer | None"]
-TokenEndpointPost = Callable[
-    [str, dict[str, str]], Awaitable["dict[str, object] | None"]
-]
+TokenEndpointPost = Callable[[str, dict[str, str]], Awaitable["dict[str, object] | None"]]
 
 
 class CredentialPersist(Protocol):
@@ -81,9 +79,7 @@ class AuthorizationCodeRefresher:
         self._persist = persist
         self._clock = clock
 
-    async def refresh(
-        self, user_id: str, server_id: str, token: OAuthToken
-    ) -> OAuthToken | None:
+    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None:
         if token.refresh_token is None:
             return None
         server = self._server_lookup(server_id)
@@ -104,15 +100,11 @@ class AuthorizationCodeRefresher:
             return None
 
         rotated = body.get("refresh_token")
-        new_refresh = (
-            rotated if isinstance(rotated, str) and rotated else token.refresh_token
-        )
+        new_refresh = rotated if isinstance(rotated, str) and rotated else token.refresh_token
         expires_in = _parse_expires_in(body.get("expires_in"))
         scopes = _parse_scopes(body.get("scope")) or token.scopes
 
-        await self._persist(
-            user_id, server_id, access_token, new_refresh, expires_in, scopes or None
-        )
+        await self._persist(user_id, server_id, access_token, new_refresh, expires_in, scopes or None)
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,

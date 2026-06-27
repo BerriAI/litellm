@@ -109,19 +109,13 @@ class OpenTelemetryV2(CustomLogger):
         self.config: OpenTelemetryV2Config = config or OpenTelemetryV2Config(**kwargs)
         self.callback_name = callback_name
         self._tracer_provider: TracerProvider = (
-            tracer_provider
-            if tracer_provider is not None
-            else build_tracer_provider(self.config)
+            tracer_provider if tracer_provider is not None else build_tracer_provider(self.config)
         )
         self.tracer: Tracer = get_tracer(self._tracer_provider, LITELLM_TRACER_NAME)
         self._metrics_recorder = self._init_metrics(meter_provider)
         self._metric_filter_error_logged = False
-        self._emitter = SpanEmitter(
-            self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names)
-        )
-        self._tenant_tracers = TenantTracerCache(
-            self.config, callback_name, LITELLM_TRACER_NAME
-        )
+        self._emitter = SpanEmitter(self.tracer, self.config, mappers=resolve_mappers(self.config.mapper_names))
+        self._tenant_tracers = TenantTracerCache(self.config, callback_name, LITELLM_TRACER_NAME)
         self._open_llm_calls: "OrderedDict[str, _LLMCallSpan]" = OrderedDict()
         self._init_otel_logger_on_litellm_proxy()
 
@@ -145,9 +139,7 @@ class OpenTelemetryV2(CustomLogger):
 
     def _register_in_callback_list(self, callbacks: list) -> None:
         already_otel = any(
-            cb.__class__.__module__.startswith(_OTEL_MODULES)
-            for cb in callbacks
-            if hasattr(cb, "__class__")
+            cb.__class__.__module__.startswith(_OTEL_MODULES) for cb in callbacks if hasattr(cb, "__class__")
         )
         if not already_otel:
             callbacks.append(self)
@@ -214,13 +206,9 @@ class OpenTelemetryV2(CustomLogger):
                 call.provisional_span_name,
                 parent_context=parent_context,
                 start_time_ns=start_time_ns,
-                tracer=self._tenant_tracers.tracer_for(
-                    self.tracer, call.dynamic_params
-                ),
+                tracer=self._tenant_tracers.tracer_for(self.tracer, call.dynamic_params),
             )
-        self._open_llm_calls[call_id] = _LLMCallSpan(
-            span=span, start_time_ns=start_time_ns
-        )
+        self._open_llm_calls[call_id] = _LLMCallSpan(span=span, start_time_ns=start_time_ns)
         # Evict the oldest open call if the map is over budget. A call that opens
         # but never closes (a stream that only fires stream events) would linger
         # otherwise; the evicted span is simply dropped (never exported).
@@ -272,9 +260,7 @@ class OpenTelemetryV2(CustomLogger):
         no boundary to open it at), deduped on the call id by the emitter.
         """
         raw_payload = kwargs.get("standard_logging_object")
-        if not raw_payload or not is_mcp_tool_call(
-            cast(Mapping[str, object], raw_payload)
-        ):
+        if not raw_payload or not is_mcp_tool_call(cast(Mapping[str, object], raw_payload)):
             return False
         payload = cast("StandardLoggingPayload", raw_payload)
         data = MCPToolCallSpanData.from_standard_logging_payload(
@@ -320,17 +306,13 @@ class OpenTelemetryV2(CustomLogger):
                 # it (named provisionally) so it isn't leaked as an open span.
                 carrier.span.end(end_time=to_ns(end_time))
             return None
-        data = LLMCallSpanData.from_standard_logging_payload(
-            payload, capture_content=self.config.capture_span_content
-        )
+        data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=self.config.capture_span_content)
         end_time_ns = to_ns(end_time)
         if carrier.span is not None:
             # Born at the boundary: stamp attributes from the typed payload, set
             # status, and end it. Its parent (the server span) was captured at
             # creation from real ambient context.
-            self._emitter.finish_span(
-                SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns
-            )
+            self._emitter.finish_span(SpanRole.LLM_CALL, carrier.span, data, end_time_ns=end_time_ns)
             return carrier.span
         # Deferred: ``pre_call`` saw no recordable parent, so create the span now.
         # The worker copied the request task's context, which carries the anchored
@@ -419,12 +401,7 @@ class OpenTelemetryV2(CustomLogger):
         # zero-duration root with no context, so skip it. Real background work
         # (budget/reset jobs, spend flush) passes start/end times and still emits
         # as a root; anything with a parent emits regardless.
-        if (
-            error_override is None
-            and start_time is None
-            and end_time is None
-            and parent_otel_span is None
-        ):
+        if error_override is None and start_time is None and end_time is None and parent_otel_span is None:
             return None
         if error_override is not None and data.error is None:
             data = ServiceSpanData(
@@ -570,9 +547,7 @@ def select_global_otel_v2_logger(
     """
     if registered is not None:
         return registered
-    existing = next(
-        (cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None
-    )
+    existing = next((cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2)), None)
     return existing if existing is not None else OpenTelemetryV2()
 
 

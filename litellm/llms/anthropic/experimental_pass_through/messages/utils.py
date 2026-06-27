@@ -41,9 +41,7 @@ class AnthropicMessagesRequestUtils:
             AnthropicMessagesRequestOptionalParams instance with only the valid parameters
         """
         valid_keys = _anthropic_messages_optional_param_keys()
-        filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
-        }
+        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
         if model is not None:
             from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 

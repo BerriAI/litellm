@@ -26,9 +26,7 @@ else:
 
 class BaseImageVariationConfig(BaseConfig, ABC):
     @abstractmethod
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageVariationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageVariationOptionalParams]:
         pass
 
     def get_complete_url(

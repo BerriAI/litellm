@@ -49,9 +49,7 @@ class VertexAIAi21Config(OpenAIGPTConfig):
         drop_params: bool,
     ):
         if "max_completion_tokens" in non_default_params:
-            non_default_params["max_tokens"] = non_default_params.pop(
-                "max_completion_tokens"
-            )
+            non_default_params["max_tokens"] = non_default_params.pop("max_completion_tokens")
         return litellm.OpenAIConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,

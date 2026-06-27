@@ -59,9 +59,7 @@ def partition_name(start: date) -> str:
     return f"{SPEND_LOGS_TABLE}_p{start.strftime('%Y%m%d')}"
 
 
-def upcoming_partitions(
-    today: date, interval: PartitionInterval, ahead: int
-) -> List[Tuple[str, date, date]]:
+def upcoming_partitions(today: date, interval: PartitionInterval, ahead: int) -> List[Tuple[str, date, date]]:
     """
     Specs (name, lower_inclusive, upper_exclusive) for the current period plus
     the next `ahead` periods, so writes always have a partition to land in.
@@ -93,9 +91,7 @@ def parse_partition_upper_bound(bound_expr: str) -> Optional[datetime]:
         return None
 
 
-def select_partitions_to_drop(
-    partitions: List[Tuple[str, Optional[datetime]]], cutoff: datetime
-) -> List[str]:
+def select_partitions_to_drop(partitions: List[Tuple[str, Optional[datetime]]], cutoff: datetime) -> List[str]:
     """
     Names of partitions whose entire range is older than `cutoff` (upper bound
     <= cutoff). `cutoff` and the bounds are UTC-naive. Partitions without a
@@ -112,8 +108,7 @@ class SpendLogsPartitionManager:
     ):
         if interval not in VALID_PARTITION_INTERVALS:
             verbose_proxy_logger.warning(
-                "Invalid SPEND_LOG_PARTITION_INTERVAL %r, falling back to 'day'. "
-                "Supported values: %s",
+                "Invalid SPEND_LOG_PARTITION_INTERVAL %r, falling back to 'day'. Supported values: %s",
                 interval,
                 sorted(VALID_PARTITION_INTERVALS),
             )
@@ -163,14 +158,10 @@ class SpendLogsPartitionManager:
                 )
                 ensured.append(name)
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "Failed to ensure spend-log partition %s: %s", name, e
-                )
+                verbose_proxy_logger.warning("Failed to ensure spend-log partition %s: %s", name, e)
         return ensured
 
-    async def _list_partitions(
-        self, prisma_client
-    ) -> List[Tuple[str, Optional[datetime]]]:
+    async def _list_partitions(self, prisma_client) -> List[Tuple[str, Optional[datetime]]]:
         rows = await prisma_client.db.query_raw(
             """
             SELECT c.relname AS name,
@@ -184,14 +175,9 @@ class SpendLogsPartitionManager:
             """,
             SPEND_LOGS_TABLE,
         )
-        return [
-            (row["name"], parse_partition_upper_bound(row.get("bound") or ""))
-            for row in rows
-        ]
+        return [(row["name"], parse_partition_upper_bound(row.get("bound") or "")) for row in rows]
 
-    async def drop_partitions_older_than(
-        self, prisma_client, cutoff: datetime
-    ) -> List[str]:
+    async def drop_partitions_older_than(self, prisma_client, cutoff: datetime) -> List[str]:
         """DROP every partition whose whole range is older than `cutoff`."""
         cutoff_naive = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
         partitions = await self._list_partitions(prisma_client)
@@ -202,7 +188,5 @@ class SpendLogsPartitionManager:
                 await prisma_client.db.execute_raw(f'DROP TABLE IF EXISTS "{name}"')
                 dropped.append(name)
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    "Failed to drop spend-log partition %s: %s", name, e
-                )
+                verbose_proxy_logger.warning("Failed to drop spend-log partition %s: %s", name, e)
         return dropped

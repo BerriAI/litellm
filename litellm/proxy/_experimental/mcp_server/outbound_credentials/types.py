@@ -91,24 +91,12 @@ class CredError:
         "not_implemented",
     ] = tag()
 
-    unauthorized: Unauthorized = (
-        case()
-    )  # no usable credential for this (subject, server) -> 401 challenge
-    misconfigured: str = (
-        case()
-    )  # the declared mode is missing required config -> 5xx (operator)
-    upstream_unavailable: str = (
-        case()
-    )  # the IdP / token endpoint could not be reached -> 503
-    unsupported_mode: str = (
-        case()
-    )  # a raw mode string did not parse into AuthSpecKind (boundary)
-    precondition_required: str = (
-        case()
-    )  # a required per-user value (e.g. an env var) has not been provided -> 412
-    not_implemented: str = (
-        case()
-    )  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
+    unauthorized: Unauthorized = case()  # no usable credential for this (subject, server) -> 401 challenge
+    misconfigured: str = case()  # the declared mode is missing required config -> 5xx (operator)
+    upstream_unavailable: str = case()  # the IdP / token endpoint could not be reached -> 503
+    unsupported_mode: str = case()  # a raw mode string did not parse into AuthSpecKind (boundary)
+    precondition_required: str = case()  # a required per-user value (e.g. an env var) has not been provided -> 412
+    not_implemented: str = case()  # the declared mode's resolver arm is not built yet -> 501 (not operator error)
 
     @staticmethod
     def of_unauthorized(
@@ -117,11 +105,7 @@ class CredError:
         www_authenticate: str | None = None,
         body: Mapping[str, str] | None = None,
     ) -> CredError:
-        return CredError(
-            unauthorized=Unauthorized(
-                detail=detail, www_authenticate=www_authenticate, body=body
-            )
-        )
+        return CredError(unauthorized=Unauthorized(detail=detail, www_authenticate=www_authenticate, body=body))
 
     @staticmethod
     def of_misconfigured(detail: str) -> CredError:
@@ -292,9 +276,7 @@ class Ambient(BaseModel):
     source: Literal["ambient"] = "ambient"
 
 
-AwsCredentialSource = Annotated[
-    StaticKeys | AssumeRole | Ambient, Field(discriminator="source")
-]
+AwsCredentialSource = Annotated[StaticKeys | AssumeRole | Ambient, Field(discriminator="source")]
 
 
 class AwsSigV4Config(BaseModel):

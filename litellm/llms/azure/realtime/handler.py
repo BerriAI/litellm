@@ -71,9 +71,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         if _is_ga:
             path = "/openai/v1/realtime"
             query_parts = []
-            if intent != "transcription" and (
-                query_params is None or "model" in query_params
-            ):
+            if intent != "transcription" and (query_params is None or "model" in query_params):
                 query_parts.append(urlencode({"model": model}))
         else:
             # Default to beta path for backwards compatibility
@@ -107,9 +105,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        backend_uses_beta_protocol = (
-            realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
-        )
+        backend_uses_beta_protocol = realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
         if api_version is None and backend_uses_beta_protocol:
             raise ValueError("api_version is required for Azure OpenAI calls")
 
@@ -140,9 +136,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     request_data={"litellm_metadata": litellm_metadata or {}},
                     backend_uses_beta_protocol=backend_uses_beta_protocol,
                     force_transcription_model=(
-                        model
-                        if (query_params or {}).get("intent") == "transcription"
-                        else None
+                        model if (query_params or {}).get("intent") == "transcription" else None
                     ),
                 )
                 await realtime_streaming.bidirectional_forward()
@@ -150,7 +144,5 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
             await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception:
-            verbose_proxy_logger.exception(
-                "Error in AzureOpenAIRealtime.async_realtime"
-            )
+            verbose_proxy_logger.exception("Error in AzureOpenAIRealtime.async_realtime")
             pass

@@ -27,25 +27,19 @@ class HealthCheckHelpers:
         )
 
         # this is a wildcard model, we need to pick a random model from the provider
-        cheapest_models = pick_cheapest_chat_models_from_llm_provider(
-            custom_llm_provider=custom_llm_provider, n=3
-        )
+        cheapest_models = pick_cheapest_chat_models_from_llm_provider(custom_llm_provider=custom_llm_provider, n=3)
         if len(cheapest_models) == 0:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
             )
         if len(cheapest_models) > 1:
-            fallback_models = cheapest_models[
-                1:
-            ]  # Pick the last 2 models from the shuffled list
+            fallback_models = cheapest_models[1:]  # Pick the last 2 models from the shuffled list
         else:
             fallback_models = None
         model_params["model"] = cheapest_models[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
-        model_params["max_tokens"] = model_params.get(
-            "max_tokens", 16
-        )  # GPT-5 models require max_output_tokens >= 16
+        model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16
         await acompletion(**model_params)
         return {}
 
@@ -167,12 +161,7 @@ class HealthCheckHelpers:
             "audio_speech": lambda: litellm.aspeech(
                 **{
                     **_filter_model_params(model_params=model_params),
-                    **(
-                        {"voice": "alloy"}
-                        if "voice"
-                        not in _filter_model_params(model_params=model_params)
-                        else {}
-                    ),
+                    **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params=model_params) else {}),
                 },
                 input=prompt or "test",
             ),

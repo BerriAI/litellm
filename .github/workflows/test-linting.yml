@@ -59,7 +59,7 @@ jobs:
             echo "No changed litellm Python files to check with ruff format."
             exit 0
           fi
-          xargs uv run --no-sync ruff format --check --line-length 88 --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
+          xargs uv run --no-sync ruff format --check --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
 
       - name: Debug - Check file state
         run: |

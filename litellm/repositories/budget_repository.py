@@ -19,9 +19,7 @@ class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     def model_class(self) -> Type[LiteLLM_BudgetTable]:
         return LiteLLM_BudgetTable
 
-    async def find_by_id(
-        self, budget_id: str, id_field: str = "budget_id"
-    ) -> Optional[LiteLLM_BudgetTable]:
+    async def find_by_id(self, budget_id: str, id_field: str = "budget_id") -> Optional[LiteLLM_BudgetTable]:
         return await super().find_by_id(budget_id, id_field)
 
     async def create_budget(

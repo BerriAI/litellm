@@ -42,9 +42,7 @@ class BanditCell:
         return max(0, int(self.alpha + self.beta - COLD_START_MASS))
 
 
-def initial_cell(
-    prefs: AdaptiveRouterPreferences, request_type: RequestType
-) -> BanditCell:
+def initial_cell(prefs: AdaptiveRouterPreferences, request_type: RequestType) -> BanditCell:
     """
     Cold-start prior for a (model, request_type) cell.
 
@@ -54,10 +52,7 @@ def initial_cell(
     """
     if prefs.quality_tier not in BASE_TIER_WEIGHT:
         valid = sorted(BASE_TIER_WEIGHT)
-        raise ValueError(
-            f"quality_tier={prefs.quality_tier} is not supported; "
-            f"valid tiers are {valid}"
-        )
+        raise ValueError(f"quality_tier={prefs.quality_tier} is not supported; valid tiers are {valid}")
     base = BASE_TIER_WEIGHT[prefs.quality_tier]
     bonus = STRENGTH_BONUS if request_type in prefs.strengths else 0.0
     mean = min(0.95, base + bonus)

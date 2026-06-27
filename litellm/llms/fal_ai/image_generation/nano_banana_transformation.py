@@ -40,15 +40,11 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        base_url: str = (
-            api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
-        ).rstrip("/")
+        base_url: str = (api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL).rstrip("/")
         endpoint = model if model.startswith("fal-ai/") else f"fal-ai/{model}"
         return f"{base_url}/{endpoint}"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         return ["n", "response_format", "size"]
 
     def map_openai_params(

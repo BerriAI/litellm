@@ -264,9 +264,7 @@ def llm_passthrough_route(
 
     # [TODO: Refactor to bedrockpassthroughconfig] need to encode the id of application-inference-profile for bedrock
     if custom_llm_provider == "bedrock" and "application-inference-profile" in endpoint:
-        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(
-            str(updated_url)
-        )
+        encoded_url_str = CommonUtils.encode_bedrock_runtime_modelid_arn(str(updated_url))
         updated_url = httpx.URL(encoded_url_str)
 
     # Add or update query parameters
@@ -345,9 +343,7 @@ def llm_passthrough_route(
             )
         else:
             # Sync path - client.client.send returns Response directly
-            response: httpx.Response = client.client.send(
-                request=request, stream=is_streaming_request
-            )  # type: ignore
+            response: httpx.Response = client.client.send(request=request, stream=is_streaming_request)  # type: ignore
             response.raise_for_status()
 
             if (

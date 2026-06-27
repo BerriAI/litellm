@@ -54,15 +54,9 @@ class JavelinGuardrail(CustomGuardrail):
             application: Optional[str] = None,
         """
 
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.javelin_api_key = api_key or get_secret_str("JAVELIN_API_KEY")
-        self.api_base = (
-            api_base
-            or get_secret_str("JAVELIN_API_BASE")
-            or "https://api-dev.javelin.live"
-        )
+        self.api_base = api_base or get_secret_str("JAVELIN_API_BASE") or "https://api-dev.javelin.live"
         self.api_version = api_version
         self.guardrail_name = guardrail_name
         self.javelin_guard_name = javelin_guard_name or guardrail_name
@@ -103,9 +97,7 @@ class JavelinGuardrail(CustomGuardrail):
         exception_str = ""
 
         try:
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: Calling Javelin guard API with request: %s", request
-            )
+            verbose_proxy_logger.debug("Javelin Guardrail: Calling Javelin guard API with request: %s", request)
             url = f"{self.api_base}/{self.api_version}/guardrail/{self.javelin_guard_name}/apply"
             verbose_proxy_logger.debug("Javelin Guardrail: Calling URL: %s", url)
             response = await self.async_handler.post(
@@ -113,9 +105,7 @@ class JavelinGuardrail(CustomGuardrail):
                 headers=headers,
                 json=dict(request),
             )
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: Javelin guard API response: %s", response.json()
-            )
+            verbose_proxy_logger.debug("Javelin Guardrail: Javelin guard API response: %s", response.json())
             response_data = response.json()
             # Ensure the response has the required assessments field
             if "assessments" not in response_data:
@@ -184,9 +174,7 @@ class JavelinGuardrail(CustomGuardrail):
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: not running guardrail. Guardrail is disabled."
-            )
+            verbose_proxy_logger.debug("Javelin Guardrail: not running guardrail. Guardrail is disabled.")
             return data
 
         if "messages" not in data:
@@ -198,11 +186,7 @@ class JavelinGuardrail(CustomGuardrail):
 
         clean_metadata = {}
         if self.metadata:
-            clean_metadata = {
-                k: v
-                for k, v in self.metadata.items()
-                if k != "standard_logging_guardrail_information"
-            }
+            clean_metadata = {k: v for k, v in self.metadata.items() if k != "standard_logging_guardrail_information"}
 
         javelin_guard_request = JavelinGuardRequest(
             input=JavelinGuardInput(text=text),
@@ -219,14 +203,10 @@ class JavelinGuardrail(CustomGuardrail):
         should_reject = False
 
         # Debug: Log the full Javelin response
-        verbose_proxy_logger.debug(
-            "Javelin Guardrail: Full Javelin response: %s", javelin_response
-        )
+        verbose_proxy_logger.debug("Javelin Guardrail: Full Javelin response: %s", javelin_response)
 
         for assessment in assessments:
-            verbose_proxy_logger.debug(
-                "Javelin Guardrail: Processing assessment: %s", assessment
-            )
+            verbose_proxy_logger.debug("Javelin Guardrail: Processing assessment: %s", assessment)
             for assessment_type, assessment_data in assessment.items():
                 verbose_proxy_logger.debug(
                     "Javelin Guardrail: Processing assessment_type: %s, data: %s",
@@ -278,9 +258,7 @@ class JavelinGuardrail(CustomGuardrail):
                 },
             )
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
 
         return data
 

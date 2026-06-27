@@ -135,19 +135,12 @@ class MCPOAuth2TokenCache(InMemoryCache):
 
         access_token = body.get("access_token")
         if not access_token:
-            raise ValueError(
-                f"OAuth2 token response for MCP server '{server.server_id}' "
-                f"missing 'access_token'"
-            )
+            raise ValueError(f"OAuth2 token response for MCP server '{server.server_id}' missing 'access_token'")
 
         # Safely parse expires_in — providers may return null or non-numeric values
         raw_expires_in = body.get("expires_in")
         try:
-            expires_in = (
-                int(raw_expires_in)
-                if raw_expires_in is not None
-                else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-            )
+            expires_in = int(raw_expires_in) if raw_expires_in is not None else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
         except (TypeError, ValueError):
             expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
 
@@ -289,9 +282,7 @@ async def resolve_mcp_auth(
         return mcp_auth_header
     if server.has_token_exchange_config:
         if subject_token:
-            return await token_exchange.mcp_token_exchange_handler.exchange_token(
-                subject_token, server
-            )
+            return await token_exchange.mcp_token_exchange_handler.exchange_token(subject_token, server)
         # No subject_token — fall back to client_credentials using the same client
         # credentials and token_url so M2M scenarios still work.
         if server.client_id and server.client_secret and server.token_url:

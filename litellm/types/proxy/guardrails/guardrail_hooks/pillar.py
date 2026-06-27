@@ -42,9 +42,7 @@ class PillarGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-class PillarGuardrailConfigModel(
-    GuardrailConfigModel[PillarGuardrailConfigModelOptionalParams]
-):
+class PillarGuardrailConfigModel(GuardrailConfigModel[PillarGuardrailConfigModelOptionalParams]):
     """Configuration parameters for the Pillar Security guardrail"""
 
     api_key: Optional[str] = Field(

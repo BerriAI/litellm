@@ -124,9 +124,7 @@ class BraveSearchConfig(BaseSearchConfig):
         )
 
         if not api_key:
-            raise ValueError(
-                "BRAVE_API_KEY is not set. Set `BRAVE_API_KEY` environment variable."
-            )
+            raise ValueError("BRAVE_API_KEY is not set. Set `BRAVE_API_KEY` environment variable.")
 
         headers["X-Subscription-Token"] = api_key
         headers["Accept"] = "application/json"
@@ -197,10 +195,7 @@ class BraveSearchConfig(BaseSearchConfig):
 
         # Only include "include_fetch_metadata" if it is not explicitly set to False
         # This parameter results (more often than not) in a timestamp which we can use for last_updated
-        if (
-            "include_fetch_metadata" in optional_params
-            and optional_params["include_fetch_metadata"] is False
-        ):
+        if "include_fetch_metadata" in optional_params and optional_params["include_fetch_metadata"] is False:
             request_data["include_fetch_metadata"] = False
         else:
             request_data["include_fetch_metadata"] = True
@@ -215,19 +210,14 @@ class BraveSearchConfig(BaseSearchConfig):
             # Convert to multiple "site:domain" clauses, joined by OR
             domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                request_data["q"] = self._append_domain_filters(
-                    request_data["q"], domains
-                )
+                request_data["q"] = self._append_domain_filters(request_data["q"], domains)
 
         # Convert to dict before dynamic key assignments
         result_data = dict(request_data)
 
         # Pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for URL building (Brave Search API uses GET not POST)
@@ -277,9 +267,7 @@ class BraveSearchConfig(BaseSearchConfig):
                 url = result.get("url", "")
                 snippet = result.get("description", "")
                 date = to_yyyy_mm_dd(result.get("page_age") or result.get("age"))
-                last_updated = to_yyyy_mm_dd(
-                    result.get("fetched_content_timestamp", "")
-                )
+                last_updated = to_yyyy_mm_dd(result.get("fetched_content_timestamp", ""))
 
                 search_result = SearchResult(
                     title=title,

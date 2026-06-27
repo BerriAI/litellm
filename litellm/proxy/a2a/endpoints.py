@@ -91,10 +91,7 @@ async def discover_agent_card(
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(
             status_code=403,
-            detail=(
-                "Only proxy admins can discover agent cards. "
-                f"Your role={user_api_key_dict.user_role}"
-            ),
+            detail=(f"Only proxy admins can discover agent cards. Your role={user_api_key_dict.user_role}"),
         )
 
     try:

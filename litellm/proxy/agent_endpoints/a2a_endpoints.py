@@ -66,11 +66,7 @@ def _forwarding_headers(
     agent_extra_headers: Optional[Dict[str, str]],
 ) -> Optional[Dict[str, str]]:
     sanitized = (
-        {
-            k: v
-            for k, v in agent_extra_headers.items()
-            if not k.lower().startswith("x-litellm-")
-        }
+        {k: v for k, v in agent_extra_headers.items() if not k.lower().startswith("x-litellm-")}
         if agent_extra_headers
         else None
     )
@@ -123,10 +119,7 @@ def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
     if not trace_id:
         raise HTTPException(
             status_code=400,
-            detail=(
-                f"Agent '{agent.agent_id}' requires x-litellm-trace-id header "
-                "on all inbound requests."
-            ),
+            detail=(f"Agent '{agent.agent_id}' requires x-litellm-trace-id header on all inbound requests."),
         )
 
 
@@ -188,9 +181,7 @@ async def _a2a_sse_event_source(
             try:
                 parsed = json.loads(error_body)
                 if isinstance(parsed, dict) and "error" in parsed:
-                    error_event = _normalize_a2a_jsonrpc_response(
-                        parsed, request_id=request_id
-                    )
+                    error_event = _normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
             except Exception:
                 error_event = None
             yield error_event or {
@@ -223,9 +214,7 @@ async def _forward_jsonrpc_sse(
     user_api_key_dict: Optional[Any] = None,
     request_data: Optional[dict] = None,
 ) -> StreamingResponse:
-    event_source = _a2a_sse_event_source(
-        agent_url, body, request_id=request_id, extra_headers=extra_headers
-    )
+    event_source = _a2a_sse_event_source(agent_url, body, request_id=request_id, extra_headers=extra_headers)
 
     def _serialize_chunk(chunk: Any) -> str:
         return f"data: {json.dumps(chunk)}\n\n"
@@ -246,11 +235,7 @@ async def _forward_jsonrpc_sse(
             + "\n\n"
         )
 
-    if (
-        proxy_logging_obj is not None
-        and user_api_key_dict is not None
-        and request_data is not None
-    ):
+    if proxy_logging_obj is not None and user_api_key_dict is not None and request_data is not None:
         # Route streamed events through the shared streaming generator so the
         # post-call streaming hook (and therefore agent guardrails) inspects
         # tasks/resubscribe output the same way message/stream does.
@@ -258,15 +243,13 @@ async def _forward_jsonrpc_sse(
             ProxyBaseLLMRequestProcessing,
         )
 
-        generator: AsyncGenerator[str, None] = (
-            ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
-                response=event_source,
-                user_api_key_dict=user_api_key_dict,
-                request_data=request_data,
-                proxy_logging_obj=proxy_logging_obj,
-                serialize_chunk=_serialize_chunk,
-                serialize_error=_serialize_error,
-            )
+        generator: AsyncGenerator[str, None] = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=event_source,
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            proxy_logging_obj=proxy_logging_obj,
+            serialize_chunk=_serialize_chunk,
+            serialize_error=_serialize_error,
         )
     else:
 
@@ -323,11 +306,7 @@ async def _handle_stream_message(
 
     from a2a.types import MessageSendParams, SendStreamingMessageRequest
 
-    use_proxy_hooks = (
-        user_api_key_dict is not None
-        and request_data is not None
-        and proxy_logging_obj is not None
-    )
+    use_proxy_hooks = user_api_key_dict is not None and request_data is not None and proxy_logging_obj is not None
 
     async def stream_response():
         try:
@@ -381,9 +360,7 @@ async def _handle_stream_message(
                         + "\n"
                     )
 
-                async for (
-                    line
-                ) in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                async for line in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
                     response=a2a_stream,
                     user_api_key_dict=user_api_key_dict,
                     request_data=request_data,
@@ -395,10 +372,7 @@ async def _handle_stream_message(
             else:
                 async for chunk in a2a_stream:
                     if hasattr(chunk, "model_dump"):
-                        yield (
-                            json.dumps(chunk.model_dump(mode="json", exclude_none=True))
-                            + "\n"
-                        )
+                        yield (json.dumps(chunk.model_dump(mode="json", exclude_none=True)) + "\n")
                     else:
                         yield json.dumps(chunk) + "\n"
         except Exception as e:
@@ -492,9 +466,7 @@ async def get_agent_card(
             "url": f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}",
         }
 
-        verbose_proxy_logger.debug(
-            f"Returning agent card for '{agent_id}' with proxy URL: {agent_card['url']}"
-        )
+        verbose_proxy_logger.debug(f"Returning agent card for '{agent_id}' with proxy URL: {agent_card['url']}")
         return JSONResponse(content=agent_card)
 
     except HTTPException:
@@ -552,9 +524,7 @@ async def invoke_agent_a2a(
 
         # Validate JSON-RPC format
         if body.get("jsonrpc") != "2.0":
-            return _jsonrpc_error(
-                body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'"
-            )
+            return _jsonrpc_error(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
 
         request_id: Optional[Any] = body.get("id")
         method: Optional[str] = body.get("method")
@@ -581,9 +551,7 @@ async def invoke_agent_a2a(
         # Find the agent
         agent = _get_agent(agent_id)
         if agent is None:
-            return _jsonrpc_error(
-                request_id, -32000, f"Agent '{agent_id}' not found", 404
-            )
+            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
 
         is_allowed = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
@@ -622,13 +590,9 @@ async def invoke_agent_a2a(
         # URL is required unless using completion bridge with a provider that derives endpoint from model
         # (e.g., bedrock/agentcore derives endpoint from ARN in model string)
         if not agent_url and not custom_llm_provider:
-            return _jsonrpc_error(
-                request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
-            )
+            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
 
-        verbose_proxy_logger.info(
-            f"Proxying A2A request to agent '{agent_id}' at {agent_url or 'completion-bridge'}"
-        )
+        verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url or 'completion-bridge'}")
 
         # Set up data dict for litellm processing
         if "metadata" not in body:
@@ -713,9 +677,7 @@ async def invoke_agent_a2a(
             _existing_guardrails: List = data.get("guardrails") or []
             if not isinstance(_existing_guardrails, list):
                 _existing_guardrails = [_existing_guardrails]
-            data["guardrails"] = _existing_guardrails + [
-                g for g in _agent_guardrails if g not in _existing_guardrails
-            ]
+            data["guardrails"] = _existing_guardrails + [g for g in _agent_guardrails if g not in _existing_guardrails]
 
         # Route through SDK functions
         if method == "message/send":
@@ -794,9 +756,7 @@ async def invoke_agent_a2a(
             "agent/getAuthenticatedExtendedCard",
         }:
             if not agent_url:
-                return _jsonrpc_error(
-                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
-                )
+                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
             if method == "tasks/pushNotificationConfig/set":
                 if not isinstance(params, dict):
                     raise HTTPException(
@@ -804,9 +764,7 @@ async def invoke_agent_a2a(
                         detail="params must be an object",
                     )
                 push_config = params.get("pushNotificationConfig", {})
-                if "pushNotificationConfig" in params and not isinstance(
-                    push_config, dict
-                ):
+                if "pushNotificationConfig" in params and not isinstance(push_config, dict):
                     raise HTTPException(
                         status_code=400,
                         detail="pushNotificationConfig must be an object",
@@ -831,19 +789,13 @@ async def invoke_agent_a2a(
                 request_data=data,
                 agent_extra_headers=agent_extra_headers,
             )
-            result = await _forward_jsonrpc(
-                agent_url, forward_body, extra_headers=caller_headers
-            )
+            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=caller_headers)
             if method == "agent/getAuthenticatedExtendedCard":
                 if isinstance(result.get("result"), dict) and "url" in result["result"]:
-                    result["result"]["url"] = (
-                        f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
-                    )
+                    result["result"]["url"] = f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
             from litellm.types.agents import LiteLLMSendMessageResponse
 
-            response = LiteLLMSendMessageResponse.from_dict(
-                result, request_id=request_id
-            )
+            response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
             response = await proxy_logging_obj.post_call_success_hook(
                 user_api_key_dict=user_api_key_dict,
                 data=data,
@@ -851,17 +803,13 @@ async def invoke_agent_a2a(
             )
             return JSONResponse(
                 content=(
-                    response.model_dump(mode="json", exclude_none=True)
-                    if hasattr(response, "model_dump")
-                    else response
+                    response.model_dump(mode="json", exclude_none=True) if hasattr(response, "model_dump") else response
                 )
             )
 
         elif method == "tasks/resubscribe":
             if not agent_url:
-                return _jsonrpc_error(
-                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
-                )
+                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
             forward_body = {
                 "jsonrpc": "2.0",
                 "id": request_id,

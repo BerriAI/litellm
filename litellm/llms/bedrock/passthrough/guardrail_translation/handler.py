@@ -269,9 +269,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                     payload_dict = _json.loads(payload_bytes)
                     texts = [
                         (group_key, container[key])
-                        for group_key, container, key in _collect_stream_delta_text_holders(
-                            payload_dict.get("delta")
-                        )
+                        for group_key, container, key in _collect_stream_delta_text_holders(payload_dict.get("delta"))
                     ]
                 except Exception as e:
                     verbose_proxy_logger.debug(
@@ -304,9 +302,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             "output": {
                 "message": {
                     "role": "assistant",
-                    "content": [
-                        {"text": "".join(group_texts[gk])} for gk in active_groups
-                    ],
+                    "content": [{"text": "".join(group_texts[gk])} for gk in active_groups],
                 }
             },
             "stopReason": "end_turn",
@@ -328,9 +324,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         try:
             processed_blocks = processed["output"]["message"]["content"]  # type: ignore[index]
-            de_anonymized_texts = [
-                processed_blocks[i]["text"] for i in range(len(active_groups))
-            ]
+            de_anonymized_texts = [processed_blocks[i]["text"] for i in range(len(active_groups))]
         except (KeyError, IndexError, TypeError):
             return body_bytes
 
@@ -362,9 +356,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             headers_bytes = frame_raw[12 : 12 + orig_hdrs_len]
 
             try:
-                payload_dict = _json.loads(
-                    frame_raw[12 + orig_hdrs_len : orig_total - 4]
-                )
+                payload_dict = _json.loads(frame_raw[12 + orig_hdrs_len : orig_total - 4])
                 for local_idx, (_, container, key) in enumerate(
                     _collect_stream_delta_text_holders(payload_dict.get("delta"))
                 ):
@@ -384,9 +376,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             msg_crc_val = esm_crc32(part_for_msg_crc, prelude_crc_val) & 0xFFFFFFFF
             msg_crc_b = struct.pack("!I", msg_crc_val)
 
-            result_parts.append(
-                prelude + prelude_crc_b + headers_bytes + new_payload + msg_crc_b
-            )
+            result_parts.append(prelude + prelude_crc_b + headers_bytes + new_payload + msg_crc_b)
 
         result_parts.append(trailing_bytes)
         return b"".join(result_parts)
@@ -458,13 +448,9 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return response
 
         output_message = (
-            response.get("output", {}).get("message", {})
-            if isinstance(response.get("output"), dict)
-            else {}
+            response.get("output", {}).get("message", {}) if isinstance(response.get("output"), dict) else {}
         )
-        content_blocks = (
-            output_message.get("content") if isinstance(output_message, dict) else None
-        )
+        content_blocks = output_message.get("content") if isinstance(output_message, dict) else None
 
         if not isinstance(content_blocks, list):
             return response
@@ -475,13 +461,8 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return response
 
         effective_request_data = request_data or {}
-        if (
-            "litellm_metadata" not in effective_request_data
-            and user_api_key_dict is not None
-        ):
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
+        if "litellm_metadata" not in effective_request_data and user_api_key_dict is not None:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 effective_request_data = {
                     **effective_request_data,

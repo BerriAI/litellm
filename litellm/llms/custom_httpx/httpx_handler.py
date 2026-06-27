@@ -39,9 +39,7 @@ class HTTPHandler:
         # Close the client when you're done with it
         await self.client.aclose()
 
-    async def get(
-        self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None
-    ):
+    async def get(self, url: str, params: Optional[dict] = None, headers: Optional[dict] = None):
         response = await self.client.get(url, params=params, headers=headers)
         return response
 

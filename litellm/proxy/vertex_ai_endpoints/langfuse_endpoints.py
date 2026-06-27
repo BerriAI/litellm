@@ -52,9 +52,7 @@ def _decode_to_convergence(value: str) -> str:
 
 
 def _normalize_langfuse_base_url(base_target_url: str) -> str:
-    if not (
-        base_target_url.startswith("http://") or base_target_url.startswith("https://")
-    ):
+    if not (base_target_url.startswith("http://") or base_target_url.startswith("https://")):
         # Existing behavior allows host-only Langfuse settings.
         base_target_url = "http://" + base_target_url
 
@@ -113,17 +111,13 @@ def _get_langfuse_proxy_credentials(
         if not dynamic_langfuse_public_key or not dynamic_langfuse_secret_key:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "Dynamic Langfuse hosts must include dynamic Langfuse credentials"
-                },
+                detail={"error": "Dynamic Langfuse hosts must include dynamic Langfuse credentials"},
             )
         return dynamic_langfuse_public_key, dynamic_langfuse_secret_key
 
     return (
-        dynamic_langfuse_public_key
-        or litellm.utils.get_secret(secret_name="LANGFUSE_PUBLIC_KEY"),
-        dynamic_langfuse_secret_key
-        or litellm.utils.get_secret(secret_name="LANGFUSE_SECRET_KEY"),
+        dynamic_langfuse_public_key or litellm.utils.get_secret(secret_name="LANGFUSE_PUBLIC_KEY"),
+        dynamic_langfuse_secret_key or litellm.utils.get_secret(secret_name="LANGFUSE_SECRET_KEY"),
     )
 
 
@@ -179,23 +173,16 @@ async def langfuse_proxy_route(
     decoded_str = decoded_bytes.decode("utf-8")
     api_key = decoded_str.split(":")[1]  # assume api key is passed in as secret key
 
-    user_api_key_dict = await user_api_key_auth(
-        request=request, api_key="Bearer {}".format(api_key)
-    )
+    user_api_key_dict = await user_api_key_auth(request=request, api_key="Bearer {}".format(api_key))
 
-    callback_settings_obj: Optional[TeamCallbackMetadata] = (
-        _get_dynamic_logging_metadata(
-            user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
-        )
+    callback_settings_obj: Optional[TeamCallbackMetadata] = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )
 
     dynamic_langfuse_public_key: Optional[str] = None
     dynamic_langfuse_secret_key: Optional[str] = None
     dynamic_langfuse_host: Optional[str] = None
-    if (
-        callback_settings_obj is not None
-        and callback_settings_obj.callback_vars is not None
-    ):
+    if callback_settings_obj is not None and callback_settings_obj.callback_vars is not None:
         for k, v in callback_settings_obj.callback_vars.items():
             if k == "langfuse_public_key":
                 dynamic_langfuse_public_key = v
@@ -206,9 +193,7 @@ async def langfuse_proxy_route(
 
     dynamic_host_supplied = dynamic_langfuse_host is not None
     base_target_url: str = (
-        dynamic_langfuse_host
-        or os.getenv("LANGFUSE_HOST", _DEFAULT_LANGFUSE_HOST)
-        or _DEFAULT_LANGFUSE_HOST
+        dynamic_langfuse_host or os.getenv("LANGFUSE_HOST", _DEFAULT_LANGFUSE_HOST) or _DEFAULT_LANGFUSE_HOST
     )
     langfuse_public_key, langfuse_secret_key = _get_langfuse_proxy_credentials(
         dynamic_host_supplied=dynamic_host_supplied,
@@ -221,9 +206,9 @@ async def langfuse_proxy_route(
         dynamic_host_supplied=dynamic_host_supplied,
     )
 
-    langfuse_combined_key = "Basic " + b64encode(
-        f"{langfuse_public_key}:{langfuse_secret_key}".encode("utf-8")
-    ).decode("ascii")
+    langfuse_combined_key = "Basic " + b64encode(f"{langfuse_public_key}:{langfuse_secret_key}".encode("utf-8")).decode(
+        "ascii"
+    )
     target_headers["Authorization"] = langfuse_combined_key
 
     ## CREATE PASS-THROUGH

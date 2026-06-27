@@ -20,9 +20,7 @@ _OPENAI_REGIONAL_HOSTS: Dict[str, str] = {
 }
 
 
-def infer_openai_data_residency(
-    custom_llm_provider: Optional[str], api_base: Optional[str]
-) -> Optional[str]:
+def infer_openai_data_residency(custom_llm_provider: Optional[str], api_base: Optional[str]) -> Optional[str]:
     """
     Derive the OpenAI data-residency region from an api_base URL.
 

@@ -63,15 +63,9 @@ class MCPUpstreamAuthError(Exception):
         if challenge is None and self.status_code == 401 and base_url:
             prefix = base_url.rstrip("/")
             if request_path and request_path.startswith(f"/{self.server_name}/mcp"):
-                resource_metadata_url = (
-                    f"{prefix}/.well-known/oauth-protected-resource/"
-                    f"{self.server_name}/mcp"
-                )
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/{self.server_name}/mcp"
             else:
-                resource_metadata_url = (
-                    f"{prefix}/.well-known/oauth-protected-resource/"
-                    f"mcp/{self.server_name}"
-                )
+                resource_metadata_url = f"{prefix}/.well-known/oauth-protected-resource/mcp/{self.server_name}"
             challenge = f'Bearer resource_metadata="{resource_metadata_url}"'
         detail = "Forbidden" if self.status_code == 403 else "Unauthorized"
         return HTTPException(

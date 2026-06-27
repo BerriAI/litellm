@@ -74,9 +74,7 @@ async def _persist_credential(
     )
 
 
-async def _post_token_endpoint(
-    url: str, form: dict[str, str]
-) -> dict[str, object] | None:
+async def _post_token_endpoint(url: str, form: dict[str, str]) -> dict[str, object] | None:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
@@ -102,9 +100,7 @@ async def _post_token_endpoint(
 def build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> CachedOAuthTokenStore:
-    refresher = AuthorizationCodeRefresher(
-        server_lookup, _post_token_endpoint, _persist_credential
-    )
+    refresher = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
     # Cache and refresh coordinator use the foundation's in-process defaults (a single replica needs
     # no shared cache or lock); the cross-replica path is layered on separately.
     refreshing = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher)

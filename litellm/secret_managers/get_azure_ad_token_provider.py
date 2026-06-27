@@ -61,21 +61,14 @@ def get_azure_ad_token_provider(
     )
 
     if azure_scope is None:
-        azure_scope = (
-            os.environ.get("AZURE_SCOPE")
-            or "https://cognitiveservices.azure.com/.default"
-        )
+        azure_scope = os.environ.get("AZURE_SCOPE") or "https://cognitiveservices.azure.com/.default"
 
     cred: str = (
         azure_credential.value
         if azure_credential
-        else None
-        or os.environ.get("AZURE_CREDENTIAL")
-        or infer_credential_type_from_environment()
+        else None or os.environ.get("AZURE_CREDENTIAL") or infer_credential_type_from_environment()
     )
-    verbose_logger.info(
-        f"For Azure AD Token Provider, choosing credential type: {cred}"
-    )
+    verbose_logger.info(f"For Azure AD Token Provider, choosing credential type: {cred}")
     credential: Optional[
         Union[
             ClientSecretCredential,

@@ -70,9 +70,7 @@ class RoleMappings(LiteLLMPydanticObjectBase):
     which role to assign the user based on the roles mapping.
     """
 
-    provider: str = Field(
-        description="SSO Provider name (e.g., 'google', 'microsoft', 'generic')"
-    )
+    provider: str = Field(description="SSO Provider name (e.g., 'google', 'microsoft', 'generic')")
     group_claim: str = Field(
         description="The field name in the SSO token that contains the groups array (e.g., 'groups', 'roles')"
     )

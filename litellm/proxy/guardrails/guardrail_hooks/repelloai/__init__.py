@@ -22,9 +22,7 @@ def _event_hook_from_mode(
     return GuardrailEventHooks(mode)
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> RepelloAIGuardrail:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> RepelloAIGuardrail:
     import litellm
 
     _repelloai_callback = RepelloAIGuardrail(

@@ -86,9 +86,7 @@ class BaseInteractionsAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate and prepare environment settings including headers.
         """

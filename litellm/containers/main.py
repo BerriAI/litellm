@@ -211,31 +211,23 @@ def create_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(
-                f"container operations are not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"container operations are not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
         # Get ContainerCreateOptionalRequestParams with only valid parameters
         container_create_optional_params: ContainerCreateOptionalRequestParams = (
-            ContainerRequestUtils.get_requested_container_create_optional_param(
-                local_vars
-            )
+            ContainerRequestUtils.get_requested_container_create_optional_param(local_vars)
         )
 
         # Get optional parameters for the container API
-        container_create_request_params: Dict = (
-            ContainerRequestUtils.get_optional_params_container_create(
-                container_provider_config=container_provider_config,
-                container_create_optional_params=container_create_optional_params,
-            )
+        container_create_request_params: Dict = ContainerRequestUtils.get_optional_params_container_create(
+            container_provider_config=container_provider_config,
+            container_create_optional_params=container_create_optional_params,
         )
 
         # Pre Call logging
@@ -440,22 +432,16 @@ def list_containers(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(
-                f"Container provider config not found for provider: {custom_llm_provider}"
-            )
+            raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
 
         # Get container list request parameters
         container_list_optional_params: ContainerListOptionalRequestParams = (
-            ContainerRequestUtils.get_requested_container_list_optional_param(
-                local_vars
-            )
+            ContainerRequestUtils.get_requested_container_list_optional_param(local_vars)
         )
 
         # Pre Call logging
@@ -641,27 +627,21 @@ def retrieve_container(
         )
 
         # Decode container ID and extract provider info
-        original_container_id, resolved_custom_llm_provider, litellm_params = (
-            decode_managed_container_id_for_request(
-                container_id=container_id,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=litellm_params,
-            )
+        original_container_id, resolved_custom_llm_provider, litellm_params = decode_managed_container_id_for_request(
+            container_id=container_id,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
         )
         # True when input was a LiteLLM-managed ID (any length); needed to re-encode output for routing affinity
         was_encoded = original_container_id != container_id
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(resolved_custom_llm_provider),
-            )
+        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(
-                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
-            )
+            raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
@@ -865,27 +845,21 @@ def delete_container(
         )
 
         # Decode container ID and extract provider info
-        original_container_id, resolved_custom_llm_provider, litellm_params = (
-            decode_managed_container_id_for_request(
-                container_id=container_id,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=litellm_params,
-            )
+        original_container_id, resolved_custom_llm_provider, litellm_params = decode_managed_container_id_for_request(
+            container_id=container_id,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
         )
         # True when input was a LiteLLM-managed ID (any length); needed to re-encode output for routing affinity
         was_encoded = original_container_id != container_id
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(resolved_custom_llm_provider),
-            )
+        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(
-                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
-            )
+            raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
@@ -1103,25 +1077,19 @@ def list_container_files(
         )
 
         # Decode container ID and extract provider info
-        original_container_id, resolved_custom_llm_provider, litellm_params = (
-            decode_managed_container_id_for_request(
-                container_id=container_id,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=litellm_params,
-            )
+        original_container_id, resolved_custom_llm_provider, litellm_params = decode_managed_container_id_for_request(
+            container_id=container_id,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
         )
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(resolved_custom_llm_provider),
-            )
+        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(
-                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
-            )
+            raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
@@ -1363,25 +1331,19 @@ def upload_container_file(
         )
 
         # Decode container ID and extract provider info
-        original_container_id, resolved_custom_llm_provider, litellm_params = (
-            decode_managed_container_id_for_request(
-                container_id=container_id,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=litellm_params,
-            )
+        original_container_id, resolved_custom_llm_provider, litellm_params = decode_managed_container_id_for_request(
+            container_id=container_id,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
         )
 
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(resolved_custom_llm_provider),
-            )
+        container_provider_config: Optional[BaseContainerConfig] = ProviderConfigManager.get_provider_container_config(
+            provider=litellm.LlmProviders(resolved_custom_llm_provider),
         )
 
         if container_provider_config is None:
-            raise ValueError(
-                f"Container provider config not found for provider: {resolved_custom_llm_provider}"
-            )
+            raise ValueError(f"Container provider config not found for provider: {resolved_custom_llm_provider}")
 
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(

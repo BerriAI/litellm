@@ -26,9 +26,7 @@ def extract_key(message: dict, fallback_index: int, used_keys: Set[str]) -> str:
     """
     content = message.get("content", "")
     if isinstance(content, list):
-        content = " ".join(
-            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
-        )
+        content = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
 
     key = None
     for pattern in _FILE_PATH_PATTERNS:
@@ -62,9 +60,7 @@ def stub_message(message: dict, key: str) -> dict:
     """
     content = message.get("content", "")
     if isinstance(content, list):
-        content = " ".join(
-            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
-        )
+        content = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
 
     line_count = content.count("\n") + 1
     content_type = detect_content_type(content)
@@ -91,9 +87,7 @@ def truncate_message(message: dict, max_tokens: int) -> dict:
     """
     content = message.get("content", "")
     if isinstance(content, list):
-        content = " ".join(
-            p.get("text", "") if isinstance(p, dict) else str(p) for p in content
-        )
+        content = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
 
     # Rough conversion: 1 token ≈ 3 characters
     target_chars = max(100, max_tokens * 3)
@@ -113,8 +107,6 @@ def truncate_message(message: dict, max_tokens: int) -> dict:
     first_count = (target_lines * 7) // 10
     last_count = target_lines - first_count
     truncated = (
-        "\n".join(lines[:first_count])
-        + "\n...[truncated for context window]...\n"
-        + "\n".join(lines[-last_count:])
+        "\n".join(lines[:first_count]) + "\n...[truncated for context window]...\n" + "\n".join(lines[-last_count:])
     )
     return {**message, "content": truncated}

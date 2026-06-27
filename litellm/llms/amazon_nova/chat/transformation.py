@@ -52,19 +52,10 @@ class AmazonNovaChatConfig(OpenAILikeChatConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         # Amazon Nova is openai compatible, we just need to set this to custom_openai and have the api_base be Nova's endpoint
-        api_base = (
-            api_base
-            or get_secret_str("AMAZON_NOVA_API_BASE")
-            or "https://api.nova.amazon.com/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("AMAZON_NOVA_API_BASE") or "https://api.nova.amazon.com/v1"  # type: ignore
 
         # Get API key from multiple sources
-        key = (
-            api_key
-            or litellm.amazon_nova_api_key
-            or get_secret_str("AMAZON_NOVA_API_KEY")
-            or litellm.api_key
-        )
+        key = api_key or litellm.amazon_nova_api_key or get_secret_str("AMAZON_NOVA_API_KEY") or litellm.api_key
         return api_base, key
 
     def get_supported_openai_params(self, model: str) -> List:
