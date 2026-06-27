@@ -49,14 +49,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
-        # Handle thinking parameter - only accept {"type": "enabled"}
+        # DeepSeek only accepts the `type` key, ignore budget_tokens
         if thinking_value is not None:
-            if (
-                isinstance(thinking_value, dict)
-                and thinking_value.get("type") == "enabled"
+            if isinstance(thinking_value, dict) and thinking_value.get("type") in (
+                "enabled",
+                "disabled",
             ):
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
-                optional_params["thinking"] = {"type": "enabled"}
+                optional_params["thinking"] = {"type": thinking_value["type"]}
 
         # Handle reasoning_effort - map to thinking enabled
         elif reasoning_effort is not None and reasoning_effort != "none":
@@ -137,14 +136,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
         """
-        Returns True only when thinking mode is actually active for this request:
-          - model supports reasoning (capability check)
-          - user explicitly passed thinking={"type": "enabled"} (opt-in check)
+        DeepSeek V4 enables thinking by default, so any reasoning-capable model
+        counts unless thinking is explicitly disabled. The API ignores
+        `reasoning_content` in non-thinking requests, so over-injecting is safe.
         """
-        return (
-            supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and (optional_params.get("thinking") or {}).get("type") == "enabled"
-        )
+        if (optional_params.get("thinking") or {}).get("type") == "disabled":
+            return False
+        return supports_reasoning(model=model, custom_llm_provider="deepseek")
 
     @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:
@@ -235,13 +233,8 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         headers: dict,
     ) -> dict:
         """
-        Ensures `reasoning_content` is forwarded on assistant messages for
-        multi-turn thinking-mode conversations (issue #28045).
-
-        Only runs when thinking mode is actually active - guarded by both
-        supports_reasoning() (model capability) and optional_params["thinking"]
-        (user explicitly enabled it), preventing spurious injection on models
-        like deepseek-v3.2 that support thinking as opt-in but not always-on.
+        Forwards `reasoning_content` on assistant messages for multi-turn
+        thinking-mode conversations.
         """
         optional_params = self._drop_unsupported_tools(optional_params)
         if self._thinking_mode_active(model=model, optional_params=optional_params):
