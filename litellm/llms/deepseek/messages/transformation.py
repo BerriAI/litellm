@@ -115,7 +115,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
                 sanitized_tools.append(tool)
         return sanitized_tools
 
-    def _fill_reasoning_content(self, messages: List[Dict]) -> List[Dict]:
+    def _fill_reasoning_content(self, messages: list[dict]) -> list[dict]:
         """
         DeepSeek thinking mode requires `reasoning_content` to be passed back on
         every assistant message in multi-turn conversations. If it is missing,
@@ -132,7 +132,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
              present (LiteLLM stores provider-specific response fields there).
           2. Otherwise inject a single space — the minimum value the API accepts.
         """
-        result: List[Dict] = []
+        result: list[dict] = []
         for msg in messages:
             if (
                 isinstance(msg, dict)
