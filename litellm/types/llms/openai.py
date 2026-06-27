@@ -1467,16 +1467,19 @@ class ResponsesAPIStreamEvents(str, Enum):
 class ResponseCreatedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_CREATED]
     response: ResponsesAPIResponse
+    sequence_number: int = 0
 
 
 class ResponseInProgressEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS]
     response: ResponsesAPIResponse
+    sequence_number: int = 0
 
 
 class ResponseCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     response: ResponsesAPIResponse
+    sequence_number: int = 0
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
 
@@ -1503,6 +1506,7 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
     summary_index: int = 0
     delta: str
+    sequence_number: int = 0
 
 
 class ReasoningSummaryTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1527,12 +1531,13 @@ class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
     output_index: int
     item: Optional[BaseLiteLLMOpenAIResponseObject]
+    sequence_number: int = 0
 
 
 class OutputItemDoneEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE]
     output_index: int
-    sequence_number: int = 1
+    sequence_number: int = 0
     item: BaseLiteLLMOpenAIResponseObject
 
 
@@ -1555,6 +1560,7 @@ class ContentPartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
     content_index: int
     part: BaseLiteLLMOpenAIResponseObject
+    sequence_number: int = 0
 
 
 class ContentPartDonePartOutputText(BaseLiteLLMOpenAIResponseObject):
@@ -1587,6 +1593,7 @@ class ContentPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
     content_index: int
     part: PART_UNION_TYPES
+    sequence_number: int = 0
 
 
 class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1595,6 +1602,7 @@ class OutputTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
     content_index: int
     delta: str
+    sequence_number: int = 0
 
 
 class OutputTextAnnotationAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1604,6 +1612,7 @@ class OutputTextAnnotationAddedEvent(BaseLiteLLMOpenAIResponseObject):
     content_index: int
     annotation_index: int
     annotation: dict
+    sequence_number: int = 0
 
 
 class OutputTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1612,6 +1621,7 @@ class OutputTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
     output_index: int
     content_index: int
     text: str
+    sequence_number: int = 0
 
 
 class RefusalDeltaEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1635,6 +1645,7 @@ class FunctionCallArgumentsDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     delta: str
+    sequence_number: int = 0
 
 
 class FunctionCallArgumentsDoneEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1642,6 +1653,7 @@ class FunctionCallArgumentsDoneEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     arguments: str
+    sequence_number: int = 0
 
 
 class FileSearchCallInProgressEvent(BaseLiteLLMOpenAIResponseObject):

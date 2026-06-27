@@ -187,11 +187,15 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     # Process the chunk once - it queues all events internally
     evt = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
 
-    # First event should be OUTPUT_ITEM_ADDED
+    # First event should be OUTPUT_ITEM_ADDED, carrying a serialized sequence_number.
+    # `sequence_number` is passed through the constructor so it lands in
+    # __pydantic_extra__ (BaseLiteLLMOpenAIResponseObject allows extras); a raw
+    # __dict__ assignment would be silently dropped by model_dump(). We assert on
+    # the dump because that is what hits the wire as SSE.
     assert evt is not None
     assert evt.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
     assert evt.output_index == 1
-    assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+    assert "sequence_number" in evt.model_dump()
 
     # Collect all remaining delta events from the pending queue by creating empty chunks
     delta_events = []
@@ -220,19 +224,21 @@ def test_tool_call_arguments_are_chunked_to_match_openai_behavior():
     # Verify multiple delta events were created (at least 6 chunks for 67 chars)
     assert len(delta_events) >= 6  # 67 chars split into chunks of max 10 chars each
 
-    # Verify each delta is at most 10 characters
+    # Verify each delta is at most 10 characters and carries a serializable
+    # sequence_number (the value lives in __pydantic_extra__, not __dict__).
     for evt in delta_events:
         assert len(evt.delta) <= 10
         assert evt.item_id == "call_test"
         assert evt.output_index == 1
-        assert hasattr(evt, "__dict__") and "sequence_number" in evt.__dict__
+        assert "sequence_number" in evt.model_dump()
 
     # Verify all deltas concatenated equal the original arguments
     concatenated = "".join(evt.delta for evt in delta_events)
     assert concatenated == large_arguments
 
-    # Verify sequence numbers are increasing
-    sequence_numbers = [evt.__dict__["sequence_number"] for evt in delta_events]
+    # Verify sequence numbers are increasing and unique (read from the dumped
+    # payload, which is what actually hits the wire).
+    sequence_numbers = [evt.model_dump()["sequence_number"] for evt in delta_events]
     assert sequence_numbers == sorted(sequence_numbers)
     assert len(set(sequence_numbers)) == len(sequence_numbers)  # All unique
 
@@ -397,3 +403,40 @@ def test_reused_index_with_new_call_id_marks_fallback_ambiguous():
     assert arguments_by_call_id["call_b"] == '{"b":'
     assert arguments_by_call_id["call_a"] != '{"a":1}'
     assert arguments_by_call_id["call_b"] != '{"b":1}'
+
+
+def test_streaming_events_serialize_sequence_number_for_strict_clients():
+    """Pin the Grok Build CLI / OpenAI SDK contract: every emitted streaming
+    event must carry `sequence_number` in its on-wire JSON payload.
+
+    Earlier code set `event.__dict__["sequence_number"] = N` after construction,
+    which silently dropped the field during Pydantic's `model_dump()` and broke
+    strict deserializers. The fix routes the value through the constructor so it
+    lands in `__pydantic_extra__` and survives serialization.
+    """
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="test-model",
+        litellm_custom_stream_wrapper=AsyncMock(),
+        request_input="hi",
+        responses_api_request={},
+    )
+
+    created = iterator.create_response_created_event()
+    in_progress = iterator.create_response_in_progress_event()
+    item_added = iterator.create_output_item_added_event()
+    part_added = iterator.create_content_part_added_event()
+
+    for evt in (created, in_progress, item_added, part_added):
+        dumped = evt.model_dump()
+        assert (
+            "sequence_number" in dumped
+        ), f"{type(evt).__name__} dropped sequence_number"
+        assert isinstance(dumped["sequence_number"], int)
+
+    # And the values must be monotonic — strict clients enforce ordering.
+    seqs = [
+        evt.model_dump()["sequence_number"]
+        for evt in (created, in_progress, item_added, part_added)
+    ]
+    assert seqs == sorted(seqs), seqs
+    assert len(set(seqs)) == len(seqs), seqs

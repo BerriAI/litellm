@@ -1718,7 +1718,10 @@ class LiteLLMCompletionResponsesConfig:
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),
-            text={},
+            # OpenAI Responses spec requires `text.format` to be present. Honor the
+            # request's `text` config when supplied; otherwise default to plain text.
+            # Strict deserializers (Grok Build CLI, OpenAI SDK) reject `text: {}`.
+            text=responses_api_request.get("text") or {"format": {"type": "text"}},
             truncation=getattr(chat_completion_response, "truncation", None),
             usage=LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                 chat_completion_response=chat_completion_response
@@ -2105,6 +2108,8 @@ class LiteLLMCompletionResponsesConfig:
                 input_tokens=0,
                 output_tokens=0,
                 total_tokens=0,
+                input_tokens_details=InputTokensDetails(cached_tokens=0),
+                output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
             )
 
         response_usage = ResponseAPIUsage(
@@ -2117,21 +2122,18 @@ class LiteLLMCompletionResponsesConfig:
         if hasattr(usage, "cost") and usage.cost is not None:
             setattr(response_usage, "cost", usage.cost)
 
-        # Translate prompt_tokens_details to input_tokens_details
-        if (
-            hasattr(usage, "prompt_tokens_details")
-            and usage.prompt_tokens_details is not None
-        ):
-            prompt_details = usage.prompt_tokens_details
-            input_details_dict: Dict[str, int] = {}
-
+        # Translate prompt_tokens_details -> input_tokens_details.
+        # OpenAI's Responses spec requires this field to always be present on
+        # response.completed.usage, so we emit it with defaults if upstream
+        # omitted prompt_tokens_details entirely.
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        input_details_dict: Dict[str, int] = {"cached_tokens": 0}
+        if prompt_details is not None:
             if (
                 hasattr(prompt_details, "cached_tokens")
                 and prompt_details.cached_tokens is not None
             ):
                 input_details_dict["cached_tokens"] = prompt_details.cached_tokens
-            else:
-                input_details_dict["cached_tokens"] = 0
 
             if (
                 hasattr(prompt_details, "text_tokens")
@@ -2145,18 +2147,14 @@ class LiteLLMCompletionResponsesConfig:
             ):
                 input_details_dict["audio_tokens"] = prompt_details.audio_tokens
 
-            if input_details_dict:
-                response_usage.input_tokens_details = InputTokensDetails(
-                    **input_details_dict
-                )
+        response_usage.input_tokens_details = InputTokensDetails(**input_details_dict)
 
-        # Translate completion_tokens_details to output_tokens_details
-        if (
-            hasattr(usage, "completion_tokens_details")
-            and usage.completion_tokens_details is not None
-        ):
-            completion_details = usage.completion_tokens_details
-            output_details_dict: Dict[str, int] = {}
+        # Translate completion_tokens_details -> output_tokens_details. Same
+        # always-present requirement; strict deserializers (Grok Build CLI, the
+        # OpenAI SDK) reject a usage object without it.
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        output_details_dict: Dict[str, int] = {"reasoning_tokens": 0}
+        if completion_details is not None:
             if (
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
@@ -2164,8 +2162,6 @@ class LiteLLMCompletionResponsesConfig:
                 output_details_dict["reasoning_tokens"] = (
                     completion_details.reasoning_tokens
                 )
-            else:
-                output_details_dict["reasoning_tokens"] = 0
 
             if (
                 hasattr(completion_details, "text_tokens")
@@ -2179,10 +2175,9 @@ class LiteLLMCompletionResponsesConfig:
             ):
                 output_details_dict["image_tokens"] = completion_details.image_tokens
 
-            if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(
-                    **output_details_dict
-                )
+        response_usage.output_tokens_details = OutputTokensDetails(
+            **output_details_dict
+        )
 
         return response_usage
 

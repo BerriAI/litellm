@@ -1623,7 +1623,13 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details.text_tokens == 9
 
     def test_transform_usage_without_details(self):
-        """Test transformation when prompt_tokens_details and completion_tokens_details are None"""
+        """Test transformation when prompt_tokens_details and completion_tokens_details are None.
+
+        Per the OpenAI Responses spec, `input_tokens_details` and
+        `output_tokens_details` must always be present on the response.completed
+        usage object; strict deserializers (Grok Build CLI, OpenAI SDK) reject
+        the event when either is missing. We emit them with zero defaults.
+        """
         # Setup: Usage without details (basic usage only)
         usage = Usage(
             prompt_tokens=9,
@@ -1651,12 +1657,14 @@ class TestUsageTransformation:
             chat_completion_response=chat_completion_response
         )
 
-        # Assert: Basic usage should still be transformed, but details should be None
+        # Assert: basic counts transformed, and details always present with zero defaults
         assert response_usage.input_tokens == 9
         assert response_usage.output_tokens == 27
         assert response_usage.total_tokens == 36
-        assert response_usage.input_tokens_details is None
-        assert response_usage.output_tokens_details is None
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 0
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 0
 
     def test_transform_usage_with_image_tokens(self):
         """Test that image_tokens from Vertex AI/Gemini are properly transformed to output_tokens_details"""
