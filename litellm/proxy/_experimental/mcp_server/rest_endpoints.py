@@ -834,12 +834,24 @@ if MCP_AVAILABLE:
                         },
                     )
                 rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
+                (
+                    virtual_mcp_auth_header,
+                    virtual_mcp_server_auth_headers,
+                    virtual_raw_headers,
+                ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
+                virtual_oauth2_headers = (
+                    MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
+                )
                 if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
                     return await handle_mcp_tool_search(
                         query=tool_arguments.get("query", ""),
                         top_k=int(tool_arguments.get("top_k", 5)),
                         user_api_key_dict=user_api_key_dict,
                         client_ip=rest_client_ip,
+                        mcp_auth_header=virtual_mcp_auth_header,
+                        mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+                        oauth2_headers=virtual_oauth2_headers,
+                        raw_headers=virtual_raw_headers,
                     )
                 else:  # MCP_TOOL_CALL_TOOL_NAME
                     return await handle_mcp_tool_call(
@@ -847,6 +859,10 @@ if MCP_AVAILABLE:
                         arguments=tool_arguments.get("arguments") or {},
                         user_api_key_dict=user_api_key_dict,
                         client_ip=rest_client_ip,
+                        mcp_auth_header=virtual_mcp_auth_header,
+                        mcp_server_auth_headers=virtual_mcp_server_auth_headers,
+                        oauth2_headers=virtual_oauth2_headers,
+                        raw_headers=virtual_raw_headers,
                     )
 
             # Validate required parameters early

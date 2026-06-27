@@ -77,12 +77,20 @@ async def handle_mcp_tool_search(
     top_k: int,
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: Optional[str] = None,
+    mcp_auth_header: Optional[str] = None,
+    mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
+    oauth2_headers: Optional[dict[str, str]] = None,
+    raw_headers: Optional[dict[str, str]] = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
     mcp_tools = await _list_mcp_tools(
         user_api_key_auth=user_api_key_dict,
         client_ip=client_ip,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
     )
     tools = [
         {
@@ -103,6 +111,10 @@ async def handle_mcp_tool_call(
     arguments: dict[str, Any],
     user_api_key_dict: UserAPIKeyAuth,
     client_ip: Optional[str] = None,
+    mcp_auth_header: Optional[str] = None,
+    mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
+    oauth2_headers: Optional[dict[str, str]] = None,
+    raw_headers: Optional[dict[str, str]] = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.server import (
         _get_allowed_mcp_servers,
@@ -121,4 +133,8 @@ async def handle_mcp_tool_call(
         allowed_mcp_servers=allowed_mcp_servers,
         start_time=datetime.now(),
         user_api_key_auth=user_api_key_dict,
+        mcp_auth_header=mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
     )

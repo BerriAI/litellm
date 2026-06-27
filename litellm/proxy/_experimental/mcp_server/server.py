@@ -703,6 +703,10 @@ if MCP_AVAILABLE:
         arguments: Optional[dict[str, Any]],
         user_api_key_auth: Optional[UserAPIKeyAuth],
         client_ip: Optional[str],
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
+        oauth2_headers: Optional[dict[str, str]] = None,
+        raw_headers: Optional[dict[str, str]] = None,
     ) -> Optional[CallToolResult]:
         """Handle the mcp_tool_search / mcp_tool_call virtual tools.
 
@@ -741,12 +745,20 @@ if MCP_AVAILABLE:
                 top_k=int(args.get("top_k", 5)),
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
             )
         return await handle_mcp_tool_call(
             tool_name=args.get("tool_name", ""),
             arguments=args.get("arguments") or {},
             user_api_key_dict=user_api_key_auth,
             client_ip=client_ip,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
         )
 
     @server.call_tool()
@@ -800,6 +812,10 @@ if MCP_AVAILABLE:
                 arguments=arguments,
                 user_api_key_auth=user_api_key_auth,
                 client_ip=_client_ip,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
             )
             if virtual_tool_result is not None:
                 return virtual_tool_result

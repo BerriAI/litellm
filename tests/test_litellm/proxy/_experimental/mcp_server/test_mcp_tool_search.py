@@ -539,11 +539,68 @@ class TestDispatchVirtualMcpTool:
                 arguments={"tool_name": "math-add", "arguments": {"a": 1, "b": 2}},
                 user_api_key_auth=uak,
                 client_ip="203.0.113.9",
+                mcp_auth_header="bearer-xyz",
+                mcp_server_auth_headers={"github": {"Authorization": "Bearer gh"}},
+                oauth2_headers={"Authorization": "Bearer oauth"},
+                raw_headers={"x-mcp-auth": "tok"},
             )
 
         assert result == "CALL_RESULT"
-        assert mock_call.await_args.kwargs["tool_name"] == "math-add"
-        assert mock_call.await_args.kwargs["client_ip"] == "203.0.113.9"
+        kw = mock_call.await_args.kwargs
+        assert kw["tool_name"] == "math-add"
+        assert kw["client_ip"] == "203.0.113.9"
+        assert kw["mcp_auth_header"] == "bearer-xyz"
+        assert kw["mcp_server_auth_headers"] == {
+            "github": {"Authorization": "Bearer gh"}
+        }
+        assert kw["oauth2_headers"] == {"Authorization": "Bearer oauth"}
+        assert kw["raw_headers"] == {"x-mcp-auth": "tok"}
+
+    @pytest.mark.asyncio
+    async def test_call_handler_forwards_auth_headers_to_execute(self) -> None:
+        """Regression: per-request auth headers must reach execute_mcp_tool so
+        upstream MCP servers needing pass-through auth can be called."""
+        from mcp.types import CallToolResult, TextContent
+
+        from litellm.proxy._experimental.mcp_server.tool_search import (
+            handle_mcp_tool_call,
+        )
+
+        uak = UserAPIKeyAuth(
+            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+        fake = CallToolResult(
+            content=[TextContent(type="text", text="ok")], isError=False
+        )
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                new_callable=AsyncMock,
+                return_value=fake,
+            ) as mock_exec,
+        ):
+            await handle_mcp_tool_call(
+                tool_name="github-create_issue",
+                arguments={},
+                user_api_key_dict=uak,
+                mcp_auth_header="bearer-xyz",
+                mcp_server_auth_headers={"github": {"Authorization": "Bearer gh"}},
+                oauth2_headers={"Authorization": "Bearer oauth"},
+                raw_headers={"x-mcp-auth": "tok"},
+            )
+
+        kw = mock_exec.await_args.kwargs
+        assert kw["mcp_auth_header"] == "bearer-xyz"
+        assert kw["mcp_server_auth_headers"] == {
+            "github": {"Authorization": "Bearer gh"}
+        }
+        assert kw["oauth2_headers"] == {"Authorization": "Bearer oauth"}
+        assert kw["raw_headers"] == {"x-mcp-auth": "tok"}
 
 
 class TestCaptureHostProgressCallback:
