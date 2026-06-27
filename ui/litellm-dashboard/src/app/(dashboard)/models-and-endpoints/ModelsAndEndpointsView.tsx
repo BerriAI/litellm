@@ -43,6 +43,13 @@ interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
 }
 
+interface RouterSettings {
+  model_group_retry_policy?: RetryPolicyObject | null;
+  retry_policy?: GlobalRetryPolicyObject | null;
+  num_retries?: number | null;
+  model_group_alias?: { [key: string]: string } | null;
+}
+
 const HEALTH_PAGE_SIZE = 50;
 
 const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
@@ -192,22 +199,32 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     refetchModels();
   };
 
-  const loadRetrySettings = useCallback(async () => {
+  const fetchRouterSettings = useCallback(async (): Promise<RouterSettings | null> => {
     if (!accessToken || !userID || !userRole) {
-      return;
+      return null;
     }
     try {
       const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
-      const router_settings = routerSettingsInfo.router_settings;
-
-      setModelGroupRetryPolicy(router_settings.model_group_retry_policy ?? null);
-      setGlobalRetryPolicy(router_settings.retry_policy ?? null);
-      setDefaultRetry(router_settings.num_retries ?? 2);
-      setModelGroupAlias(router_settings.model_group_alias || {});
+      return routerSettingsInfo.router_settings;
     } catch (error) {
       console.error("Error fetching model data:", error);
+      return null;
     }
   }, [accessToken, userID, userRole]);
+
+  const applyRouterSettings = useCallback((routerSettings: RouterSettings) => {
+    setModelGroupRetryPolicy(routerSettings.model_group_retry_policy ?? null);
+    setGlobalRetryPolicy(routerSettings.retry_policy ?? null);
+    setDefaultRetry(routerSettings.num_retries ?? 2);
+    setModelGroupAlias(routerSettings.model_group_alias || {});
+  }, []);
+
+  const loadRetrySettings = useCallback(async () => {
+    const routerSettings = await fetchRouterSettings();
+    if (routerSettings) {
+      applyRouterSettings(routerSettings);
+    }
+  }, [fetchRouterSettings, applyRouterSettings]);
 
   const handleSaveRetrySettings = () => {
     updateRetryPolicy.mutate(
@@ -231,8 +248,17 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     if (!accessToken || !token || !userRole || !userID || !modelDataResponse) {
       return;
     }
-    loadRetrySettings();
-  }, [accessToken, token, userRole, userID, modelDataResponse, loadRetrySettings]);
+    let active = true;
+    void (async () => {
+      const routerSettings = await fetchRouterSettings();
+      if (active && routerSettings) {
+        applyRouterSettings(routerSettings);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [accessToken, token, userRole, userID, modelDataResponse, fetchRouterSettings, applyRouterSettings]);
 
   const isLoading = isLoadingModels || isLoadingModelCostMap || isLoadingCredentials || isLoadingUISettings;
 
