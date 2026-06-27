@@ -220,7 +220,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
-    args = parser.parse_args()
+    args, unknown = parser.parse_known_args()
     if args.update:
         cmd_update(count_basedpyright(sys.stdin.read()))
     else:
