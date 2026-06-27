@@ -10740,15 +10740,10 @@ class Router:
 
         invalid_model_indices = set()  # Use set for O(1) membership checks
 
-        try:
-            input_tokens = litellm.token_counter(messages=messages)
-        except Exception as e:
-            verbose_router_logger.error(
-                "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
-                    str(e)
-                )
-            )
-            return _returned_deployments
+        # Token counting (tiktoken) is the dominant on-loop cost for large prompts.
+        # Only count when a deployment actually declares max_input_tokens, and count
+        # at most once; for model groups with no context-window limit it is skipped.
+        input_tokens: Optional[int] = None
 
         _context_window_error = False
         _potential_error_str = ""
@@ -10781,20 +10776,29 @@ class Router:
                 )
                 _deployment_model = base_model or _litellm_params.get("model", None)
 
-                if (
-                    isinstance(model_info, dict)
-                    and model_info.get("max_input_tokens", None) is not None
-                ):
-                    if (
-                        isinstance(model_info["max_input_tokens"], int)
-                        and input_tokens > model_info["max_input_tokens"]
-                    ):
+                max_input_tokens = (
+                    model_info.get("max_input_tokens")
+                    if isinstance(model_info, dict)
+                    else None
+                )
+                if isinstance(max_input_tokens, int):
+                    if input_tokens is None:
+                        try:
+                            input_tokens = litellm.token_counter(messages=messages)
+                        except Exception as e:
+                            verbose_router_logger.error(
+                                "litellm.router.py::_pre_call_checks: failed to count tokens. Returning initial list of deployments. Got - {}".format(
+                                    str(e)
+                                )
+                            )
+                            return _returned_deployments
+                    if input_tokens > max_input_tokens:
                         invalid_model_indices.add(idx)
                         _context_window_error = True
                         _potential_error_str += (
                             "Model={}, Max Input Tokens={}, Got={}".format(
                                 _deployment_model,
-                                model_info["max_input_tokens"],
+                                max_input_tokens,
                                 input_tokens,
                             )
                         )

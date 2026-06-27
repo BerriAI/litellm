@@ -6,6 +6,7 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -95,6 +96,23 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                 try:
                     parsed_body = orjson.loads(body)
                 except orjson.JSONDecodeError as e:
+                    # The surrogate-repair fallback below runs two full-body re.sub
+                    # passes, which block the event loop on multi-MB malformed bodies.
+                    # Above the configured size, skip the repair and raise the 400 now.
+                    repair_limit_bytes = (
+                        MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB * 1024 * 1024
+                    )
+                    if repair_limit_bytes > 0 and len(body) > repair_limit_bytes:
+                        verbose_proxy_logger.error(
+                            f"Invalid JSON payload received: {str(e)}"
+                        )
+                        raise ProxyException(
+                            message=f"Invalid JSON payload: {str(e)}",
+                            type="invalid_request_error",
+                            param="request_body",
+                            code=status.HTTP_400_BAD_REQUEST,
+                        )
+
                     # First try the standard json module which is more forgiving
                     # First decode bytes to string if needed
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
