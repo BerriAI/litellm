@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
 )
@@ -24,9 +25,7 @@ class AsyncCache(Protocol):
 
     async def async_get_cache(self, key: str) -> object | None: ...
 
-    async def async_set_cache(
-        self, key: str, value: str, ttl: float | None = None
-    ) -> None: ...
+    async def async_set_cache(self, key: str, value: str, ttl: float | None = None) -> None: ...
 
     async def async_delete_cache(self, key: str) -> None: ...
 
@@ -50,9 +49,7 @@ class DualCacheTokenCacheBackend:
         blob = await self._cache.async_get_cache(self._key(user_id, server_id))
         return self._codec.decode(blob) if isinstance(blob, str) else None
 
-    async def set(
-        self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float
-    ) -> None:
+    async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
         if ttl_seconds <= 0:
             return
         await self._cache.async_set_cache(
@@ -62,4 +59,9 @@ class DualCacheTokenCacheBackend:
         )
 
     async def delete(self, user_id: str, server_id: str) -> None:
-        await self._cache.async_delete_cache(self._key(user_id, server_id))
+        # Fail open like get()/set(): a cache outage must drop to the TTL-bounded stale entry, not a
+        # request failure. DualCache swallows get/set errors internally but not delete, so catch here.
+        try:
+            await self._cache.async_delete_cache(self._key(user_id, server_id))
+        except Exception as exc:  # noqa: BLE001
+            verbose_logger.debug("MCP per-user token cache delete failed (ignored): %s", exc)

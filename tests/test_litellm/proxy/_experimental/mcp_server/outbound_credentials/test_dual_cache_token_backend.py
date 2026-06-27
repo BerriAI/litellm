@@ -91,3 +91,17 @@ async def test_keys_isolate_users_and_servers():
     bob = await backend.get("bob", "srv")
     assert alice is not None and alice.access_token == "a"
     assert bob is not None and bob.access_token == "b"
+
+
+class _DeleteRaisingCache(_FakeCache):
+    async def async_delete_cache(self, key):
+        raise ConnectionError("redis down")
+
+
+@pytest.mark.asyncio
+async def test_delete_fails_open_when_the_cache_raises():
+    # A Redis outage on delete must degrade to the TTL-bounded stale entry, not surface as a request
+    # failure - otherwise the unauthorized branch of CachedOAuthTokenStore.fetch() (which deletes
+    # before returning None) 500s instead of issuing the OAuth challenge.
+    backend = _backend(_DeleteRaisingCache())
+    await backend.delete("alice", "srv")  # must not raise
