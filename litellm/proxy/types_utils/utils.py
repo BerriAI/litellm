@@ -46,14 +46,10 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
 
             spec = importlib.util.spec_from_file_location(module_name, module_file_path)  # type: ignore
             if spec is None:
-                raise ImportError(
-                    f"Could not find a module specification for {module_file_path}"
-                )
+                raise ImportError(f"Could not find a module specification for {module_file_path}")
             module = importlib.util.module_from_spec(spec)  # type: ignore
             if spec.loader is None:
-                raise ImportError(
-                    f"Could not find a module loader for {module_file_path}"
-                )
+                raise ImportError(f"Could not find a module loader for {module_file_path}")
             spec.loader.exec_module(module)  # type: ignore
         else:
             # Dynamically import the module
@@ -66,18 +62,14 @@ def get_instance_fn(value: str, config_file_path: Optional[str] = None) -> Any:
     except ImportError as e:
         # Re-raise the exception with a user-friendly message
         if instance_name and module_name:
-            raise ImportError(
-                f"Could not import {instance_name} from {module_name}"
-            ) from e
+            raise ImportError(f"Could not import {instance_name} from {module_name}") from e
         else:
             raise e
     except Exception as e:
         raise e
 
 
-def _load_instance_from_remote_storage(
-    remote_url: str, config_file_path: Optional[str] = None
-) -> Any:
+def _load_instance_from_remote_storage(remote_url: str, config_file_path: Optional[str] = None) -> Any:
     """
     Load custom logger instance from S3 or GCS URL.
 
@@ -130,9 +122,7 @@ def _load_instance_from_remote_storage(
         # Split by last dot to separate module from instance
         module_parts = path_and_module.split(".")
         if len(module_parts) < 2:
-            raise ValueError(
-                f"Invalid module specification in {remote_url}. Expected: path/to/module.instance_name"
-            )
+            raise ValueError(f"Invalid module specification in {remote_url}. Expected: path/to/module.instance_name")
 
         instance_name = module_parts[-1]
         module_path = ".".join(module_parts[:-1])
@@ -164,14 +154,10 @@ def _load_instance_from_remote_storage(
                 local_file_path=local_file_path,
             )
         else:  # gcs
-            success = asyncio.run(
-                _download_gcs_file_wrapper(bucket_name, object_key, local_file_path)
-            )
+            success = asyncio.run(_download_gcs_file_wrapper(bucket_name, object_key, local_file_path))
 
         if not success:
-            raise ImportError(
-                f"Failed to download {object_key} from {storage_type} bucket {bucket_name}"
-            )
+            raise ImportError(f"Failed to download {object_key} from {storage_type} bucket {bucket_name}")
 
         # Load the module from the downloaded file using the actual module name
         spec = importlib.util.spec_from_file_location(module_path, local_file_path)
@@ -188,33 +174,23 @@ def _load_instance_from_remote_storage(
         try:
             os.remove(local_file_path)
         except Exception as cleanup_error:
-            verbose_proxy_logger.warning(
-                f"Could not clean up temporary file {local_file_path}: {cleanup_error}"
-            )
+            verbose_proxy_logger.warning(f"Could not clean up temporary file {local_file_path}: {cleanup_error}")
 
-        verbose_proxy_logger.info(
-            f"Successfully loaded custom logger from {remote_url}"
-        )
+        verbose_proxy_logger.info(f"Successfully loaded custom logger from {remote_url}")
         return instance
 
     except Exception as e:
-        raise ImportError(
-            f"Failed to load custom logger from {remote_url}: {str(e)}"
-        ) from e
+        raise ImportError(f"Failed to load custom logger from {remote_url}: {str(e)}") from e
 
 
-async def _download_gcs_file_wrapper(
-    bucket_name: str, object_key: str, local_file_path: str
-) -> bool:
+async def _download_gcs_file_wrapper(bucket_name: str, object_key: str, local_file_path: str) -> bool:
     """Wrapper for GCS download to handle async properly"""
     try:
         from litellm.proxy.common_utils.load_config_utils import (
             download_python_file_from_gcs,
         )
 
-        return await download_python_file_from_gcs(
-            bucket_name, object_key, local_file_path
-        )
+        return await download_python_file_from_gcs(bucket_name, object_key, local_file_path)
     except Exception as e:
         from litellm._logging import verbose_proxy_logger
 
@@ -232,8 +208,6 @@ def validate_custom_validate_return_type(
     return_type = hints.get("return")
 
     if return_type != Literal[True]:
-        raise TypeError(
-            f"Custom validator must be annotated to return Literal[True], got {return_type}"
-        )
+        raise TypeError(f"Custom validator must be annotated to return Literal[True], got {return_type}")
 
     return fn

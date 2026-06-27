@@ -1572,6 +1572,8 @@ class TestClaudeOpus48AdaptiveThinking:
             "bedrock/eu.anthropic.claude-opus-4-8",
             "vertex_ai/claude-opus-4-8",
             "azure_ai/claude-opus-4-8",
+            "anthropic.claude-opus-4-8-20251201-v1:0",
+            "bedrock/invoke/global.anthropic.claude-opus-4-8-20251201-v1:0",
         ],
     )
     def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
@@ -1594,6 +1596,74 @@ class TestClaudeOpus48AdaptiveThinking:
             )
             is True
         )
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-fable-5",
+            "anthropic.claude-fable-5",
+            "us.anthropic.claude-fable-5",
+            "bedrock/invoke/us.anthropic.claude-fable-5",
+            "vertex_ai/claude-fable-5",
+        ],
+    )
+    def test_adaptive_thinking_detected_for_fable_5(self, local_model_cost_map, model):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-6",
+            "us.anthropic.claude-opus-4-7",
+            "bedrock/invoke/us.anthropic.claude-opus-4-7",
+            "bedrock/invoke/global.anthropic.claude-opus-4-7-v1:0",
+            "global.anthropic.claude-sonnet-4-6-v1:0",
+            "bedrock/invoke/us.anthropic.claude-opus-4-6-v1:0",
+            "anthropic.claude-opus-4-6-v1",
+            "bedrock/us.anthropic.claude-sonnet-4-6",
+            "us.anthropic.claude-sonnet-4-6",
+            "vertex_ai/claude-opus-4-6",
+            "azure_ai/claude-sonnet-4-6",
+            "claude-sonnet-4-6-20260219",
+            "us.anthropic.claude-sonnet-4-6-20251101-v1:0",
+            "bedrock/invoke/us.anthropic.claude-sonnet-4-6-20251101-v1:0",
+            "claude-sonnet-4.6",
+        ],
+    )
+    def test_adaptive_thinking_detected_for_opus_4_6_4_7_and_sonnet_4_6(
+        self, local_model_cost_map, model
+    ):
+        """Opus 4.6/4.7 and Sonnet 4.6 carry the ``supports_adaptive_thinking`` flag,
+        so detection holds purely from the cost map with no name-based version
+        fallback. Each alias form the Bedrock/anthropic paths see resolves to a flagged
+        base entry through candidate normalization: provider/region prefixes, a
+        Bedrock ``-v1:0`` version suffix (stripped fully for 4.7/4.8 keys or to ``-v1``
+        for the 4.6 key), a dated release suffix (``-20260219``), a combined
+        ``-<date>-v1:0`` suffix (the real Bedrock id shape), and a dotted family
+        version (``4.6`` -> ``4-6``)."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-9",
+            "claude-opus-4-8-some-future-suffix",
+            "us.anthropic.claude-fable-5-preview",
+        ],
+    )
+    def test_unmapped_aliases_defer_to_cost_map(self, local_model_cost_map, model):
+        """Detection is sourced solely from the cost map flag: an alias absent from
+        the map (a future release or a preview suffix) is not adaptive until a
+        ``fallback_generalizations`` rule (PR #29718) covers it."""
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert model not in litellm.model_cost
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
 
     @pytest.mark.parametrize(
         "model",

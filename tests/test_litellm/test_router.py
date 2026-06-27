@@ -2670,6 +2670,74 @@ def test_should_include_deployment():
     )
 
 
+def test_pre_call_checks_skips_token_count_without_max_input_tokens(monkeypatch):
+    """
+    tiktoken token counting is the dominant on-loop cost for large prompts. When no
+    deployment in the group declares max_input_tokens, the count is never consumed, so
+    _pre_call_checks must not run it at all.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {})
+
+    calls = []
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d2"}},
+    ]
+    result = router._pre_call_checks(
+        model="m",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert calls == []
+    assert len(result) == 2
+
+
+def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch):
+    """
+    When a deployment declares max_input_tokens the count must still run, be performed
+    at most once across the group (memoized), and filter deployments whose limit is
+    exceeded.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d2"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert calls == [1]
+
+
 def test_get_deployment_model_info_base_model_flow():
     """Test that get_deployment_model_info correctly handles the base model flow"""
     from unittest.mock import patch

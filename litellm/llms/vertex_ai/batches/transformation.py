@@ -28,15 +28,11 @@ class VertexAIBatchTransformation:
         input_file_id = request.get("input_file_id")
         if input_file_id is None:
             raise ValueError("input_file_id is required, but not provided")
-        input_config: InputConfig = InputConfig(
-            gcsSource=GcsSource(uris=[input_file_id]), instancesFormat="jsonl"
-        )
+        input_config: InputConfig = InputConfig(gcsSource=GcsSource(uris=[input_file_id]), instancesFormat="jsonl")
         model: str = cls._get_model_from_gcs_file(input_file_id)
         output_config: OutputConfig = OutputConfig(
             predictionsFormat="jsonl",
-            gcsDestination=GcsDestination(
-                outputUriPrefix=cls._get_gcs_uri_prefix_from_file(input_file_id)
-            ),
+            gcsDestination=GcsDestination(outputUriPrefix=cls._get_gcs_uri_prefix_from_file(input_file_id)),
         )
         return VertexAIBatchPredictionJob(
             inputConfig=input_config,
@@ -52,19 +48,13 @@ class VertexAIBatchTransformation:
         return LiteLLMBatch(
             id=cls._get_batch_id_from_vertex_ai_batch_response(response),
             completion_window="24hrs",
-            created_at=_convert_vertex_datetime_to_openai_datetime(
-                vertex_datetime=response.get("createTime", "")
-            ),
+            created_at=_convert_vertex_datetime_to_openai_datetime(vertex_datetime=response.get("createTime", "")),
             endpoint="",
-            input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(
-                response
-            ),
+            input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(response),
             object="batch",
             status=cls._get_batch_job_status_from_vertex_ai_batch_response(response),
             error_file_id=None,  # Vertex AI doesn't seem to have a direct equivalent
-            output_file_id=cls._get_output_file_id_from_vertex_ai_batch_response(
-                response
-            ),
+            output_file_id=cls._get_output_file_id_from_vertex_ai_batch_response(response),
         )
 
     @classmethod
@@ -76,10 +66,7 @@ class VertexAIBatchTransformation:
         """
 
         batch_jobs = response.get("batchPredictionJobs", []) or []
-        data = [
-            cls.transform_vertex_ai_batch_response_to_openai_batch_response(job)
-            for job in batch_jobs
-        ]
+        data = [cls.transform_vertex_ai_batch_response_to_openai_batch_response(job) for job in batch_jobs]
 
         first_id = data[0].id if len(data) > 0 else None
         last_id = data[-1].id if len(data) > 0 else None
@@ -95,9 +82,7 @@ class VertexAIBatchTransformation:
         }
 
     @classmethod
-    def _get_batch_id_from_vertex_ai_batch_response(
-        cls, response: VertexBatchPredictionResponse
-    ) -> str:
+    def _get_batch_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the batch id from the Vertex AI Batch response safely
 
@@ -113,9 +98,7 @@ class VertexAIBatchTransformation:
         return parts[-1] if parts else _name
 
     @classmethod
-    def _get_input_file_id_from_vertex_ai_batch_response(
-        cls, response: VertexBatchPredictionResponse
-    ) -> str:
+    def _get_input_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the input file id from the Vertex AI Batch response
         """
@@ -135,16 +118,12 @@ class VertexAIBatchTransformation:
         return uris[0]
 
     @classmethod
-    def _get_output_file_id_from_vertex_ai_batch_response(
-        cls, response: VertexBatchPredictionResponse
-    ) -> str:
+    def _get_output_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
         """
         Gets the output file id from the Vertex AI Batch response
         """
 
-        output_file_id: str = response.get("outputInfo", OutputInfo()).get(
-            "gcsOutputDirectory", ""
-        )
+        output_file_id: str = response.get("outputInfo", OutputInfo()).get("gcsOutputDirectory", "")
         if output_file_id:
             output_file_id = output_file_id.rstrip("/") + "/predictions.jsonl"
         if output_file_id and output_file_id != "/predictions.jsonl":

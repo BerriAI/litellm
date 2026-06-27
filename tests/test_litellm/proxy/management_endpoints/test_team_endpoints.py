@@ -9434,3 +9434,64 @@ async def test_team_info_forwards_key_limit_to_get_data():
         )
 
     assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
+
+
+class TestEmitTeamMembersMetric:
+    """The _emit_team_members_metric seam between the team handlers and Prometheus."""
+
+    @pytest.fixture
+    def restore_callbacks(self):
+        import litellm
+
+        original = litellm.callbacks
+        yield
+        litellm.callbacks = original
+
+    def _team(self, member_count):
+        return LiteLLM_TeamTable(
+            team_id="team-x",
+            team_alias="X",
+            members_with_roles=[
+                Member(user_id=f"u{i}", role="user") for i in range(member_count)
+            ],
+        )
+
+    def test_emits_with_team_when_logger_registered(self, restore_callbacks):
+        import litellm
+        from litellm.integrations.prometheus import PrometheusLogger
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric,
+        )
+
+        fake_logger = MagicMock(spec=PrometheusLogger)
+        litellm.callbacks = [fake_logger]
+
+        team = self._team(3)
+        _emit_team_members_metric(team)
+
+        fake_logger.set_team_members_metric.assert_called_once_with(team)
+
+    def test_noop_when_no_logger_registered(self, restore_callbacks):
+        import litellm
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric,
+        )
+
+        litellm.callbacks = []
+        # Must not raise when Prometheus is not enabled.
+        _emit_team_members_metric(self._team(2))
+
+    def test_metric_failure_does_not_break_request(self, restore_callbacks):
+        import litellm
+        from litellm.integrations.prometheus import PrometheusLogger
+        from litellm.proxy.management_endpoints.team_endpoints import (
+            _emit_team_members_metric,
+        )
+
+        fake_logger = MagicMock(spec=PrometheusLogger)
+        fake_logger.set_team_members_metric.side_effect = Exception("boom")
+        litellm.callbacks = [fake_logger]
+
+        # A metric failure must be swallowed, not propagated to the handler.
+        _emit_team_members_metric(self._team(1))
+        fake_logger.set_team_members_metric.assert_called_once()
