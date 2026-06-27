@@ -191,32 +191,41 @@ class TestListToolRestApiWithToolSearch:
             and "GET" in r.methods
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints.build_effective_auth_contexts",
-            new_callable=AsyncMock,
-            return_value=[user_api_key_dict],
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
-        ) as mock_manager, patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints._get_tools_for_single_server",
-            new_callable=AsyncMock,
-            return_value=fake_tools,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints.IPAddressUtils"
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints._prefetch_user_oauth_creds",
-            new_callable=AsyncMock,
-            return_value={},
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints._get_oauth2_server_ids",
-            return_value=[],
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints._get_server_auth_header",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.rest_endpoints._get_user_oauth_extra_headers",
-            new_callable=AsyncMock,
-            return_value=None,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints.build_effective_auth_contexts",
+                new_callable=AsyncMock,
+                return_value=[user_api_key_dict],
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+            ) as mock_manager,
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_tools_for_single_server",
+                new_callable=AsyncMock,
+                return_value=fake_tools,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints.IPAddressUtils"
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._prefetch_user_oauth_creds",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_oauth2_server_ids",
+                return_value=[],
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_server_auth_header",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_user_oauth_extra_headers",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
             mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
@@ -320,10 +329,23 @@ class TestCallToolRestApiVirtualTools:
             isError=False,
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.tool_search.global_mcp_server_manager"
-        ) as mock_manager:
-            mock_manager.call_tool = AsyncMock(return_value=fake_result)
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_search.global_mcp_server_manager"
+            ) as mock_manager,
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_search.build_effective_auth_contexts",
+                new_callable=AsyncMock,
+                return_value=[user_api_key_dict],
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                new_callable=AsyncMock,
+                return_value=fake_result,
+            ),
+        ):
+            mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
+            mock_manager.get_registry = MagicMock(return_value={})
 
             result = await self._get_call_fn()(
                 request=request,
