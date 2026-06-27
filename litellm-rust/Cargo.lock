@@ -670,6 +670,7 @@ name = "litellm-core"
 version = "0.1.0"
 dependencies = [
  "rand 0.8.6",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

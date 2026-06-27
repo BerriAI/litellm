@@ -16,10 +16,10 @@ use litellm_ai_gateway::routes;
 use litellm_ai_gateway::state::AppState;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
-use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
-use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
 #[cfg(feature = "python-config")]
 use litellm_ai_gateway::python;
+use litellm_core::integrations::custom_logger::CustomLogger;
+use litellm_core::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).

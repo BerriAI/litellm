@@ -53,19 +53,24 @@ class RecordingBridge:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callbacks: list[object] | None = None,
+        guardrails: list[object] | None = None,
     ) -> dict[str, object]:
-        self.calls.append(
-            {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
+        call: dict[str, object] = {
+            "model": model,
+            "document": document,
+            "api_key": api_key,
+            "api_base": api_base,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "optional_params": optional_params,
+            "timeout_seconds": timeout_seconds,
+        }
+        if callbacks is not None:
+            call["callbacks"] = callbacks
+        if guardrails is not None:
+            call["guardrails"] = guardrails
+        self.calls.append(call)
         return dict(FAKE_OCR_RESPONSE)
 
 
@@ -85,19 +90,24 @@ class RecordingAsyncBridge:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout_seconds: float | None,
+        callbacks: list[object] | None = None,
+        guardrails: list[object] | None = None,
     ) -> dict[str, object]:
-        self.calls.append(
-            {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
+        call: dict[str, object] = {
+            "model": model,
+            "document": document,
+            "api_key": api_key,
+            "api_base": api_base,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "optional_params": optional_params,
+            "timeout_seconds": timeout_seconds,
+        }
+        if callbacks is not None:
+            call["callbacks"] = callbacks
+        if guardrails is not None:
+            call["guardrails"] = guardrails
+        self.calls.append(call)
         return dict(FAKE_OCR_RESPONSE)
 
 
@@ -403,6 +413,30 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
     }
 
 
+def test_bridge_wrapper_forwards_callbacks_and_guardrails_to_rust():
+    bridge = RecordingBridge()
+    callback = object()
+    guardrail = object()
+
+    litellm.use_litellm_rust(True, ocr=bridge)
+    response = rust_bridge.ocr(
+        model="mistral-ocr-latest",
+        document=DOCUMENT,
+        api_key="sk-test",
+        api_base=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        optional_params={},
+        timeout=None,
+        callbacks=[callback],
+        guardrails=[guardrail],
+    )
+
+    assert response == FAKE_OCR_RESPONSE
+    assert bridge.calls[0]["callbacks"] == [callback]
+    assert bridge.calls[0]["guardrails"] == [guardrail]
+
+
 @pytest.mark.asyncio
 async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
     bridge = RecordingAsyncBridge()
@@ -430,6 +464,43 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
         "optional_params": {"vertex_project": "project-1"},
         "timeout_seconds": 42.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_bridge_wrapper_forwards_async_callbacks_and_guardrails_to_rust():
+    bridge = RecordingAsyncBridge()
+    callback = object()
+    guardrail = object()
+
+    litellm.use_litellm_rust(True, aocr=bridge)
+    response = await rust_bridge.aocr(
+        model="mistral-ocr-latest",
+        document=DOCUMENT,
+        api_key="sk-test",
+        api_base=None,
+        custom_llm_provider="mistral",
+        extra_headers=None,
+        optional_params={},
+        timeout=None,
+        callbacks=[callback],
+        guardrails=[guardrail],
+    )
+
+    assert response == FAKE_OCR_RESPONSE
+    assert bridge.calls[0]["callbacks"] == [callback]
+    assert bridge.calls[0]["guardrails"] == [guardrail]
+
+
+def test_ocr_response_moves_hidden_params_to_private_attr():
+    response = OCRResponse(
+        **{
+            **FAKE_OCR_RESPONSE,
+            "_hidden_params": {"litellm_rust": True},
+        }
+    )
+
+    assert response._hidden_params == {"litellm_rust": True}
+    assert "_hidden_params" not in response.model_dump()
 
 
 def test_run_rust_ocr_prepares_request_and_wraps_response():

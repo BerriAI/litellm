@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::CoreError;
 use litellm_core::ocr::transformation::OcrAuthStrategy;
+use litellm_core::ocr::types::litellm_rust_hidden_params;
 use litellm_core::CoreResult;
 use serde_json::{json, Map, Value};
 
@@ -11,13 +13,13 @@ use super::common_utils::{
     convert_document_url_to_data_uri, has_header, ocr_provider_config, string_headers,
 };
 use super::types::{PreparedOcrRequest, ProviderOcrRequest};
-use crate::integrations::custom_guardrail::{
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
+use litellm_core::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
 };
 
@@ -25,6 +27,7 @@ pub(crate) struct OcrLifecycleHooks {
     logger_runner: CustomLoggerRunner,
     guardrail_runner: CustomGuardrailRunner,
     request_metadata: RequestMetadata,
+    logging_kwargs: HashMap<String, Value>,
 }
 
 type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = CoreResult<T>> + Send + 'a>>;
@@ -35,11 +38,13 @@ impl OcrLifecycleHooks {
         logger_runner: CustomLoggerRunner,
         guardrail_runner: CustomGuardrailRunner,
         request_metadata: RequestMetadata,
+        logging_kwargs: HashMap<String, Value>,
     ) -> Self {
         Self {
             logger_runner,
             guardrail_runner,
             request_metadata,
+            logging_kwargs,
         }
     }
 
@@ -164,8 +169,21 @@ impl OcrLifecycleHooks {
                 user_api_key_team_id: self.request_metadata.user_api_key_team_id.clone(),
                 ..Default::default()
             },
+            hidden_params: litellm_rust_hidden_params().into_iter().collect(),
             messages: None,
         }
+    }
+
+    fn model_call_details(
+        &self,
+        context: &CallLifecycleContext,
+        timing: &CallLifecycleTiming,
+    ) -> ModelCallDetails {
+        let mut details = ModelCallDetails::from_standard_logging_payload(
+            self.standard_logging_payload(context, timing),
+        );
+        details.extra_metadata = self.logging_kwargs.clone();
+        details
     }
 }
 
@@ -202,11 +220,10 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
                 return;
             }
             let response_obj = CallbackValue::new("ocr", response.clone());
+            let model_call_details = self.model_call_details(context, timing);
             self.logger_runner
                 .async_log_success_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.standard_logging_payload(context, timing),
-                    ),
+                    &model_call_details,
                     &response_obj,
                     CallbackTiming::new(timing.start_time, timing.end_time),
                 )
@@ -235,12 +252,12 @@ impl CallLifecycleHooks<PreparedOcrRequest, ProviderOcrRequest, Value> for OcrLi
                     "kind": logging_error.kind,
                 }),
             );
+            let model_call_details = self
+                .model_call_details(context, timing)
+                .with_failure_error(logging_error);
             self.logger_runner
                 .async_log_failure_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.standard_logging_payload(context, timing),
-                    )
-                    .with_failure_error(logging_error),
+                    &model_call_details,
                     Some(&response_obj),
                     CallbackTiming::new(timing.start_time, timing.end_time),
                 )
@@ -268,7 +285,7 @@ fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
     GuardrailContext {
         call_type: CallType::Ocr,
         selected_guardrails: Vec::new(),
-        metadata: std::collections::HashMap::new(),
+        metadata: HashMap::new(),
         user_api_key_hash: metadata.user_api_key_hash.clone(),
         user_api_key_user_id: metadata.user_api_key_user_id.clone(),
         user_api_key_team_id: metadata.user_api_key_team_id.clone(),

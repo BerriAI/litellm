@@ -367,6 +367,7 @@ mod tests {
             end_time: 1.0,
             stream: false,
             metadata: StandardLoggingMetadata::default(),
+            hidden_params: Default::default(),
             messages: None,
         });
 

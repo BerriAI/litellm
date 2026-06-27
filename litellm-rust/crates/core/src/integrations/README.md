@@ -26,7 +26,7 @@ Implement `CustomLogger` when Rust code needs to observe terminal success or
 failure events. Method names intentionally match Python `CustomLogger` names.
 
 ```rust
-use litellm_ai_gateway::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
 
@@ -80,7 +80,7 @@ during-call checks. Method names intentionally match Python `CustomGuardrail`
 entrypoints inherited from Python `CustomLogger`.
 
 ```rust
-use litellm_ai_gateway::integrations::custom_guardrail::{
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };
@@ -104,7 +104,7 @@ impl CustomGuardrail for BlocklistedPromptGuardrail {
         Box::pin(async move {
             if request.data.to_string().contains("blocked phrase") {
                 return Ok(GuardrailDecision::Block(
-                    litellm_ai_gateway::integrations::custom_guardrail::GuardrailError::blocked(
+                    litellm_core::integrations::custom_guardrail::GuardrailError::blocked(
                         "blocked phrase detected",
                     ),
                 ));

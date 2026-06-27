@@ -5342,6 +5342,7 @@ class StandardLoggingPayloadSetup:
             batch_models=None,
             litellm_model_name=None,
             usage_object=None,
+            litellm_rust=None,
         )
         if hidden_params is not None:
             for key in StandardLoggingHiddenParams.__annotations__.keys():

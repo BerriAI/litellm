@@ -2,10 +2,19 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::constants::{
-    DEFAULT_CHANNEL_CAPACITY, DEFAULT_FLUSH_INTERVAL_MS, DEFAULT_MAX_BATCH_SIZE,
-};
 use crate::integrations::types::StandardLoggingPayload;
+
+/// Default bounded channel depth for the log-egress worker.
+/// Override: `LITELLM_LOG_CHANNEL_CAPACITY`.
+const DEFAULT_CHANNEL_CAPACITY: usize = 4096;
+
+/// Default max records POSTed per request to the control plane.
+/// Override: `LITELLM_LOG_BATCH_SIZE`.
+const DEFAULT_MAX_BATCH_SIZE: usize = 256;
+
+/// Default partial-batch flush cadence, in ms.
+/// Override: `LITELLM_LOG_FLUSH_INTERVAL_MS`.
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 
 #[derive(Serialize)]
 pub struct CallbackLogsRequest {
