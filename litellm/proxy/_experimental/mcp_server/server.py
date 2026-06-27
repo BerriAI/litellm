@@ -729,12 +729,14 @@ if MCP_AVAILABLE:
                         query=(arguments or {}).get("query", ""),
                         top_k=int((arguments or {}).get("top_k", 5)),
                         user_api_key_dict=user_api_key_auth,
+                        client_ip=_client_ip,
                     )
                 else:
                     return await handle_mcp_tool_call(
                         tool_name=(arguments or {}).get("tool_name", ""),
                         arguments=(arguments or {}).get("arguments") or {},
                         user_api_key_dict=user_api_key_auth,
+                        client_ip=_client_ip,
                     )
 
             host_progress_callback = None
@@ -1696,6 +1698,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        client_ip: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1787,6 +1790,7 @@ if MCP_AVAILABLE:
             allowed_mcp_servers = await _get_allowed_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_servers=mcp_servers,
+                client_ip=client_ip,
             )
 
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
@@ -2225,6 +2229,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
+        client_ip: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         List all available MCP tools.
@@ -2234,6 +2239,7 @@ if MCP_AVAILABLE:
             mcp_auth_header: Optional auth header for MCP server (deprecated)
             mcp_servers: Optional list of server names/aliases to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            client_ip: Client IP for IP-based server access control
 
         Returns:
             List[MCPTool]: Combined list of tools from all accessible servers
@@ -2257,6 +2263,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
                 list_tools_log_source=list_tools_log_source,
+                client_ip=client_ip,
             )
             verbose_logger.debug(
                 f"Successfully fetched {len(managed_tools)} tools from managed MCP servers"

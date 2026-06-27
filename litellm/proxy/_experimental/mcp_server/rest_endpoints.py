@@ -606,8 +606,15 @@ if MCP_AVAILABLE:
                 and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
 
-            if getattr(getattr(user_api_key_dict, "object_permission", None), "mcp_tool_search_enabled", False):
-                from litellm.proxy._experimental.mcp_server.tool_search import get_virtual_tool_definitions
+            if getattr(
+                getattr(user_api_key_dict, "object_permission", None),
+                "mcp_tool_search_enabled",
+                False,
+            ):
+                from litellm.proxy._experimental.mcp_server.tool_search import (
+                    get_virtual_tool_definitions,
+                )
+
                 return {
                     "tools": get_virtual_tool_definitions(),
                     "error": None,
@@ -801,22 +808,32 @@ if MCP_AVAILABLE:
             )
 
             if tool_name in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
-                if not getattr(getattr(user_api_key_dict, "object_permission", None), "mcp_tool_search_enabled", False):
+                if not getattr(
+                    getattr(user_api_key_dict, "object_permission", None),
+                    "mcp_tool_search_enabled",
+                    False,
+                ):
                     raise HTTPException(
                         status_code=403,
-                        detail={"error": "forbidden", "message": f"{tool_name} requires mcp_tool_search_enabled on the key"},
+                        detail={
+                            "error": "forbidden",
+                            "message": f"{tool_name} requires mcp_tool_search_enabled on the key",
+                        },
                     )
+                rest_client_ip = IPAddressUtils.get_mcp_client_ip(request)
                 if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
                     return await handle_mcp_tool_search(
                         query=tool_arguments.get("query", ""),
                         top_k=int(tool_arguments.get("top_k", 5)),
                         user_api_key_dict=user_api_key_dict,
+                        client_ip=rest_client_ip,
                     )
                 else:  # MCP_TOOL_CALL_TOOL_NAME
                     return await handle_mcp_tool_call(
                         tool_name=tool_arguments.get("tool_name", ""),
                         arguments=tool_arguments.get("arguments") or {},
                         user_api_key_dict=user_api_key_dict,
+                        client_ip=rest_client_ip,
                     )
 
             # Validate required parameters early

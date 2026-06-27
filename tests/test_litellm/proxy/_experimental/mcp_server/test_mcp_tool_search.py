@@ -298,10 +298,10 @@ class TestCallToolRestApiVirtualTools:
         mock_tool.inputSchema = {"type": "object", "properties": {}}
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.tool_search.global_mcp_server_manager"
-        ) as mock_manager:
-            mock_manager.list_tools = AsyncMock(return_value=[mock_tool])
-
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            new_callable=AsyncMock,
+            return_value=[mock_tool],
+        ):
             result = await self._get_call_fn()(
                 request=request,
                 user_api_key_dict=user_api_key_dict,
@@ -342,29 +342,104 @@ class TestCallToolRestApiVirtualTools:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.tool_search.global_mcp_server_manager"
-            ) as mock_manager,
-            patch(
-                "litellm.proxy._experimental.mcp_server.tool_search.build_effective_auth_contexts",
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
-                return_value=[user_api_key_dict],
+                return_value=[],
             ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                new_callable=AsyncMock,
+                return_value=fake_result,
+            ) as mock_execute,
+        ):
+            result = await self._get_call_fn()(
+                request=request,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        mock_execute.assert_awaited_once()
+        assert mock_execute.await_args.kwargs["name"] == "github-create_issue"
+
+        assert result.isError is False
+        assert result.content[0].text == "Issue created"
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_call_forwards_client_ip_for_ip_filtering(self) -> None:
+        """Regression: the virtual call path must resolve allowed servers with the
+        request's client IP so IP-restricted servers (available_on_public_internet:
+        false) cannot be reached from a public IP."""
+        from mcp.types import CallToolResult, TextContent
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            object_permission=_make_perm(
+                mcp_tool_search_enabled=True, mcp_servers=["github"]
+            ),
+        )
+        request = self._make_request(
+            {
+                "name": MCP_TOOL_CALL_TOOL_NAME,
+                "arguments": {"tool_name": "github-create_issue", "arguments": {}},
+            }
+        )
+
+        fake_result = CallToolResult(
+            content=[TextContent(type="text", text="ok")], isError=False
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints.IPAddressUtils.get_mcp_client_ip",
+                return_value="203.0.113.7",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_allowed,
             patch(
                 "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
                 new_callable=AsyncMock,
                 return_value=fake_result,
             ),
         ):
-            mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
-            mock_manager.get_registry = MagicMock(return_value={})
-
-            result = await self._get_call_fn()(
-                request=request,
-                user_api_key_dict=user_api_key_dict,
+            await self._get_call_fn()(
+                request=request, user_api_key_dict=user_api_key_dict
             )
 
-        assert result.isError is False
-        assert result.content[0].text == "Issue created"
+        mock_allowed.assert_awaited_once()
+        assert mock_allowed.await_args.kwargs["client_ip"] == "203.0.113.7"
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_search_forwards_client_ip_for_ip_filtering(self) -> None:
+        """Search must list tools through the IP-filtered catalog, not the raw one."""
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_key",
+            object_permission=_make_perm(
+                mcp_tool_search_enabled=True, mcp_servers=["github"]
+            ),
+        )
+        request = self._make_request(
+            {"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "issue"}}
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints.IPAddressUtils.get_mcp_client_ip",
+                return_value="203.0.113.7",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_list,
+        ):
+            await self._get_call_fn()(
+                request=request, user_api_key_dict=user_api_key_dict
+            )
+
+        mock_list.assert_awaited_once()
+        assert mock_list.await_args.kwargs["client_ip"] == "203.0.113.7"
 
     @pytest.mark.asyncio
     async def test_mcp_tool_search_requires_flag_enabled(self) -> None:

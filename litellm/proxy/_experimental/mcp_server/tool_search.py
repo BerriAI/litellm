@@ -2,16 +2,9 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from mcp.types import CallToolResult, TextContent
-
-from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-    global_mcp_server_manager,
-)
-from litellm.proxy._experimental.mcp_server.ui_session_utils import (
-    build_effective_auth_contexts,
-)
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
@@ -83,9 +76,13 @@ async def handle_mcp_tool_search(
     query: str,
     top_k: int,
     user_api_key_dict: "UserAPIKeyAuth",
+    client_ip: Optional[str] = None,
 ) -> CallToolResult:
-    mcp_tools = await global_mcp_server_manager.list_tools(
-        user_api_key_auth=user_api_key_dict
+    from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
+
+    mcp_tools = await _list_mcp_tools(
+        user_api_key_auth=user_api_key_dict,
+        client_ip=client_ip,
     )
     tools = [
         {
@@ -105,22 +102,18 @@ async def handle_mcp_tool_call(
     tool_name: str,
     arguments: dict[str, Any],
     user_api_key_dict: "UserAPIKeyAuth",
+    client_ip: Optional[str] = None,
 ) -> CallToolResult:
-    from litellm.proxy._experimental.mcp_server.server import execute_mcp_tool
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_allowed_mcp_servers,
+        execute_mcp_tool,
+    )
 
-    auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
-    allowed_server_ids: set[str] = set()
-    for auth_context in auth_contexts:
-        servers = await global_mcp_server_manager.get_allowed_mcp_servers(
-            user_api_key_auth=auth_context,
-        )
-        allowed_server_ids.update(servers)
-
-    allowed_mcp_servers = [
-        s
-        for s in global_mcp_server_manager.get_registry().values()
-        if s.server_id in allowed_server_ids
-    ]
+    allowed_mcp_servers = await _get_allowed_mcp_servers(
+        user_api_key_auth=user_api_key_dict,
+        mcp_servers=None,
+        client_ip=client_ip,
+    )
 
     return await execute_mcp_tool(
         name=tool_name,
