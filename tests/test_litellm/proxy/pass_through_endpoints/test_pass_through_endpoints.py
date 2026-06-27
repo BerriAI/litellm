@@ -3485,3 +3485,137 @@ class TestStaleRouteCleanupOnReload:
         assert InitPassThroughEndpointHelpers.is_registered_pass_through_route(
             "/live-passthrough/some/subpath"
         )
+
+
+# Regression (LIT-3538): a pre-call guardrail block on a passthrough endpoint
+# must be logged at WARNING without a traceback, not as an ERROR with a full
+# stack trace. The generic ``except Exception`` in ``pass_through_request`` used
+# to call ``verbose_proxy_logger.exception(...)`` for every exception, so an
+# intentional guardrail block (which the rest of the codebase already classifies
+# via ``CustomGuardrail._is_guardrail_intervention``) produced scary error noise
+# even though the client correctly receives the 4xx.
+from fastapi import HTTPException as _FastAPIHTTPException
+
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+)
+
+_PT_MODULE = "litellm.proxy.pass_through_endpoints.pass_through_endpoints"
+
+
+def _lit3538_user_api_key_dict():
+    d = MagicMock()
+    d.api_key = "sk-test"
+    d.user_id = "user-1"
+    d.team_id = "team-1"
+    d.org_id = None
+    d.metadata = {}
+    d.team_metadata = {}
+    d.parent_otel_span = None
+    d.request_route = "/mock/echo"
+    return d
+
+
+def _lit3538_request():
+    r = MagicMock()
+    r.method = "POST"
+    r.query_params = {}
+    r.url = "http://testserver/mock/echo"
+    r.state = SimpleNamespace()
+    headers = MagicMock()
+    headers.copy.return_value = {}
+    r.headers = headers
+    return r
+
+
+async def _drive_pass_through_block(raised_exception):
+    """Drive the real ``pass_through_request`` so its pre_call_hook raises
+    ``raised_exception``, returning (status_code, logger_mock)."""
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=raised_exception)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+
+    logger = MagicMock()
+
+    patches = [
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch(f"{_PT_MODULE}.verbose_proxy_logger", logger),
+        patch(
+            f"{_PT_MODULE}._read_request_body",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(f"{_PT_MODULE}._safe_get_request_headers", return_value={}),
+        patch(
+            "litellm.proxy.pass_through_endpoints.passthrough_guardrails."
+            "PassthroughGuardrailHandler.collect_guardrails",
+            return_value=[],
+        ),
+    ]
+
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        status_code = None
+        try:
+            await pass_through_request(
+                request=_lit3538_request(),
+                target="https://upstream.example/echo",
+                custom_headers={"Content-Type": "application/json"},
+                user_api_key_dict=_lit3538_user_api_key_dict(),
+                stream=False,
+            )
+        except Exception as e:  # ProxyException carrying the original status
+            status_code = getattr(e, "code", None) or getattr(e, "status_code", None)
+    return status_code, logger
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "guardrail_exception, expected_code",
+    [
+        (
+            GuardrailRaisedException(guardrail_name="g", message="blocked"),
+            400,
+        ),
+        (
+            BlockedPiiEntityError(entity_type="EMAIL", guardrail_name="presidio"),
+            400,
+        ),
+        (
+            _FastAPIHTTPException(
+                status_code=400, detail={"error": "Violated moderation policy"}
+            ),
+            400,
+        ),
+    ],
+)
+async def test_pre_call_guardrail_block_logs_warning_not_exception(
+    guardrail_exception, expected_code
+):
+    status_code, logger = await _drive_pass_through_block(guardrail_exception)
+
+    assert int(status_code) == expected_code
+    assert (
+        logger.exception.call_count == 0
+    ), "guardrail block must not be logged as an ERROR with a traceback"
+    assert (
+        logger.warning.call_count == 1
+    ), "guardrail block must be logged once at WARNING"
+
+
+@pytest.mark.asyncio
+async def test_non_guardrail_exception_still_logs_with_traceback():
+    status_code, logger = await _drive_pass_through_block(
+        RuntimeError("upstream connection reset")
+    )
+
+    assert int(status_code) == 500
+    assert (
+        logger.exception.call_count == 1
+    ), "a genuine failure must still be logged via verbose_proxy_logger.exception"
+    assert (
+        logger.warning.call_count == 0
+    ), "a genuine failure must not be downgraded to WARNING"

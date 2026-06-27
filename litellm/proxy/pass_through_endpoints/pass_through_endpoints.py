@@ -36,6 +36,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -1423,11 +1424,17 @@ async def pass_through_request(
             cache_key=None,
             api_base=str(url._uri_reference) if url else None,
         )
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {}".format(
-                str(e)
+        if CustomGuardrail._is_guardrail_intervention(e):
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: request blocked by guardrail - %s",
+                str(e),
             )
-        )
+        else:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.pass_through_endpoint(): Exception occured - {}".format(
+                    str(e)
+                )
+            )
 
         #########################################################
         # Monitoring: Trigger post_call_failure_hook
