@@ -277,9 +277,16 @@ class RefreshingTokenStore:
         token = await self._inner.fetch(user_id, server_id)
         if token is None or not self._is_expired(token):
             return token
+
+        async def refresh_latest_token() -> OAuthToken | None:
+            latest_token = await self._inner.fetch(user_id, server_id)
+            if latest_token is None or not self._is_expired(latest_token):
+                return latest_token
+            return await self._refresher.refresh(user_id, server_id, latest_token)
+
         return await self._coordinator.run(
             user_id,
             server_id,
-            refresh=lambda: self._refresher.refresh(user_id, server_id, token),
+            refresh=refresh_latest_token,
             reread=lambda: self._inner.fetch(user_id, server_id),
         )

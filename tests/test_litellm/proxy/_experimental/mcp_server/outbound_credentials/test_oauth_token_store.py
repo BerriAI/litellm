@@ -246,6 +246,56 @@ async def test_refreshing_is_single_flight_under_concurrency():
     assert all(r is not None and r.access_token == "refreshed" for r in results)
 
 
+class _StaleReadRacePair:
+    def __init__(self) -> None:
+        self._old_token = OAuthToken(access_token="old", expires_at=900.0)
+        self._current = self._old_token
+        self.fetch_calls = 0
+        self.refresh_calls = 0
+        self.refresh_started = asyncio.Event()
+        self.finish_refresh = asyncio.Event()
+        self.stale_read_started = asyncio.Event()
+        self.finish_stale_read = asyncio.Event()
+
+    async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
+        self.fetch_calls += 1
+        if self.fetch_calls == 3:
+            self.stale_read_started.set()
+            await self.finish_stale_read.wait()
+            return self._old_token
+        return self._current
+
+    async def refresh(
+        self, user_id: str, server_id: str, token: OAuthToken
+    ) -> Optional[OAuthToken]:
+        self.refresh_calls += 1
+        self.refresh_started.set()
+        await self.finish_refresh.wait()
+        self._current = OAuthToken(access_token="refreshed", expires_at=9999.0)
+        return self._current
+
+
+async def test_stale_read_after_refresh_rereads_before_starting_new_refresh():
+    pair = _StaleReadRacePair()
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
+
+    first = asyncio.create_task(store.fetch("u", "s"))
+    await pair.refresh_started.wait()
+    second = asyncio.create_task(store.fetch("u", "s"))
+    await pair.stale_read_started.wait()
+
+    pair.finish_refresh.set()
+    first_result = await first
+    pair.finish_stale_read.set()
+    second_result = await second
+
+    assert first_result is not None and first_result.access_token == "refreshed"
+    assert second_result is not None and second_result.access_token == "refreshed"
+    assert pair.refresh_calls == 1
+
+
 async def test_refresh_failure_is_shared_by_joiners_not_re_run():
     class _FailingRefresher:
         def __init__(self) -> None:
