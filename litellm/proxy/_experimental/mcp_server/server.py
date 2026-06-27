@@ -665,6 +665,90 @@ if MCP_AVAILABLE:
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
 
+    def _capture_host_progress_callback(host_server) -> Optional[Callable]:
+        """Return a progress-forwarding callback bound to the host MCP session.
+
+        Returns ``None`` when the host did not supply a progress token.
+        """
+        try:
+            host_ctx = host_server.request_context
+        except Exception as e:
+            verbose_logger.warning(f"Could not capture host progress context: {e}")
+            return None
+
+        if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
+            return None
+        host_token = getattr(host_ctx.meta, "progressToken", None)
+        if not (host_token and hasattr(host_ctx, "session") and host_ctx.session):
+            return None
+        host_session = host_ctx.session
+
+        async def forward_progress(progress: float, total: Optional[float]):
+            """Forward progress notifications from external MCP to Host"""
+            try:
+                await host_session.send_progress_notification(
+                    progress_token=host_token,
+                    progress=progress,
+                    total=total,
+                )
+                verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+            except Exception as e:
+                verbose_logger.error(f"Failed to forward progress to Host: {e}")
+
+        verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        return forward_progress
+
+    async def _dispatch_virtual_mcp_tool(
+        name: str,
+        arguments: Optional[dict[str, Any]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        client_ip: Optional[str],
+    ) -> Optional[CallToolResult]:
+        """Handle the mcp_tool_search / mcp_tool_call virtual tools.
+
+        Returns a CallToolResult when ``name`` is a virtual tool, else ``None`` so
+        the caller falls through to normal tool routing.
+        """
+        from litellm.proxy._experimental.mcp_server.tool_search import (
+            MCP_TOOL_CALL_TOOL_NAME,
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            handle_mcp_tool_call,
+            handle_mcp_tool_search,
+        )
+
+        if name not in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
+            return None
+
+        if not getattr(
+            getattr(user_api_key_auth, "object_permission", None),
+            "mcp_tool_search_enabled",
+            False,
+        ):
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"Tool {name} requires mcp_tool_search_enabled on the key",
+                    )
+                ],
+                isError=True,
+            )
+
+        args = arguments or {}
+        if name == MCP_TOOL_SEARCH_TOOL_NAME:
+            return await handle_mcp_tool_search(
+                query=args.get("query", ""),
+                top_k=int(args.get("top_k", 5)),
+                user_api_key_dict=user_api_key_auth,
+                client_ip=client_ip,
+            )
+        return await handle_mcp_tool_call(
+            tool_name=args.get("tool_name", ""),
+            arguments=args.get("arguments") or {},
+            user_api_key_dict=user_api_key_auth,
+            client_ip=client_ip,
+        )
+
     @server.call_tool()
     async def mcp_server_tool_call(
         name: str, arguments: Dict[str, Any] | None
@@ -711,77 +795,16 @@ if MCP_AVAILABLE:
                 f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
             )
 
-            from litellm.proxy._experimental.mcp_server.tool_search import (
-                MCP_TOOL_CALL_TOOL_NAME,
-                MCP_TOOL_SEARCH_TOOL_NAME,
-                handle_mcp_tool_call,
-                handle_mcp_tool_search,
+            virtual_tool_result = await _dispatch_virtual_mcp_tool(
+                name=name,
+                arguments=arguments,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=_client_ip,
             )
+            if virtual_tool_result is not None:
+                return virtual_tool_result
 
-            if name in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
-                from mcp.types import CallToolResult, TextContent
-
-                if not getattr(
-                    getattr(user_api_key_auth, "object_permission", None),
-                    "mcp_tool_search_enabled",
-                    False,
-                ):
-                    return CallToolResult(
-                        content=[
-                            TextContent(
-                                type="text",
-                                text=f"Tool {name} requires mcp_tool_search_enabled on the key",
-                            )
-                        ],
-                        isError=True,
-                    )
-                if name == MCP_TOOL_SEARCH_TOOL_NAME:
-                    return await handle_mcp_tool_search(
-                        query=(arguments or {}).get("query", ""),
-                        top_k=int((arguments or {}).get("top_k", 5)),
-                        user_api_key_dict=user_api_key_auth,
-                        client_ip=_client_ip,
-                    )
-                else:
-                    return await handle_mcp_tool_call(
-                        tool_name=(arguments or {}).get("tool_name", ""),
-                        arguments=(arguments or {}).get("arguments") or {},
-                        user_api_key_dict=user_api_key_auth,
-                        client_ip=_client_ip,
-                    )
-
-            host_progress_callback = None
-            try:
-                host_ctx = server.request_context
-                if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
-                    host_token = getattr(host_ctx.meta, "progressToken", None)
-                    if host_token and hasattr(host_ctx, "session") and host_ctx.session:
-                        host_session = host_ctx.session
-
-                        async def forward_progress(
-                            progress: float, total: Optional[float]
-                        ):
-                            """Forward progress notifications from external MCP to Host"""
-                            try:
-                                await host_session.send_progress_notification(
-                                    progress_token=host_token,
-                                    progress=progress,
-                                    total=total,
-                                )
-                                verbose_logger.debug(
-                                    f"Forwarded progress {progress}/{total} to Host"
-                                )
-                            except Exception as e:
-                                verbose_logger.error(
-                                    f"Failed to forward progress to Host: {e}"
-                                )
-
-                        host_progress_callback = forward_progress
-                        verbose_logger.debug(
-                            f"Host progressToken captured: {host_token[:8]}..."
-                        )
-            except Exception as e:
-                verbose_logger.warning(f"Could not capture host progress context: {e}")
+            host_progress_callback = _capture_host_progress_callback(server)
             try:
                 # Create a body date for logging
                 body_data = {"name": name, "arguments": arguments}
