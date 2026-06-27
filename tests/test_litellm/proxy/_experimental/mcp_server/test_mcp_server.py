@@ -4154,6 +4154,185 @@ async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_call_mcp_tool_failure_hook_preserves_call_type_and_metadata():
+    """
+    Ensure unresolved local-registry tool failures log as MCP tool calls with attempted tool metadata.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            call_mcp_tool,
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    mock_server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+    # Assumes the default MCP_TOOL_PREFIX_SEPARATOR="-".
+    requested_tool_name = "test_server-totally_made_up_tool"
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[mock_server.server_id],
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            return_value=mock_server,
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[mock_server],
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            proxy_logging_mock,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name=requested_tool_name,
+                arguments={"x": 1},
+                user_api_key_auth=user_auth,
+                litellm_call_id="cid",
+            )
+
+    assert exc_info.value.status_code == 404
+    proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
+    request_data = proxy_logging_mock.post_call_failure_hook.await_args.kwargs[
+        "request_data"
+    ]
+    assert request_data["call_type"] == "call_mcp_tool"
+    assert request_data["model"] == f"MCP: {requested_tool_name}"
+    assert request_data["litellm_call_id"] == "cid"
+    mcp_tool_call_metadata = request_data["metadata"]["mcp_tool_call_metadata"]
+    assert mcp_tool_call_metadata["name"] == "totally_made_up_tool"
+    assert mcp_tool_call_metadata["arguments"] == {"x": 1}
+    assert (
+        mcp_tool_call_metadata["namespaced_tool_name"]
+        == "test_server/totally_made_up_tool"
+    )
+    assert mcp_tool_call_metadata["mcp_session_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_failure_hook_uses_logging_metadata_without_clearing_model():
+    """
+    Ensure logging-object metadata is preserved without replacing the fallback model with None.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            call_mcp_tool,
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport, UserAPIKeyAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    mock_server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+    logging_metadata = {
+        "name": "any_tool",
+        "arguments": {"x": 2},
+        "namespaced_tool_name": "test_server/any_tool",
+        "mcp_session_id": None,
+    }
+    litellm_logging_obj = MagicMock()
+    litellm_logging_obj.model_call_details = {
+        "model": None,
+        "mcp_tool_call_metadata": logging_metadata,
+    }
+    litellm_logging_obj.async_failure_handler = AsyncMock()
+    litellm_logging_obj.failure_handler = MagicMock()
+
+    proxy_logging_mock = MagicMock()
+    proxy_logging_mock.post_call_failure_hook = AsyncMock()
+
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[mock_server.server_id],
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            return_value=mock_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[mock_server],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+            new_callable=AsyncMock,
+            side_effect=Exception("boom"),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            proxy_logging_mock,
+        ),
+    ):
+        with pytest.raises(Exception, match="boom"):
+            await call_mcp_tool(
+                name="test_server-any_tool",
+                arguments={"x": 2},
+                user_api_key_auth=user_auth,
+                litellm_call_id="cid",
+                litellm_logging_obj=litellm_logging_obj,
+            )
+
+    proxy_logging_mock.post_call_failure_hook.assert_awaited_once()
+    request_data = proxy_logging_mock.post_call_failure_hook.await_args.kwargs[
+        "request_data"
+    ]
+    assert request_data["model"] == "MCP: test_server-any_tool"
+    mcp_tool_call_metadata = request_data["metadata"]["mcp_tool_call_metadata"]
+    assert mcp_tool_call_metadata["name"] == logging_metadata["name"]
+    assert mcp_tool_call_metadata["arguments"] == logging_metadata["arguments"]
+    assert (
+        mcp_tool_call_metadata["namespaced_tool_name"]
+        == logging_metadata["namespaced_tool_name"]
+    )
+    assert mcp_tool_call_metadata["mcp_session_id"] is None
+
+
+@pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enabled():
     """
     Regression test for 872e5b98...:
