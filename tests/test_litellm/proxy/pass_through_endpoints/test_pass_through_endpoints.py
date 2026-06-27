@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -7,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Request, UploadFile
+from fastapi import FastAPI, Request, Response, UploadFile
 from starlette.datastructures import Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -15,6 +16,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
     HttpPassThroughEndpointHelpers,
@@ -3313,3 +3315,127 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
+
+
+def test_get_response_headers_sanitizes_custom_headers():
+    """Regression: the non-streaming passthrough finalizer passes
+    dict(fastapi_response.headers) as custom_headers, and an empty FastAPI
+    Response carries a default content-length: 0. Custom headers must run through
+    the same exclusion list as upstream headers so framework defaults can't
+    override the real body length, while genuine litellm metadata still passes."""
+    upstream_headers = httpx.Headers(
+        {"content-type": "application/json", "content-length": "42"}
+    )
+    custom_headers = {
+        "content-length": "0",
+        "transfer-encoding": "chunked",
+        "x-litellm-call-id": "call-123",
+        "x-litellm-version": "1.2.3",
+    }
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(
+        upstream_headers, custom_headers=custom_headers
+    )
+
+    lowered = {k.lower(): v for k, v in result.items()}
+    assert "content-length" not in lowered
+    assert "transfer-encoding" not in lowered
+    assert lowered["x-litellm-call-id"] == "call-123"
+    assert lowered["x-litellm-version"] == "1.2.3"
+
+
+class _FakeUpstreamResponse:
+    """Stands in for the httpx upstream response the passthrough finalizer
+    reads. Only the attributes the finalizer touches are implemented."""
+
+    def __init__(self, body: bytes, headers: httpx.Headers, status_code: int = 200):
+        self._body = body
+        self.headers = headers
+        self.status_code = status_code
+
+    async def aread(self) -> bytes:
+        return self._body
+
+
+class _StubPassthroughProcessing(ProxyBaseLLMRequestProcessing):
+    """Drives the real ``base_passthrough_process_llm_request`` finalizer while
+    short-circuiting the upstream call via override (no monkeypatching)."""
+
+    def __init__(self, upstream: _FakeUpstreamResponse):
+        super().__init__(data={})
+        self._upstream = upstream
+
+    async def base_process_llm_request(self, *args, **kwargs):  # type: ignore[override]
+        return self._upstream
+
+
+def test_bedrock_passthrough_nonempty_body_survives_http_serialization():
+    """Regression for the v1.85.0 Bedrock passthrough Content-Length bug.
+
+    Drives the real ``base_passthrough_process_llm_request`` finalizer, which
+    merges ``dict(fastapi_response.headers)`` into the response. The placeholder
+    FastAPI Response carries a default content-length: 0; if that leaks past
+    ``get_response_headers`` it overrides the real upstream length, so a
+    non-empty Bedrock body is served with a Content-Length that no longer matches
+    it. The finalizer's output is serialized through an in-process ASGI server
+    (httpx.ASGITransport) and the Content-Length the client receives is asserted
+    against the served body, the mismatch the object-level assertion in #27412
+    didn't check. This folder is mock-only (see tests/test_litellm/readme.md), so
+    the test stays in-process instead of binding a real socket."""
+    upstream_body = json.dumps(
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "hello from bedrock"}],
+                }
+            }
+        }
+    ).encode()
+
+    upstream = _FakeUpstreamResponse(
+        body=upstream_body,
+        headers=httpx.Headers(
+            {
+                "content-type": "application/json",
+                "content-length": str(len(upstream_body)),
+                "x-amzn-requestid": "bedrock-request-id",
+            }
+        ),
+    )
+
+    fastapi_response = Response()
+    fastapi_response.headers["x-litellm-call-id"] = "test-call-id"
+
+    async def _drive_and_serve() -> httpx.Response:
+        final_response = await _StubPassthroughProcessing(
+            upstream
+        ).base_passthrough_process_llm_request(
+            request=MagicMock(),
+            fastapi_response=fastapi_response,
+            user_api_key_dict=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            general_settings={},
+            proxy_config=MagicMock(),
+            select_data_generator=MagicMock(),
+        )
+
+        app = FastAPI()
+
+        @app.get("/bedrock/passthrough")
+        async def _bedrock_passthrough() -> Response:
+            return final_response
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://bedrock-passthrough"
+        ) as client:
+            return await client.get("/bedrock/passthrough")
+
+    response = asyncio.run(_drive_and_serve())
+
+    assert response.status_code == 200
+    assert response.content == upstream_body
+    assert int(response.headers["content-length"]) == len(upstream_body)
+    assert response.headers["x-amzn-requestid"] == "bedrock-request-id"
+    assert response.headers["x-litellm-call-id"] == "test-call-id"
