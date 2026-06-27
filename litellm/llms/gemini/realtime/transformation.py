@@ -60,9 +60,7 @@ from litellm.utils import get_empty_usage
 
 from ..common_utils import encode_unserializable_types, get_api_key_from_env
 
-MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[
-    str, Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]
-] = {
+MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[str, Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]] = {
     "setupComplete": OpenAIRealtimeEventTypes.SESSION_CREATED,
     "serverContent.generationComplete": OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE,
     "serverContent.turnComplete": OpenAIRealtimeEventTypes.RESPONSE_DONE,
@@ -71,9 +69,7 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Dict[
 }
 
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
-_KNOWN_GEMINI_TOP_LEVEL_KEYS: set = {
-    map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT
-}
+_KNOWN_GEMINI_TOP_LEVEL_KEYS: set = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
 
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
@@ -90,9 +86,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return "setup" in msg_obj
 
     def is_content_message(self, msg_obj: dict) -> bool:
-        return any(
-            k in msg_obj for k in ("realtimeInput", "clientContent", "toolResponse")
-        )
+        return any(k in msg_obj for k in ("realtimeInput", "clientContent", "toolResponse"))
 
     def _include_function_response_id(self) -> bool:
         """Google AI Studio Gemini 3.5+ accepts ``id`` on functionResponses; Vertex AI rejects it."""
@@ -125,14 +119,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return usage_dict
 
-    def validate_environment(
-        self, headers: dict, model: str, api_key: Optional[str] = None
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, api_key: Optional[str] = None) -> dict:
         return headers
 
-    def get_complete_url(
-        self, api_base: Optional[str], model: str, api_key: Optional[str] = None
-    ) -> str:
+    def get_complete_url(self, api_base: Optional[str], model: str, api_key: Optional[str] = None) -> str:
         """
         Example output:
         "BACKEND_WS_URL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"";
@@ -151,9 +141,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # already covers the main leak vector.
         return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
 
-    def map_model_turn_event(
-        self, model_turn: HttpxContentType
-    ) -> OpenAIRealtimeEventTypes:
+    def map_model_turn_event(self, model_turn: HttpxContentType) -> OpenAIRealtimeEventTypes:
         """
         Map the model turn event to the OpenAI realtime events.
 
@@ -166,9 +154,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if "parts" in model_turn:
             parts = model_turn["parts"]
             if len(parts) != 1:
-                verbose_logger.warning(
-                    f"Realtime: Expected 1 part, got {len(parts)} for Gemini model turn event."
-                )
+                verbose_logger.warning(f"Realtime: Expected 1 part, got {len(parts)} for Gemini model turn event.")
             part = parts[0]
             if "text" in part:
                 return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DELTA
@@ -178,9 +164,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 raise ValueError(f"Unexpected part type: {part}")
         raise ValueError(f"Unexpected model turn event, no 'parts' key: {model_turn}")
 
-    def map_generation_complete_event(
-        self, delta_type: Optional[ALL_DELTA_TYPES]
-    ) -> OpenAIRealtimeEventTypes:
+    def map_generation_complete_event(self, delta_type: Optional[ALL_DELTA_TYPES]) -> OpenAIRealtimeEventTypes:
         if delta_type == "text":
             return OpenAIRealtimeEventTypes.RESPONSE_TEXT_DONE
         elif delta_type == "audio":
@@ -197,55 +181,36 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return mime_types.get(input_audio_format, "application/octet-stream")
 
-    def _manual_turn_detection_enabled(
-        self, session_configuration_request: Optional[str]
-    ) -> bool:
+    def _manual_turn_detection_enabled(self, session_configuration_request: Optional[str]) -> bool:
         if not session_configuration_request:
             return False
         try:
             setup = json.loads(session_configuration_request).get("setup", {})
-            automatic_detection = setup.get("realtimeInputConfig", {}).get(
-                "automaticActivityDetection", {}
-            )
-            return (
-                isinstance(automatic_detection, dict)
-                and automatic_detection.get("disabled") is True
-            )
+            automatic_detection = setup.get("realtimeInputConfig", {}).get("automaticActivityDetection", {})
+            return isinstance(automatic_detection, dict) and automatic_detection.get("disabled") is True
         except (json.JSONDecodeError, TypeError, AttributeError):
             return False
 
-    def _handle_input_audio_buffer_commit_or_end(
-        self, session_configuration_request: Optional[str]
-    ) -> List[str]:
+    def _handle_input_audio_buffer_commit_or_end(self, session_configuration_request: Optional[str]) -> List[str]:
         """Map OpenAI buffer commit/end to Gemini Live turn-boundary signals."""
         if self._manual_turn_detection_enabled(session_configuration_request):
             realtime_input_dict: BidiGenerateContentRealtimeInput = {
                 "activityEnd": True,
             }
-            verbose_logger.debug(
-                "Gemini Realtime: Sending activityEnd realtimeInput to backend"
-            )
+            verbose_logger.debug("Gemini Realtime: Sending activityEnd realtimeInput to backend")
         else:
             realtime_input_dict = {"audioStreamEnd": True}
-            verbose_logger.debug(
-                "Gemini Realtime: Sending audioStreamEnd realtimeInput to backend"
-            )
+            verbose_logger.debug("Gemini Realtime: Sending audioStreamEnd realtimeInput to backend")
         return [json.dumps({"realtimeInput": realtime_input_dict})]
 
-    def map_automatic_turn_detection(
-        self, value: OpenAIRealtimeTurnDetection
-    ) -> AutomaticActivityDetection:
+    def map_automatic_turn_detection(self, value: OpenAIRealtimeTurnDetection) -> AutomaticActivityDetection:
         """Map OpenAI ``server_vad`` to Gemini ``automaticActivityDetection``.
 
         OpenAI ``semantic_vad`` has no Gemini Live equivalent — return an empty
         dict so callers omit ``realtimeInputConfig`` (mapping it with
         ``disabled: true`` breaks native-audio sessions).
         """
-        if (
-            isinstance(value, dict)
-            and value.get("type") == "semantic_vad"
-            and "create_response" not in value
-        ):
+        if isinstance(value, dict) and value.get("type") == "semantic_vad" and "create_response" not in value:
             return AutomaticActivityDetection()
 
         automatic_activity_dection = AutomaticActivityDetection()
@@ -258,12 +223,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             automatic_activity_dection["disabled"] = True
         if "prefix_padding_ms" in value and isinstance(value["prefix_padding_ms"], int):
             automatic_activity_dection["prefixPaddingMs"] = value["prefix_padding_ms"]
-        if "silence_duration_ms" in value and isinstance(
-            value["silence_duration_ms"], int
-        ):
-            automatic_activity_dection["silenceDurationMs"] = value[
-                "silence_duration_ms"
-            ]
+        if "silence_duration_ms" in value and isinstance(value["silence_duration_ms"], int):
+            automatic_activity_dection["silenceDurationMs"] = value["silence_duration_ms"]
         return automatic_activity_dection
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -278,16 +239,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "voice",
         ]
 
-    def map_openai_params(
-        self, optional_params: dict, non_default_params: dict
-    ) -> dict:
+    def map_openai_params(self, optional_params: dict, non_default_params: dict) -> dict:
         if "generationConfig" not in optional_params:
             optional_params["generationConfig"] = {}
         for key, value in non_default_params.items():
             if key == "instructions":
-                optional_params["systemInstruction"] = HttpxContentType(
-                    role="user", parts=[{"text": value}]
-                )
+                optional_params["systemInstruction"] = HttpxContentType(role="user", parts=[{"text": value}])
             elif key == "temperature":
                 optional_params["generationConfig"]["temperature"] = value
             elif key == "max_response_output_tokens":
@@ -319,14 +276,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     # Only skip when there is no create_response override so that
                     # a guardrail-injected create_response:false is not dropped.
                     continue
-                transformed_audio_activity_config = self.map_automatic_turn_detection(
-                    value_typed
-                )
+                transformed_audio_activity_config = self.map_automatic_turn_detection(value_typed)
                 if transformed_audio_activity_config:
-                    optional_params["realtimeInputConfig"] = (
-                        BidiGenerateContentRealtimeInputConfig(
-                            automaticActivityDetection=transformed_audio_activity_config
-                        )
+                    optional_params["realtimeInputConfig"] = BidiGenerateContentRealtimeInputConfig(
+                        automaticActivityDetection=transformed_audio_activity_config
                     )
             elif key == "voice":
                 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -387,21 +340,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if isinstance(audio, dict):
             input_cfg = audio.get("input")
             if isinstance(input_cfg, dict):
-                if (
-                    "input_audio_transcription" not in normalized
-                    and "transcription" in input_cfg
-                ):
+                if "input_audio_transcription" not in normalized and "transcription" in input_cfg:
                     normalized["input_audio_transcription"] = input_cfg["transcription"]
             output_cfg = audio.get("output")
             if isinstance(output_cfg, dict) and output_cfg.get("voice"):
                 normalized["voice"] = output_cfg["voice"]
 
-        extracted_turn_detection = GeminiRealtimeConfig._extract_turn_detection(
-            normalized
-        )
-        if extracted_turn_detection is not None and not isinstance(
-            normalized.get("turn_detection"), dict
-        ):
+        extracted_turn_detection = GeminiRealtimeConfig._extract_turn_detection(normalized)
+        if extracted_turn_detection is not None and not isinstance(normalized.get("turn_detection"), dict):
             normalized["turn_detection"] = extracted_turn_detection
 
         return normalized
@@ -411,30 +357,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         entry = litellm.model_cost.get(model)
         if entry is None:
             stripped = model.split("/", 1)[-1]
-            entry = litellm.model_cost.get(stripped) or litellm.model_cost.get(
-                f"gemini/{stripped}"
-            )
+            entry = litellm.model_cost.get(stripped) or litellm.model_cost.get(f"gemini/{stripped}")
         return entry or {}
 
     @staticmethod
     def _is_audio_only_live_model(model: str) -> bool:
         entry = GeminiRealtimeConfig._model_cost_entry(model)
-        return bool(
-            entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live")
-        )
+        return bool(entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live"))
 
     @staticmethod
     def _is_native_audio_model(model: str) -> bool:
-        return bool(
-            GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio")
-        )
+        return bool(GeminiRealtimeConfig._model_cost_entry(model).get("gemini_native_audio"))
 
     @staticmethod
     def _coerce_response_modalities(model: str, modalities: list[Any]) -> list[str]:
         """Map unsupported TEXT responseModalities to AUDIO for audio-only Live models."""
         normalized = [
-            modality.upper() if isinstance(modality, str) else str(modality).upper()
-            for modality in modalities
+            modality.upper() if isinstance(modality, str) else str(modality).upper() for modality in modalities
         ]
         if not GeminiRealtimeConfig._is_audio_only_live_model(model):
             return normalized
@@ -444,16 +383,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return without_text if without_text else ["AUDIO"]
 
     @staticmethod
-    def _finalize_gemini_live_setup(
-        model: str, setup: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _finalize_gemini_live_setup(model: str, setup: Dict[str, Any]) -> Dict[str, Any]:
         """Drop fields Gemini Live native-audio rejects on ``setup``."""
         generation_config = setup.get("generationConfig")
         if isinstance(generation_config, dict):
             modalities = generation_config.get("responseModalities")
             if isinstance(modalities, list):
-                generation_config["responseModalities"] = (
-                    GeminiRealtimeConfig._coerce_response_modalities(model, modalities)
+                generation_config["responseModalities"] = GeminiRealtimeConfig._coerce_response_modalities(
+                    model, modalities
                 )
             if GeminiRealtimeConfig._is_native_audio_model(model):
                 generation_config.pop("speechConfig", None)
@@ -490,28 +427,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # would be silently dropped because ``map_openai_params`` only
         # recognises the flat OpenAI-beta key names.
         session_payload = self._normalize_session_payload_for_mapping(session_payload)
-        new_overrides = self.map_openai_params(
-            optional_params={}, non_default_params=session_payload
-        )
+        new_overrides = self.map_openai_params(optional_params={}, non_default_params=session_payload)
 
         if session_configuration_request is None:
             generation_config = new_overrides.setdefault("generationConfig", {})
             generation_config.setdefault("responseModalities", ["AUDIO"])
             new_overrides.setdefault("inputAudioTranscription", {})
             new_overrides["model"] = f"models/{model}"
-            verbose_logger.debug(
-                "Gemini Realtime: Sending initial setup with tools to backend"
-            )
-            return [
-                json.dumps(
-                    {"setup": self._finalize_gemini_live_setup(model, new_overrides)}
-                )
-            ]
+            verbose_logger.debug("Gemini Realtime: Sending initial setup with tools to backend")
+            return [json.dumps({"setup": self._finalize_gemini_live_setup(model, new_overrides)})]
 
         if not new_overrides:
-            verbose_logger.debug(
-                "Gemini Realtime: Ignoring session.update (no mappable fields)"
-            )
+            verbose_logger.debug("Gemini Realtime: Ignoring session.update (no mappable fields)")
             return []
 
         try:
@@ -534,18 +461,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         }
         original_generation_config = original_setup.get("generationConfig")
         new_generation_config = new_overrides.get("generationConfig")
-        if isinstance(original_generation_config, dict) and isinstance(
-            new_generation_config, dict
-        ):
+        if isinstance(original_generation_config, dict) and isinstance(new_generation_config, dict):
             follow_up_setup["generationConfig"] = {
                 **original_generation_config,
                 **new_generation_config,
             }
         original_realtime_input_config = original_setup.get("realtimeInputConfig")
         new_realtime_input_config = new_overrides.get("realtimeInputConfig")
-        if isinstance(original_realtime_input_config, dict) and isinstance(
-            new_realtime_input_config, dict
-        ):
+        if isinstance(original_realtime_input_config, dict) and isinstance(new_realtime_input_config, dict):
             merged_realtime_input_config = {
                 **original_realtime_input_config,
                 **new_realtime_input_config,
@@ -555,12 +478,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             # ``create_response: False``) does not silently drop unrelated
             # knobs like ``silenceDurationMs`` / ``prefixPaddingMs`` from
             # the original setup.
-            original_automatic_activity_detection = original_realtime_input_config.get(
-                "automaticActivityDetection"
-            )
-            new_automatic_activity_detection = new_realtime_input_config.get(
-                "automaticActivityDetection"
-            )
+            original_automatic_activity_detection = original_realtime_input_config.get("automaticActivityDetection")
+            new_automatic_activity_detection = new_realtime_input_config.get("automaticActivityDetection")
             if isinstance(original_automatic_activity_detection, dict) and isinstance(
                 new_automatic_activity_detection, dict
             ):
@@ -572,21 +491,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 BidiGenerateContentRealtimeInputConfig,
                 merged_realtime_input_config,
             )
-        finalized_follow_up = self._finalize_gemini_live_setup(
-            model, cast(dict[str, Any], follow_up_setup)
-        )
+        finalized_follow_up = self._finalize_gemini_live_setup(model, cast(dict[str, Any], follow_up_setup))
         # Skip if the follow-up setup is identical to the one already sent.
         # The final session.update from Pipecat's _create_response (after history
         # items) matches the pre-history session.update we intentionally sent
         # before content; sending a duplicate at that point would risk a 1007.
         if finalized_follow_up == original_setup:
-            verbose_logger.debug(
-                "Gemini Realtime: Skipping duplicate follow-up session.update (no changes)"
-            )
+            verbose_logger.debug("Gemini Realtime: Skipping duplicate follow-up session.update (no changes)")
             return []
-        verbose_logger.debug(
-            "Gemini Realtime: Forwarding session.update as follow-up setup"
-        )
+        verbose_logger.debug("Gemini Realtime: Forwarding session.update as follow-up setup")
         return [json.dumps({"setup": finalized_follow_up})]
 
     def _handle_conversation_item(self, json_message: dict) -> List[str]:
@@ -608,20 +521,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         call_id = item.get("call_id", "")
         output = item.get("output", "{}")
 
-        verbose_logger.debug(
-            f"Gemini Realtime: Transforming function_call_output for call_id={call_id}"
-        )
+        verbose_logger.debug(f"Gemini Realtime: Transforming function_call_output for call_id={call_id}")
 
         # Gemini functionResponses[].response must be a dict; wrap non-dicts.
         try:
             parsed_output = json.loads(output) if isinstance(output, str) else output
         except json.JSONDecodeError:
             parsed_output = output
-        output_dict = (
-            parsed_output
-            if isinstance(parsed_output, dict)
-            else {"result": parsed_output}
-        )
+        output_dict = parsed_output if isinstance(parsed_output, dict) else {"result": parsed_output}
 
         # Keep the entry (don't delete) so retried tool responses still find the name.
         function_name = self._tool_call_id_to_name.get(call_id)
@@ -639,20 +546,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if function_name:
             function_response["name"] = function_name
 
-        tool_response_message = {
-            "toolResponse": {"functionResponses": [function_response]}
-        }
+        tool_response_message = {"toolResponse": {"functionResponses": [function_response]}}
 
         return [json.dumps(tool_response_message)]
 
     def _handle_user_text_content(self, item: dict) -> List[str]:
         """Transform user text content to Gemini clientContent format."""
         content_list = item.get("content", [])
-        text_parts = [
-            c.get("text", "")
-            for c in content_list
-            if isinstance(c, dict) and c.get("type") == "input_text"
-        ]
+        text_parts = [c.get("text", "") for c in content_list if isinstance(c, dict) and c.get("type") == "input_text"]
         text = " ".join(filter(None, text_parts))
         if not text:
             return []
@@ -686,9 +587,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         msg_type = json_message.get("type")
 
         if msg_type == "session.update":
-            return self._handle_session_update(
-                json_message, model, session_configuration_request
-            )
+            return self._handle_session_update(json_message, model, session_configuration_request)
 
         if msg_type == "response.create":
             return []  # Gemini responds automatically; nothing to forward
@@ -703,22 +602,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
             realtime_input_dict = cast(
                 BidiGenerateContentRealtimeInput,
-                encode_unserializable_types(
-                    cast(Dict[str, object], realtime_input_dict)
-                ),
+                encode_unserializable_types(cast(Dict[str, object], realtime_input_dict)),
             )
 
             gemini_msg = json.dumps({"realtimeInput": realtime_input_dict})
-            verbose_logger.debug(
-                "Gemini Realtime: Sending audio realtimeInput to backend"
-            )
+            verbose_logger.debug("Gemini Realtime: Sending audio realtimeInput to backend")
             messages.append(gemini_msg)
             return messages
 
         if msg_type in ("input_audio_buffer.commit", "input_audio_buffer.end"):
-            return self._handle_input_audio_buffer_commit_or_end(
-                session_configuration_request
-            )
+            return self._handle_input_audio_buffer_commit_or_end(session_configuration_request)
 
         if msg_type == "input_audio_buffer.clear":
             return []  # local buffer op, nothing to forward
@@ -739,16 +632,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             session_configuration_request_dict = {}
 
         _model = session_configuration_request_dict.get("model") or model
-        generation_config = (
-            session_configuration_request_dict.get("generationConfig", {}) or {}
-        )
+        generation_config = session_configuration_request_dict.get("generationConfig", {}) or {}
         gemini_modalities = generation_config.get("responseModalities", ["AUDIO"])
-        _modalities = [
-            modality.lower() for modality in cast(List[str], gemini_modalities)
-        ]
-        _system_instruction = session_configuration_request_dict.get(
-            "systemInstruction"
-        )
+        _modalities = [modality.lower() for modality in cast(List[str], gemini_modalities)]
+        _system_instruction = session_configuration_request_dict.get("systemInstruction")
         session = OpenAIRealtimeStreamSession(
             id=logging_session_id,
             modalities=_modalities,
@@ -776,9 +663,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     ) -> bool:
         if previous_messages is None or len(previous_messages) == 0:
             return True
-        if "type" in previous_messages[-1] and previous_messages[-1]["type"].endswith(
-            "delta"
-        ):
+        if "type" in previous_messages[-1] and previous_messages[-1]["type"].endswith("delta"):
             return False
         return True
 
@@ -793,18 +678,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         session_configuration_request_dict: BidiGenerateContentSetup = {}
         if session_configuration_request is not None:
             try:
-                session_configuration_request_dict = json.loads(
-                    session_configuration_request
-                ).get("setup", {})
+                session_configuration_request_dict = json.loads(session_configuration_request).get("setup", {})
             except json.JSONDecodeError:
                 session_configuration_request_dict = {}
-        generation_config = session_configuration_request_dict.get(
-            "generationConfig", {}
-        )
+        generation_config = session_configuration_request_dict.get("generationConfig", {})
         gemini_modalities = generation_config.get("responseModalities", ["AUDIO"])
-        _modalities = [
-            modality.lower() for modality in cast(List[str], gemini_modalities)
-        ]
+        _modalities = [modality.lower() for modality in cast(List[str], gemini_modalities)]
 
         _temperature = generation_config.get("temperature")
         _max_output_tokens = generation_config.get("maxOutputTokens")
@@ -904,16 +783,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     elif "inlineData" in part:
                         delta += part["inlineData"].get("data", "")
         except Exception as e:
-            raise ValueError(
-                f"Error transforming content delta events: {e}, got message: {message}"
-            )
+            raise ValueError(f"Error transforming content delta events: {e}, got message: {message}")
 
         return OpenAIRealtimeResponseDelta(
-            type=(
-                "response.output_text.delta"
-                if delta_type == "text"
-                else "response.output_audio.delta"
-            ),
+            type=("response.output_text.delta" if delta_type == "text" else "response.output_audio.delta"),
             content_index=0,
             event_id="event_{}".format(uuid.uuid4()),
             item_id=output_item_id,
@@ -961,9 +834,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self,
         current_output_item_id: Optional[str],
         current_response_id: Optional[str],
-        delta_done_event: Union[
-            OpenAIRealtimeResponseTextDone, OpenAIRealtimeResponseAudioDone
-        ],
+        delta_done_event: Union[OpenAIRealtimeResponseTextDone, OpenAIRealtimeResponseAudioDone],
         delta_type: ALL_DELTA_TYPES,
     ) -> List[OpenAIRealtimeEvents]:
         """
@@ -1046,9 +917,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         resolved_response_id = response_id or f"resp_{uuid.uuid4()}"
         resolved_output_item_id = output_item_id or f"item_{uuid.uuid4()}"
 
-        verbose_logger.debug(
-            f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format"
-        )
+        verbose_logger.debug(f"Gemini Realtime: Transforming {len(function_calls)} tool call(s) to OpenAI format")
 
         events: List[OpenAIRealtimeFunctionCallArgumentsDone] = []
         for idx, fc in enumerate(function_calls):
@@ -1098,9 +967,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 any_delta_chunk = False
                 for event in transformed_message:
                     if event["type"] == "response.output_text.delta":
-                        current_delta_chunks.append(
-                            cast(OpenAIRealtimeResponseDelta, event)
-                        )
+                        current_delta_chunks.append(cast(OpenAIRealtimeResponseDelta, event))
                         any_delta_chunk = True
                 if not any_delta_chunk:
                     current_delta_chunks = None
@@ -1110,9 +977,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 ):  # audio deltas are not accumulated (memory)
                     if current_delta_chunks is None:
                         current_delta_chunks = []
-                    current_delta_chunks.append(
-                        cast(OpenAIRealtimeResponseDelta, transformed_message)
-                    )
+                    current_delta_chunks.append(cast(OpenAIRealtimeResponseDelta, transformed_message))
                 else:
                     current_delta_chunks = None
             return current_delta_chunks
@@ -1132,9 +997,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 any_item_chunk = False
                 for event in transformed_message:
                     if event["type"] == "response.output_item.done":
-                        current_item_chunks.append(
-                            cast(OpenAIRealtimeOutputItemDone, event)
-                        )
+                        current_item_chunks.append(cast(OpenAIRealtimeOutputItemDone, event))
                         any_item_chunk = True
                 if not any_item_chunk:
                     current_item_chunks = None
@@ -1142,16 +1005,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if transformed_message["type"] == "response.output_item.done":
                     if current_item_chunks is None:
                         current_item_chunks = []
-                    current_item_chunks.append(
-                        cast(OpenAIRealtimeOutputItemDone, transformed_message)
-                    )
+                    current_item_chunks.append(cast(OpenAIRealtimeOutputItemDone, transformed_message))
                 else:
                     current_item_chunks = None
             return current_item_chunks
         except Exception as e:
-            raise ValueError(
-                f"Error updating current item chunks: {e}, got transformed_message: {transformed_message}"
-            )
+            raise ValueError(f"Error updating current item chunks: {e}, got transformed_message: {transformed_message}")
 
     def transform_response_done_event(
         self,
@@ -1173,18 +1032,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         else:
             session_configuration_request_dict = {}
 
-        generation_config = session_configuration_request_dict.get(
-            "generationConfig", {}
-        )
+        generation_config = session_configuration_request_dict.get("generationConfig", {})
         temperature = generation_config.get("temperature")
         max_output_tokens = generation_config.get("maxOutputTokens")
         gemini_modalities = generation_config.get("responseModalities", ["AUDIO"])
-        _modalities = [
-            modality.lower() for modality in cast(List[str], gemini_modalities)
-        ]
-        resolved_usage_metadata = self._consume_usage_metadata_for_response_done(
-            cast(dict, message)
-        )
+        _modalities = [modality.lower() for modality in cast(List[str], gemini_modalities)]
+        resolved_usage_metadata = self._consume_usage_metadata_for_response_done(cast(dict, message))
         if resolved_usage_metadata is not None:
             _chat_completion_usage = VertexGeminiConfig._calculate_usage(
                 completion_response=cast(
@@ -1208,11 +1061,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 id=current_response_id,
                 status="completed",
                 status_details=None,  # type: ignore[typeddict-item]
-                output=(
-                    [output_item["item"] for output_item in output_items]
-                    if output_items
-                    else []
-                ),
+                output=([output_item["item"] for output_item in output_items] if output_items else []),
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
                 usage=_usage_dict,
@@ -1221,9 +1070,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         if temperature is not None:
             response_done_event["response"]["temperature"] = temperature
         if max_output_tokens is not None:
-            response_done_event["response"]["max_output_tokens"] = cast(
-                int, max_output_tokens
-            )
+            response_done_event["response"]["max_output_tokens"] = cast(int, max_output_tokens)
 
         return response_done_event
 
@@ -1234,17 +1081,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         realtime_response_transform_input: RealtimeResponseTransformInput,
         delta_type: ALL_DELTA_TYPES,
     ) -> RealtimeModalityResponseTransformOutput:
-        current_output_item_id = realtime_response_transform_input[
-            "current_output_item_id"
-        ]
+        current_output_item_id = realtime_response_transform_input["current_output_item_id"]
         current_response_id = realtime_response_transform_input["current_response_id"]
-        current_conversation_id = realtime_response_transform_input[
-            "current_conversation_id"
-        ]
+        current_conversation_id = realtime_response_transform_input["current_conversation_id"]
         current_delta_chunks = realtime_response_transform_input["current_delta_chunks"]
-        session_configuration_request = realtime_response_transform_input[
-            "session_configuration_request"
-        ]
+        session_configuration_request = realtime_response_transform_input["session_configuration_request"]
 
         returned_message: List[OpenAIRealtimeEvents] = []
         if (
@@ -1255,9 +1096,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             if not current_output_item_id:
                 # send the list of standard 'new' content.delta events
                 current_output_item_id = "item_{}".format(uuid.uuid4())
-                current_conversation_id = current_conversation_id or "conv_{}".format(
-                    uuid.uuid4()
-                )
+                current_conversation_id = current_conversation_id or "conv_{}".format(uuid.uuid4())
                 returned_message = self.return_new_content_delta_events(
                     session_configuration_request=session_configuration_request,
                     response_id=current_response_id,
@@ -1288,12 +1127,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
             # Use IDs from the done event — transform_content_done_event may have
             # generated UUID fallbacks when the originals were None.
-            resolved_item_id = (
-                transformed_content_done_event.get("item_id") or current_output_item_id
-            )
-            resolved_response_id = (
-                transformed_content_done_event.get("response_id") or current_response_id
-            )
+            resolved_item_id = transformed_content_done_event.get("item_id") or current_output_item_id
+            resolved_response_id = transformed_content_done_event.get("response_id") or current_response_id
 
             additional_items = self.return_additional_content_done_events(
                 current_output_item_id=resolved_item_id,
@@ -1324,15 +1159,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         else:
             model_turn_event = None
             generation_complete_event = None
-        openai_event: Optional[
-            Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]
-        ] = None
+        openai_event: Optional[Union[OpenAIRealtimeEventTypes, ResponsesAPIStreamEvents]] = None
         if model_turn_event:  # check if model turn event
             openai_event = self.map_model_turn_event(model_turn_event)
         elif generation_complete_event:
-            openai_event = self.map_generation_complete_event(
-                delta_type=current_delta_type
-            )
+            openai_event = self.map_generation_complete_event(delta_type=current_delta_type)
         else:
             # Check if this key or any nested key matches our mapping. Use a
             # distinct loop variable so we don't shadow ``openai_event`` and
@@ -1350,8 +1181,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     if (
                         prefix == key
                         and isinstance(value, dict)
-                        and GeminiRealtimeConfig.get_nested_value(value, nested_path)
-                        is not None
+                        and GeminiRealtimeConfig.get_nested_value(value, nested_path) is not None
                     ):
                         openai_event = candidate_event
                         break
@@ -1380,30 +1210,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         verbose_logger.debug(
             "Realtime Response Transform: Gemini frame keys=%s",
-            (
-                sorted(json_message.keys())
-                if isinstance(json_message, dict)
-                else type(json_message).__name__
-            ),
+            (sorted(json_message.keys()) if isinstance(json_message, dict) else type(json_message).__name__),
         )
 
         logging_session_id = logging_obj.litellm_trace_id
 
-        current_output_item_id = realtime_response_transform_input[
-            "current_output_item_id"
-        ]
+        current_output_item_id = realtime_response_transform_input["current_output_item_id"]
         current_response_id = realtime_response_transform_input["current_response_id"]
-        current_conversation_id = realtime_response_transform_input[
-            "current_conversation_id"
-        ]
+        current_conversation_id = realtime_response_transform_input["current_conversation_id"]
         current_delta_chunks = realtime_response_transform_input["current_delta_chunks"]
-        session_configuration_request = realtime_response_transform_input[
-            "session_configuration_request"
-        ]
+        session_configuration_request = realtime_response_transform_input["session_configuration_request"]
         current_item_chunks = realtime_response_transform_input["current_item_chunks"]
-        current_delta_type: Optional[ALL_DELTA_TYPES] = (
-            realtime_response_transform_input["current_delta_type"]
-        )
+        current_delta_type: Optional[ALL_DELTA_TYPES] = realtime_response_transform_input["current_delta_type"]
         returned_message: List[OpenAIRealtimeEvents] = []
 
         server_content = json_message.get("serverContent")
@@ -1429,9 +1247,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     current_response_id = "resp_{}".format(uuid.uuid4())
                 if current_output_item_id is None:
                     current_output_item_id = "item_{}".format(uuid.uuid4())
-                    current_conversation_id = (
-                        current_conversation_id or "conv_{}".format(uuid.uuid4())
-                    )
+                    current_conversation_id = current_conversation_id or "conv_{}".format(uuid.uuid4())
                     returned_message.extend(
                         self.return_new_content_delta_events(
                             session_configuration_request=session_configuration_request,
@@ -1465,16 +1281,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "interrupted",
                 "generationComplete",
             }
-            server_content_handled = not any(
-                k in server_content for k in _model_content_keys
-            )
+            server_content_handled = not any(k in server_content for k in _model_content_keys)
         else:
             server_content_handled = False
 
         tool_call_handled = False
-        for key, value in list(
-            json_message.items()
-        ):  # snapshot: handlers may mutate json_message
+        for key, value in list(json_message.items()):  # snapshot: handlers may mutate json_message
             # Skip sibling metadata keys (e.g. ``usageMetadata``) that can
             # accompany a primary payload like ``toolCall`` or ``serverContent``.
             # ``map_openai_event`` raises ValueError on unknown keys, which
@@ -1512,21 +1324,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 session_setup: BidiGenerateContentSetup = {}
                 if session_configuration_request is not None:
                     try:
-                        session_setup = json.loads(session_configuration_request).get(
-                            "setup", {}
-                        )
+                        session_setup = json.loads(session_configuration_request).get("setup", {})
                     except (json.JSONDecodeError, TypeError):
                         session_setup = {}
-                tool_call_generation_config = (
-                    session_setup.get("generationConfig", {}) or {}
-                )
+                tool_call_generation_config = session_setup.get("generationConfig", {}) or {}
                 tool_call_modalities = [
                     modality.lower()
                     for modality in cast(
                         List[str],
-                        tool_call_generation_config.get(
-                            "responseModalities", ["AUDIO"]
-                        ),
+                        tool_call_generation_config.get("responseModalities", ["AUDIO"]),
                     )
                 ]
 
@@ -1545,12 +1351,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 "output": [],
                                 "conversation_id": current_conversation_id,
                                 "modalities": tool_call_modalities,
-                                "temperature": tool_call_generation_config.get(
-                                    "temperature"
-                                ),
-                                "max_output_tokens": tool_call_generation_config.get(
-                                    "maxOutputTokens"
-                                ),
+                                "temperature": tool_call_generation_config.get("temperature"),
+                                "max_output_tokens": tool_call_generation_config.get("maxOutputTokens"),
                             },
                         }
                     )
@@ -1630,25 +1432,23 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         )
                     )
 
-                resolved_tool_call_usage_metadata = (
-                    self._consume_usage_metadata_for_response_done(json_message)
-                )
+                resolved_tool_call_usage_metadata = self._consume_usage_metadata_for_response_done(json_message)
                 if resolved_tool_call_usage_metadata is not None:
-                    _tool_call_chat_completion_usage = (
-                        VertexGeminiConfig._calculate_usage(
-                            completion_response=cast(
-                                BidiGenerateContentServerMessage,
-                                {
-                                    **json_message,
-                                    "usageMetadata": resolved_tool_call_usage_metadata,
-                                },
-                            ),
-                        )
+                    _tool_call_chat_completion_usage = VertexGeminiConfig._calculate_usage(
+                        completion_response=cast(
+                            BidiGenerateContentServerMessage,
+                            {
+                                **json_message,
+                                "usageMetadata": resolved_tool_call_usage_metadata,
+                            },
+                        ),
                     )
                 else:
                     _tool_call_chat_completion_usage = get_empty_usage()
-                tool_call_responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
-                    _tool_call_chat_completion_usage,
+                tool_call_responses_api_usage = (
+                    LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+                        _tool_call_chat_completion_usage,
+                    )
                 )
                 _tool_usage_dict = tool_call_responses_api_usage.model_dump()
                 self._add_pipecat_usage_detail_aliases(_tool_usage_dict)
@@ -1679,23 +1479,16 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
                 tool_call_temperature = tool_call_generation_config.get("temperature")
                 if tool_call_temperature is not None:
-                    tool_call_done_event["response"]["temperature"] = (
-                        tool_call_temperature
-                    )
-                tool_call_max_output_tokens = tool_call_generation_config.get(
-                    "maxOutputTokens"
-                )
+                    tool_call_done_event["response"]["temperature"] = tool_call_temperature
+                tool_call_max_output_tokens = tool_call_generation_config.get("maxOutputTokens")
                 if tool_call_max_output_tokens is not None:
-                    tool_call_done_event["response"]["max_output_tokens"] = cast(
-                        int, tool_call_max_output_tokens
-                    )
+                    tool_call_done_event["response"]["max_output_tokens"] = cast(int, tool_call_max_output_tokens)
                 returned_message.append(tool_call_done_event)
                 current_output_item_id = None
                 current_response_id = None
             elif openai_event == OpenAIRealtimeEventTypes.RESPONSE_DONE:
                 _has_pending_function_call = current_item_chunks and any(
-                    chunk.get("item", {}).get("type") == "function_call"
-                    for chunk in current_item_chunks
+                    chunk.get("item", {}).get("type") == "function_call" for chunk in current_item_chunks
                 )
                 if current_response_id is None and _has_pending_function_call:
                     # Trailing bare turnComplete after a toolCall (Vertex emits ~5
@@ -1787,9 +1580,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         for msg in returned_message:
             event_type = msg.get("type") if isinstance(msg, dict) else "unknown"
-            verbose_logger.debug(
-                "Realtime Response Transform: OpenAI event=%s", event_type
-            )
+            verbose_logger.debug("Realtime Response Transform: OpenAI event=%s", event_type)
 
         return {
             "response": returned_message,

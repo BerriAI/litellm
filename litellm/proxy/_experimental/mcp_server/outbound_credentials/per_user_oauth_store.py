@@ -89,9 +89,7 @@ async def _persist_credential(
     )
 
 
-async def _post_token_endpoint(
-    url: str, form: dict[str, str]
-) -> dict[str, object] | None:
+async def _post_token_endpoint(url: str, form: dict[str, str]) -> dict[str, object] | None:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
@@ -114,9 +112,7 @@ async def _post_token_endpoint(
         return body  # pyright: ignore
 
 
-def _runtime_backend_and_coordinator() -> tuple[
-    TokenCacheBackend | None, RefreshCoordinator | None
-]:
+def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None]:
     """The cross-replica cache + coordinator when Redis is wired, else ``(None, None)`` so the
     foundation's in-process defaults are used (a single replica needs no shared cache or lock).
     """
@@ -131,9 +127,7 @@ def _runtime_backend_and_coordinator() -> tuple[
         return None, None
     codec = OAuthTokenCacheCodec(
         encrypt_value_helper,
-        lambda blob: decrypt_value_helper(
-            blob, "mcp_per_user_token", exception_type="debug"
-        ),
+        lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
     # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) and the
     # Redis client from init_async_client() is partially typed - both are untyped-boundary casts.
@@ -152,15 +146,9 @@ def build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> CachedOAuthTokenStore:
     backend, coordinator = _runtime_backend_and_coordinator()
-    refresher = AuthorizationCodeRefresher(
-        server_lookup, _post_token_endpoint, _persist_credential
-    )
-    refreshing = RefreshingTokenStore(
-        V2PerUserTokenStore(_read_credential), refresher, coordinator=coordinator
-    )
-    return CachedOAuthTokenStore(
-        refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS, backend=backend
-    )
+    refresher = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
+    refreshing = RefreshingTokenStore(V2PerUserTokenStore(_read_credential), refresher, coordinator=coordinator)
+    return CachedOAuthTokenStore(refreshing, default_ttl_seconds=_DEFAULT_TTL_SECONDS, backend=backend)
 
 
 class LazyPerUserOAuthTokenStore:

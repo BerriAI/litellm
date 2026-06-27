@@ -122,12 +122,8 @@ class OpenTelemetryV2Config(BaseSettings):
         default=None,
         validation_alias=AliasChoices("OTEL_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS"),
     )
-    service_name: str = Field(
-        default="litellm", validation_alias=AliasChoices("OTEL_SERVICE_NAME")
-    )
-    deployment_environment: str | None = Field(
-        default=None, validation_alias=AliasChoices("OTEL_ENVIRONMENT_NAME")
-    )
+    service_name: str = Field(default="litellm", validation_alias=AliasChoices("OTEL_SERVICE_NAME"))
+    deployment_environment: str | None = Field(default=None, validation_alias=AliasChoices("OTEL_ENVIRONMENT_NAME"))
 
     enable_metrics: bool = Field(
         default=False,
@@ -139,13 +135,9 @@ class OpenTelemetryV2Config(BaseSettings):
     )
     capture_message_content: str = Field(
         default=CaptureMessageContent.NO_CONTENT,
-        validation_alias=AliasChoices(
-            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
-        ),
+        validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
     )
-    legacy_compat: bool = Field(
-        default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT")
-    )
+    legacy_compat: bool = Field(default=True, validation_alias=AliasChoices("LITELLM_OTEL_LEGACY_COMPAT"))
 
     # ----- explicit multi-destination / vocabulary configuration ------------ #
 
@@ -179,9 +171,7 @@ class OpenTelemetryV2Config(BaseSettings):
 
     baggage_promoted_keys: Annotated[List[str], NoDecode] = Field(
         default_factory=lambda: list(BAGGAGE_PROMOTED_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_promoted_keys", "LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS"),
         description=(
             "Identity attribute keys written into Baggage and stamped on every "
             "child span (e.g. ``litellm.team.id``). Configure via the "
@@ -192,9 +182,7 @@ class OpenTelemetryV2Config(BaseSettings):
     )
     baggage_metadata_keys: Annotated[List[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_METADATA_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_metadata_keys", "LITELLM_OTEL_BAGGAGE_METADATA_KEYS"),
         description=(
             "Metadata sub-keys promoted under the ``litellm.metadata.*`` "
             "namespace. Configure via the ``LITELLM_OTEL_BAGGAGE_METADATA_KEYS`` "
@@ -204,9 +192,7 @@ class OpenTelemetryV2Config(BaseSettings):
     )
     baggage_team_metadata_keys: Annotated[List[str], NoDecode] = Field(
         default_factory=lambda: list(DEFAULT_BAGGAGE_TEAM_METADATA_KEYS),
-        validation_alias=AliasChoices(
-            "baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"
-        ),
+        validation_alias=AliasChoices("baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"),
         description=(
             "Sub-keys of the team's free-form metadata promoted under "
             "``litellm.team.metadata``. Empty by default so none of a team's "

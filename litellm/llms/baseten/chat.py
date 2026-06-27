@@ -82,9 +82,7 @@ class BasetenConfig(OpenAIGPTConfig):
                 optional_params[param] = value
         return optional_params
 
-    def _get_openai_compatible_provider_info(
-        self, api_base: str, api_key: str
-    ) -> tuple:
+    def _get_openai_compatible_provider_info(self, api_base: str, api_key: str) -> tuple:
         """
         Get the OpenAI compatible provider info for Baseten
         """

@@ -43,14 +43,10 @@ MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 # endpoints that reject unknown fields with 400 "Unknown parameter:
 # 'max_tokens'". Allow-list so new modes are safe by default.
 # Per-deployment override: `model_info.health_check_supports_max_tokens`.
-_MAX_TOKEN_SUPPORT_MODES: frozenset[str] = frozenset(
-    {"chat", "completion", "responses"}
-)
+_MAX_TOKEN_SUPPORT_MODES: frozenset[str] = frozenset({"chat", "completion", "responses"})
 
 
-def _resolve_health_check_mode(
-    model_info: Mapping[str, object], litellm_params: Mapping[str, object]
-) -> str | None:
+def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
     """
     Effective mode for a deployment's health-check probe.
 
@@ -72,9 +68,7 @@ def _resolve_health_check_mode(
         return None
 
 
-def _should_inject_health_check_max_tokens(
-    model_info: Mapping[str, object], mode: str | None
-) -> bool:
+def _should_inject_health_check_max_tokens(model_info: Mapping[str, object], mode: str | None) -> bool:
     """
     Whether the health-check probe should include `max_tokens`.
 
@@ -90,9 +84,7 @@ def _should_inject_health_check_max_tokens(
 
 
 # Health-check modes that forward `reasoning_effort` to the provider (chat-style calls).
-_HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT = frozenset(
-    (None, "chat", "completion")
-)
+_HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT = frozenset((None, "chat", "completion"))
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -211,9 +203,7 @@ async def _run_model_health_check(model: dict):
     )
 
 
-async def _run_health_checks_with_bounded_concurrency(
-    models: list, concurrency_limit: int
-) -> tuple[list, int]:
+async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_limit: int) -> tuple[list, int]:
     """
     Run health checks with at most `concurrency_limit` active tasks.
     Preserves result ordering to match `models`.
@@ -274,13 +264,9 @@ async def _perform_health_check(
     peak_in_flight = 0
     if isinstance(max_concurrency, int) and max_concurrency > 0:
         dispatch_mode = "bounded"
-        results, peak_in_flight = await _run_health_checks_with_bounded_concurrency(
-            model_list, max_concurrency
-        )
+        results, peak_in_flight = await _run_health_checks_with_bounded_concurrency(model_list, max_concurrency)
     else:
-        tasks = [
-            asyncio.create_task(_run_model_health_check(model)) for model in model_list
-        ]
+        tasks = [asyncio.create_task(_run_model_health_check(model)) for model in model_list]
         peak_in_flight = len(tasks)
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -330,9 +316,7 @@ async def _perform_health_check(
                 cleaned["model_id"] = _model_id
                 if isinstance(is_healthy, Exception):
                     exceptions_by_model_id[_model_id] = is_healthy
-                    cleaned["exception_status"] = getattr(
-                        is_healthy, "status_code", 500
-                    )
+                    cleaned["exception_status"] = getattr(is_healthy, "status_code", 500)
             unhealthy_endpoints.append(cleaned)
 
     return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
@@ -389,9 +373,7 @@ def _health_check_deployment_is_wildcard(litellm_params: dict) -> bool:
     return "*" in _deployment_model_string_for_health_check(litellm_params)
 
 
-def _resolve_health_check_max_tokens(
-    model_info: dict, litellm_params: dict
-) -> Optional[int]:
+def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> Optional[int]:
     """
     Pick max_tokens for the health check request.
 
@@ -418,9 +400,7 @@ def _resolve_health_check_max_tokens(
         except Exception:
             is_reasoning = False
         tokens_reasoning = model_info.get("health_check_max_tokens_reasoning", None)
-        tokens_non_reasoning = model_info.get(
-            "health_check_max_tokens_non_reasoning", None
-        )
+        tokens_non_reasoning = model_info.get("health_check_max_tokens_non_reasoning", None)
         if tokens_reasoning is not None or tokens_non_reasoning is not None:
             if is_reasoning and tokens_reasoning is not None:
                 return int(tokens_reasoning)
@@ -438,9 +418,7 @@ def _resolve_health_check_max_tokens(
     return None
 
 
-def _update_litellm_params_for_health_check(
-    model_info: dict, litellm_params: dict
-) -> dict:
+def _update_litellm_params_for_health_check(model_info: dict, litellm_params: dict) -> dict:
     """
     Update the litellm params for health check.
 
@@ -463,9 +441,7 @@ def _update_litellm_params_for_health_check(
         model_info,
         mode,  # any-ok: untyped router config dict
     ):
-        _resolved_max_tokens = _resolve_health_check_max_tokens(
-            model_info, litellm_params
-        )
+        _resolved_max_tokens = _resolve_health_check_max_tokens(model_info, litellm_params)
         if _resolved_max_tokens is not None:
             litellm_params["max_tokens"] = _resolved_max_tokens
 
@@ -556,9 +532,7 @@ async def perform_health_check(
 
     if not model_list:
         if cli_model:
-            model_list = [
-                {"model_name": cli_model, "litellm_params": {"model": cli_model}}
-            ]
+            model_list = [{"model_name": cli_model, "litellm_params": {"model": cli_model}}]
         else:
             if instrumentation_enabled:
                 logger.debug(
@@ -573,26 +547,18 @@ async def perform_health_check(
 
     # Filter by model_id first so a single deployment is checked when id is specified
     if model_id is not None:
-        _by_id = [
-            x for x in model_list if (x.get("model_info") or {}).get("id") == model_id
-        ]
+        _by_id = [x for x in model_list if (x.get("model_info") or {}).get("id") == model_id]
         if _by_id:
             model_list = _by_id
     elif model is not None:
-        _new_model_list = [
-            x for x in model_list if x["litellm_params"]["model"] == model
-        ]
+        _new_model_list = [x for x in model_list if x["litellm_params"]["model"] == model]
         if _new_model_list == []:
             _new_model_list = [x for x in model_list if x["model_name"] == model]
         model_list = _new_model_list
 
     if health_check_skip_disabled_background_models:
         model_list = [
-            x
-            for x in model_list
-            if not (x.get("model_info") or {}).get(
-                "disable_background_health_check", False
-            )
+            x for x in model_list if not (x.get("model_info") or {}).get("disable_background_health_check", False)
         ]
     if not model_list:
         if instrumentation_enabled:
