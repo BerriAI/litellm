@@ -26,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ServerSpec,
     SharedKey,
     Subject,
+    TokenExchangeConfig,
 )
 from litellm.types.mcp import MCPAuth
 
@@ -61,8 +62,9 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
     modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
-    all shared-key), and ``oauth2`` per-user tokens (``authorization_code``); client_credentials
-    (M2M), delegated/passthrough oauth2, token exchange, and SigV4 return None and stay on v1.
+    all shared-key), ``oauth2`` per-user tokens (``authorization_code``), and
+    ``oauth2_token_exchange`` (RFC 8693 OBO); client_credentials (M2M), delegated/passthrough
+    oauth2, and SigV4 return None and stay on v1.
     """
     if server.is_byok:
         return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
@@ -92,9 +94,36 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
                 )
             # client_credentials (M2M) and delegate/passthrough oauth2 stay on v1
             return None
-        case MCPAuth.oauth2_token_exchange | MCPAuth.aws_sigv4:
-            return None  # token exchange and SigV4 are not migrated yet -> defer to v1
+        case MCPAuth.oauth2_token_exchange:
+            return _token_exchange_spec(server, resource)
+        case MCPAuth.aws_sigv4:
+            return None  # SigV4 is not migrated yet -> defer to v1
     assert_never(auth_type)
+
+
+def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
+    """Build a token_exchange (RFC 8693 OBO) spec, or defer (None) if the exchange config is absent.
+
+    Mirrors v1's ``has_token_exchange_config`` precondition: an endpoint (``token_exchange_endpoint``
+    or ``token_url``) plus ``client_id``/``client_secret`` must all be present, else there is nothing
+    to exchange against and the server stays on v1 (parity-safe). ``audience`` is forwarded only when
+    the operator set it; a missing one is omitted, not derived.
+    """
+    endpoint = server.token_exchange_endpoint or server.token_url
+    if not endpoint or not server.client_id or not server.client_secret:
+        return None
+    return ServerSpec(
+        server_id=server.server_id,
+        resource=resource,
+        config=TokenExchangeConfig(
+            subject_token_type=server.subject_token_type,
+            token_exchange_endpoint=endpoint,
+            audience=server.audience,
+            client_id=server.client_id,
+            client_secret=SecretStr(server.client_secret),
+            scopes=tuple(server.scopes or ()),
+        ),
+    )
 
 
 def _shared_key_spec(
