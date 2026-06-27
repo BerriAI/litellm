@@ -94,9 +94,7 @@ class BedrockKBModelConfiguration(TypedDict, total=False):
 class BedrockKBRerankingConfiguration(TypedDict, total=False):
     """Configuration for reranking in vector search."""
 
-    bedrockRerankingConfiguration: Optional[
-        Dict[str, Any]
-    ]  # This could be further typed if needed
+    bedrockRerankingConfiguration: Optional[Dict[str, Any]]  # This could be further typed if needed
     type: Optional[str]
 
 

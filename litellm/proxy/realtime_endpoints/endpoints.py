@@ -118,12 +118,8 @@ async def _prepare_client_secret_session(
     llm_model_list: Optional[list],
     llm_router: Any,
 ) -> tuple[str, Optional[dict], str]:
-    session_type = _coerce_realtime_session_type(
-        req.session.type if req.session else None
-    )
-    session_data: Optional[dict] = (
-        req.session.model_dump(exclude_none=True) if req.session else None
-    )
+    session_type = _coerce_realtime_session_type(req.session.type if req.session else None)
+    session_data: Optional[dict] = req.session.model_dump(exclude_none=True) if req.session else None
     if session_data is not None:
         session_data["type"] = session_type
 
@@ -138,9 +134,7 @@ async def _prepare_client_secret_session(
         )
         return model, session_data, session_type
 
-    transcription_model_candidates = _transcription_model_candidates_from_session(
-        session_data or {}
-    )
+    transcription_model_candidates = _transcription_model_candidates_from_session(session_data or {})
     if not transcription_model_candidates:
         _append_model_candidate(transcription_model_candidates, session_model)
         _append_model_candidate(transcription_model_candidates, req.model)
@@ -282,9 +276,7 @@ async def create_realtime_client_secret(
             call_type="acreate_realtime_client_secret",
         )
 
-        verbose_proxy_logger.debug(
-            "WebRTC: /v1/realtime/client_secrets (model=%s)", model
-        )
+        verbose_proxy_logger.debug("WebRTC: /v1/realtime/client_secrets (model=%s)", model)
 
         llm_call = await route_request(
             data=data,
@@ -422,16 +414,10 @@ async def proxy_realtime_calls(
                 )
 
         openai_ephemeral_key = decoded_payload.get("ephemeral_key", "")
-        model = (
-            decoded_payload.get("model_id")
-            or request.query_params.get("model")
-            or _DEFAULT_REALTIME_MODEL
-        )
+        model = decoded_payload.get("model_id") or request.query_params.get("model") or _DEFAULT_REALTIME_MODEL
         user_id = decoded_payload.get("user_id") or None
         team_id = decoded_payload.get("team_id") or None
-        session_type = _coerce_realtime_session_type(
-            decoded_payload.get("session_type")
-        )
+        session_type = _coerce_realtime_session_type(decoded_payload.get("session_type"))
     else:
         # Backward compatibility: older tokens contained only encrypted upstream key.
         openai_ephemeral_key = decrypted_token_value
@@ -594,9 +580,7 @@ async def create_realtime_transcription_session(
             call_type="acreate_realtime_transcription_session",
         )
 
-        verbose_proxy_logger.debug(
-            "Realtime: /v1/realtime/transcription_sessions (model=%s)", model
-        )
+        verbose_proxy_logger.debug("Realtime: /v1/realtime/transcription_sessions (model=%s)", model)
 
         llm_call = await route_request(
             data=data,

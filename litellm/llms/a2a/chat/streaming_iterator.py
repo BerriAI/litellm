@@ -31,9 +31,7 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         )
         self.model = model
 
-    def chunk_parser(
-        self, chunk: dict
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         """
         Parse A2A streaming chunk to OpenAI format.
 
