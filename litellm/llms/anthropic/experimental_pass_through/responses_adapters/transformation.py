@@ -8,6 +8,9 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm.litellm_core_utils.reasoning_effort_utils import (
+    reasoning_effort_from_thinking_budget,
+)
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
@@ -257,11 +260,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
 
-        thinking.budget_tokens maps to reasoning effort:
-          >= 10000 -> high, >= 5000 -> medium, >= 2000 -> low, < 2000 -> minimal
-
-        For adaptive thinking, uses output_config.effort if available,
-        otherwise defaults to medium.
+        ``thinking.budget_tokens`` is bucketed via the shared
+        ``reasoning_effort_from_thinking_budget`` thresholds. For adaptive
+        thinking, uses ``output_config.effort`` if available, otherwise defaults
+        to medium.
         """
         if not isinstance(thinking, dict):
             return None
@@ -274,15 +276,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             if isinstance(output_config, dict) and output_config.get("effort"):
                 effort = output_config["effort"]
         elif thinking_type == "enabled":
-            budget = thinking.get("budget_tokens", 0)
-            if budget >= 10000:
-                effort = "high"
-            elif budget >= 5000:
-                effort = "medium"
-            elif budget >= 2000:
-                effort = "low"
-            else:
-                effort = "minimal"
+            effort = reasoning_effort_from_thinking_budget(
+                thinking.get("budget_tokens", 0)
+            )
         else:
             return None
 

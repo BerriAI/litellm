@@ -229,10 +229,7 @@ DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
     "Sonnet 4.6+, and Mythos Preview."
 )
 
-DROP_UNSUPPORTED_SPEED_WARNING = (
-    "Dropping unsupported `speed` for model=%s "
-    "(drop_params=True). Fast mode is only supported on select Opus models."
-)
+DROP_UNSUPPORTED_SPEED_WARNING = "Dropping unsupported `speed` for model=%s (drop_params=True). Fast mode is only supported on select Opus models."
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -352,8 +349,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _validate_effort_for_model(model: str, effort: Optional[str]) -> Optional[str]:
         """Return ``None`` if ``effort`` is allowed on ``model``, else an error message."""
         if effort == "max" and not (
-            AnthropicConfig._is_claude_4_6_model(model)
-            or AnthropicConfig._is_claude_4_7_model(model)
+            AnthropicConfig._is_adaptive_thinking_model(model)
             or AnthropicConfig._supports_effort_level(model, "max")
         ):
             return f"effort='max' is not supported by this model. Got model: {model}"
@@ -471,8 +467,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if (
             "claude-3-7-sonnet" in model
-            or AnthropicConfig._is_claude_4_6_model(model)
-            or AnthropicConfig._is_claude_4_7_model(model)
+            or AnthropicConfig._is_adaptive_thinking_model(model)
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
@@ -2093,8 +2088,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if effort is not None and effort not in valid_efforts:
             raise litellm.exceptions.BadRequestError(
                 message=(
-                    f"Invalid effort value: {effort!r}. Must be one of: "
-                    f"'high', 'medium', 'low', 'xhigh', 'max'"
+                    f"Invalid effort value: {effort!r}. Must be one of: 'high', 'medium', 'low', 'xhigh', 'max'"
                 ),
                 model=model,
                 llm_provider=self.custom_llm_provider or "anthropic",
