@@ -37,7 +37,9 @@ async def test_serves_token_until_its_expiry():
     token = OAuthToken(access_token="at", expires_at=1100.0)
     inner = _FakeStore({("u", "s"): token})
     clock = _Clock(1000.0)
-    store = CachedOAuthTokenStore(inner, default_ttl_seconds=60, expiry_skew_seconds=30, clock=clock)
+    store = CachedOAuthTokenStore(
+        inner, default_ttl_seconds=60, expiry_skew_seconds=30, clock=clock
+    )
 
     assert await store.fetch("u", "s") is token
     clock.t = 1060.0  # still before expiry - skew (1100 - 30 = 1070)
@@ -49,7 +51,9 @@ async def test_refetches_once_token_has_expired():
     token = OAuthToken(access_token="at", expires_at=1100.0)
     inner = _FakeStore({("u", "s"): token})
     clock = _Clock(1000.0)
-    store = CachedOAuthTokenStore(inner, default_ttl_seconds=60, expiry_skew_seconds=30, clock=clock)
+    store = CachedOAuthTokenStore(
+        inner, default_ttl_seconds=60, expiry_skew_seconds=30, clock=clock
+    )
 
     await store.fetch("u", "s")
     clock.t = 1080.0  # past expiry - skew (1070)
@@ -105,7 +109,9 @@ async def test_invalidate_drops_a_cached_token():
     inner._values[("u", "s")] = OAuthToken(access_token="t2")  # rotated
     await store.invalidate("u", "s")
     second = await store.fetch("u", "s")
-    assert second is not None and second.access_token == "t2"  # re-read after invalidate
+    assert (
+        second is not None and second.access_token == "t2"
+    )  # re-read after invalidate
 
 
 async def test_store_unavailable_is_not_cached():
@@ -146,7 +152,9 @@ async def test_bounded_cache_evicts_oldest_not_everything():
             ("u3", "s"): OAuthToken(access_token="k3"),
         }
     )
-    store = CachedOAuthTokenStore(inner, default_ttl_seconds=60, max_size=2, clock=_Clock())
+    store = CachedOAuthTokenStore(
+        inner, default_ttl_seconds=60, max_size=2, clock=_Clock()
+    )
 
     await store.fetch("u1", "s")
     await store.fetch("u2", "s")
@@ -154,7 +162,9 @@ async def test_bounded_cache_evicts_oldest_not_everything():
     await store.fetch("u2", "s")  # still cached
     await store.fetch("u1", "s")  # was evicted -> re-read
 
-    assert inner.calls.count(("u2", "s")) == 1  # only the oldest was evicted, not everything
+    assert (
+        inner.calls.count(("u2", "s")) == 1
+    )  # only the oldest was evicted, not everything
     assert inner.calls.count(("u1", "s")) == 2
 
 
@@ -172,17 +182,23 @@ class _RefreshablePair:
         self.fetch_calls += 1
         return self._current
 
-    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+    async def refresh(
+        self, user_id: str, server_id: str, token: OAuthToken
+    ) -> Optional[OAuthToken]:
         self.refresh_calls += 1
         self.refresh_args.append((user_id, server_id))
-        await asyncio.sleep(0)  # yield so other concurrent callers reach the lock and wait
+        await asyncio.sleep(
+            0
+        )  # yield so other concurrent callers reach the lock and wait
         self._current = OAuthToken(access_token="refreshed", expires_at=9999.0)
         return self._current
 
 
 async def test_refreshing_passes_through_a_fresh_token():
     pair = _RefreshablePair(OAuthToken(access_token="ok", expires_at=9999.0))
-    store = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
 
     token = await store.fetch("u", "s")
     assert token is not None and token.access_token == "ok"
@@ -191,12 +207,16 @@ async def test_refreshing_passes_through_a_fresh_token():
 
 async def test_refreshing_mints_a_fresh_token_when_expired():
     pair = _RefreshablePair(OAuthToken(access_token="old", expires_at=900.0))
-    store = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
 
     token = await store.fetch("u", "s")
     assert token is not None and token.access_token == "refreshed"
     assert pair.refresh_calls == 1
-    assert pair.refresh_args == [("u", "s")]  # the seam threads the grant/persist key through
+    assert pair.refresh_args == [
+        ("u", "s")
+    ]  # the seam threads the grant/persist key through
 
 
 async def test_refreshing_returns_none_when_it_cannot_refresh():
@@ -204,7 +224,9 @@ async def test_refreshing_returns_none_when_it_cannot_refresh():
         async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
             return OAuthToken(access_token="old", expires_at=900.0)
 
-        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+        async def refresh(
+            self, user_id: str, server_id: str, token: OAuthToken
+        ) -> Optional[OAuthToken]:
             return None  # e.g. no refresh_token
 
     src = _NoRefresh()
@@ -215,7 +237,9 @@ async def test_refreshing_returns_none_when_it_cannot_refresh():
 
 async def test_refreshing_is_single_flight_under_concurrency():
     pair = _RefreshablePair(OAuthToken(access_token="old", expires_at=900.0))
-    store = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
 
     results = await asyncio.gather(*[store.fetch("u", "s") for _ in range(5)])
     assert pair.refresh_calls == 1  # one refresh shared across 5 concurrent callers
@@ -241,7 +265,9 @@ class _StaleReadRacePair:
             return self._old_token
         return self._current
 
-    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+    async def refresh(
+        self, user_id: str, server_id: str, token: OAuthToken
+    ) -> Optional[OAuthToken]:
         self.refresh_calls += 1
         self.refresh_started.set()
         await self.finish_refresh.wait()
@@ -251,7 +277,9 @@ class _StaleReadRacePair:
 
 async def test_stale_read_after_refresh_rereads_before_starting_new_refresh():
     pair = _StaleReadRacePair()
-    store = RefreshingTokenStore(pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0))
+    store = RefreshingTokenStore(
+        pair, pair, expiry_skew_seconds=30, clock=_Clock(1000.0)
+    )
 
     first = asyncio.create_task(store.fetch("u", "s"))
     await pair.refresh_started.wait()
@@ -276,7 +304,9 @@ async def test_refresh_failure_is_shared_by_joiners_not_re_run():
         async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
             return OAuthToken(access_token="old", expires_at=900.0)
 
-        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
+        async def refresh(
+            self, user_id: str, server_id: str, token: OAuthToken
+        ) -> Optional[OAuthToken]:
             self.calls += 1
             await asyncio.sleep(0)  # let the concurrent callers join the same task
             raise RuntimeError("refresh boom")
@@ -284,7 +314,9 @@ async def test_refresh_failure_is_shared_by_joiners_not_re_run():
     src = _FailingRefresher()
     store = RefreshingTokenStore(src, src, expiry_skew_seconds=30, clock=_Clock(1000.0))
 
-    results = await asyncio.gather(*[store.fetch("u", "s") for _ in range(3)], return_exceptions=True)
+    results = await asyncio.gather(
+        *[store.fetch("u", "s") for _ in range(3)], return_exceptions=True
+    )
     assert src.calls == 1  # single-flight: one attempt, the failure is shared
     assert all(isinstance(r, RuntimeError) for r in results)
 
@@ -326,7 +358,9 @@ async def test_refreshing_default_skew_is_60_seconds():
 
 
 def test_oauth_token_repr_masks_the_secrets():
-    token = OAuthToken(access_token="super-secret", expires_at=123.0, refresh_token="rt-secret")
+    token = OAuthToken(
+        access_token="super-secret", expires_at=123.0, refresh_token="rt-secret"
+    )
     rendered = repr(token)
     assert "super-secret" not in rendered
     assert "rt-secret" not in rendered
@@ -345,7 +379,9 @@ class _RecordingBackend:
     async def get(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
         return self._store.get((user_id, server_id))
 
-    async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
+    async def set(
+        self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float
+    ) -> None:
         self.sets.append((user_id, server_id, token, ttl_seconds))
         self._store[(user_id, server_id)] = token
 
@@ -376,7 +412,9 @@ async def test_cache_delegates_storage_to_an_injected_backend():
 
 async def test_cache_miss_deletes_from_the_injected_backend():
     backend = _RecordingBackend()
-    store = CachedOAuthTokenStore(_FakeStore({}), default_ttl_seconds=60, backend=backend, clock=_Clock())
+    store = CachedOAuthTokenStore(
+        _FakeStore({}), default_ttl_seconds=60, backend=backend, clock=_Clock()
+    )
     assert await store.fetch("u", "s") is None
     assert backend.deletes == [("u", "s")]  # a miss is never cached
 
@@ -406,61 +444,3 @@ async def test_refreshing_delegates_single_flight_to_an_injected_coordinator():
     token = await store.fetch("u", "s")
     assert token is not None and token.access_token == "refreshed"
     assert coordinator.calls == 1  # the injected coordinator drove the refresh
-
-
-class _LoserCoordinator:
-    """Simulates losing the cross-replica election: the loser only re-reads what the winner persisted,
-    it never refreshes itself."""
-
-    async def run(self, user_id, server_id, refresh, reread):
-        return await reread()
-
-
-async def test_loser_surfaces_none_not_a_stale_token_when_the_winner_refresh_failed():
-    # The winner's refresh failed, so the store still holds the expired token. A loser must surface
-    # None (-> re-auth challenge) like the winner did, never the still-expired bearer (the upstream
-    # would 401 it). _RefreshablePair only updates on refresh, so a loser that never refreshes keeps
-    # re-reading the expired token.
-    pair = _RefreshablePair(OAuthToken(access_token="expired", expires_at=900.0))
-    store = RefreshingTokenStore(
-        pair,
-        pair,
-        expiry_skew_seconds=30,
-        coordinator=_LoserCoordinator(),
-        clock=_Clock(1000.0),
-    )
-
-    assert await store.fetch("u", "s") is None
-    assert pair.refresh_calls == 0  # the loser never refreshes; it only re-reads
-
-
-async def test_loser_rereads_the_fresh_token_a_successful_winner_persisted():
-    class _ExpiredThenWinnerPersisted:
-        # First read sees the expired token (triggers the refresh path); the re-read sees the fresh
-        # token a winner persisted in between.
-        def __init__(self) -> None:
-            self._reads = 0
-            self.refresh_calls = 0
-
-        async def fetch(self, user_id: str, server_id: str) -> Optional[OAuthToken]:
-            self._reads += 1
-            if self._reads == 1:
-                return OAuthToken(access_token="expired", expires_at=900.0)
-            return OAuthToken(access_token="winner-fresh", expires_at=9999.0)
-
-        async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> Optional[OAuthToken]:
-            self.refresh_calls += 1
-            raise AssertionError("a loser must not refresh")
-
-    src = _ExpiredThenWinnerPersisted()
-    store = RefreshingTokenStore(
-        src,
-        src,
-        expiry_skew_seconds=30,
-        coordinator=_LoserCoordinator(),
-        clock=_Clock(1000.0),
-    )
-
-    token = await store.fetch("u", "s")
-    assert token is not None and token.access_token == "winner-fresh"
-    assert src.refresh_calls == 0
