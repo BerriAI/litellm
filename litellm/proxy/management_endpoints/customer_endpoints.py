@@ -133,9 +133,7 @@ async def unblock_user(data: BlockUsers):
     ):
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "Blocked user check was never set. This call has no effect."
-            },
+            detail={"error": "Blocked user check was never set. This call has no effect."},
         )
 
     if isinstance(litellm.blocked_user_list, list):
@@ -144,9 +142,7 @@ async def unblock_user(data: BlockUsers):
     else:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "`blocked_user_list` must be set as a list. Filepaths can't be updated."
-            },
+            detail={"error": "`blocked_user_list` must be set as a list. Filepaths can't be updated."},
         )
 
     return {"blocked_users": litellm.blocked_user_list}
@@ -169,10 +165,7 @@ def new_budget_request(data: NewCustomerRequest) -> Optional[BudgetNewRequest]:
 
     if budget_kv_pairs:
         budget_request = BudgetNewRequest(**budget_kv_pairs)
-        if (
-            budget_request.budget_reset_at is None
-            and budget_request.budget_duration is not None
-        ):
+        if budget_request.budget_reset_at is None and budget_request.budget_duration is not None:
             budget_request.budget_reset_at = datetime.utcnow() + timedelta(
                 seconds=duration_in_seconds(duration=budget_request.budget_duration)
             )
@@ -199,9 +192,7 @@ async def _handle_customer_object_permission_update(
     """
     if "object_permission" in non_default_values:
         existing_object_permission_id = (
-            end_user_table_data_typed.object_permission_id
-            if end_user_table_data_typed is not None
-            else None
+            end_user_table_data_typed.object_permission_id if end_user_table_data_typed is not None else None
         )
         object_permission_id = await handle_update_object_permission_common(
             data_json=non_default_values,
@@ -342,10 +333,8 @@ async def new_end_user(
                 budget_record = await BudgetRepository(prisma_client).table.create(
                     data={
                         **_new_budget.model_dump(exclude_unset=True),
-                        "created_by": user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,  # type: ignore
-                        "updated_by": user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,  # type: ignore
+                        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     }
                 )
             except Exception as e:
@@ -424,9 +413,7 @@ async def new_end_user(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def end_user_info(
-    end_user_id: str = fastapi.Query(
-        description="End User ID in the request parameters"
-    ),
+    end_user_id: str = fastapi.Query(description="End User ID in the request parameters"),
 ):
     """
     Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
@@ -564,14 +551,10 @@ async def update_end_user(
         # get non default values for key
         non_default_values = {}
         for k, v in data_json.items():
-            if (
-                v is not None
-                and v
-                not in (
-                    [],
-                    {},
-                    0,
-                )
+            if v is not None and v not in (
+                [],
+                {},
+                0,
             ):  # models default to [], spend defaults to 0, we should not reset these values
                 non_default_values[k] = v
 
@@ -588,9 +571,7 @@ async def update_end_user(
                 param="user_id",
             )
 
-        end_user_table_data_typed = LiteLLM_EndUserTable(
-            **end_user_table_data.model_dump()
-        )
+        end_user_table_data_typed = LiteLLM_EndUserTable(**end_user_table_data.model_dump())
 
         ## Get budget table data ##
         end_user_budget_table = end_user_table_data_typed.litellm_budget_table
@@ -620,27 +601,19 @@ async def update_end_user(
         if budget_table_data:
             if end_user_budget_table is None:
                 ## Create new budget ##
-                budget_table_data_record = await BudgetRepository(
-                    prisma_client
-                ).table.create(
+                budget_table_data_record = await BudgetRepository(prisma_client).table.create(
                     data={
                         **budget_table_data,
-                        "created_by": user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
-                        "updated_by": user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
+                        "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                     },
                     include={"end_users": True},
                 )
 
-                update_end_user_table_data["budget_id"] = (
-                    budget_table_data_record.budget_id
-                )
+                update_end_user_table_data["budget_id"] = budget_table_data_record.budget_id
             else:
                 ## Update existing budget ##
-                budget_table_data_record = await BudgetRepository(
-                    prisma_client
-                ).table.update(
+                budget_table_data_record = await BudgetRepository(prisma_client).table.update(
                     where={"budget_id": end_user_budget_table.budget_id},
                     data=budget_table_data,
                 )
@@ -665,12 +638,8 @@ async def update_end_user(
                 include={"litellm_budget_table": True, "object_permission": True},  # type: ignore
             )
             if response is None:
-                raise ValueError(
-                    f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}"
-                )
-            verbose_proxy_logger.debug(
-                f"received response from updating prisma client. response={response}"
-            )
+                raise ValueError(f"Failed updating customer data. User ID does not exist passed user_id={data.user_id}")
+            verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
 
             # Convert to dict and clean up recursive fields
             response_dict = response.model_dump()
@@ -693,9 +662,7 @@ async def update_end_user(
 
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.update_end_user(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.update_end_user(): Exception occured - {}".format(str(e))
         )
         raise handle_exception_on_proxy(e)
 
@@ -740,25 +707,17 @@ async def delete_end_user(
             raise Exception("Not connected to DB!")
 
         verbose_proxy_logger.debug("/customer/delete: Received data = %s", data)
-        if (
-            data.user_ids is not None
-            and isinstance(data.user_ids, list)
-            and len(data.user_ids) > 0
-        ):
+        if data.user_ids is not None and isinstance(data.user_ids, list) and len(data.user_ids) > 0:
             # First check if all users exist
             existing_users = await EndUserRepository(prisma_client).table.find_many(
                 where={"user_id": {"in": data.user_ids}}
             )
             existing_user_ids = {user.user_id for user in existing_users}
-            missing_user_ids = [
-                user_id for user_id in data.user_ids if user_id not in existing_user_ids
-            ]
+            missing_user_ids = [user_id for user_id in data.user_ids if user_id not in existing_user_ids]
 
             if missing_user_ids:
                 raise ProxyException(
-                    message="End User Id(s)={} do not exist in db".format(
-                        ", ".join(missing_user_ids)
-                    ),
+                    message="End User Id(s)={} do not exist in db".format(", ".join(missing_user_ids)),
                     type="not_found",
                     code=404,
                     param="user_ids",
@@ -768,13 +727,10 @@ async def delete_end_user(
             response = await EndUserRepository(prisma_client).table.delete_many(
                 where={"user_id": {"in": data.user_ids}}
             )
-            verbose_proxy_logger.debug(
-                f"received response from updating prisma client. response={response}"
-            )
+            verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
             return {
                 "deleted_customers": response,
-                "message": "Successfully deleted customers with ids: "
-                + str(data.user_ids),
+                "message": "Successfully deleted customers with ids: " + str(data.user_ids),
             }
         else:
             raise ValueError(f"user_id is required, passed user_id = {data.user_ids}")
@@ -782,9 +738,7 @@ async def delete_end_user(
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.delete_end_user(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.delete_end_user(): Exception occured - {}".format(str(e))
         )
         raise handle_exception_on_proxy(e)
 
@@ -824,11 +778,7 @@ async def list_end_user(
         ):
             raise HTTPException(
                 status_code=401,
-                detail={
-                    "error": "Admin-only endpoint. Your user role={}".format(
-                        user_api_key_dict.user_role
-                    )
-                },
+                detail={"error": "Admin-only endpoint. Your user role={}".format(user_api_key_dict.user_role)},
             )
 
         if prisma_client is None:
@@ -898,11 +848,7 @@ async def get_customer_daily_activity(
     ):
         raise HTTPException(
             status_code=401,
-            detail={
-                "error": "Admin-only endpoint. Your user role={}".format(
-                    user_api_key_dict.user_role
-                )
-            },
+            detail={"error": "Admin-only endpoint. Your user role={}".format(user_api_key_dict.user_role)},
         )
 
     from litellm.proxy.proxy_server import prisma_client
@@ -917,17 +863,13 @@ async def get_customer_daily_activity(
     end_user_ids_list = end_user_ids.split(",") if end_user_ids else None
     exclude_end_user_ids_list: Optional[List[str]] = None
     if exclude_end_user_ids:
-        exclude_end_user_ids_list = (
-            exclude_end_user_ids.split(",") if exclude_end_user_ids else None
-        )
+        exclude_end_user_ids_list = exclude_end_user_ids.split(",") if exclude_end_user_ids else None
 
     # Fetch organization aliases for metadata
     where_condition = {}
     if end_user_ids_list:
         where_condition["user_id"] = {"in": list(end_user_ids_list)}
-    end_user_aliases = await EndUserRepository(prisma_client).table.find_many(
-        where=where_condition
-    )
+    end_user_aliases = await EndUserRepository(prisma_client).table.find_many(where=where_condition)
     end_user_alias_metadata = {e.user_id: {"alias": e.alias} for e in end_user_aliases}
 
     # Query daily activity for organizations

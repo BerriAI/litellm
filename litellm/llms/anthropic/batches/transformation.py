@@ -233,12 +233,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             completed_at=ended_at if processing_status == "ended" else None,
             failed_at=None,
             expired_at=archived_at if archived_at else None,
-            cancelling_at=(
-                cancel_initiated_at if processing_status == "canceling" else None
-            ),
-            cancelled_at=(
-                ended_at if processing_status == "canceling" and ended_at else None
-            ),
+            cancelling_at=(cancel_initiated_at if processing_status == "canceling" else None),
+            cancelled_at=(ended_at if processing_status == "canceling" and ended_at else None),
             request_counts=request_counts,
             metadata={},
         )
@@ -255,9 +251,7 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         else:
             headers_obj = headers if isinstance(headers, Headers) else None
 
-        return AnthropicError(
-            status_code=status_code, message=error_message, headers=headers_obj
-        )
+        return AnthropicError(status_code=status_code, message=error_message, headers=headers_obj)
 
     def transform_response(
         self,
@@ -290,17 +284,13 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                     response_json = json.loads(line)
                     # Update model_response with the parsed JSON
                     completion_response = response_json["result"]["message"]
-                    transformed_response = (
-                        self.anthropic_chat_config.transform_parsed_response(
-                            completion_response=completion_response,
-                            raw_response=raw_response,
-                            model_response=model_response,
-                        )
+                    transformed_response = self.anthropic_chat_config.transform_parsed_response(
+                        completion_response=completion_response,
+                        raw_response=raw_response,
+                        model_response=model_response,
                     )
 
-                    transformed_response_usage = getattr(
-                        transformed_response, "usage", None
-                    )
+                    transformed_response_usage = getattr(transformed_response, "usage", None)
                     if transformed_response_usage:
                         all_usage.append(cast(Usage, transformed_response_usage))
                 except json.JSONDecodeError:

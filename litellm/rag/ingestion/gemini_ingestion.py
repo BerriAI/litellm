@@ -86,19 +86,11 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         vector_store_config = cast(Dict[str, Any], self.vector_store_config)
 
         # Get API credentials
-        api_key = (
-            cast(Optional[str], vector_store_config.get("api_key"))
-            or GeminiModelInfo.get_api_key()
-        )
-        api_base = (
-            cast(Optional[str], vector_store_config.get("api_base"))
-            or GeminiModelInfo.get_api_base()
-        )
+        api_key = cast(Optional[str], vector_store_config.get("api_key")) or GeminiModelInfo.get_api_key()
+        api_base = cast(Optional[str], vector_store_config.get("api_base")) or GeminiModelInfo.get_api_base()
 
         if not api_key:
-            raise ValueError(
-                "GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search"
-            )
+            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY is required for Gemini File Search")
 
         if not api_base:
             raise ValueError("GEMINI_API_BASE is required")
@@ -245,12 +237,8 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             if white_space_config:
                 request_body["chunkingConfig"] = {
                     "whiteSpaceConfig": {
-                        "maxTokensPerChunk": white_space_config.get(
-                            "max_tokens_per_chunk", 800
-                        ),
-                        "maxOverlapTokens": white_space_config.get(
-                            "max_overlap_tokens", 400
-                        ),
+                        "maxTokensPerChunk": white_space_config.get("max_tokens_per_chunk", 800),
+                        "maxOverlapTokens": white_space_config.get("max_overlap_tokens", 400),
                     }
                 }
 
@@ -334,9 +322,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
         try:
             response_data = response.json()
             # The response should contain the document name or file reference
-            file_id = response_data.get("name", "") or response_data.get(
-                "file", {}
-            ).get("name", "")
+            file_id = response_data.get("name", "") or response_data.get("file", {}).get("name", "")
             verbose_logger.debug(f"Upload complete. File ID: {file_id}")
             return file_id
         except Exception as e:

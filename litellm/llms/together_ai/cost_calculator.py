@@ -29,9 +29,7 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
     if call_type == CallTypes.embedding or call_type == CallTypes.aembedding:
         return get_model_params_and_category_embeddings(model_name=model_name)
     model_name = model_name.lower()
-    re_params_match = re.search(
-        r"(\d+b)", model_name
-    )  # catch all decimals like 3b, 70b, etc
+    re_params_match = re.search(r"(\d+b)", model_name)  # catch all decimals like 3b, 70b, etc
     category = None
     if re_params_match is not None:
         params_match = str(re_params_match.group(1))
@@ -67,9 +65,7 @@ def get_model_params_and_category_embeddings(model_name) -> str:
     - str - model pricing category if mapped else received model name
     """
     model_name = model_name.lower()
-    re_params_match = re.search(
-        r"(\d+m)", model_name
-    )  # catch all decimals like 100m, 200m, etc.
+    re_params_match = re.search(r"(\d+m)", model_name)  # catch all decimals like 100m, 200m, etc.
     category = None
     if re_params_match is not None:
         params_match = str(re_params_match.group(1))
