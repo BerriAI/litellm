@@ -429,3 +429,46 @@ def _is_debugging_on() -> bool:
     Returns True if debugging is on
     """
     return verbose_logger.isEnabledFor(logging.DEBUG) or set_verbose is True
+
+
+_HEALTH_CHECK_PROBE_PATHS = frozenset(
+    {
+        "/health/liveliness",
+        "/health/liveness",
+        "/health/readiness",
+    }
+)
+
+
+class HealthCheckAccessLogFilter(logging.Filter):
+    """Drop uvicorn access-log records for health-check probe endpoints.
+
+    Liveness/readiness probes are polled constantly by orchestrators (k8s, load
+    balancers), drowning out real access logs. uvicorn emits each access record
+    with args ``(client_addr, method, full_path, http_version, status_code)``,
+    so the request path is matched to decide what to silence.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if not isinstance(args, tuple) or len(args) < 3:
+            return True
+        path = args[2]
+        if not isinstance(path, str):
+            return True
+        normalized = path.split("?", 1)[0].rstrip("/")
+        return normalized not in _HEALTH_CHECK_PROBE_PATHS
+
+
+def disable_health_check_access_logs() -> None:
+    """Silence uvicorn access logs for health-check probe endpoints.
+
+    Idempotent so repeated startup hooks (workers, reloads) don't stack filters.
+    """
+    access_logger = logging.getLogger("uvicorn.access")
+    if any(
+        isinstance(existing, HealthCheckAccessLogFilter)
+        for existing in access_logger.filters
+    ):
+        return
+    access_logger.addFilter(HealthCheckAccessLogFilter())

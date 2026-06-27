@@ -919,6 +919,11 @@ async def proxy_startup_event(app: FastAPI):
             )
         )
 
+    if general_settings.get("disable_health_check_logs") is True:
+        from litellm._logging import disable_health_check_access_logs
+
+        disable_health_check_access_logs()
+
     ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
         proxy_logging_obj=proxy_logging_obj,
