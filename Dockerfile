@@ -28,6 +28,23 @@ RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
 COPY ui/litellm-dashboard/ ./
 RUN npm run build
 
+# Admin UI builder. Pinned to the build platform so the architecture-independent
+# Next.js static export compiles once natively even in a multi-arch build,
+# instead of once per target arch under QEMU.
+FROM --platform=$BUILDPLATFORM $UI_BUILD_IMAGE AS ui-builder
+
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    npm_config_fund=false \
+    npm_config_audit=false
+
+WORKDIR /ui
+
+COPY ui/litellm-dashboard/package.json ui/litellm-dashboard/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --prefer-offline
+
+COPY ui/litellm-dashboard/ ./
+RUN npm run build
+
 # Builder stage
 FROM cgr.dev/chainguard/wolfi-base@sha256:31da6565f35af6401031c1d7aa91dc84ac76c5c48edd17fb90f0ed9e3173c7a9 AS builder
 
