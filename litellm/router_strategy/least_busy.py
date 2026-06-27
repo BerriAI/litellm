@@ -76,7 +76,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -109,7 +109,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 self.router_cache.set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -144,7 +144,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 await self.router_cache.async_set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -178,7 +178,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 await self.router_cache.async_set_cache(
                     key=request_count_api_key, value=request_count_dict
                 )
@@ -202,22 +202,22 @@ class LeastBusyLoggingHandler(CustomLogger):
             if d["model_info"]["id"] not in all_deployments:
                 all_deployments[d["model_info"]["id"]] = 0
         # map deployment to id
-        # pick least busy deployment
+        # pick least busy deployment, with random jitter on ties
         min_traffic = float("inf")
-        min_deployment = None
         for k, v in all_deployments.items():
             if v < min_traffic:
                 min_traffic = v
-                min_deployment = k
-        if min_deployment is not None:
-            ## check if min deployment is a string, if so, cast it to int
+        # collect all deployments tied at the minimum
+        min_deployment_ids = [k for k, v in all_deployments.items() if v == min_traffic]
+        if min_deployment_ids:
+            chosen_id = random.choice(min_deployment_ids)
             for m in healthy_deployments:
-                if m["model_info"]["id"] == min_deployment:
+                if m["model_info"]["id"] == chosen_id:
                     return m
-            min_deployment = random.choice(healthy_deployments)
+            # chosen_id not in healthy list, fall back
+            return random.choice(healthy_deployments)
         else:
-            min_deployment = random.choice(healthy_deployments)
-        return min_deployment
+            return random.choice(healthy_deployments)
 
     def get_available_deployments(
         self,
