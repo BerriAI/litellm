@@ -299,3 +299,21 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gpt-5.2", "azure/gpt-5.2", "gpt5_series/gpt-5.2", "azure/gpt-5.4"],
+)
+def test_azure_gpt5_2_logprobs_not_duplicated(
+    config: AzureOpenAIGPT5Config, model: str
+):
+    """Regression: gpt-5.2/5.4 must list logprobs and top_logprobs exactly once.
+
+    These models support reasoning_effort="none", so the base config already
+    includes the logprobs params; the Azure override must not append a second
+    copy.
+    """
+    supported_params = config.get_supported_openai_params(model=model)
+    assert supported_params.count("logprobs") == 1
+    assert supported_params.count("top_logprobs") == 1
