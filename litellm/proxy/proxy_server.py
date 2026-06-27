@@ -9,8 +9,10 @@ import random
 import re
 import secrets
 import shutil
+import atexit
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -1748,21 +1750,6 @@ try:
                         # Skip binary files or files we can't write to
                         continue
 
-    # # Mount the _next directory at the root level
-    app.mount(
-        "/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
-        name="next_static",
-    )
-    app.mount(
-        f"{litellm_asset_prefix}/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
-        name="next_static",
-    )
-    # print(f"mounted _next at {server_root_path}/ui/_next")
-
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-
     def _restructure_ui_html_files(ui_root: str) -> None:
         """Ensure each exported HTML route is available as <route>/index.html."""
 
@@ -1789,27 +1776,38 @@ try:
                     # Another process may have already moved this file.
                     continue
 
-    # Handle HTML file restructuring
-    # Only restructure if:
-    # 1. UI is not already pre-restructured
-    # 2. Filesystem is writable
-    try:
-        is_pre_restructured = _is_ui_pre_restructured(ui_path)
-        is_writable = os.access(ui_path, os.W_OK)
-
-        if is_pre_restructured:
+    def _prepare_ui_directory(path: str) -> str:
+        """Return a fully restructured UI path, copying to a temp dir if the source is read-only."""
+        if _is_ui_pre_restructured(path):
             verbose_proxy_logger.info(
-                f"Skipping UI restructuring: {ui_path} is already pre-restructured"
+                f"Skipping UI restructuring: {path} is already pre-restructured"
             )
-        elif not is_writable:
+            return path
+
+        if os.access(path, os.W_OK):
+            _restructure_ui_html_files(path)
+            verbose_proxy_logger.info(f"Restructured UI directory: {path}")
+            return path
+
+        tmp_dir = tempfile.mkdtemp(prefix="litellm_ui_")
+        try:
+            shutil.copytree(path, tmp_dir, dirs_exist_ok=True, symlinks=True)
+            _restructure_ui_html_files(tmp_dir)
+            atexit.register(shutil.rmtree, tmp_dir, True)
+            verbose_proxy_logger.info(
+                f"Copied read-only UI to temp dir and restructured: {tmp_dir}"
+            )
+            return tmp_dir
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
             verbose_proxy_logger.warning(
-                f"Cannot restructure UI at {ui_path}: path is not writable. "
-                f"UI may not work correctly for extensionless routes. "
-                f"Pre-build and restructure UI in Dockerfile for read-only deployments."
+                f"Failed to copy and restructure UI from {path}; "
+                f"extensionless routes like /ui/login may return 404"
             )
-        else:
-            _restructure_ui_html_files(ui_path)
-            verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
+            return path
+
+    try:
+        ui_path = _prepare_ui_directory(ui_path)
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"
@@ -1818,6 +1816,20 @@ try:
         verbose_proxy_logger.exception(
             f"Error while restructuring UI directory {ui_path}: {e}"
         )
+
+    # Mount _next and UI using the (possibly updated) ui_path
+    app.mount(
+        "/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
+    app.mount(
+        f"{litellm_asset_prefix}/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
+
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 except Exception:
     pass

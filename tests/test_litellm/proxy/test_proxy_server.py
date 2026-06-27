@@ -604,6 +604,112 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
+def test_read_only_ui_dir_falls_back_to_temp_dir_for_extensionless_routes(tmp_path):
+    """
+    Regression for pip-install 404: when the UI directory cannot be restructured
+    in-place (e.g., read-only site-packages), copying it to a writable temp dir
+    and restructuring there must make /ui/login return 200.
+    """
+    import shutil
+    import tempfile
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("<html>index</html>")
+    (ui_root / "login.html").write_text("<html>login</html>")
+    (ui_root / "_next").mkdir()
+
+    # Confirm that without restructuring the extensionless route returns 404.
+    fastapi_before = FastAPI()
+    fastapi_before.mount(
+        "/ui", StaticFiles(directory=str(ui_root), html=True), name="ui"
+    )
+    assert TestClient(fastapi_before).get("/ui/login").status_code == 404
+
+    # Apply the read-only fallback: copy to a temp dir and restructure.
+    tmp_dir = tempfile.mkdtemp(prefix="litellm_ui_test_")
+    try:
+        shutil.copytree(str(ui_root), tmp_dir, dirs_exist_ok=True)
+        proxy_server._restructure_ui_html_files(tmp_dir)
+
+        assert (Path(tmp_dir) / "login" / "index.html").exists()
+        assert not (Path(tmp_dir) / "login.html").exists()
+
+        fastapi_after = FastAPI()
+        fastapi_after.mount("/ui", StaticFiles(directory=tmp_dir, html=True), name="ui")
+        response = TestClient(fastapi_after).get("/ui/login")
+        assert response.status_code == 200
+        assert "login" in response.text
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_prepare_ui_uses_temp_dir_when_not_writable(tmp_path, monkeypatch):
+    import shutil
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("<html>index</html>")
+    (ui_root / "login.html").write_text("<html>login</html>")
+    (ui_root / "_next").mkdir()
+
+    monkeypatch.setattr(proxy_server.os, "access", lambda path, mode: False)
+
+    result = proxy_server._prepare_ui_directory(str(ui_root))
+    try:
+        assert result != str(ui_root)
+        assert (Path(result) / "login" / "index.html").exists()
+        assert not (Path(result) / "login.html").exists()
+
+        app = FastAPI()
+        app.mount("/ui", StaticFiles(directory=result, html=True), name="ui")
+        response = TestClient(app).get("/ui/login")
+        assert response.status_code == 200
+        assert "login" in response.text
+    finally:
+        shutil.rmtree(result, ignore_errors=True)
+
+
+def test_prepare_ui_cleans_up_temp_dir_on_copy_failure(tmp_path, monkeypatch):
+    import shutil
+
+    from litellm.proxy import proxy_server
+
+    ui_root = tmp_path / "ui"
+    ui_root.mkdir()
+    (ui_root / "index.html").write_text("<html>index</html>")
+    (ui_root / "_next").mkdir()
+
+    monkeypatch.setattr(proxy_server.os, "access", lambda path, mode: False)
+    monkeypatch.setattr(
+        proxy_server.shutil,
+        "copytree",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    import tempfile
+
+    created_dirs: list = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def tracking_mkdtemp(**kwargs):
+        d = real_mkdtemp(**kwargs)
+        created_dirs.append(d)
+        return d
+
+    monkeypatch.setattr(proxy_server.tempfile, "mkdtemp", tracking_mkdtemp)
+
+    result = proxy_server._prepare_ui_directory(str(ui_root))
+
+    assert result == str(ui_root)
+    for d in created_dirs:
+        assert not Path(d).exists(), f"temp dir {d} was not cleaned up"
+
+
 def test_admin_ui_export_serves_nested_extensionless_routes():
     out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
     assert out_dir.is_dir(), f"missing UI export at {out_dir}"
