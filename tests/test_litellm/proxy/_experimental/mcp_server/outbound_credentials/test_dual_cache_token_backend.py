@@ -66,6 +66,15 @@ async def test_non_str_cache_value_is_a_miss():
 
 
 @pytest.mark.asyncio
+async def test_undecryptable_blob_is_a_miss():
+    # e.g. a master-key rotation leaves an entry the codec can't decrypt; it must read as a miss so
+    # the store re-reads the DB, not raise (the decrypt helper here returns None for unknown blobs).
+    cache = _FakeCache()
+    cache.values["mcp:per_user_token:alice:srv"] = "not-our-ciphertext"
+    assert await _backend(cache).get("alice", "srv") is None
+
+
+@pytest.mark.asyncio
 async def test_non_positive_ttl_is_not_written():
     cache = _FakeCache()
     await _backend(cache).set("alice", "srv", OAuthToken(access_token="at"), 0.0)
@@ -93,15 +102,42 @@ async def test_keys_isolate_users_and_servers():
     assert bob is not None and bob.access_token == "b"
 
 
-class _DeleteRaisingCache(_FakeCache):
+class _RaisingCache(_FakeCache):
+    """A cache whose every op raises, e.g. a Redis outage tripping the circuit breaker."""
+
+    async def async_get_cache(self, key):
+        raise ConnectionError("redis down")
+
+    async def async_set_cache(self, key, value, ttl=None):
+        raise ConnectionError("redis down")
+
     async def async_delete_cache(self, key):
         raise ConnectionError("redis down")
 
 
+# A cache or codec failure must degrade to the safe value (miss / no-op), never propagate: otherwise a
+# Redis outage turns CachedOAuthTokenStore.fetch() into a 500 instead of a cache miss that re-reads the
+# DB (get/set) or issues the OAuth challenge (the unauthorized branch deletes before returning None).
 @pytest.mark.asyncio
-async def test_delete_fails_open_when_the_cache_raises():
-    # A Redis outage on delete must degrade to the TTL-bounded stale entry, not surface as a request
-    # failure - otherwise the unauthorized branch of CachedOAuthTokenStore.fetch() (which deletes
-    # before returning None) 500s instead of issuing the OAuth challenge.
-    backend = _backend(_DeleteRaisingCache())
-    await backend.delete("alice", "srv")  # must not raise
+async def test_get_is_a_miss_when_the_cache_raises():
+    assert await _backend(_RaisingCache()).get("alice", "srv") is None
+
+
+@pytest.mark.asyncio
+async def test_set_is_swallowed_when_the_cache_raises():
+    await _backend(_RaisingCache()).set("alice", "srv", OAuthToken(access_token="at"), 60.0)
+
+
+@pytest.mark.asyncio
+async def test_delete_is_swallowed_when_the_cache_raises():
+    await _backend(_RaisingCache()).delete("alice", "srv")
+
+
+@pytest.mark.asyncio
+async def test_set_is_swallowed_when_the_codec_raises():
+    def _boom(_: str) -> str:
+        raise ValueError("encrypt unavailable")
+
+    codec = OAuthTokenCacheCodec(encrypt=_boom, decrypt=lambda b: None)
+    backend = DualCacheTokenCacheBackend(_FakeCache(), codec)
+    await backend.set("alice", "srv", OAuthToken(access_token="at"), 60.0)  # must not raise

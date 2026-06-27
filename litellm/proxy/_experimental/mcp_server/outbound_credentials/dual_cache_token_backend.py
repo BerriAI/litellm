@@ -31,6 +31,12 @@ class AsyncCache(Protocol):
 
 
 class DualCacheTokenCacheBackend:
+    """Every method degrades a cache or codec failure to its safe value - ``get`` to a miss
+    (``None``), ``set``/``delete`` to a no-op - so a Redis outage or an undecryptable entry reads as a
+    cache miss rather than a request error, matching v1 and this layer's "boundary failure = miss"
+    contract. The guarantee holds here regardless of whether the injected cache/codec also swallow.
+    """
+
     def __init__(
         self,
         cache: AsyncCache,
@@ -46,21 +52,26 @@ class DualCacheTokenCacheBackend:
         return f"{self._key_prefix}{user_id}:{server_id}"
 
     async def get(self, user_id: str, server_id: str) -> OAuthToken | None:
-        blob = await self._cache.async_get_cache(self._key(user_id, server_id))
-        return self._codec.decode(blob) if isinstance(blob, str) else None
+        try:
+            blob = await self._cache.async_get_cache(self._key(user_id, server_id))
+            return self._codec.decode(blob) if isinstance(blob, str) else None
+        except Exception as exc:  # noqa: BLE001
+            verbose_logger.debug("MCP per-user token cache get failed (miss): %s", exc)
+            return None
 
     async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
         if ttl_seconds <= 0:
             return
-        await self._cache.async_set_cache(
-            self._key(user_id, server_id),
-            self._codec.encode(token),
-            ttl=ttl_seconds,
-        )
+        try:
+            await self._cache.async_set_cache(
+                self._key(user_id, server_id),
+                self._codec.encode(token),
+                ttl=ttl_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            verbose_logger.debug("MCP per-user token cache set failed (ignored): %s", exc)
 
     async def delete(self, user_id: str, server_id: str) -> None:
-        # Fail open like get()/set(): a cache outage must drop to the TTL-bounded stale entry, not a
-        # request failure. DualCache swallows get/set errors internally but not delete, so catch here.
         try:
             await self._cache.async_delete_cache(self._key(user_id, server_id))
         except Exception as exc:  # noqa: BLE001
