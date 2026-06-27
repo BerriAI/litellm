@@ -1944,13 +1944,19 @@ def _complete_bedrock_mantle(
     stream = ctx.stream
     timeout = ctx.timeout
 
-    api_base = api_base or litellm.api_base or get_secret("BEDROCK_MANTLE_API_BASE")
+    from litellm.llms.bedrock_mantle.common_utils import (
+        mantle_uses_anthropic_messages,
+    )
+
+    api_base = api_base or litellm.api_base
     api_key = api_key or litellm.api_key or get_secret("BEDROCK_MANTLE_API_KEY")
     headers = headers or litellm.headers
-    config = litellm.BedrockMantleChatConfig.get_config()
-    for k, v in config.items():
-        if k not in optional_params:
-            optional_params[k] = v
+    if not mantle_uses_anthropic_messages(model):
+        api_base = api_base or get_secret("BEDROCK_MANTLE_API_BASE")
+        config = litellm.BedrockMantleChatConfig.get_config()
+        for k, v in config.items():
+            if k not in optional_params:
+                optional_params[k] = v
     return base_llm_http_handler.completion(
         model=model,
         stream=stream,

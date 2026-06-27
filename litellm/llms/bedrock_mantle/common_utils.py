@@ -145,3 +145,20 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     """
     entry = model_cost.get(f"bedrock_mantle/{model}", {})
     return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"
+
+
+def mantle_uses_anthropic_messages(model: str | None) -> bool:
+    """Whether a Bedrock Mantle model is served over the Anthropic Messages wire
+    format (.../anthropic/v1/messages) rather than the OpenAI-compatible surface.
+
+    Mantle exposes Anthropic models (the anthropic.* vendor namespace, e.g.
+    anthropic.claude-mythos-preview) through the Anthropic Messages API, and every
+    other vendor (openai.*, google.*) through the OpenAI-compatible surface. The
+    vendor namespace is the routing signal because it is the literal identifier AWS
+    uses to decide which sub-API a model lives behind, so unlike a family substring
+    it cannot drift from the model. The provider prefix is stripped first so both
+    "bedrock_mantle/anthropic.x" and a bare "anthropic.x" resolve the same way.
+    """
+    if not model:
+        return False
+    return model.split("/")[-1].startswith("anthropic.")
