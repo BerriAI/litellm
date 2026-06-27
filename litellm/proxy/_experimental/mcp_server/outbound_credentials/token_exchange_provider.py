@@ -1,9 +1,10 @@
 """Composition root for the v2-native token_exchange (OBO) exchanger.
 
 Wires the pure ``Rfc8693TokenExchanger`` to its runtime edges: the real httpx POST against the IdP and
-the configured cache sizing/TTL constants. The exchanger (and its in-process cache) must be built once
-and reused so the cache survives across requests, so ``LazyTokenExchanger`` builds it on first use and
-holds it. The httpx client is acquired per call (its globals are not import-time ready), mirroring v1.
+the configured cache sizing/TTL constants. ``build_token_exchanger`` is built once at egress
+construction and reused, so the in-process exchanged-token cache survives across requests. Unlike the
+per-user store, nothing here reads a runtime global at build time (the httpx client is acquired per
+call), so it needs no lazy wrapper.
 """
 
 from __future__ import annotations
@@ -17,18 +18,9 @@ from litellm.constants import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
-    OAuthToken,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
-    Result,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
     Rfc8693TokenExchanger,
-)
-from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
-    CredError,
-    ServerSpec,
-    TokenExchangeConfig,
 )
 
 
@@ -62,21 +54,3 @@ def build_token_exchanger() -> Rfc8693TokenExchanger:
         min_ttl_seconds=MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
         expiry_buffer_seconds=MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
     )
-
-
-class LazyTokenExchanger:
-    """``TokenExchanger`` that builds the exchanger (and its process-lifetime cache) on first use.
-
-    Built once, then reused, so the exchanged-token cache persists across requests rather than being
-    discarded each call.
-    """
-
-    def __init__(self) -> None:
-        self._exchanger: Rfc8693TokenExchanger | None = None
-
-    async def exchange(
-        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig
-    ) -> Result[OAuthToken, CredError]:
-        if self._exchanger is None:
-            self._exchanger = build_token_exchanger()
-        return await self._exchanger.exchange(subject_token, server, config)

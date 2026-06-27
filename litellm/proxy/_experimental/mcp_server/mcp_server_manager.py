@@ -72,7 +72,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_
     LazyPerUserOAuthTokenStore,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
-    LazyTokenExchanger,
+    build_token_exchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
@@ -535,7 +535,7 @@ class MCPServerManager:
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id),
-            token_exchanger=LazyTokenExchanger(),
+            token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
         self.config_mcp_servers: dict[str, MCPServer] = {}

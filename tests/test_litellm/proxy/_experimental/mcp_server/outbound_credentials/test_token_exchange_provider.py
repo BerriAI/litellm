@@ -1,49 +1,31 @@
-"""Tests for the token_exchange composition root: build-once laziness and the HTTP edge contract.
+"""Tests for the token_exchange composition root: the built exchanger and the HTTP edge contract.
 
-`LazyTokenExchanger` must build its exchanger (and process-lifetime cache) exactly once;
-`_post_exchange_endpoint` is the I/O edge that maps any transport/HTTP failure to None and parses a
-JSON body on success.
+`build_token_exchanger` wires the pure exchanger to its runtime edges; `_post_exchange_endpoint` is
+the I/O edge that maps any transport/HTTP failure to None and parses a JSON body on success.
 """
 
 from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy._experimental.mcp_server.outbound_credentials import (
-    Error,
-    ServerSpec,
-)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
-    LazyTokenExchanger,
     _post_exchange_endpoint,
     build_token_exchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
     Rfc8693TokenExchanger,
 )
-from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
-    TokenExchangeConfig,
-)
 
 _HTTP_CLIENT = "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
-_BUILD = "litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider.build_token_exchanger"
 
 
 def test_build_token_exchanger_returns_an_exchanger():
     assert isinstance(build_token_exchanger(), Rfc8693TokenExchanger)
 
 
-@pytest.mark.asyncio
-async def test_lazy_builds_once_across_calls():
-    incomplete = TokenExchangeConfig()  # misconfigured before any HTTP, so no network needed
-    server = ServerSpec(server_id="s", resource="r", config=incomplete)
-    with patch(_BUILD, wraps=build_token_exchanger) as spy:
-        lazy = LazyTokenExchanger()
-        first = await lazy.exchange("jwt", server, incomplete)
-        second = await lazy.exchange("jwt", server, incomplete)
-        assert spy.call_count == 1
-    assert isinstance(first, Error) and isinstance(second, Error)
-    assert first.error.tag == "misconfigured"
+def test_build_gives_each_caller_an_independent_cache():
+    # Separate builds must not share a cache, so one egress instance cannot serve another's tokens.
+    assert build_token_exchanger() is not build_token_exchanger()
 
 
 @pytest.mark.asyncio
