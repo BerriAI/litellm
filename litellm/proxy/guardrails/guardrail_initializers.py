@@ -112,7 +112,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail):
                 event_hook=GuardrailEventHooks.post_call.value,
             )
 
-    if run_output:
+    if run_output and not litellm_params.output_parse_pii:
         output_callback = _make_presidio_callback(
             apply_to_output=True,
             event_hook=GuardrailEventHooks.post_call.value,

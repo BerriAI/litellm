@@ -21,7 +21,14 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 def _make_mock_session_iterator(
@@ -840,6 +847,61 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     assert len(created) == 2
     assert any(not c.apply_to_output for c in created)
     assert any(c.apply_to_output for c in created)
+
+    # both + output_parse_pii -> unmask only; no apply_to_output callback
+    created.clear()
+    params_both_unmask = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_filter_scope="both",
+        output_parse_pii=True,
+    )
+    cb = initialize_presidio(params_both_unmask, guardrail_dict)
+    assert len(created) == 2
+    assert all(not c.apply_to_output for c in created)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_skips_remask_when_pii_tokens_present():
+    """
+    When input was masked with numbered tokens, the apply_to_output streaming
+    hook must not re-mask the already-unmasked response.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_presidio",
+        apply_to_output=True,
+        event_hook="post_call",
+        mock_testing=True,
+    )
+
+    request_data = {
+        "metadata": {
+            "pii_tokens": {"<EMAIL_ADDRESS_1>": "shivam@uni.minerva.edu"},
+        }
+    }
+
+    async def _fake_stream():
+        yield ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    delta=Delta(content="Your email is shivam@uni.minerva.edu"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ]
+        )
+
+    chunks = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        response=_fake_stream(),
+        request_data=request_data,
+    ):
+        chunks.append(chunk)
+
+    assert len(chunks) == 1
+    assert "shivam@uni.minerva.edu" in chunks[0].choices[0].delta.content
+    assert "<EMAIL_ADDRESS" not in chunks[0].choices[0].delta.content
 
 
 @pytest.mark.asyncio
@@ -2300,6 +2362,72 @@ async def test_apply_guardrail_unmask_on_response():
     )
 
     assert result["texts"][0] == "Hello John Smith, your number is 555-123-4567."
+
+
+@pytest.mark.asyncio
+async def test_proxy_post_call_unmask_when_litellm_metadata_shadows_guardrails():
+    """
+    Regression: guardrails live in metadata but a non-empty litellm_metadata
+    without guardrails must not prevent Presidio post-call unmasking.
+    """
+    import litellm
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+
+    litellm.callbacks = []
+    post_guard = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        guardrail_name="presidio-g",
+        output_parse_pii=True,
+        event_hook="post_call",
+    )
+    litellm.logging_callback_manager.add_litellm_callback(post_guard)
+
+    data = {
+        "model": "gpt-4",
+        "metadata": {
+            "guardrails": ["presidio-g"],
+            "pii_tokens": {"<PERSON_1>": "John Smith"},
+        },
+        "litellm_metadata": {"user_api_key_user_id": "user-1"},
+    }
+    response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(
+                    role="assistant",
+                    content="Hello <PERSON_1>, how can I help?",
+                ),
+                index=0,
+                finish_reason="stop",
+            )
+        ]
+    )
+
+    proxy_logging = ProxyLogging(user_api_key_cache=None)
+    result = await proxy_logging.post_call_success_hook(
+        data=data,
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key", request_route="/chat/completions"
+        ),
+    )
+
+    assert result.choices[0].message.content == "Hello John Smith, how can I help?"
+
+
+def test_pii_tokens_mirrored_to_litellm_metadata():
+    """pii_tokens must be readable from either metadata container after masking."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    request_data: dict = {"litellm_metadata": {"user_api_key_user_id": "u1"}}
+    tokens = guardrail._ensure_pii_tokens(request_data)
+    tokens["<PERSON_1>"] = "John Smith"
+
+    assert request_data["metadata"]["pii_tokens"]["<PERSON_1>"] == "John Smith"
+    assert request_data["litellm_metadata"]["pii_tokens"]["<PERSON_1>"] == "John Smith"
+    assert guardrail._get_pii_tokens_from_request_data(request_data)["<PERSON_1>"] == (
+        "John Smith"
+    )
 
 
 @pytest.mark.asyncio

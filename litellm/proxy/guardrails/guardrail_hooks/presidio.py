@@ -477,6 +477,40 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
         return redacted_text["text"]
 
+    def _ensure_pii_tokens(self, request_data: dict) -> Dict[str, str]:
+        """
+        Return the shared pii_tokens map for this request, stored on both
+        metadata and litellm_metadata so post-call unmasking works regardless
+        of which container downstream hooks read.
+        """
+        tokens: Optional[Dict[str, str]] = None
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = request_data.get(meta_key)
+            if isinstance(meta, dict) and isinstance(meta.get("pii_tokens"), dict):
+                tokens = meta["pii_tokens"]
+                break
+        if tokens is None:
+            tokens = {}
+        for meta_key in ("metadata", "litellm_metadata"):
+            if not isinstance(request_data.get(meta_key), dict):
+                request_data[meta_key] = {}
+            request_data[meta_key]["pii_tokens"] = tokens
+        return tokens
+
+    @staticmethod
+    def _get_pii_tokens_from_request_data(
+        request_data: Optional[Dict],
+    ) -> Dict[str, str]:
+        if not request_data:
+            return {}
+        for meta_key in ("metadata", "litellm_metadata"):
+            meta = request_data.get(meta_key)
+            if isinstance(meta, dict):
+                tokens = meta.get("pii_tokens")
+                if isinstance(tokens, dict) and tokens:
+                    return tokens
+        return {}
+
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -496,11 +530,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "This may indicate a missing caller update."
             )
             request_data = {}
-        if not request_data.get("metadata"):
-            request_data["metadata"] = {}
-        if "pii_tokens" not in request_data["metadata"]:
-            request_data["metadata"]["pii_tokens"] = {}
-        pii_tokens = request_data["metadata"]["pii_tokens"]
+        pii_tokens = self._ensure_pii_tokens(request_data)
 
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
@@ -1008,8 +1038,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Process an Anthropic native message dict for PII masking/unmasking.
         Handles content blocks with type == "text".
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._get_pii_tokens_from_request_data(request_data)
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
                 "No pii_tokens in metadata for Anthropic response unmask"
@@ -1050,11 +1079,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._get_pii_tokens_from_request_data(request_data)
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
-                "No pii_tokens found in request_data['metadata'] — nothing to unmask"
+                "No pii_tokens found in request_data metadata — nothing to unmask"
             )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
@@ -1390,17 +1418,21 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         The base class declares ModelResponseStream only.
         """
         if self.apply_to_output:
+            pii_tokens = self._get_pii_tokens_from_request_data(request_data)
+            if pii_tokens:
+                async for chunk in response:
+                    yield chunk
+                return
             async for chunk in self._stream_apply_output_masking(
                 response, request_data
             ):
                 yield chunk
             return
 
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._get_pii_tokens_from_request_data(request_data)
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
-                "No pii_tokens in request_data['metadata'] for streaming unmask path"
+                "No pii_tokens in request_data for streaming unmask path"
             )
         if not (self.output_parse_pii and pii_tokens):
             async for chunk in response:
@@ -1460,8 +1492,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # When input_type is "response" and pii_tokens are available,
         # unmask the text instead of masking it.
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._get_pii_tokens_from_request_data(request_data)
 
         new_texts = []
         if input_type == "response" and pii_tokens:
@@ -1492,3 +1523,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.presidio_entities_deny_list = (
                 litellm_params.presidio_entities_deny_list
             )
+        if litellm_params.output_parse_pii is not None:
+            self.output_parse_pii = litellm_params.output_parse_pii or False
+            if (self.output_parse_pii or self.apply_to_output) and not getattr(
+                self, "logging_only", False
+            ):
+                current_hook = self.event_hook
+                if isinstance(current_hook, str) and current_hook != "post_call":
+                    self.event_hook = cast(
+                        List[GuardrailEventHooks], [current_hook, "post_call"]
+                    )
+                elif isinstance(current_hook, list) and "post_call" not in current_hook:
+                    self.event_hook = cast(
+                        List[GuardrailEventHooks], current_hook + ["post_call"]
+                    )
