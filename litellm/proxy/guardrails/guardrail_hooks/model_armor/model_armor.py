@@ -42,6 +42,26 @@ from litellm.types.utils import (
 GUARDRAIL_NAME = "model_armor"
 
 
+class DictTarget:
+    def __init__(self, container: dict, key: str, value: str):
+        self.container = container
+        self.key = key
+        self.value = value
+
+    def update(self, new_value: str) -> None:
+        self.container[self.key] = new_value
+
+
+class ListTarget:
+    def __init__(self, container: list, index: int, value: str):
+        self.container = container
+        self.index = index
+        self.value = value
+
+    def update(self, new_value: str) -> None:
+        self.container[self.index] = new_value
+
+
 class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     """
     Google Cloud Model Armor Guardrail integration for LiteLLM.
@@ -102,6 +122,63 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return {"userPromptData": {"text": content}}
         else:
             return {"modelResponseData": {"text": content}}
+
+    def _targets_from_content_list(self, content: list) -> list:
+        return [
+            DictTarget(item, "text", item["text"])
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str) and item["text"].strip()
+        ]
+
+    def _targets_from_input_item(self, input_data: list, idx: int, item: object) -> list:
+        if isinstance(item, str) and item.strip():
+            return [ListTarget(input_data, idx, item)]
+        if not isinstance(item, dict):
+            return []
+        role = item.get("role")
+        if role is not None and role != "user":
+            return []
+        text_val = item.get("text")
+        if isinstance(text_val, str) and text_val.strip():
+            return [DictTarget(item, "text", text_val)]
+        content_val = item.get("content")
+        if isinstance(content_val, str) and content_val.strip():
+            return [DictTarget(item, "content", content_val)]
+        if isinstance(content_val, list):
+            return self._targets_from_content_list(content_val)
+        return []
+
+    def _targets_from_msg(self, msg: dict) -> list:
+        c = msg.get("content")
+        if isinstance(c, str) and c.strip():
+            return [DictTarget(msg, "content", c)]
+        return self._targets_from_content_list(c) if isinstance(c, list) else []
+
+    def _get_request_targets(self, data: dict) -> list:
+        """Locate all user-facing, text-bearing fields in the request data to scan."""
+        if "input" in data:
+            input_data = data.get("input")
+            if isinstance(input_data, str) and input_data.strip():
+                return [DictTarget(data, "input", input_data)]
+            if isinstance(input_data, list):
+                return [
+                    t
+                    for idx, item in enumerate(input_data)
+                    for t in self._targets_from_input_item(input_data, idx, item)
+                ]
+            if input_data is not None:
+                return [DictTarget(data, "input", str(input_data))]
+            return []
+
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            return []
+        trailing: list = []
+        for msg in reversed(messages):
+            if not (isinstance(msg, dict) and msg.get("role") == "user"):
+                break
+            trailing.append(msg)
+        return [t for msg in trailing for t in self._targets_from_msg(msg)]
 
     def _extract_content_from_response(self, response: Union[Any, ModelResponse]) -> str:
         """
@@ -326,6 +403,75 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         )
         return response
 
+    async def _run_request_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> dict:
+        """Run the Model Armor guardrail logic on the request data in a schema-aware way."""
+        from litellm.proxy.common_utils.callback_utils import (
+            add_guardrail_to_applied_guardrails_header,
+        )
+        import asyncio
+
+        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return data
+
+        # Add guardrail to applied_guardrails header early
+        add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
+
+        targets = self._get_request_targets(data)
+
+        if not targets:
+            verbose_proxy_logger.warning("Model Armor: not running guardrail. No scan targets found in request.")
+            return data
+
+        try:
+            sem = asyncio.Semaphore(self.optional_params.get("max_concurrent_scans", 10))
+
+            async def _scan(t: Union[DictTarget, ListTarget]) -> dict:
+                async with sem:
+                    return await self.make_model_armor_request(
+                        content=t.value,
+                        source="user_prompt",
+                        request_data=data,
+                    )
+
+            responses = await asyncio.gather(*[_scan(t) for t in targets])
+
+            blocked_response = None
+            for resp in responses:
+                if self._should_block_content(resp, allow_sanitization=self.mask_request_content):
+                    blocked_response = resp
+                    break
+
+            primary_response = blocked_response or responses[0]
+
+            if isinstance(data, dict):
+                metadata = data.setdefault("metadata", {})
+                metadata["_model_armor_response"] = primary_response
+                metadata["_model_armor_status"] = "blocked" if blocked_response else "success"
+
+            if blocked_response is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Content blocked by Model Armor",
+                        "model_armor_response": blocked_response,
+                    },
+                )
+
+            if self.mask_request_content:
+                for target, resp in zip(targets, responses):
+                    sanitized_val = self._get_sanitized_content(resp)
+                    if sanitized_val and sanitized_val != target.value:
+                        target.update(sanitized_val)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            verbose_proxy_logger.error("Model Armor request-side error: %s", str(e), exc_info=True)
+            if self.optional_params.get("fail_on_error", True):
+                raise
+
+        return data
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
@@ -336,88 +482,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     ) -> Union[Exception, str, dict, None]:
         """Pre-call hook to sanitize user prompts."""
         verbose_proxy_logger.debug("Inside Model Armor Pre-Call Hook")
-
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
-        event_type = GuardrailEventHooks.pre_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return data
-
-        messages = data.get("messages")
-        if not messages:
-            verbose_proxy_logger.warning("Model Armor: not running guardrail. No messages in data")
-            return data
-
-        # Extract content from messages using helper from common_utils
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            get_last_user_message,
-        )
-
-        content = get_last_user_message(messages)
-        if not content:
-            return data
-
-        # Make Model Armor request
-        try:
-            armor_response = await self.make_model_armor_request(
-                content=content,
-                source="user_prompt",
-                request_data=data,
-            )
-
-            # Store the armor response for logging
-            # Attach Model Armor response + evaluation status directly to the per-request metadata to avoid
-            #   race-conditions between concurrent requests which share the same guardrail instance.
-            #   This ensures each request logs its own Model Armor response instead of a potentially stale value
-            #   overwritten by another coroutine.
-            if isinstance(data, dict):
-                metadata = data.setdefault("metadata", {})  # ensures metadata exists and is unique per request
-                metadata["_model_armor_response"] = armor_response
-                # Pre-compute guardrail status for downstream logging. A blocked response will eventually raise
-                #   an HTTPException, however in scenarios where the caller decides to ignore the exception (e.g.
-                #   fail_on_error=False) we still want the correct status reflected.
-                metadata["_model_armor_status"] = (
-                    "blocked"
-                    if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content)
-                    else "success"
-                )
-
-            # Add guardrail to applied_guardrails BEFORE potential blocking
-            # This ensures guardrail is recorded even when it blocks the request
-            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-
-            # Check if content should be blocked
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Content blocked by Model Armor",
-                        "model_armor_response": armor_response,
-                    },
-                )
-
-            # If mask_request_content is enabled, update messages with sanitized content
-            if self.mask_request_content:
-                sanitized_content = self._get_sanitized_content(armor_response)
-                if sanitized_content and sanitized_content != content:
-                    # Use the helper to set the last user message with sanitized content
-                    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                        set_last_user_message,
-                    )
-
-                    data["messages"] = set_last_user_message(messages, sanitized_content)
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            verbose_proxy_logger.error("Model Armor pre-call error: %s", str(e), exc_info=True)
-            # Depending on configuration, either fail or continue
-            if self.optional_params.get("fail_on_error", True):
-                raise
-
-        return data
+        return await self._run_request_guardrail(data, GuardrailEventHooks.pre_call)
 
     @log_guardrail_information
     async def async_moderation_hook(
@@ -428,79 +493,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     ) -> Union[Exception, str, dict, None]:
         """During-call hook to sanitize user prompts in parallel with LLM call."""
         verbose_proxy_logger.debug("Inside Model Armor Moderation Hook")
-
-        from litellm.proxy.common_utils.callback_utils import (
-            add_guardrail_to_applied_guardrails_header,
-        )
-
-        event_type = GuardrailEventHooks.during_call
-        if self.should_run_guardrail(data=data, event_type=event_type) is not True:
-            return data
-
-        messages = data.get("messages")
-        if not messages:
-            verbose_proxy_logger.warning("Model Armor: not running guardrail. No messages in data")
-            return data
-
-        # Extract content from messages
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            get_last_user_message,
-        )
-
-        content = get_last_user_message(messages)
-        if not content:
-            return data
-
-        # Make Model Armor request
-        try:
-            armor_response = await self.make_model_armor_request(
-                content=content,
-                source="user_prompt",
-                request_data=data,
-            )
-
-            # Store the armor response for logging
-            if isinstance(data, dict):
-                metadata = data.setdefault("metadata", {})
-                metadata["_model_armor_response"] = armor_response
-                metadata["_model_armor_status"] = (
-                    "blocked"
-                    if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content)
-                    else "success"
-                )
-
-            # Add guardrail to applied_guardrails BEFORE potential blocking
-            # This ensures guardrail is recorded even when it blocks the request
-            add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-
-            # Check if content should be blocked
-            if self._should_block_content(armor_response, allow_sanitization=self.mask_request_content):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "Content blocked by Model Armor",
-                        "model_armor_response": armor_response,
-                    },
-                )
-
-            # If mask_request_content is enabled, update messages with sanitized content
-            if self.mask_request_content:
-                sanitized_content = self._get_sanitized_content(armor_response)
-                if sanitized_content and sanitized_content != content:
-                    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                        set_last_user_message,
-                    )
-
-                    data["messages"] = set_last_user_message(messages, sanitized_content)
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            verbose_proxy_logger.error("Model Armor moderation error: %s", str(e), exc_info=True)
-            if self.optional_params.get("fail_on_error", True):
-                raise
-
-        return data
+        return await self._run_request_guardrail(data, GuardrailEventHooks.during_call)
 
     @log_guardrail_information
     async def async_post_call_success_hook(
