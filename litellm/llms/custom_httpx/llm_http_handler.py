@@ -5507,12 +5507,20 @@ class BaseLLMHTTPHandler:
     def _maybe_wrap_in_fake_stream(
         self,
         response: Any,
-        logging_obj: "LiteLLMLoggingObj",
+        logging_obj: Optional["LiteLLMLoggingObj"],
+        api_surface: str,
     ) -> Any:
         """
         If the original request was streaming but converted to non-streaming for
         WebSearch interception, wrap the dict response in a FakeAnthropicMessagesStreamIterator.
+
+        The converted-stream flag is only ever set by anthropic-messages websearch
+        interception, and the wrapper rebuilds an Anthropic SSE stream, so wrapping
+        is gated on ``api_surface == "anthropic_messages"`` to leave other surfaces
+        (e.g. the responses API) untouched.
         """
+        if api_surface != "anthropic_messages":
+            return response
         websearch_converted_stream = (
             logging_obj.model_call_details.get(
                 "websearch_interception_converted_stream", False
@@ -5633,7 +5641,9 @@ class BaseLLMHTTPHandler:
                         stream=stream,
                         kwargs=kwargs_with_provider,
                     )
-                    return self._maybe_wrap_in_fake_stream(agentic_result, logging_obj)
+                    return self._maybe_wrap_in_fake_stream(
+                        agentic_result, logging_obj, api_surface
+                    )
 
                 plan = await callback.async_build_agentic_loop_plan(
                     tools=tool_calls,
@@ -5649,7 +5659,7 @@ class BaseLLMHTTPHandler:
 
                 if plan.response_override is not None:
                     return self._maybe_wrap_in_fake_stream(
-                        plan.response_override, logging_obj
+                        plan.response_override, logging_obj, api_surface
                     )
                 if plan.terminate:
                     verbose_logger.debug(
@@ -5657,7 +5667,9 @@ class BaseLLMHTTPHandler:
                         callback.__class__.__name__,
                         plan.stop_reason,
                     )
-                    return self._maybe_wrap_in_fake_stream(response, logging_obj)
+                    return self._maybe_wrap_in_fake_stream(
+                        response, logging_obj, api_surface
+                    )
                 if not plan.run_agentic_loop:
                     continue
 
@@ -5691,6 +5703,7 @@ class BaseLLMHTTPHandler:
                         callback=callback,
                     ),
                     logging_obj,
+                    api_surface,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -5707,7 +5720,7 @@ class BaseLLMHTTPHandler:
         # 1. Stream was originally True but converted to False for WebSearch interception
         # 2. No agentic loop ran (LLM didn't use the tool)
         # 3. We have a non-streaming response that needs to be converted to streaming
-        result = self._maybe_wrap_in_fake_stream(response, logging_obj)
+        result = self._maybe_wrap_in_fake_stream(response, logging_obj, api_surface)
         if result is not response:
             return result
 
