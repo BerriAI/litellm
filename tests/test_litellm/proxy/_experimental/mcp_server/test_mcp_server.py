@@ -1176,31 +1176,31 @@ async def test_concurrent_initialize_session_managers():
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # All tasks should complete successfully (no exceptions)
-            assert all(
-                result == "success" for result in results
-            ), f"Some tasks failed: {results}"
+            assert all(result == "success" for result in results), (
+                f"Some tasks failed: {results}"
+            )
 
             # Each session manager.run() should only be called once due to the lock
-            assert (
-                mock_stateless_run.call_count == 1
-            ), f"Expected 1 call to session_manager_stateless.run(), got {mock_stateless_run.call_count}"
-            assert (
-                mock_stateful_run.call_count == 1
-            ), f"Expected 1 call to session_manager_stateful.run(), got {mock_stateful_run.call_count}"
-            assert (
-                mock_sse_run.call_count == 1
-            ), f"Expected 1 call to sse_session_manager.run(), got {mock_sse_run.call_count}"
+            assert mock_stateless_run.call_count == 1, (
+                f"Expected 1 call to session_manager_stateless.run(), got {mock_stateless_run.call_count}"
+            )
+            assert mock_stateful_run.call_count == 1, (
+                f"Expected 1 call to session_manager_stateful.run(), got {mock_stateful_run.call_count}"
+            )
+            assert mock_sse_run.call_count == 1, (
+                f"Expected 1 call to sse_session_manager.run(), got {mock_sse_run.call_count}"
+            )
 
             # The context managers should only be entered once each
-            assert (
-                mock_cm_stateless.__aenter__.call_count == 1
-            ), f"Expected 1 call to stateless __aenter__, got {mock_cm_stateless.__aenter__.call_count}"
-            assert (
-                mock_cm_stateful.__aenter__.call_count == 1
-            ), f"Expected 1 call to stateful __aenter__, got {mock_cm_stateful.__aenter__.call_count}"
-            assert (
-                mock_cm_sse.__aenter__.call_count == 1
-            ), f"Expected 1 call to sse __aenter__, got {mock_cm_sse.__aenter__.call_count}"
+            assert mock_cm_stateless.__aenter__.call_count == 1, (
+                f"Expected 1 call to stateless __aenter__, got {mock_cm_stateless.__aenter__.call_count}"
+            )
+            assert mock_cm_stateful.__aenter__.call_count == 1, (
+                f"Expected 1 call to stateful __aenter__, got {mock_cm_stateful.__aenter__.call_count}"
+            )
+            assert mock_cm_sse.__aenter__.call_count == 1, (
+                f"Expected 1 call to sse __aenter__, got {mock_cm_sse.__aenter__.call_count}"
+            )
 
             # State should be properly set
             assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
@@ -1343,16 +1343,16 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
     # initialize → stateful
     init_body = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
     stateless_called, stateful_called = await make_request(init_body)
-    assert (
-        stateful_called and not stateless_called
-    ), "initialize (no session) should route to stateful, not stateless"
+    assert stateful_called and not stateless_called, (
+        "initialize (no session) should route to stateful, not stateless"
+    )
 
     # tools/list → stateless
     tools_body = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
     stateless_called, stateful_called = await make_request(tools_body)
-    assert (
-        stateless_called and not stateful_called
-    ), "tools/list (no session) should route to stateless, not stateful"
+    assert stateless_called and not stateful_called, (
+        "tools/list (no session) should route to stateless, not stateful"
+    )
 
 
 @pytest.mark.asyncio
@@ -1437,9 +1437,9 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert (
-        stateful_called and not stateless_called
-    ), "chunked initialize (no session) should route to stateful, not stateless"
+    assert stateful_called and not stateless_called, (
+        "chunked initialize (no session) should route to stateful, not stateless"
+    )
 
 
 @pytest.mark.asyncio
@@ -2432,9 +2432,9 @@ async def test_stateful_mcp_session_serializes_concurrent_requests():
         mcp_server._stateful_session_owners.pop(session_id, None)
         mcp_server._stateful_session_locks.pop(session_id, None)
 
-    assert (
-        max_inside == 1
-    ), "concurrent requests on same stateful session must be serialized"
+    assert max_inside == 1, (
+        "concurrent requests on same stateful session must be serialized"
+    )
 
 
 @pytest.mark.asyncio
@@ -2498,9 +2498,9 @@ async def test_stateful_mcp_lock_does_not_leak_when_auth_context_missing():
             assert session_id not in mcp_server._stateful_session_auth_contexts
             await handle_streamable_http_mcp(scope, receive, AsyncMock())
 
-        assert (
-            session_id not in mcp_server._stateful_session_locks
-        ), "lock entry must be cleaned up for untracked stateful session"
+        assert session_id not in mcp_server._stateful_session_locks, (
+            "lock entry must be cleaned up for untracked stateful session"
+        )
     finally:
         mcp_server._stateful_session_auth_contexts.pop(session_id, None)
         mcp_server._stateful_session_owners.pop(session_id, None)
@@ -2810,9 +2810,9 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
     ]
 
     assert len(called_servers) == 1, "Should have resolved to exactly one server."
-    assert (
-        called_servers[0].server_id == specific_server.server_id
-    ), "Should have contacted the specific server alias, not the group."
+    assert called_servers[0].server_id == specific_server.server_id, (
+        "Should have contacted the specific server alias, not the group."
+    )
 
 
 @pytest.mark.asyncio
@@ -2926,9 +2926,9 @@ async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
         )
 
     # Verify that _create_mcp_client was called
-    assert (
-        mock_create_client.call_count == 1
-    ), "Expected _create_mcp_client to be called once"
+    assert mock_create_client.call_count == 1, (
+        "Expected _create_mcp_client to be called once"
+    )
 
     # Verify the server passed to _create_mcp_client is the OAuth2 server
     assert captured_client_args["server"].server_id == oauth2_server.server_id
@@ -4153,6 +4153,159 @@ async def test_call_mcp_tool_logs_failure_via_post_call_failure_hook():
     )
 
 
+def test_get_mcp_tool_call_error_message():
+    """The helper turns a failed CallToolResult into its error text, and returns
+    None for a successful one, so call_mcp_tool can branch its logging on it."""
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        _get_mcp_tool_call_error_message,
+    )
+
+    ok = CallToolResult(
+        content=[TextContent(type="text", text="all good")], isError=False
+    )
+    assert _get_mcp_tool_call_error_message(ok) is None
+
+    err = CallToolResult(
+        content=[TextContent(type="text", text="Error: auth denied")], isError=True
+    )
+    assert _get_mcp_tool_call_error_message(err) == "Error: auth denied"
+
+    multi = CallToolResult(
+        content=[
+            TextContent(type="text", text="line one"),
+            TextContent(type="text", text="line two"),
+        ],
+        isError=True,
+    )
+    assert _get_mcp_tool_call_error_message(multi) == "line one\nline two"
+
+    # A failure with no text content still reads as an error, never as success.
+    empty = CallToolResult(content=[], isError=True)
+    assert (
+        _get_mcp_tool_call_error_message(empty)
+        == "MCP tool call returned an error result"
+    )
+
+
+async def _run_call_mcp_tool_with_result(call_tool_result):
+    """Drive ``call_mcp_tool`` against a stubbed ``execute_mcp_tool`` that returns
+    ``call_tool_result``, with a real logging object so the standard logging
+    payload (and its status) is actually built. Returns (response, logging_obj)."""
+    import uuid
+    from datetime import timezone
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        call_mcp_tool,
+        global_mcp_server_manager,
+    )
+    from litellm.utils import Rules, function_setup
+
+    mock_server = MCPServer(
+        server_id="server-123",
+        name="test_server",
+        alias="test_server",
+        server_name="test_server",
+        url="https://test-server.com/mcp",
+        transport=MCPTransport.http,
+        mcp_info={"server_name": "test_server"},
+    )
+    user_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+
+    start_time = datetime.now(timezone.utc)
+    litellm_logging_obj, _ = function_setup(
+        original_function="call_mcp_tool",
+        rules_obj=Rules(),
+        start_time=start_time,
+        litellm_call_id=str(uuid.uuid4()),
+        name="test_server-any_tool",
+        arguments={"x": 1},
+    )
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[mock_server.server_id],
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            return_value=mock_server,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers_from_mcp_server_names",
+            new_callable=AsyncMock,
+            return_value=[mock_server],
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+            new_callable=AsyncMock,
+            return_value=call_tool_result,
+        ),
+    ):
+        response = await call_mcp_tool(
+            name="test_server-any_tool",
+            arguments={"x": 1},
+            user_api_key_auth=user_auth,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+    return response, litellm_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_iserror_result_logged_as_failure():
+    """A tools/call returning ``isError: true`` (auth denied, upstream error,
+    guardrail block, ...) stays on HTTP 200 per the MCP spec, but must be
+    recorded as a failure: the standard logging payload gets status="failure"
+    with the tool's error text, which is what marks the OTel span ERROR.
+
+    Regression: such calls were logged as successful (green) traces because
+    call_mcp_tool always invoked async_success_handler."""
+    try:
+        from mcp.types import CallToolResult, TextContent
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    error_result = CallToolResult(
+        content=[TextContent(type="text", text="Error: upstream auth denied")],
+        isError=True,
+    )
+    response, logging_obj = await _run_call_mcp_tool_with_result(error_result)
+
+    # HTTP wire behavior is unchanged: the isError result is returned as-is.
+    assert response.isError is True
+
+    slp = logging_obj.model_call_details["standard_logging_object"]
+    assert slp["status"] == "failure"
+    assert slp["error_information"]["error_class"] == "MCPToolCallError"
+    assert "upstream auth denied" in slp["error_information"]["error_message"]
+    # The @client wrapper's deferred success log is suppressed so the same call
+    # isn't double-logged as both a failure and a success.
+    assert logging_obj.model_call_details.get("has_logged_async_success") is True
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_success_result_logged_as_success():
+    """A tools/call that succeeds (``isError`` falsey) is still logged as a
+    success, so the fix doesn't flip healthy calls to failures."""
+    try:
+        from mcp.types import CallToolResult, TextContent
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    ok_result = CallToolResult(
+        content=[TextContent(type="text", text="sunny, 21C")], isError=False
+    )
+    response, logging_obj = await _run_call_mcp_tool_with_result(ok_result)
+
+    assert response.isError is False
+    slp = logging_obj.model_call_details["standard_logging_object"]
+    assert slp["status"] == "success"
+
+
 @pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enabled():
     """
@@ -4887,9 +5040,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
                     server
                 )
-                assert (
-                    create.await_count == 1
-                ), "Second probe within cooldown must not reconnect to upstream"
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect to upstream"
+                )
                 assert (
                     "empty-server"
                     not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
@@ -4928,9 +5081,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
                     server
                 )
-                assert (
-                    create.await_count == 1
-                ), "Second probe within cooldown must not reconnect after failure"
+                assert create.await_count == 1, (
+                    "Second probe within cooldown must not reconnect after failure"
+                )
                 assert (
                     "boom-server"
                     not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
@@ -5321,10 +5474,9 @@ async def test_call_tool_empty_extra_headers_returns_none():
             pass  # We only care about the captured headers
 
     # With P2 fix: extra_headers should be None (not {}) when all headers filtered
-    assert (
-        captured_extra_headers is None
-    ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
-        captured_extra_headers
+    assert captured_extra_headers is None, (
+        "P2 API consistency issue: expected None for empty extra_headers, got: "
+        + str(captured_extra_headers)
     )
 
 

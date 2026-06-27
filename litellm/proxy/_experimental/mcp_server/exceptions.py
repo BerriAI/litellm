@@ -5,6 +5,23 @@ from typing import Optional
 from fastapi import HTTPException
 
 
+class MCPToolCallError(Exception):
+    """Marks an MCP ``tools/call`` that completed with a tool-level error
+    (``CallToolResult.isError`` is True).
+
+    Per the MCP spec a failed tool call still returns HTTP 200 with
+    ``isError: true`` in the JSON-RPC result, so this is never raised to the
+    client; it exists only to route the call through the failure logging path
+    so the standard logging payload and OTel span are recorded as a failure.
+    ``message`` carries the tool's error text so it surfaces in
+    ``error_information`` and on the span.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 class MCPUpstreamAuthError(Exception):
     """Raised when an upstream MCP server returns an authentication failure
     (typically HTTP 401) and the gateway should surface it transparently to

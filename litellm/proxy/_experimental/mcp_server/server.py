@@ -40,7 +40,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPToolCallError,
+    MCPUpstreamAuthError,
+)
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
@@ -2714,6 +2717,26 @@ if MCP_AVAILABLE:
 
         return response
 
+    def _get_mcp_tool_call_error_message(
+        response: "CallToolResult",
+    ) -> Optional[str]:
+        """The error text of a failed MCP ``tools/call`` result, or ``None`` when
+        it succeeded.
+
+        A failed tool call returns HTTP 200 with ``isError: true`` in the JSON-RPC
+        result (MCP spec), so the result object itself is the only failure signal.
+        The message is the concatenated text of the result's ``TextContent``
+        blocks, falling back to a generic string when the tool reported no text.
+        """
+        if not response.isError:
+            return None
+        texts = tuple(
+            text
+            for block in (response.content or ())
+            if isinstance((text := getattr(block, "text", None)), str) and text
+        )
+        return "\n".join(texts) or "MCP tool call returned an error result"
+
     @client
     async def call_mcp_tool(
         name: str,
@@ -2802,9 +2825,25 @@ if MCP_AVAILABLE:
                 end_time=end_time,
             )
             litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
-            await litellm_logging_obj.async_success_handler(
-                result=response, start_time=start_time, end_time=end_time
-            )
+            tool_error_message = _get_mcp_tool_call_error_message(response)
+            if tool_error_message is not None:
+                # A tool returning ``isError: true`` (auth denied, upstream
+                # error, guardrail block, ...) is a failed call even though the
+                # MCP spec keeps it on HTTP 200. Log it as a failure so spend
+                # logs and the OTel span are marked ERROR, then mark async
+                # success as already handled so the @client wrapper doesn't
+                # also emit a success log for the same call.
+                await litellm_logging_obj.async_failure_handler(
+                    MCPToolCallError(tool_error_message),
+                    "",
+                    start_time,
+                    end_time,
+                )
+                litellm_logging_obj.has_run_logging(event_type="async_success")
+            else:
+                await litellm_logging_obj.async_success_handler(
+                    result=response, start_time=start_time, end_time=end_time
+                )
         return response
 
     async def mcp_get_prompt(
