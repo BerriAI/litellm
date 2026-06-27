@@ -215,6 +215,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
+    "litellm_team_members_metric",
     "litellm_remaining_org_budget_metric",
     "litellm_org_max_budget_metric",
     "litellm_org_budget_remaining_hours_metric",
@@ -529,6 +530,11 @@ class PrometheusMetricLabels:
     ]
 
     litellm_team_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_team_members_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
