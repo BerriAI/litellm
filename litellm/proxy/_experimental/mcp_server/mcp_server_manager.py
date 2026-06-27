@@ -190,6 +190,10 @@ def _should_strip_caller_authorization(
     Strip rules:
     - **M2M (client_credentials) servers**: never forward the caller's
       ``Authorization`` — the proxy fetches its own upstream token.
+    - **Migrated per-user OAuth (authorization_code) servers**: never forward
+      the caller's ``Authorization`` — the v2 resolver injects the stored
+      per-user token, so a caller-supplied bearer cannot override another
+      user's stored credential. Delegate / pass-through keep forwarding it.
     - **OAuth pass-through servers**: strip when the ``Authorization``
       header is actually the LiteLLM API key — either because admission
       validated it (``user_api_key_auth.api_key`` is set) and the caller
@@ -201,6 +205,15 @@ def _should_strip_caller_authorization(
       forwarded, so we keep it.
     """
     if mcp_server.has_client_credentials:
+        return True
+    if (
+        mcp_server.auth_type == MCPAuth.oauth2
+        and to_server_spec(mcp_server) is not None
+    ):
+        # Migrated per-user OAuth (authorization_code): the v2 resolver injects the
+        # stored token, so a caller-forwarded Authorization must not be forwarded
+        # upstream — it would override another user's stored credential. Delegate and
+        # pass-through return None from to_server_spec and keep forwarding the bearer.
         return True
     if not mcp_server.is_oauth_passthrough:
         return False
@@ -219,6 +232,18 @@ def _should_strip_caller_authorization(
     return admission_consumed_authorization_as_litellm_key or (
         user_api_key_auth is None and not has_explicit_litellm_admission_header
     )
+
+
+def _without_authorization(
+    headers: Optional[dict[str, str]],
+) -> Optional[dict[str, str]]:
+    """A copy of ``headers`` with any ``Authorization`` key removed (case-insensitive), or
+    None if nothing remains. Drops only the credential, keeping other forwarded headers.
+    """
+    if not headers:
+        return None
+    filtered = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+    return filtered or None
 
 
 def _extract_upstream_auth_failure(
@@ -3509,6 +3534,16 @@ class MCPServerManager:
                 extra_headers = None
             else:
                 extra_headers = oauth2_headers
+                # Migrated authorization_code: the v2 resolver injects the stored per-user
+                # token, so drop the caller-forwarded Authorization (apply-if-absent would
+                # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
+                # via _should_strip_caller_authorization to match _prepare_mcp_server_headers.
+                if extra_headers and _should_strip_caller_authorization(
+                    mcp_server=mcp_server,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                ):
+                    extra_headers = _without_authorization(extra_headers)
 
         if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:

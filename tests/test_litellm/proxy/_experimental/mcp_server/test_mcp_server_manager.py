@@ -31,6 +31,8 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _deserialize_json_dict,
     _deserialize_json_list,
     _normalize_mcp_server_cost_info,
+    _should_strip_caller_authorization,
+    _without_authorization,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -599,6 +601,84 @@ class TestMCPServerManager:
         )
 
         assert captured_extra_headers == {"x-request-id": "req-123"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_v2_authz_code_drops_caller_authorization(
+        self,
+    ):
+        """A v2-migrated per-user OAuth (authorization_code) server must NOT seed a
+        caller-forwarded Authorization into extra_headers — the resolver injects the
+        stored per-user token, and apply-if-absent would otherwise let the caller's
+        header override another user's stored credential (matches v1's overwrite)."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        # oauth2, not M2M, not delegate => to_server_spec maps it to AuthorizationCodeConfig
+        server = MCPServer(
+            server_id="server-authz-code-call",
+            name="authz-code-server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        # Migrated authorization_code => the centralized strip decision says drop the
+        # caller's Authorization (the v2 resolver injects the stored token).
+        assert (
+            _should_strip_caller_authorization(
+                mcp_server=server, raw_headers=None, user_api_key_auth=None
+            )
+            is True
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = "unset"
+
+        async def capture_create_mcp_client(
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer caller-supplied-token"},
+            raw_headers={"authorization": "Bearer caller-supplied-token"},
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        # The caller's Authorization must not reach extra_headers; the v2 resolver is
+        # the sole Authorization source for this server.
+        assert captured_extra_headers != "unset"
+        if captured_extra_headers:
+            assert "authorization" not in {k.lower() for k in captured_extra_headers}
+
+    def test_without_authorization_drops_only_the_credential(self):
+        # None / empty -> None
+        assert _without_authorization(None) is None
+        assert _without_authorization({}) is None
+        # Only Authorization present -> nothing left -> None (case-insensitive)
+        assert _without_authorization({"authorization": "Bearer x"}) is None
+        # Authorization dropped, other headers kept
+        assert _without_authorization(
+            {"Authorization": "Bearer x", "X-Trace-Id": "t"}
+        ) == {"X-Trace-Id": "t"}
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(

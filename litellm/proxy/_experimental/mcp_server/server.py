@@ -283,6 +283,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         _should_strip_caller_authorization,
+        _without_authorization,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -1435,6 +1436,16 @@ if MCP_AVAILABLE:
             else:
                 # Copy to avoid mutating the original dict (important for parallel fetching)
                 extra_headers = oauth2_headers.copy() if oauth2_headers else None
+                # Migrated authorization_code: the v2 resolver injects the stored per-user
+                # token, so drop the caller-forwarded Authorization (apply-if-absent would
+                # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
+                # via _should_strip_caller_authorization to match _call_regular_mcp_tool.
+                if extra_headers and _should_strip_caller_authorization(
+                    mcp_server=server,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                ):
+                    extra_headers = _without_authorization(extra_headers)
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
