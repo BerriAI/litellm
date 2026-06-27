@@ -1458,9 +1458,11 @@ class BaseLLMChatTest(ABC):
             reasoning_effort="high",
         )
         # either accepts reasoning effort or thinking budget
-        assert "reasoning_effort" in optional_params or "4096" in json.dumps(
-            optional_params
-        )
+        from litellm.constants import DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+
+        assert "reasoning_effort" in optional_params or str(
+            DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
+        ) in json.dumps(optional_params)
 
         try:
             litellm._turn_on_debug()
