@@ -316,7 +316,10 @@ from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
 from litellm.proxy.common_utils.swagger_utils import ERROR_RESPONSES
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    get_management_object_ttl,
+)
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
@@ -3105,7 +3108,7 @@ async def update_cache(
     asyncio.create_task(
         user_api_key_cache.async_set_cache_pipeline(
             cache_list=values_to_update_in_cache,
-            ttl=60,
+            ttl=get_management_object_ttl(user_api_key_cache),
             litellm_parent_otel_span=parent_otel_span,
         )
     )
@@ -17044,17 +17047,15 @@ async def _resolve_mcp_csv_tokens(
 async def _is_mcp_access_group_cached(name: str) -> bool:
     """Return True if *name* is a known MCP access group tag.
 
-    Positive results are cached for ``DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL``
-    seconds. Negative results are cached for a short
+    Positive results are cached for the configured management-object TTL
+    (``get_management_object_ttl(user_api_key_cache)``). Negative results are
+    cached for a short
     ``DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL`` window so unauthenticated
     callers cannot force a fresh DB lookup per request for unknown names, while
     bounding staleness so a transient DB error (which surfaces as an empty
     list) cannot hide a real group for long.
     """
-    from litellm.constants import (
-        DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
-        DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL,
-    )
+    from litellm.constants import DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
@@ -17068,7 +17069,7 @@ async def _is_mcp_access_group_cached(name: str) -> bool:
         key=cache_key,
         value=result,
         ttl=(
-            DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+            get_management_object_ttl(user_api_key_cache)
             if result
             else DEFAULT_MCP_ACCESS_GROUP_NEGATIVE_CACHE_TTL
         ),
