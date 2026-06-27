@@ -312,9 +312,9 @@ def test_customer_endpoints_error_schema_consistency(
     assert "Customer already exists" in error2["message"]
 
     # Verify both errors have the same schema structure
-    assert set(error1.keys()) == set(
-        error2.keys()
-    ), "Both errors should have the same top-level keys"
+    assert set(error1.keys()) == set(error2.keys()), (
+        "Both errors should have the same top-level keys"
+    )
 
     # Both should have string values for all fields
     for key in ["message", "type", "code"]:
