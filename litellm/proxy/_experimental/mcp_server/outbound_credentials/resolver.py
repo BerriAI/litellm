@@ -64,13 +64,9 @@ class UpstreamCredentialProvider:
     """
 
     def __init__(self, oauth_token_store: OAuthTokenStore | None = None) -> None:
-        self._oauth_token_store: OAuthTokenStore = (
-            oauth_token_store or _NullOAuthTokenStore()
-        )
+        self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
 
-    async def resolve_credentials(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[httpx.Auth, CredError]:
+    async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
             case NoneConfig():
                 return Ok(NoOpAuth())
@@ -101,52 +97,30 @@ class UpstreamCredentialProvider:
     def _api_key(self, config: ApiKeyConfig) -> Result[httpx.Auth, CredError]:
         match config.key_source:
             case SharedKey() as source:
-                header_name, header_value = config.header(
-                    source.value.get_secret_value()
-                )
+                header_name, header_value = config.header(source.value.get_secret_value())
                 return Ok(StaticHeaderAuth(header_value, header_name=header_name))
             case Byok():
                 # Per-user key pulled from the credential store; lands with that seam.
-                return Error(
-                    CredError.of_not_implemented(
-                        "api_key BYOK source not implemented yet"
-                    )
-                )
+                return Error(CredError.of_not_implemented("api_key BYOK source not implemented yet"))
         assert_never(config.key_source)
 
-    async def _authorization_code(
-        self, subject: Subject, server: ServerSpec
-    ) -> Result[StaticHeaderAuth, CredError]:
+    async def _authorization_code(self, subject: Subject, server: ServerSpec) -> Result[StaticHeaderAuth, CredError]:
         token = await self._authz_token(subject, server)
         if token is None:
-            return Error(
-                CredError.of_unauthorized(
-                    "Authorization required: complete the OAuth flow for this server."
-                )
-            )
-        return Ok(
-            StaticHeaderAuth(
-                f"Bearer {token.access_token}", header_name="Authorization"
-            )
-        )
+            return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
+        return Ok(StaticHeaderAuth(f"Bearer {token.access_token}", header_name="Authorization"))
 
-    async def _authz_token(
-        self, subject: Subject, server: ServerSpec
-    ) -> OAuthToken | None:
+    async def _authz_token(self, subject: Subject, server: ServerSpec) -> OAuthToken | None:
         """The user's authorization_code token, or None when absent or the store is unreachable.
 
         A store outage is mapped to None (the OAuth challenge), not raised, so a transient outage
         does not 500; it is the store, not this resolver, that declines to cache the failure.
         """
         try:
-            return await self._oauth_token_store.fetch(
-                subject.subject_id, server.server_id
-            )
+            return await self._oauth_token_store.fetch(subject.subject_id, server.server_id)
         except TokenStoreUnavailable:
             return None
 
 
 def _not_implemented(kind: AuthSpecKind) -> Result[httpx.Auth, CredError]:
-    return Error(
-        CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet")
-    )
+    return Error(CredError.of_not_implemented(f"{kind.value}: resolver arm not implemented yet"))

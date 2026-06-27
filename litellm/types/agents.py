@@ -354,9 +354,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
             LiteLLMSendMessageResponse with _hidden_params support
         """
         response_dict = response.model_dump(mode="json", exclude_none=True)
-        response_dict = _normalize_a2a_jsonrpc_response(
-            response_dict, request_id=request_id
-        )
+        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
         return cls(**response_dict)
 
     @classmethod
@@ -375,6 +373,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls(
-            **_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
-        )
+        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))
