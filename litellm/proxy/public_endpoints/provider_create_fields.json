@@ -1737,6 +1737,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "FOUNDRY_LOCAL",
+    "provider_display_name": "Foundry Local",
+    "litellm_provider": "foundry_local",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "http://localhost:5272/v1",
+        "tooltip": "Foundry Local endpoint (from foundry-local-sdk or manually set)",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Optional - Foundry Local does not require authentication",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "phi-3.5-mini"
+  },
+  {
     "provider": "MARITALK",
     "provider_display_name": "Maritalk",
     "litellm_provider": "maritalk",

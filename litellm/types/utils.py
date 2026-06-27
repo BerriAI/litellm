@@ -3436,6 +3436,7 @@ class LlmProviders(str, Enum):
     HOSTED_VLLM = "hosted_vllm"
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
+    FOUNDRY_LOCAL = "foundry_local"
     GALADRIEL = "galadriel"
     NEBIUS = "nebius"
     INFINITY = "infinity"

@@ -285,6 +285,7 @@ LLM_CONFIG_NAMES = (
     "VLLMConfig",
     "DeepSeekChatConfig",
     "LMStudioChatConfig",
+    "FoundryLocalChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
     "PerplexityChatConfig",
@@ -1096,6 +1097,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
+    "FoundryLocalChatConfig": (
+        ".llms.foundry_local.chat.transformation",
+        "FoundryLocalChatConfig",
+    ),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",
         "LmStudioEmbeddingConfig",
