@@ -144,17 +144,20 @@ def test_shipped_backup_carries_the_anthropic_claude_rule():
 def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     """Adaptive thinking is data, not code. The bundled backup must carry
     supports_adaptive_thinking on genuine Claude >= 4.6 entries (every provider
-    route) and on the anthropic-claude fallback rule for unmapped future Claudes,
-    while leaving the dated Claude 4.0 names ("...-4-20250514") unflagged so a date
-    can never be mistaken for a 4.6+ minor version."""
+    route) and on the version-gated anthropic-claude-adaptive-thinking rule for
+    unmapped future Claudes, while leaving the dated Claude 4.0 names
+    ("...-4-20250514") unflagged so a date can never be mistaken for a 4.6+ minor
+    version. The version-neutral anthropic-claude pricing rule must not flag it, so
+    an unmapped sub-4.6 name is priced but stays non-adaptive."""
     backup = GetModelCostMap.load_local_model_cost_map()
 
-    rule = next(
-        r
-        for r in backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
-        if r.get("name") == "anthropic-claude"
+    rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
+    pricing_rule = next(r for r in rules if r.get("name") == "anthropic-claude")
+    adaptive_rule = next(
+        r for r in rules if r.get("name") == "anthropic-claude-adaptive-thinking"
     )
-    assert rule["model_info"]["supports_adaptive_thinking"] is True
+    assert "supports_adaptive_thinking" not in pricing_rule["model_info"]
+    assert adaptive_rule["model_info"]["supports_adaptive_thinking"] is True
 
     for adaptive in [
         "anthropic.claude-opus-4-8",

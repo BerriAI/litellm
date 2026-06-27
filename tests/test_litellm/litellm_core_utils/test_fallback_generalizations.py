@@ -207,9 +207,10 @@ def shipped_cost_map(monkeypatch):
         set_fallback_generalizations(previous_rules)
 
 
-def test_shipped_rule_prices_unmapped_claude_at_opus_tier(shipped_cost_map):
-    """The shipped anthropic-claude rule prices an unmapped/new Claude at the Opus tier
-    and flags it adaptive, so an unknown Claude is over-costed rather than silently free."""
+def test_shipped_rule_prices_unmapped_high_version_claude_at_opus_tier(shipped_cost_map):
+    """An unmapped Claude >= 4.6 resolves to the self-contained adaptive-thinking rule:
+    Opus-tier pricing (so an unknown model is over-costed rather than silently free) and
+    ``supports_adaptive_thinking`` together, from one rule with no merging."""
     model = "claude-opus-9-9"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model)
@@ -219,3 +220,29 @@ def test_shipped_rule_prices_unmapped_claude_at_opus_tier(shipped_cost_map):
     assert info["cache_creation_input_token_cost"] == 6.25e-06
     assert info["cache_read_input_token_cost"] == 5e-07
     assert info["supports_adaptive_thinking"] is True
+
+
+def test_shipped_rule_prices_unmapped_low_version_claude_without_adaptive(shipped_cost_map):
+    """An unmapped Claude < 4.6 falls through to the version-neutral anthropic-claude rule:
+    same Opus-tier pricing, but no ``supports_adaptive_thinking`` flag, so a sub-4.6 alias
+    such as ``claude-opus-4-0`` is still priced yet never marked adaptive."""
+    model = "claude-opus-4-0"
+    assert model not in litellm.model_cost
+    info = litellm.get_model_info(model)
+    assert info["litellm_provider"] == "anthropic"
+    assert info["input_cost_per_token"] == 5e-06
+    assert info.get("supports_adaptive_thinking") is None
+
+
+def test_shipped_adaptive_rule_gates_on_version_not_pricing(shipped_cost_map):
+    """The version-gated ``anthropic-claude-adaptive-thinking`` rule marks an unmapped
+    Claude adaptive only from >= 4.6, including provider-prefixed ids the anchored pricing
+    rule cannot match, while leaving < 4.6 (and the dated Opus 4.0 form) non-adaptive."""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    adaptive = "us.anthropic.claude-opus-4-9"
+    non_adaptive = "us.anthropic.claude-opus-4-20250514"
+    assert adaptive not in litellm.model_cost
+    assert non_adaptive not in litellm.model_cost
+    assert AnthropicModelInfo._is_adaptive_thinking_model(adaptive) is True
+    assert AnthropicModelInfo._is_adaptive_thinking_model(non_adaptive) is False
