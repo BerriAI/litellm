@@ -5,6 +5,8 @@ Helper util for handling anthropic-specific cost calculation
 
 from typing import TYPE_CHECKING, Optional, Tuple
 
+from pydantic import BaseModel, ValidationError
+
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _get_token_base_cost,
     _get_web_search_requests,
@@ -109,6 +111,34 @@ def cost_per_token(
         pass
 
     return prompt_cost, completion_cost
+
+
+class _AnthropicServerToolUseProbe(BaseModel):
+    web_search_requests: int | None = None
+
+
+class _AnthropicUsageProbe(BaseModel):
+    server_tool_use: _AnthropicServerToolUseProbe | None = None
+
+
+class _AnthropicResponseProbe(BaseModel):
+    usage: _AnthropicUsageProbe | None = None
+
+
+def get_anthropic_web_search_requests_from_response(
+    response_object: object,
+) -> int | None:
+    """Read usage.server_tool_use.web_search_requests from a raw Anthropic
+    /v1/messages response dict, returning None when absent."""
+    if not isinstance(response_object, dict):
+        return None
+    try:
+        probe = _AnthropicResponseProbe.model_validate(response_object)
+    except ValidationError:
+        return None
+    if probe.usage is None or probe.usage.server_tool_use is None:
+        return None
+    return probe.usage.server_tool_use.web_search_requests
 
 
 def get_cost_for_anthropic_web_search(

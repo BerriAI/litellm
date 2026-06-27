@@ -625,6 +625,8 @@ class AnthropicResponseContentBlockRedactedThinking(BaseModel):
 
 
 class AnthropicResponseUsageBlock(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     input_tokens: int
     output_tokens: int
 
