@@ -844,9 +844,9 @@ async def fetch_upstream_oauth_protected_resource(
     """Fetch the upstream MCP server's ``.well-known/oauth-protected-resource``
     metadata for a pass-through server.
 
-    Tries host-only first, then falls back to the RFC 9728 §3.1 path-suffix
-    form (e.g. ``https://host/.well-known/oauth-protected-resource/mcp``) to
-    cover upstreams that scope metadata per resource path.
+    Tries the RFC 9728 §3.1 path-suffix form first (e.g.
+    ``https://host/.well-known/oauth-protected-resource/mcp``) so upstreams
+    that scope metadata per resource path win, then falls back to host-root.
 
     Responses are cached in-process for ~5 minutes keyed on
     ``(server_id, resource_url)`` so we do not hammer the IdP.
@@ -876,14 +876,14 @@ async def fetch_upstream_oauth_protected_resource(
         if cached is not None and cached[0] > now:
             return cached[1]
 
-        host_base = f"{upstream.scheme}://{upstream.netloc}"
-        candidates = [f"{host_base}/.well-known/oauth-protected-resource"]
-        # RFC 9728 §3.1 path fallback
-        if upstream.path and upstream.path not in ("", "/"):
-            candidates.append(
-                f"{host_base}/.well-known/oauth-protected-resource"
-                f"{upstream.path.rstrip('/')}"
-            )
+        from mcp.client.auth.utils import (
+            build_protected_resource_metadata_discovery_urls,
+        )
+
+        # RFC 9728 §3.1 ordering: path-suffix form first, host-root fallback.
+        candidates = build_protected_resource_metadata_discovery_urls(
+            None, mcp_server.url
+        )
 
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.Oauth2Check
@@ -1043,19 +1043,21 @@ async def _build_oauth_protected_resource_response(
             ),
         )
 
-    return {
-        "authorization_servers": [
+    from mcp.shared.auth import ProtectedResourceMetadata
+
+    return ProtectedResourceMetadata(
+        resource=resource_url,  # type: ignore[arg-type]
+        authorization_servers=[
             (
                 f"{request_base_url}/{mcp_server_name}"
                 if mcp_server_name
                 else f"{request_base_url}"
             )
-        ],
-        "resource": resource_url,
-        "scopes_supported": (
+        ],  # type: ignore[list-item]
+        scopes_supported=(
             mcp_server.scopes if mcp_server and mcp_server.scopes else []
         ),
-    }
+    ).model_dump(mode="json", exclude_none=True)
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
@@ -1145,24 +1147,26 @@ def _build_oauth_authorization_server_response(
             mcp_server_name, client_ip=client_ip
         )
 
-    return {
-        "issuer": request_base_url,  # point to your proxy
-        "authorization_endpoint": authorization_endpoint,
-        "token_endpoint": token_endpoint,
-        "response_types_supported": ["code"],
-        "scopes_supported": (
+    from mcp.shared.auth import OAuthMetadata
+
+    return OAuthMetadata(
+        issuer=request_base_url,  # type: ignore[arg-type]
+        authorization_endpoint=authorization_endpoint,  # type: ignore[arg-type]
+        token_endpoint=token_endpoint,  # type: ignore[arg-type]
+        response_types_supported=["code"],
+        scopes_supported=(
             mcp_server.scopes if mcp_server and mcp_server.scopes else []
         ),
-        "grant_types_supported": ["authorization_code", "refresh_token"],
-        "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+        grant_types_supported=["authorization_code", "refresh_token"],
+        code_challenge_methods_supported=["S256"],
+        token_endpoint_auth_methods_supported=["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": (
+        registration_endpoint=(  # type: ignore[arg-type]
             f"{request_base_url}/{mcp_server_name}/register"
             if mcp_server_name
             else f"{request_base_url}/register"
         ),
-    }
+    ).model_dump(mode="json", exclude_none=True)
 
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}

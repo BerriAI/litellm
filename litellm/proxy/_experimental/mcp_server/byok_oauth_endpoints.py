@@ -600,28 +600,32 @@ def _build_authorize_html(
 @router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
 async def oauth_authorization_server_metadata(request: Request) -> JSONResponse:
     """RFC 8414 Authorization Server Metadata for the BYOK OAuth flow."""
+    from mcp.shared.auth import OAuthMetadata
+
     base_url = get_request_base_url(request)
     return JSONResponse(
-        {
-            "issuer": base_url,
-            "authorization_endpoint": f"{base_url}/v1/mcp/oauth/authorize",
-            "token_endpoint": f"{base_url}/v1/mcp/oauth/token",
-            "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code"],
-            "code_challenge_methods_supported": ["S256"],
-        }
+        OAuthMetadata(
+            issuer=base_url,  # type: ignore[arg-type]
+            authorization_endpoint=f"{base_url}/v1/mcp/oauth/authorize",  # type: ignore[arg-type]
+            token_endpoint=f"{base_url}/v1/mcp/oauth/token",  # type: ignore[arg-type]
+            response_types_supported=["code"],
+            grant_types_supported=["authorization_code"],
+            code_challenge_methods_supported=["S256"],
+        ).model_dump(mode="json", exclude_none=True)
     )
 
 
 @router.get("/.well-known/oauth-protected-resource", include_in_schema=False)
 async def oauth_protected_resource_metadata(request: Request) -> JSONResponse:
     """RFC 9728 Protected Resource Metadata pointing back at this server."""
+    from mcp.shared.auth import ProtectedResourceMetadata
+
     base_url = get_request_base_url(request)
     return JSONResponse(
-        {
-            "resource": base_url,
-            "authorization_servers": [base_url],
-        }
+        ProtectedResourceMetadata(
+            resource=base_url,  # type: ignore[arg-type]
+            authorization_servers=[base_url],  # type: ignore[list-item]
+        ).model_dump(mode="json", exclude_none=True)
     )
 
 

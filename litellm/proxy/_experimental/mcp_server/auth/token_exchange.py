@@ -14,6 +14,8 @@ import weakref
 from typing import TYPE_CHECKING, Dict, Tuple
 
 import httpx
+from mcp.shared.auth import OAuthToken
+from pydantic import ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -33,6 +35,21 @@ if TYPE_CHECKING:
 TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
 
 DEFAULT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+
+
+def parse_oauth_token_response(response: httpx.Response, server_id: str) -> OAuthToken:
+    """Validate a token-endpoint response per RFC 6749 §5.1 using the SDK model.
+
+    Raises ``ValueError`` with a server-scoped message on malformed payloads so
+    callers surface a clear configuration error instead of a pydantic trace.
+    """
+    try:
+        return OAuthToken.model_validate(response.json())
+    except ValidationError as exc:
+        raise ValueError(
+            f"OAuth2 token response for MCP server '{server_id}' is not a valid "
+            f"RFC 6749 token payload: {exc.error_count()} validation error(s)"
+        ) from exc
 
 
 class TokenExchangeHandler:
@@ -120,6 +137,8 @@ class TokenExchangeHandler:
             "subject_token": subject_token,
             "subject_token_type": server.subject_token_type
             or DEFAULT_SUBJECT_TOKEN_TYPE,
+            # RFC 8693 §2.1: explicit requested_token_type (the spec default)
+            "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
             "client_id": server.client_id,
             "client_secret": server.client_secret,
         }
@@ -150,30 +169,12 @@ class TokenExchangeHandler:
                 f"failed with status {exc.response.status_code}"
             ) from exc
 
-        body = response.json()
-        if not isinstance(body, dict):
-            raise ValueError(
-                f"Token exchange response for MCP server '{server.server_id}' "
-                f"returned non-object JSON (got {type(body).__name__})"
-            )
-
-        access_token = body.get("access_token")
-        if not access_token:
-            raise ValueError(
-                f"Token exchange response for MCP server '{server.server_id}' "
-                f"missing 'access_token'"
-            )
-
-        raw_expires_in = body.get("expires_in")
-        try:
-            expires_in = (
-                int(raw_expires_in)
-                if raw_expires_in is not None
-                else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-            )
-        except (TypeError, ValueError):
-            expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-
+        token = parse_oauth_token_response(response, server.server_id)
+        expires_in = (
+            token.expires_in
+            if token.expires_in is not None
+            else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+        )
         ttl = max(
             expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
             MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
@@ -184,7 +185,7 @@ class TokenExchangeHandler:
             server.server_id,
             expires_in,
         )
-        return access_token, ttl
+        return token.access_token, ttl
 
     def invalidate(self, subject_token: str, server_id: str) -> None:
         """Remove a cached exchanged token (e.g. after a 401)."""

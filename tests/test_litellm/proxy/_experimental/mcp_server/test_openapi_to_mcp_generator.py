@@ -420,6 +420,8 @@ class TestExtractParameters:
             "parameters": [
                 {"name": "repo-id", "in": "path"},
                 {"name": "filter", "in": "query"},
+                {"name": "X-Request-Id", "in": "header"},
+                {"name": "session", "in": "cookie"},
                 {"name": "data", "in": "body"},
             ],
             "requestBody": {
@@ -427,10 +429,18 @@ class TestExtractParameters:
             },
         }
 
-        path_params, query_params, body_params = extract_parameters(operation)
+        (
+            path_params,
+            query_params,
+            header_params,
+            cookie_params,
+            body_params,
+        ) = extract_parameters(operation)
 
         assert "repo-id" in path_params
         assert "filter" in query_params
+        assert "X-Request-Id" in header_params
+        assert "session" in cookie_params
         assert "data" in body_params
         assert "body" in body_params  # From requestBody
 
@@ -1207,3 +1217,220 @@ class TestRequestExtraHeaders:
             call_args = async_client.get.call_args
             headers_sent = call_args[1]["headers"]
             assert "X-TOKEN" not in headers_sent
+
+
+class TestHeaderAndCookieParameters:
+    """OpenAPI ``in: header`` / ``in: cookie`` parameters must reach the wire."""
+
+    @pytest.mark.asyncio
+    async def test_header_parameter_is_sent(self):
+        operation = {
+            "parameters": [
+                {"name": "X-Request-Id", "in": "header", "schema": {"type": "string"}}
+            ]
+        }
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            await func(**{"X-Request-Id": "req-42"})
+
+            headers_sent = async_client.get.call_args[1]["headers"]
+            assert headers_sent["X-Request-Id"] == "req-42"
+
+    @pytest.mark.asyncio
+    async def test_header_parameter_cannot_override_operator_header(self):
+        operation = {
+            "parameters": [
+                {"name": "X-Tenant", "in": "header", "schema": {"type": "string"}}
+            ]
+        }
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Tenant": "operator-tenant"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            await func(**{"X-Tenant": "attacker-tenant"})
+
+            headers_sent = async_client.get.call_args[1]["headers"]
+            assert headers_sent["X-Tenant"] == "operator-tenant"
+
+    @pytest.mark.asyncio
+    async def test_cookie_parameter_is_sent_as_cookie_header(self):
+        operation = {
+            "parameters": [
+                {"name": "session", "in": "cookie", "schema": {"type": "string"}},
+                {"name": "theme", "in": "cookie", "schema": {"type": "string"}},
+            ]
+        }
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            await func(session="abc123", theme="dark")
+
+            headers_sent = async_client.get.call_args[1]["headers"]
+            assert headers_sent["Cookie"] == "session=abc123; theme=dark"
+
+    @pytest.mark.asyncio
+    async def test_cookie_parameter_appends_after_operator_cookie(self):
+        operation = {
+            "parameters": [
+                {"name": "session", "in": "cookie", "schema": {"type": "string"}}
+            ]
+        }
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"Cookie": "tenant=operator"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            await func(session="abc123")
+
+            headers_sent = async_client.get.call_args[1]["headers"]
+            assert headers_sent["Cookie"] == "tenant=operator; session=abc123"
+
+
+class TestRequestBodyContentTypes:
+    """requestBody must be encoded per the operation's declared content type."""
+
+    @pytest.mark.asyncio
+    async def test_form_urlencoded_body_sent_as_data(self):
+        operation = {
+            "requestBody": {
+                "content": {
+                    "application/x-www-form-urlencoded": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"grant_type": {"type": "string"}},
+                        }
+                    }
+                }
+            }
+        }
+        func = create_tool_function(
+            path="/token",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("post", "ok")
+            mock_client.return_value = async_client
+
+            await func(body={"grant_type": "client_credentials"})
+
+            kwargs = async_client.post.call_args[1]
+            assert kwargs["data"] == {"grant_type": "client_credentials"}
+            assert "json" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_multipart_body_sent_as_files(self):
+        operation = {
+            "requestBody": {
+                "content": {
+                    "multipart/form-data": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"file_name": {"type": "string"}},
+                        }
+                    }
+                }
+            }
+        }
+        func = create_tool_function(
+            path="/upload",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("post", "ok")
+            mock_client.return_value = async_client
+
+            await func(body={"file_name": "report.csv"})
+
+            kwargs = async_client.post.call_args[1]
+            assert kwargs["files"] == {"file_name": (None, "report.csv")}
+            assert "json" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_json_body_still_sent_as_json(self):
+        operation = {
+            "requestBody": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                        }
+                    }
+                }
+            }
+        }
+        func = create_tool_function(
+            path="/items",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("post", "ok")
+            mock_client.return_value = async_client
+
+            await func(body={"name": "widget"})
+
+            kwargs = async_client.post.call_args[1]
+            assert kwargs["json"] == {"name": "widget"}
+
+    def test_form_body_schema_appears_in_input_schema(self):
+        operation = {
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/x-www-form-urlencoded": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"grant_type": {"type": "string"}},
+                        }
+                    }
+                },
+            }
+        }
+
+        schema = build_input_schema(operation)
+
+        assert schema["properties"]["body"]["properties"] == {
+            "grant_type": {"type": "string"}
+        }
+        assert "body" in schema["required"]

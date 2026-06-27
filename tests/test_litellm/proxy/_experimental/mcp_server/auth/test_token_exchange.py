@@ -79,6 +79,9 @@ async def test_exchange_token_success():
     assert data["grant_type"] == TOKEN_EXCHANGE_GRANT_TYPE
     assert data["subject_token"] == "user-jwt-xyz"
     assert data["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+    assert (
+        data["requested_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+    )
     assert data["audience"] == "api://mcp-server"
     assert data["scope"] == "mcp.tools.read mcp.tools.execute"
     assert data["client_id"] == "litellm-client-id"
@@ -258,7 +261,7 @@ async def test_exchange_token_missing_access_token():
             "litellm.proxy._experimental.mcp_server.auth.token_exchange.get_async_httpx_client",
             return_value=mock_client,
         ),
-        pytest.raises(ValueError, match="missing 'access_token'"),
+        pytest.raises(ValueError, match="not a valid RFC 6749 token payload"),
     ):
         await handler.exchange_token("jwt", server)
 

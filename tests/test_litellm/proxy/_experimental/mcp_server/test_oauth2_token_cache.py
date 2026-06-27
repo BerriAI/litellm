@@ -170,6 +170,6 @@ async def test_non_dict_response_raises_value_error():
             "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
             return_value=mock_client,
         ),
-        pytest.raises(ValueError, match="non-object JSON"),
+        pytest.raises(ValueError, match="not a valid RFC 6749 token payload"),
     ):
         await resolve_mcp_auth(server)

@@ -234,9 +234,11 @@ def resolve_operation_params(
 
 
 def extract_parameters(operation: Dict[str, Any]) -> tuple:
-    """Extract parameter names from OpenAPI operation."""
+    """Extract parameter names from an OpenAPI operation, grouped by location."""
     path_params = []
     query_params = []
+    header_params = []
+    cookie_params = []
     body_params = []
 
     # OpenAPI 3.x and 2.x parameters
@@ -249,6 +251,10 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
                 path_params.append(param_name)
             elif param.get("in") == "query":
                 query_params.append(param_name)
+            elif param.get("in") == "header":
+                header_params.append(param_name)
+            elif param.get("in") == "cookie":
+                cookie_params.append(param_name)
             elif param.get("in") == "body":
                 body_params.append(param_name)
 
@@ -256,7 +262,24 @@ def extract_parameters(operation: Dict[str, Any]) -> tuple:
     if "requestBody" in operation:
         body_params.append("body")
 
-    return path_params, query_params, body_params
+    return path_params, query_params, header_params, cookie_params, body_params
+
+
+# Request-body content types the generated tool functions can encode, in
+# preference order when a spec offers several.
+_BODY_CONTENT_TYPES = (
+    "application/json",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+)
+
+
+def _request_body_content_type(operation: Dict[str, Any]) -> str:
+    content = operation.get("requestBody", {}).get("content", {})
+    for content_type in _BODY_CONTENT_TYPES:
+        if content_type in content:
+            return content_type
+    return "application/json"
 
 
 def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
@@ -286,9 +309,10 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
         request_body = operation["requestBody"]
         content = request_body.get("content", {})
 
-        # Try to get JSON schema
-        if "application/json" in content:
-            schema = content["application/json"].get("schema", {})
+        schema = content.get(_request_body_content_type(operation), {}).get(
+            "schema", {}
+        )
+        if schema or "application/json" in content:
             properties["body"] = {
                 "type": "object",
                 "description": request_body.get("description", "Request body"),
@@ -344,6 +368,75 @@ def _merge_openapi_tool_request_headers(
     return effective_headers
 
 
+def _build_request_headers(
+    static_headers: Dict[str, str],
+    header_params: List[str],
+    cookie_params: List[str],
+    kwargs: Dict[str, Any],
+) -> Dict[str, str]:
+    """Final request headers for a generated tool call.
+
+    Caller-supplied ``in: header`` params rank below operator-configured and
+    auth headers, so an LLM-provided value can never override them.
+    ``in: cookie`` params are encoded into the ``Cookie`` header, appended
+    after any operator-configured value so the operator's cookies win for
+    servers that take the first match.
+    """
+    param_headers: Dict[str, str] = {}
+    for param_name in header_params:
+        param_value = kwargs.get(param_name, "")
+        if param_value:
+            param_headers[param_name] = str(param_value)
+
+    effective_headers = _merge_openapi_tool_request_headers(static_headers)
+    effective_lower_names = {k.lower() for k in effective_headers}
+    param_headers = {
+        k: v for k, v in param_headers.items() if k.lower() not in effective_lower_names
+    }
+    effective_headers = {**param_headers, **effective_headers}
+
+    cookie_pairs = [
+        f"{param_name}={kwargs[param_name]}"
+        for param_name in cookie_params
+        if kwargs.get(param_name, "")
+    ]
+    if cookie_pairs:
+        existing_cookie_names = [k for k in effective_headers if k.lower() == "cookie"]
+        if existing_cookie_names:
+            name = existing_cookie_names[0]
+            effective_headers[name] = (
+                effective_headers[name] + "; " + "; ".join(cookie_pairs)
+            )
+        else:
+            effective_headers["Cookie"] = "; ".join(cookie_pairs)
+
+    return effective_headers
+
+
+def _encode_request_body(
+    json_body: Optional[Dict[str, Any]],
+    body_content_type: str,
+    method: str,
+) -> Dict[str, Any]:
+    """Encode the body per the operation's requestBody content type.
+
+    multipart is only supported on POST (the HTTP handler's other verbs don't
+    accept files); PUT/PATCH multipart keeps the JSON fallback.
+    """
+    if json_body is None:
+        return {}
+    if body_content_type == "application/x-www-form-urlencoded":
+        return {"data": json_body}
+    if body_content_type == "multipart/form-data" and method == "post":
+        return {
+            "files": {
+                k: (None, v if isinstance(v, (str, bytes)) else json.dumps(v))
+                for k, v in json_body.items()
+            }
+        }
+    return {"json": json_body}
+
+
 def create_tool_function(
     path: str,
     method: str,
@@ -370,7 +463,14 @@ def create_tool_function(
     if headers is None:
         headers = {}
 
-    path_params, query_params, body_params = extract_parameters(operation)
+    (
+        path_params,
+        query_params,
+        header_params,
+        cookie_params,
+        body_params,
+    ) = extract_parameters(operation)
+    body_content_type = _request_body_content_type(operation)
     original_method = method.lower()
 
     async def tool_function(**kwargs: Any) -> str:
@@ -381,7 +481,9 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        effective_headers = _merge_openapi_tool_request_headers(headers)
+        effective_headers = _build_request_headers(
+            headers, header_params, cookie_params, kwargs
+        )
 
         # Build URL from base_url and path
         url = base_url + path
@@ -432,17 +534,21 @@ def create_tool_function(
                 except (json.JSONDecodeError, TypeError):
                     json_body = {"data": body_value}
 
+        body_kwargs = _encode_request_body(
+            json_body, body_content_type, original_method
+        )
+
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
 
         if original_method == "get":
             response = await client.get(url, params=params, headers=effective_headers)
         elif original_method == "post":
             response = await client.post(
-                url, params=params, json=json_body, headers=effective_headers
+                url, params=params, headers=effective_headers, **body_kwargs
             )
         elif original_method == "put":
             response = await client.put(
-                url, params=params, json=json_body, headers=effective_headers
+                url, params=params, headers=effective_headers, **body_kwargs
             )
         elif original_method == "delete":
             response = await client.delete(
@@ -450,7 +556,7 @@ def create_tool_function(
             )
         elif original_method == "patch":
             response = await client.patch(
-                url, params=params, json=json_body, headers=effective_headers
+                url, params=params, headers=effective_headers, **body_kwargs
             )
         else:
             return f"Unsupported HTTP method: {original_method}"

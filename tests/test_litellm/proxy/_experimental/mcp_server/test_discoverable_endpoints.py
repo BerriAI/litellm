@@ -2015,7 +2015,9 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
         assert "/test_oauth/" not in authorization_response["authorization_endpoint"]
         assert "/test_oauth/" not in authorization_response["token_endpoint"]
         assert authorization_response["scopes_supported"] == []
-        assert resource_response["authorization_servers"] == ["https://llm.example.com"]
+        assert resource_response["authorization_servers"] == [
+            "https://llm.example.com/"
+        ]
         assert resource_response["scopes_supported"] == []
     finally:
         global_mcp_server_manager.registry.clear()

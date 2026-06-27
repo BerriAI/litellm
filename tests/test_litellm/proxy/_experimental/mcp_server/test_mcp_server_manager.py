@@ -1093,6 +1093,135 @@ class TestMCPServerManager:
         assert scopes == ["read", "write"]
 
     @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_from_resource_parses_strict_rfc9728_payload(
+        self,
+    ):
+        """A fully spec-compliant RFC 9728 payload (with ``resource``) takes the
+        strict ProtectedResourceMetadata path, which normalizes the URLs."""
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "resource": "https://protected.example.com/mcp",
+            "authorization_servers": ["https://auth.example.com"],
+            "scopes_supported": ["read", "write"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth-protected-resource/mcp",
+                "https://protected.example.com/mcp",
+            )
+
+        assert servers == ["https://auth.example.com/"]
+        assert scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_from_resource_ignores_non_list_servers(self):
+        """A non-conformant payload whose ``authorization_servers`` is not a
+        list yields no servers instead of crashing the lenient fallback."""
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": "https://auth.example.com",
+            "scopes_supported": ["read"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth-protected-resource",
+                "https://protected.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes == ["read"]
+
+    def test_oauth_metadata_from_asm_payload_without_usable_fields_is_none(self):
+        """An object payload with no endpoint or scope fields yields None so
+        discovery moves on to the next candidate URL."""
+        manager = MCPServerManager()
+
+        assert manager._oauth_metadata_from_asm_payload({"error": "not_found"}) is None
+
+    @pytest.mark.asyncio
+    async def test_discovery_payloads_that_are_not_json_objects_yield_no_metadata(
+        self,
+    ):
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = ["not", "an", "object"]
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth-protected-resource",
+                "https://protected.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        assert manager._oauth_metadata_from_asm_payload(["not", "an", "object"]) is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_parses_strict_rfc8414_payload(
+        self,
+    ):
+        """A fully spec-compliant RFC 8414 payload (with ``issuer``) takes the
+        strict OAuthMetadata path and maps all endpoint fields."""
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "issuer": "https://provider.example.com",
+            "authorization_endpoint": "https://provider.example.com/authorize",
+            "token_endpoint": "https://provider.example.com/token",
+            "registration_endpoint": "https://provider.example.com/register",
+            "response_types_supported": ["code"],
+            "scopes_supported": ["mcp.read"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                "https://provider.example.com",
+                "https://provider.example.com",
+            )
+
+        assert result is not None
+        assert result.authorization_url == "https://provider.example.com/authorize"
+        assert result.token_url == "https://provider.example.com/token"
+        assert result.registration_url == "https://provider.example.com/register"
+        assert result.scopes == ["mcp.read"]
+
+    @pytest.mark.asyncio
     async def test_descovery_metadata_probes_well_known_when_server_does_not_challenge(
         self,
     ):
