@@ -4420,6 +4420,12 @@ async def test_find_team_with_model_access_defers_no_team_403_under_db_fallback(
     assert team_object is None
 
 
+def _db_fallback_handler(litellm_jwtauth: Optional[LiteLLM_JWTAuth] = None) -> JWTHandler:
+    handler = JWTHandler()
+    handler.litellm_jwtauth = litellm_jwtauth or LiteLLM_JWTAuth()
+    return handler
+
+
 @pytest.mark.asyncio
 async def test_resolve_db_team_fallback_skips_unresolvable_membership():
     """An orphaned membership (team row missing/erroring) is skipped and the next
@@ -4449,6 +4455,8 @@ async def test_resolve_db_team_fallback_skips_unresolvable_membership():
             user_object=user_object,
             user_id=None,
             requested_model=None,
+            route="/chat/completions",
+            jwt_handler=_db_fallback_handler(),
             enforce_team_based_model_access=True,
             team_id_upsert=False,
             prisma_client=None,
@@ -4732,6 +4740,8 @@ async def test_resolve_db_team_fallback_skips_team_without_model_access():
             user_object=user_object,
             user_id=None,
             requested_model="gpt-4",
+            route="/chat/completions",
+            jwt_handler=_db_fallback_handler(),
             enforce_team_based_model_access=True,
             team_id_upsert=False,
             prisma_client=None,
@@ -4742,6 +4752,63 @@ async def test_resolve_db_team_fallback_skips_team_without_model_access():
 
     assert team_id == "allowed_team"
     assert team_object is teams["allowed_team"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_db_team_fallback_enforces_team_allowed_routes():
+    """The DB-team fallback must apply the same team_allowed_routes gate as the
+    claim-based path: a route the JWT config excludes for team-role callers must
+    not become reachable by selecting a DB team, even when that team can access
+    the requested model. Without the gate, a teamless JWT could reach the
+    info/management routes an admin narrowed team_allowed_routes to exclude."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_routes",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_a"],
+    )
+    team = LiteLLM_TeamTable(team_id="team_a", models=["gpt-4"])
+    handler = _db_fallback_handler(LiteLLM_JWTAuth(team_allowed_routes=["openai_routes"]))
+
+    async def fake_get_team(team_id, **kwargs):
+        return team
+
+    async def fake_can_access(model, team_object, llm_router, team_model_aliases=None):
+        return True
+
+    async def resolve(route):
+        return await JWTAuthManager._resolve_db_team_fallback(
+            user_object=user_object,
+            user_id=None,
+            requested_model="gpt-4",
+            route=route,
+            jwt_handler=handler,
+            enforce_team_based_model_access=False,
+            team_id_upsert=False,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=fake_get_team,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            side_effect=fake_can_access,
+        ),
+    ):
+        excluded_team_id, excluded_team_object, _ = await resolve("/key/info")
+        allowed_team_id, allowed_team_object, _ = await resolve("/chat/completions")
+
+    assert excluded_team_id is None
+    assert excluded_team_object is None
+    assert allowed_team_id == "team_a"
+    assert allowed_team_object is team
 
 
 def test_validate_header_team_in_db_membership_does_not_leak_team_ids():
@@ -4813,6 +4880,8 @@ async def test_resolve_db_team_fallback_loads_team_membership():
             user_object=user_object,
             user_id="u_membership",
             requested_model=None,
+            route="/chat/completions",
+            jwt_handler=_db_fallback_handler(),
             enforce_team_based_model_access=True,
             team_id_upsert=False,
             prisma_client=None,
@@ -4864,6 +4933,8 @@ async def test_resolve_db_team_fallback_survives_membership_lookup_error():
             user_object=user_object,
             user_id="u_flaky",
             requested_model=None,
+            route="/chat/completions",
+            jwt_handler=_db_fallback_handler(),
             enforce_team_based_model_access=True,
             team_id_upsert=False,
             prisma_client=None,
@@ -4996,6 +5067,8 @@ async def test_resolve_db_team_fallback_distinguishes_no_membership_vs_model_den
                 user_object=membership_user,
                 user_id=None,
                 requested_model="gpt-4",
+                route="/chat/completions",
+                jwt_handler=_db_fallback_handler(),
                 enforce_team_based_model_access=True,
                 team_id_upsert=False,
                 prisma_client=None,
@@ -5009,6 +5082,8 @@ async def test_resolve_db_team_fallback_distinguishes_no_membership_vs_model_den
                 user_object=no_membership_user,
                 user_id=None,
                 requested_model="gpt-4",
+                route="/chat/completions",
+                jwt_handler=_db_fallback_handler(),
                 enforce_team_based_model_access=True,
                 team_id_upsert=False,
                 prisma_client=None,
@@ -5355,6 +5430,10 @@ async def test_auth_builder_db_fallback_enforces_passthrough_route_access():
             "litellm.proxy.auth.handle_jwt.get_team_membership",
             new_callable=AsyncMock,
             return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
+            return_value=True,
         ),
         patch.object(
             JWTAuthManager,

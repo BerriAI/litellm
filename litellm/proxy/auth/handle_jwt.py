@@ -1989,12 +1989,15 @@ class JWTAuthManager:
         user_object: LiteLLM_UserTable | None,
         user_id: str | None,
         requested_model: str | None,
+        route: str,
+        jwt_handler: JWTHandler,
         enforce_team_based_model_access: bool,
         team_id_upsert: bool,
         prisma_client: PrismaClient | None,
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
+        request_method: str | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None, LiteLLM_TeamMembership | None]:
         """
         Resolve a team for a user whose JWT carries no team claims by selecting
@@ -2002,6 +2005,12 @@ class JWTAuthManager:
         requested, can access that model — mirroring the per-team model-access
         check the claim-based path enforces, so a team's `models` restriction is
         not bypassed by the fallback.
+
+        The same `team_allowed_routes` gate the claim-based path applies is
+        enforced here too, so a DB-selected team cannot reach a route the JWT
+        config excludes for team-role callers. Auth-enforced passthrough routes
+        are exempt from that gate by design (they are governed by the team's
+        `allowed_passthrough_routes`, re-checked by the caller).
 
         The resolved team's membership row is loaded too (when user_id is set) so
         per-team membership budget limits are enforced on the fallback path the
@@ -2013,6 +2022,16 @@ class JWTAuthManager:
         from litellm.proxy.proxy_server import llm_router
 
         user_team_ids = user_object.teams if user_object else []
+        normalized_method = (
+            request_method.upper() if isinstance(request_method, str) else None
+        )
+        team_route_allowed = RouteChecks.is_auth_enforced_pass_through_route(
+            route=route, method=normalized_method
+        ) or allowed_routes_check(
+            user_role=LitellmUserRoles.TEAM,
+            user_route=route,
+            litellm_proxy_roles=jwt_handler.litellm_jwtauth,
+        )
         any_team_resolved = False
         for candidate_team_id in user_team_ids:
             try:
@@ -2039,6 +2058,8 @@ class JWTAuthManager:
                     )
                 except Exception:
                     continue
+            if not team_route_allowed:
+                continue
             verbose_proxy_logger.debug(
                 "JWT DB team fallback: resolved team_id=%s from user DB membership",
                 candidate_team_id,
@@ -2355,12 +2376,15 @@ class JWTAuthManager:
                 user_object=user_object,
                 user_id=user_id,
                 requested_model=request_data.get("model"),
+                route=route,
+                jwt_handler=jwt_handler,
                 enforce_team_based_model_access=jwt_handler.litellm_jwtauth.enforce_team_based_model_access,
                 team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 parent_otel_span=parent_otel_span,
                 proxy_logging_obj=proxy_logging_obj,
+                request_method=request_method,
             )
             # The earlier passthrough gate ran when team_id was None; re-check
             # against the DB-resolved team so a fallback-selected team must also
