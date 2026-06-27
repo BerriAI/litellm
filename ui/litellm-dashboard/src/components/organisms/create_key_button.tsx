@@ -29,6 +29,7 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
+import { TagRateLimitEditor, TagRateLimitEntry, tagRowsToLimits } from "../key_team_helpers/TagRateLimitEditor";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -202,6 +203,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
+  const [tagRateLimits, setTagRateLimits] = useState<TagRateLimitEntry[]>([]);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -220,6 +222,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
     setBudgetLimits([]);
+    setTagRateLimits([]);
   };
 
   const handleCancel = () => {
@@ -239,6 +242,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedOrganizationId(null);
     setSelectedProjectId(null);
     setBudgetLimits([]);
+    setTagRateLimits([]);
   };
 
   useEffect(() => {
@@ -536,6 +540,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         formValues.budget_limits = validWindows;
       }
 
+      // Add per-tag rate limits (only when at least one row is configured)
+      const { tag_rpm_limit } = tagRowsToLimits(tagRateLimits);
+      if (Object.keys(tag_rpm_limit).length > 0) {
+        formValues.tag_rpm_limit = tag_rpm_limit;
+      }
+
       let response;
       if (keyOwner === "service_account") {
         response = await keyCreateServiceAccountCall(accessToken, formValues);
@@ -558,6 +568,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       NotificationsManager.success("Virtual Key Created");
       form.resetFields();
       setBudgetLimits([]);
+      setTagRateLimits([]);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
@@ -1140,6 +1151,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     form={form}
                     showDetailedDescriptions={true}
                   />
+                  <Form.Item
+                    className="mt-4"
+                    label={
+                      <span>
+                        Per-Tag Rate Limits{" "}
+                        <Tooltip title="Scope rate limits to a request tag so each tag (e.g. a cell or group) gets its own RPM counter. Requests without a matching tag fall back to the key-level limit.">
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                  >
+                    <TagRateLimitEditor value={tagRateLimits} onChange={setTagRateLimits} />
+                  </Form.Item>
                   <Form.Item
                     label={
                       <span>
