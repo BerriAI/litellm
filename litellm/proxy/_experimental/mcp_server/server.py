@@ -229,7 +229,7 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     return False
 
 
-def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[Dict[str, str]]:
+def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[dict[str, str]]:
     """The W3C trace context (``traceparent``/``tracestate``) the MCP client
     propagated in the request's ``params._meta`` (SEP-414), or ``None``.
 
@@ -250,7 +250,7 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[Dict[str, str]]:
     return carrier or None
 
 
-def _otel_set_mcp_trace_carrier(carrier: Optional[Dict[str, str]]) -> object:
+def _otel_set_mcp_trace_carrier(carrier: Optional[dict[str, str]]) -> object:
     """Stash ``carrier`` for the otel_v2 MCP span and return a reset token, or
     ``None`` when otel_v2 is unavailable. Lazily imported so opentelemetry stays an
     optional dependency."""
@@ -260,7 +260,7 @@ def _otel_set_mcp_trace_carrier(carrier: Optional[Dict[str, str]]) -> object:
         )
 
         return set_mcp_message_trace_carrier(carrier)
-    except Exception:
+    except ImportError:
         return None
 
 
@@ -275,7 +275,7 @@ def _otel_reset_mcp_trace_carrier(token: object) -> None:
         )
 
         reset_mcp_message_trace_carrier(token)
-    except Exception:
+    except ImportError:
         return
 
 
