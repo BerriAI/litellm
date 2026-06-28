@@ -1,6 +1,8 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import pytest
+
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -26,6 +28,13 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_otel_v2_flag_cache():
+    is_otel_v2_enabled.cache_clear()
+    yield
+    is_otel_v2_enabled.cache_clear()
 
 
 def _sample_payload(**overrides):
@@ -561,9 +570,35 @@ def test_capture_message_content_normalizer_only_touches_strings():
 
 def test_v2_flag_is_off_by_default(monkeypatch):
     monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is False
     monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+    is_otel_v2_enabled.cache_clear()
     assert is_otel_v2_enabled() is True
+
+
+def test_v2_flag_resolved_once_not_per_call(monkeypatch):
+    """Regression for LIT-3895: ``is_otel_v2_enabled`` sits on the proxy hot path
+    (auth, logging-callback setup). Building the pydantic-settings model on every
+    call re-scanned the environment at ~28us a pop and dropped throughput, so the
+    flag must be resolved once and cached rather than reconstructed per call."""
+    from litellm.integrations.otel.model import config as config_mod
+
+    constructions = 0
+    real_flag = config_mod._OTelV2Flag
+
+    def _counting_flag(*args, **kwargs):
+        nonlocal constructions
+        constructions += 1
+        return real_flag(*args, **kwargs)
+
+    monkeypatch.setattr(config_mod, "_OTelV2Flag", _counting_flag)
+    config_mod.is_otel_v2_enabled.cache_clear()
+
+    for _ in range(50):
+        config_mod.is_otel_v2_enabled()
+
+    assert constructions == 1
 
 
 def test_config_from_env(monkeypatch):

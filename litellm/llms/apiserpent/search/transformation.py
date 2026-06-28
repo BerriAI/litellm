@@ -53,11 +53,15 @@ class APISerpentSearchConfig(BaseSearchConfig):
         api_base: Optional[str] = None,
         **kwargs,
     ) -> Dict:
-        api_key = api_key or get_secret_str("APISERPENT_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("APISERPENT_API_KEY",),
+            base_env_var="APISERPENT_API_BASE",
+            default_api_base=APISERPENT_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "APISERPENT_API_KEY is not set. Set `APISERPENT_API_KEY` environment variable."
-            )
+            raise ValueError("APISERPENT_API_KEY is not set. Set `APISERPENT_API_KEY` environment variable.")
         headers["X-API-Key"] = api_key
         headers["Content-Type"] = "application/json"
         return headers
@@ -76,14 +80,8 @@ class APISerpentSearchConfig(BaseSearchConfig):
         changes the host. The ``endswith`` guard keeps this idempotent, since the
         handler re-invokes this method with the already-resolved URL as api_base.
         """
-        base = (
-            api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE
-        ).rstrip("/")
-        path = (
-            DEEP_SEARCH_PATH
-            if self._is_deep_search(optional_params)
-            else QUICK_SEARCH_PATH
-        )
+        base = (api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE).rstrip("/")
+        path = DEEP_SEARCH_PATH if self._is_deep_search(optional_params) else QUICK_SEARCH_PATH
         if not base.endswith(path):
             base = f"{base}{path}"
 
@@ -119,9 +117,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         overrides: Dict = {}
         if "max_results" in optional_params:
             num_min = NUM_MIN_DEEP if is_deep else NUM_MIN
-            overrides["num"] = max(
-                num_min, min(optional_params["max_results"], NUM_MAX)
-            )
+            overrides["num"] = max(num_min, min(optional_params["max_results"], NUM_MAX))
         if "country" in optional_params:
             overrides["country"] = cast(str, optional_params["country"]).lower()
 
@@ -158,11 +154,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         response_json = raw_response.json()
 
         raw_results = response_json.get("results") or {}
-        organic = (
-            raw_results.get("organic", [])
-            if isinstance(raw_results, dict)
-            else raw_results
-        )
+        organic = raw_results.get("organic", []) if isinstance(raw_results, dict) else raw_results
 
         results: List[SearchResult] = []
         for result in organic:

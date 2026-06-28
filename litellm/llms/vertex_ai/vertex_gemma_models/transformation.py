@@ -88,9 +88,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
         # Remove params not needed/supported by Vertex Gemma
         openai_request.pop("model", None)
-        openai_request.pop(
-            "stream", None
-        )  # Streaming not supported, will be faked client-side
+        openai_request.pop("stream", None)  # Streaming not supported, will be faked client-side
         openai_request.pop("stream_options", None)  # Stream options not supported
         # Vertex Gemma's chatCompletions wrapper does not understand
         # `context_management` (an Anthropic/Responses API concept). Strip it
@@ -271,9 +269,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(
-            model_response=model_response, stream=stream
-        )
+        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
 
     async def _async_completion(
         self,
@@ -371,6 +367,4 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Return fake stream iterator if streaming was requested
-        return self._handle_fake_stream_response(
-            model_response=model_response, stream=stream
-        )
+        return self._handle_fake_stream_response(model_response=model_response, stream=stream)
