@@ -182,6 +182,11 @@ def update_response_metadata(
         return
 
     metadata = ResponseMetadata(result)
-    metadata.set_hidden_params(logging_obj, model, kwargs)
+    # set_timing_metrics must run first: it assigns result._response_ms, which
+    # set_hidden_params reads (via _response_cost_calculator) to compute
+    # input_cost_per_second / output_cost_per_second pricing. Reversing this
+    # order makes per-second cost calculation read a missing/stale _response_ms
+    # and permanently cache a response_cost of 0.0 (see litellm issue #20228).
     metadata.set_timing_metrics(start_time, end_time, logging_obj)
+    metadata.set_hidden_params(logging_obj, model, kwargs)
     metadata.apply()
