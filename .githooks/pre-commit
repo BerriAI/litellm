@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#
+# pre-commit — shift CI lint left.
+#
+# Opt-in: runs only after `make install-hooks` points core.hooksPath at .githooks.
+# Mirrors the gating jobs in .github/workflows so a clean commit means green CI:
+#   - Python staged      -> `make lint` (test-linting.yml)
+#   - dashboard staged   -> prettier + eslint over the changed files (test-litellm-ui-build.yml)
+#   - proxy/types staged -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
+#
+# Each block is skipped when no matching files are staged, so unrelated commits stay fast.
+# Bypass when you must: git commit --no-verify.
+
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+py_files=$(printf '%s\n' "$staged" | grep -E '\.py$' | grep -v '^litellm/enterprise/' || true)
+ui_files=$(printf '%s\n' "$staged" | grep -E '^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$' || true)
+spec_files=$(printf '%s\n' "$staged" | grep -E '^litellm/(proxy|types)/.*\.py$' || true)
+
+status=0
+
+if [ -n "$py_files" ]; then
+    echo "pre-commit: linting Python (make lint)"
+    if ! make lint; then
+        echo "✗ Python lint failed. Fix the reds above, then recommit (or: git commit --no-verify)." >&2
+        status=1
+    fi
+fi
+
+if [ -n "$ui_files" ]; then
+    echo "pre-commit: linting dashboard (prettier + eslint)"
+    ui_rel=()
+    while IFS= read -r f; do
+        [ -n "$f" ] && ui_rel+=("${f#ui/litellm-dashboard/}")
+    done <<EOF
+$ui_files
+EOF
+    if ! ( cd ui/litellm-dashboard && npx prettier --check "${ui_rel[@]}" && npx eslint --no-warn-ignored "${ui_rel[@]}" ); then
+        echo "✗ Dashboard lint failed. Fix with: (cd ui/litellm-dashboard && npm run format && npm run lint)." >&2
+        status=1
+    fi
+fi
+
+if [ -n "$spec_files" ]; then
+    echo "pre-commit: checking dashboard API types are in sync (npm run gen:api)"
+    if ( cd ui/litellm-dashboard && npm run gen:api ); then
+        if ! git diff --quiet -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
+            echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and recommit." >&2
+            status=1
+        fi
+    else
+        echo "✗ Could not regenerate API types (npm run gen:api failed)." >&2
+        status=1
+    fi
+fi
+
+exit $status
