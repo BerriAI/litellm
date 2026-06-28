@@ -265,6 +265,11 @@ class TestPerSecondCostUsesActualDuration:
             model=model,
             optional_params={},
             litellm_params={},
+            # Bypass the explicit per-provider branches in cost_per_token (e.g.
+            # the OpenAI one, which unprefixed model names resolve to by
+            # default) so the lookup reaches the generic input_cost_per_second
+            # fallback this test is exercising.
+            custom_llm_provider="custom",
         )
         return logging_obj
 
