@@ -1,8 +1,16 @@
-# Contributing e2e tests
+# Contributors Guide
 
 This directory holds the live end-to-end suites that prove product correctness against a real running proxy and real provider APIs. The goal of this guide is simple: when you ship a feature, you add e2e coverage that walks that feature the way production does, across every route and edge case it touches, so a later change that breaks it fails here first
 
-Read this before adding a test. The harness already encodes most of the rules; your job is to fill in the feature-specific behavior, not to reinvent plumbing
+Read this before adding a test and i recommend reading through CLAUDE.md
+
+When contributing to this directory, please first discuss the change you wish to make via issue or pull request. We require screenshots and proof of your tests working on a live proxy. 
+
+
+## Setup
+
+1. Use litellm-config.yml in gateway/ if your tests require adding new models
+2. Deploy a docker image in docker-compose.yml to run your e2e tests
 
 ## What a complete test looks like
 
