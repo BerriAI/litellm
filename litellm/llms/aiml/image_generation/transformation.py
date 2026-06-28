@@ -37,9 +37,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         """
         return model.startswith(OPENAI_STYLE_IMAGE_MODEL_PREFIXES)
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         https://api.aimlapi.com/v1/images/generations
         """
@@ -111,9 +109,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete url for the request
         """
-        complete_url: str = (
-            api_base or get_secret_str("AIML_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url: str = api_base or get_secret_str("AIML_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
         # Strip /v1 suffix if present since IMAGE_GENERATION_ENDPOINT already includes v1
@@ -133,9 +129,7 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("AIML_API_KEY")
-            or get_secret_str("AIMLAPI_KEY")  # Alternative name
+            api_key or get_secret_str("AIML_API_KEY") or get_secret_str("AIMLAPI_KEY")  # Alternative name
         )
         if not final_api_key:
             raise ValueError("AIML_API_KEY or AIMLAPI_KEY is not set")
@@ -160,12 +154,10 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         if self._is_openai_style_model(model):
             return {"model": model, "prompt": prompt, **optional_params}
 
-        aiml_image_generation_request_body: AimlImageGenerationRequestParams = (
-            AimlImageGenerationRequestParams(
-                prompt=prompt,
-                model=model,
-                **optional_params,
-            )
+        aiml_image_generation_request_body: AimlImageGenerationRequestParams = AimlImageGenerationRequestParams(
+            prompt=prompt,
+            model=model,
+            **optional_params,
         )
         return dict(aiml_image_generation_request_body)
 

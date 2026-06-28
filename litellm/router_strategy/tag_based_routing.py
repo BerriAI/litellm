@@ -43,9 +43,7 @@ def _is_valid_deployment_tag_regex(
     return None
 
 
-def is_valid_deployment_tag(
-    deployment_tags: List[str], request_tags: List[str], match_any: bool = True
-) -> bool:
+def is_valid_deployment_tag(deployment_tags: List[str], request_tags: List[str], match_any: bool = True) -> bool:
     """
     Check if a tag is valid, the matching can be either any or all based on `match_any` flag
     """
@@ -109,9 +107,7 @@ def _match_deployment(
     deployment_has_plain_tags = deployment_tags is not None and len(deployment_tags) > 0
     strict_tag_check_failed = not match_any and deployment_has_plain_tags
     if deployment_tag_regex and header_strings and not strict_tag_check_failed:
-        regex_match = _is_valid_deployment_tag_regex(
-            deployment_tag_regex, header_strings
-        )
+        regex_match = _is_valid_deployment_tag_regex(deployment_tag_regex, header_strings)
         if regex_match is not None:
             return {"matched_via": "tag_regex", "matched_value": regex_match}
 
@@ -141,21 +137,15 @@ async def get_deployments_for_tag(
         return healthy_deployments
 
     if healthy_deployments is None:
-        verbose_logger.debug(
-            "get_deployments_for_tag: healthy_deployments is None returning healthy_deployments"
-        )
+        verbose_logger.debug("get_deployments_for_tag: healthy_deployments is None returning healthy_deployments")
         return healthy_deployments
 
     # Tag filtering applies only when there is at least one deployment to evaluate.
     if isinstance(healthy_deployments, list) and len(healthy_deployments) == 0:
-        verbose_logger.debug(
-            "get_deployments_for_tag: empty candidate set; skipping tag filter"
-        )
+        verbose_logger.debug("get_deployments_for_tag: empty candidate set; skipping tag filter")
         return healthy_deployments
 
-    verbose_logger.debug(
-        "request metadata: %s", request_kwargs.get(metadata_variable_name)
-    )
+    verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
     if metadata_variable_name in request_kwargs:
         metadata = request_kwargs[metadata_variable_name]
         request_tags = metadata.get("tags")
@@ -174,12 +164,8 @@ async def get_deployments_for_tag(
         # behaviour for operators who use plain tags: a request that carries a
         # User-Agent (all proxy requests do) but targets deployments with no
         # tag_regex will continue to use the original tag-only code path.
-        has_regex_deployments = any(
-            d.get("litellm_params", {}).get("tag_regex") for d in healthy_deployments
-        )
-        has_tag_filter = bool(request_tags) or (
-            bool(header_strings) and has_regex_deployments
-        )
+        has_regex_deployments = any(d.get("litellm_params", {}).get("tag_regex") for d in healthy_deployments)
+        has_tag_filter = bool(request_tags) or (bool(header_strings) and has_regex_deployments)
         if has_tag_filter:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: request_tags=%s user_agent=%s",
@@ -225,11 +211,7 @@ async def get_deployments_for_tag(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
 
-            return (
-                new_healthy_deployments
-                if len(new_healthy_deployments) > 0
-                else default_deployments
-            )
+            return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
 
     # for Untagged requests use default deployments if set
     _default_deployments_with_tags = []

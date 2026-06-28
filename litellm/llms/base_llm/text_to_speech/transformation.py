@@ -137,9 +137,7 @@ class BaseTextToSpeechConfig(ABC):
         """
         pass
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Dict
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: Dict) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(
