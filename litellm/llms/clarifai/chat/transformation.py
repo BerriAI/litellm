@@ -71,13 +71,9 @@ class ClarifaiConfig(OpenAIGPTConfig):
         dynamic_api_key = api_key or get_secret_str("CLARIFAI_API_KEY") or ""
         return api_base, dynamic_api_key
 
-    def transform_request(
-        self, model, messages, optional_params, litellm_params, headers
-    ):
+    def transform_request(self, model, messages, optional_params, litellm_params, headers):
         model = self.get_base_model(model) or model
-        return super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        return super().transform_request(model, messages, optional_params, litellm_params, headers)
 
     def transform_response(
         self,

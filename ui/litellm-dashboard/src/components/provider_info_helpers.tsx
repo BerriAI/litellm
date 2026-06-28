@@ -218,6 +218,8 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+
 const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
@@ -394,11 +396,13 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     Object.entries(modelMap).forEach(([key, value]) => {
       if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
         const litellmProvider = (value as any)["litellm_provider"];
+        const isPrefixVariant =
+          typeof litellmProvider === "string" &&
+          (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
+            litellmProvider.startsWith(`${custom_llm_provider}-`));
         if (
           litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" &&
-            (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
-              litellmProvider.startsWith(`${custom_llm_provider}-`)))
+          (isPrefixVariant && !standaloneSubproviderSlugs.has(litellmProvider))
         ) {
           providerModels.push(key);
         }

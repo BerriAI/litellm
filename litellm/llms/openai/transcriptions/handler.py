@@ -37,11 +37,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         - call openai_aclient.audio.transcriptions.create by default
         """
         try:
-            raw_response = (
-                await openai_aclient.audio.transcriptions.with_raw_response.create(
-                    **data, timeout=timeout
-                )
-            )  # type: ignore
+            raw_response = await openai_aclient.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)  # type: ignore
             headers = dict(raw_response.headers)
             response = raw_response.parse()
 
@@ -62,18 +58,12 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         """
         try:
             if litellm.return_response_headers is True:
-                raw_response = (
-                    openai_client.audio.transcriptions.with_raw_response.create(
-                        **data, timeout=timeout
-                    )
-                )  # type: ignore
+                raw_response = openai_client.audio.transcriptions.with_raw_response.create(**data, timeout=timeout)  # type: ignore
                 headers = dict(raw_response.headers)
                 response = raw_response.parse()
                 return headers, response
             else:
-                response = openai_client.audio.transcriptions.create(
-                    **data, timeout=timeout
-                )  # type: ignore
+                response = openai_client.audio.transcriptions.create(**data, timeout=timeout)  # type: ignore
                 return None, response
         except Exception as e:
             raise e
