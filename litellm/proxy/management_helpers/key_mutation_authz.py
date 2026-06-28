@@ -47,6 +47,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     LiteLLM_VerificationToken,
     LitellmUserRoles,
+    PermissionsDict,
     RegenerateKeyRequest,
     UpdateKeyRequest,
     UserAPIKeyAuth,
@@ -153,7 +154,7 @@ def _check_permissions_field(
     `model_fields_set` trips the gate."""
     if _is_proxy_admin(user_api_key_dict):
         return
-    permissions = getattr(data, "permissions", None)
+    permissions: Optional[PermissionsDict] = getattr(data, "permissions", None)
     if is_create_path:
         if not permissions:
             return

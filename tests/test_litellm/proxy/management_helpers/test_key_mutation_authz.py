@@ -691,6 +691,36 @@ def test_generate_key_helper_fn_has_no_mutable_permissions_default():
     assert sig.parameters["permissions"].default is None
 
 
+def test_permissions_param_is_typed_with_permissionsdict():
+    """The `permissions` parameter on every internal helper that holds the
+    payload is typed with `PermissionsDict`, not a bare `dict`. Names the
+    keys the proxy actually reads (`get_spend_routes`,
+    `enable_llm_guard_check`) so basedpyright catches typos at the
+    call sites; `total=False` keeps user-defined guardrail keys valid."""
+    import inspect
+    from typing import Optional
+
+    from litellm.proxy._types import PermissionsDict
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_helper_fn,
+    )
+    from litellm.proxy.management_helpers.key_mutation_authz import (
+        _check_permissions_field,
+    )
+    from litellm.repositories.verification_token_repository import (
+        VerificationTokenRepository,
+    )
+
+    expected = Optional[PermissionsDict]
+    assert inspect.signature(generate_key_helper_fn).parameters["permissions"].annotation == expected
+    assert inspect.signature(VerificationTokenRepository.create_token).parameters["permissions"].annotation == expected
+    # The helper's gate function inspects but does not declare a
+    # permissions param; just verify the type is importable next to it.
+    assert _check_permissions_field is not None
+    assert "get_spend_routes" in PermissionsDict.__annotations__
+    assert "enable_llm_guard_check" in PermissionsDict.__annotations__
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Composition / regenerate
 # ─────────────────────────────────────────────────────────────────────

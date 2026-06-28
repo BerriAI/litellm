@@ -1008,6 +1008,21 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
 from litellm.models.team import BudgetLimitEntry as BudgetLimitEntry  # noqa: E402
 
 
+class PermissionsDict(TypedDict, total=False):
+    """Plain-dict mirror of the ``permissions`` field on a key request.
+
+    Names the keys the proxy actually reads off the dict: ``get_spend_routes``
+    (gates the global spend routes in ``route_checks``) and
+    ``enable_llm_guard_check`` (gates the enterprise LLM-guard callback).
+    Other keys are still valid at runtime; ``guardrail_helpers`` iterates the
+    dict as ``{guardrail_name: should_run}``, so ``total=False`` lets those
+    user-defined keys pass without a schema bump.
+    """
+
+    get_spend_routes: bool
+    enable_llm_guard_check: bool
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests

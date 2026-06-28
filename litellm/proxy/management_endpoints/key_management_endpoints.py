@@ -3312,7 +3312,7 @@ async def generate_key_helper_fn(
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
-    permissions: Optional[dict] = None,
+    permissions: Optional[PermissionsDict] = None,
     model_max_budget: Optional[dict] = {},
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
