@@ -16,12 +16,13 @@ import os
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import litellm
-from litellm._logging import print_verbose
+from litellm._logging import print_verbose, verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
+from ._embedding_router import build_router_embedding_metadata, resolve_embedding_router
 from .base_cache import BaseCache
 
 
@@ -67,9 +68,6 @@ class RedisSemanticCache(BaseCache):
             Exception: If similarity_threshold is not provided or required Redis
                 connection information is missing
         """
-        from redisvl.extensions.llmcache import SemanticCache  # type: ignore[import-not-found, import-untyped]
-        from redisvl.utils.vectorize import CustomTextVectorizer  # type: ignore[import-not-found, import-untyped]
-
         if index_name is None:
             index_name = self.DEFAULT_REDIS_INDEX_NAME
 
@@ -99,23 +97,49 @@ class RedisSemanticCache(BaseCache):
                 # Raise a more informative exception if any of the required keys are missing
                 missing_var = e.args[0]
                 raise ValueError(
-                    f"Missing required Redis configuration: {missing_var}. "
-                    f"Provide {missing_var} or redis_url."
+                    f"Missing required Redis configuration: {missing_var}. Provide {missing_var} or redis_url."
                 ) from e
 
             redis_url = f"redis://:{password}@{host}:{port}"
 
         print_verbose(f"Redis semantic-cache redis_url: {redis_url}")
 
-        # Initialize the Redis vectorizer and cache
-        cache_vectorizer = CustomTextVectorizer(self._get_embedding)
+        # Defer redisvl index construction until first use. redisvl's
+        # CustomTextVectorizer eagerly embeds a probe string at construction;
+        # building lazily ensures that probe runs after llm_router is wired so
+        # per-deployment auth (e.g. Bedrock aws_role_name) is applied.
+        self._index_name = index_name
+        self._redis_url = redis_url
+        self._llmcache = None
 
-        self.llmcache = self._init_semantic_cache(
-            semantic_cache_cls=SemanticCache,
-            index_name=index_name,
-            redis_url=redis_url,
-            cache_vectorizer=cache_vectorizer,
-        )
+    @property
+    def llmcache(self) -> object:
+        if getattr(self, "_llmcache", None) is None:
+            self._llmcache = self._build_llmcache()
+        return self._llmcache
+
+    @llmcache.setter
+    def llmcache(self, value: object) -> None:
+        self._llmcache = value
+
+    def _build_llmcache(self) -> object:
+        # CustomTextVectorizer probes its embedding dimension at construction by
+        # embedding "dimension test", so the first cache request issues one extra
+        # billable embedding on top of the request's own.
+        from redisvl.extensions.llmcache import SemanticCache  # type: ignore[import-not-found, import-untyped]
+        from redisvl.utils.vectorize import CustomTextVectorizer  # type: ignore[import-not-found, import-untyped]
+
+        try:
+            cache_vectorizer = CustomTextVectorizer(self._get_embedding)
+            return self._init_semantic_cache(
+                semantic_cache_cls=SemanticCache,
+                index_name=self._index_name,
+                redis_url=self._redis_url,
+                cache_vectorizer=cache_vectorizer,
+            )
+        except Exception as e:
+            verbose_logger.error(f"Redis semantic-cache index build failed: {e}")
+            raise
 
     @classmethod
     def _cache_key_filterable_field(cls) -> Dict[str, str]:
@@ -133,10 +157,7 @@ class RedisSemanticCache(BaseCache):
     ) -> Any:
         def _is_schema_mismatch(exc: ValueError) -> bool:
             error_message = str(exc).lower()
-            return any(
-                phrase in error_message
-                for phrase in ("schema does not match", "index schema")
-            )
+            return any(phrase in error_message for phrase in ("schema does not match", "index schema"))
 
         try:
             return semantic_cache_cls(
@@ -285,27 +306,39 @@ class RedisSemanticCache(BaseCache):
             return dict_method()
         return value
 
-    def _get_embedding(self, prompt: str) -> List[float]:
+    def _get_embedding(self, prompt: str, metadata: Dict[str, Any] | None = None) -> List[float]:
         """
-        Generate an embedding vector for the given prompt using the configured embedding model.
-
-        Args:
-            prompt: The text to generate an embedding for
-
-        Returns:
-            List[float]: The embedding vector
+        Routes through the proxy Router when the embedding model is a Router
+        deployment so per-deployment auth (e.g. Bedrock aws_role_name) applies,
+        mirroring ``_get_async_embedding``; otherwise embeds directly.
         """
-        # Create an embedding from prompt
-        embedding_response = cast(
-            EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
-        )
-        embedding = embedding_response["data"][0]["embedding"]
-        return embedding
+        try:
+            from litellm.proxy.proxy_server import llm_model_list, llm_router
+        except ImportError:
+            llm_model_list = None
+            llm_router = None
+
+        router = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        if router is not None:
+            embedding_response = cast(
+                EmbeddingResponse,
+                router.embedding(
+                    model=self.embedding_model,
+                    input=prompt,
+                    cache={"no-store": True, "no-cache": True},
+                    metadata=build_router_embedding_metadata(metadata),
+                ),
+            )
+        else:
+            embedding_response = cast(
+                EmbeddingResponse,
+                litellm.embedding(
+                    model=self.embedding_model,
+                    input=prompt,
+                    cache={"no-store": True, "no-cache": True},
+                ),
+            )
+        return embedding_response["data"][0]["embedding"]
 
     def _get_cache_logic(self, cached_response: Any) -> Any:
         """
@@ -357,7 +390,10 @@ class RedisSemanticCache(BaseCache):
 
             value_str = str(value)
 
-            store_kwargs: Dict[str, Any] = {
+            prompt_embedding = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
+
+            store_kwargs: dict[str, Any] = {
+                "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
 
@@ -367,9 +403,7 @@ class RedisSemanticCache(BaseCache):
                 store_kwargs["ttl"] = int(ttl)
             self.llmcache.store(prompt, value_str, **store_kwargs)
         except Exception as e:
-            print_verbose(
-                f"Error setting {value_str or value} in the Redis semantic cache: {str(e)}"
-            )
+            print_verbose(f"Error setting {value_str or value} in the Redis semantic cache: {str(e)}")
 
     def get_cache(self, key: str, **kwargs) -> Any:
         """
@@ -393,8 +427,10 @@ class RedisSemanticCache(BaseCache):
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
-            check_kwargs: Dict[str, Any] = {
+            prompt_embedding = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
+            check_kwargs: dict[str, Any] = {
                 "prompt": prompt,
+                "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
             }
             results = self.llmcache.check(**check_kwargs)
@@ -435,49 +471,38 @@ class RedisSemanticCache(BaseCache):
             print_verbose(f"Error retrieving from Redis semantic cache: {str(e)}")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
-    async def _get_async_embedding(self, prompt: str, **kwargs) -> List[float]:
+    async def _get_async_embedding(self, prompt: str, metadata: Dict[str, Any] | None = None) -> List[float]:
         """
         Asynchronously generate an embedding for the given prompt.
 
         Args:
             prompt: The text to generate an embedding for
-            **kwargs: Additional arguments that may contain metadata
+            metadata: Request metadata forwarded to the Router embedding call
 
         Returns:
             List[float]: The embedding vector
         """
-        from litellm.proxy.proxy_server import llm_model_list, llm_router
-
-        # Route the embedding request through the proxy if appropriate
-        router_model_names = (
-            [m["model_name"] for m in llm_model_list]
-            if llm_model_list is not None
-            else []
-        )
-
         try:
-            if llm_router is not None and self.embedding_model in router_model_names:
-                # Use the router for embedding generation
-                user_api_key = kwargs.get("metadata", {}).get("user_api_key", "")
-                embedding_response = await llm_router.aembedding(
+            from litellm.proxy.proxy_server import llm_model_list, llm_router
+        except ImportError:
+            llm_model_list = None
+            llm_router = None
+
+        router = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        try:
+            if router is not None:
+                embedding_response = await router.aembedding(
                     model=self.embedding_model,
                     input=prompt,
                     cache={"no-store": True, "no-cache": True},
-                    metadata={
-                        "user_api_key": user_api_key,
-                        "semantic-cache-embedding": True,
-                        "trace_id": kwargs.get("metadata", {}).get("trace_id", None),
-                    },
+                    metadata=build_router_embedding_metadata(metadata),
                 )
             else:
-                # Generate embedding directly
                 embedding_response = await litellm.aembedding(
                     model=self.embedding_model,
                     input=prompt,
                     cache={"no-store": True, "no-cache": True},
                 )
-
-            # Extract and return the embedding vector
             return embedding_response["data"][0]["embedding"]
         except Exception as e:
             print_verbose(f"Error generating async embedding: {str(e)}")
@@ -504,9 +529,9 @@ class RedisSemanticCache(BaseCache):
             value_str = str(value)
 
             # Generate embedding for the value (response) to cache
-            prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
+            prompt_embedding = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
-            store_kwargs: Dict[str, Any] = {
+            store_kwargs: dict[str, Any] = {
                 "vector": prompt_embedding,
                 "filters": self._get_cache_filters(key),
             }
@@ -544,11 +569,11 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             # Generate embedding for the prompt
-            prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
+            prompt_embedding = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
-            check_kwargs: Dict[str, Any] = {
+            check_kwargs: dict[str, Any] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
                 "filter_expression": self._get_cache_key_filter_expression(key),
@@ -600,9 +625,7 @@ class RedisSemanticCache(BaseCache):
         aindex = await self.llmcache._get_async_index()
         return await aindex.info()
 
-    async def async_set_cache_pipeline(
-        self, cache_list: List[Tuple[str, Any]], **kwargs
-    ) -> None:
+    async def async_set_cache_pipeline(self, cache_list: List[Tuple[str, Any]], **kwargs) -> None:
         """
         Asynchronously store multiple values in the semantic cache.
 

@@ -1,7 +1,8 @@
 """Tests for scripts/budget_ratchet_check.py.
 
-The guard's whole contract is "ceilings may only fall": a raised ceiling, a dropped
-rule, or a deleted file is a regression, while a lowered/equal ceiling, a brand-new
+The guard's contract is "baselines and ceilings may only fall": a raised ceiling, a
+raised baseline (even when slack is cut to keep the ceiling flat), a dropped rule, or
+a deleted file is a regression, while a lowered/equal baseline and ceiling, a brand-new
 rule, or a brand-new budget file is fine. Each branch is pinned here.
 """
 
@@ -10,7 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-_MODULE_PATH = Path(__file__).resolve().parents[2] / "scripts" / "budget_ratchet_check.py"
+_MODULE_PATH = (
+    Path(__file__).resolve().parents[2] / "scripts" / "budget_ratchet_check.py"
+)
 _spec = importlib.util.spec_from_file_location("budget_ratchet_check", _MODULE_PATH)
 ratchet = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ratchet)
@@ -35,10 +38,30 @@ def test_raised_ceiling_is_a_regression():
 
 def test_lowered_or_equal_ceiling_is_clean():
     base = {"LIT006": _spec_of(1013, 10)}
+    # baseline drops, slack flat -> ceiling falls
     assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1000, 10)}) == []
+    # nothing changes
     assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1013, 10)}) == []
-    # slack traded for baseline at the same ceiling is fine
-    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1023, 0)}) == []
+    # slack cut while baseline holds -> ceiling falls, baseline flat
+    assert ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1013, 0)}) == []
+
+
+def test_raised_baseline_is_a_regression_even_when_ceiling_held_flat():
+    # baseline 1013 -> 1023 with slack cut 10 -> 0 keeps the ceiling at 1023, but a
+    # higher baseline bakes in more accepted debt and must still surface as a regression
+    base = {"LIT006": _spec_of(1013, 10)}
+    regs = ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1023, 0)})
+    assert [r.rule for r in regs] == ["LIT006"]
+    assert "baseline raised 1013 -> 1023" in regs[0].detail
+    assert "ceiling raised" not in regs[0].detail
+
+
+def test_raised_baseline_and_ceiling_report_both_reasons():
+    base = {"LIT006": _spec_of(1013, 10)}
+    regs = ratchet.regressions_for("b.json", base, {"LIT006": _spec_of(1100, 10)})
+    assert [r.rule for r in regs] == ["LIT006"]
+    assert "ceiling raised 1023 -> 1110" in regs[0].detail
+    assert "baseline raised 1013 -> 1100" in regs[0].detail
 
 
 def test_dropped_rule_is_a_regression():

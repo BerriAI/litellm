@@ -181,10 +181,7 @@ def handle_a2a_localhost_retry(
         ImportError: If the A2A SDK is not installed
     """
     if not A2A_SDK_AVAILABLE or _A2AClient is None:
-        raise ImportError(
-            "A2A SDK is required for localhost retry handling. "
-            "Install it with: pip install a2a"
-        )
+        raise ImportError("A2A SDK is required for localhost retry handling. Install it with: pip install a2a")
 
     request_type = "streaming " if is_streaming else ""
     verbose_logger.warning(

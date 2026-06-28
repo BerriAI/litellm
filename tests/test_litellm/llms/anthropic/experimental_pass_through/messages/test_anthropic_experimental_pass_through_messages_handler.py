@@ -105,6 +105,48 @@ async def test_anthropic_messages_sanitizes_empty_text_blocks_before_dispatch():
     assert len(msgs[0]["content"]) == 2  # caller untouched
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "functions.Bash:0",
+                    "name": "Bash",
+                    "input": {},
+                }
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+        )
+
+    assert captured["messages"][0]["content"][0]["id"] == "functions_Bash_0"
+    assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+
 async def _async_return(value):
     return value
 
@@ -228,9 +270,9 @@ def test_openai_model_with_thinking_converts_to_reasoning():
             "reasoning" in call_kwargs
         ), "reasoning should be passed to litellm.responses"
 
-        # budget_tokens=1024 -> effort="minimal" (< 2000 threshold)
+        # budget_tokens=1024 -> effort="low" (at the LOW budget threshold)
         # reasoning_auto_summary is False by default, so no summary key
-        expected_reasoning = {"effort": "minimal"}
+        expected_reasoning = {"effort": "low"}
         assert call_kwargs["reasoning"] == expected_reasoning, (
             f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
             f"got {call_kwargs.get('reasoning')}"
@@ -274,7 +316,7 @@ class TestThinkingParameterTransformation:
         )
 
         # reasoning_auto_summary is False by default, so no summary key
-        assert result == {"reasoning_effort": "minimal"}
+        assert result == {"reasoning_effort": "low"}
         assert "thinking" not in result
         assert "summary" not in str(result["reasoning_effort"])
 
@@ -294,7 +336,7 @@ class TestThinkingParameterTransformation:
                 model="openai/gpt-5.2",
             )
             assert result == {
-                "reasoning_effort": {"effort": "medium", "summary": "detailed"}
+                "reasoning_effort": {"effort": "high", "summary": "detailed"}
             }
         finally:
             litellm.reasoning_auto_summary = original
@@ -507,7 +549,7 @@ class TestThinkingSummaryPreservation:
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking
         )
-        assert result == {"effort": "medium", "summary": "concise"}
+        assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
         """translate_thinking_to_reasoning should not include summary by default (opt-in)."""
@@ -525,7 +567,7 @@ class TestThinkingSummaryPreservation:
                     thinking
                 )
             )
-            assert result == {"effort": "medium"}
+            assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:
             litellm.reasoning_auto_summary = original
@@ -542,7 +584,7 @@ class TestThinkingSummaryPreservation:
             model="openai/gpt-5.2",
         )
         assert result == {
-            "reasoning_effort": {"effort": "medium", "summary": "concise"}
+            "reasoning_effort": {"effort": "high", "summary": "concise"}
         }
 
 

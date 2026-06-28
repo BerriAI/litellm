@@ -935,16 +935,6 @@ print(response.choices[0].message.content)`}
             <div>
               <Text className="text-lg font-semibold mb-4">Connection Details</Text>
               <div className="space-y-2">
-                <div>
-                  <Text className="font-medium">URL:</Text>
-                  <div className="flex items-center space-x-2 mt-1">
-                    <Text className="text-sm break-all bg-gray-100 p-2 rounded flex-1">{selectedMcpServer.url}</Text>
-                    <CopyOutlined
-                      onClick={() => copyToClipboard(selectedMcpServer.url)}
-                      className="cursor-pointer text-gray-500 hover:text-blue-500 flex-shrink-0"
-                    />
-                  </div>
-                </div>
                 {selectedMcpServer.command && (
                   <div>
                     <Text className="font-medium">Command:</Text>

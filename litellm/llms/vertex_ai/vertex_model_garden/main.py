@@ -48,10 +48,7 @@ def create_vertex_url(
     """Return the api base for vertex model garden (without /chat/completions)."""
     base_url = get_vertex_base_url(vertex_location)
     if _vertex_model_garden_model_id_in_json_body(model):
-        return (
-            f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}"
-            "/endpoints/openapi"
-        )
+        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
 
@@ -95,9 +92,7 @@ class VertexAIModelGardenModels(VertexBase):
                 message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
             )
 
-        if not (
-            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
-        ):
+        if not (hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")):
             raise VertexAIError(
                 status_code=400,
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",

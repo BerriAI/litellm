@@ -67,11 +67,15 @@ class TinyfishSearchConfig(BaseSearchConfig):
         api_base: str | None = None,
         **kwargs: object,
     ) -> dict[str, str]:
-        resolved_key = api_key or get_secret_str("TINYFISH_API_KEY")
+        resolved_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("TINYFISH_API_KEY",),
+            base_env_var="TINYFISH_API_BASE",
+            default_api_base=self.TINYFISH_API_BASE,
+        )
         if not resolved_key:
-            raise ValueError(
-                "TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable."
-            )
+            raise ValueError("TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable.")
         return {**headers, "X-API-Key": resolved_key, "Accept": "application/json"}
 
     def get_complete_url(
@@ -81,13 +85,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
         data: dict[str, object] | list[dict[str, object]] | None = None,
         **kwargs: object,
     ) -> str:
-        resolved_base = (
-            api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
-        )
+        resolved_base = api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
         if isinstance(data, dict) and _TINYFISH_PARAMS_KEY in data:
-            validated_params = _UrlEncodableParams.validate_python(
-                data[_TINYFISH_PARAMS_KEY]
-            )
+            validated_params = _UrlEncodableParams.validate_python(data[_TINYFISH_PARAMS_KEY])
             return f"{resolved_base}?{urlencode(validated_params, doseq=True)}"
         return resolved_base
 
@@ -110,15 +110,11 @@ class TinyfishSearchConfig(BaseSearchConfig):
             request_data["max_results"] = max(1, min(int(raw_max), 20))
 
         try:
-            domains = _StrList.validate_python(
-                optional_params.get("search_domain_filter")
-            )
+            domains = _StrList.validate_python(optional_params.get("search_domain_filter"))
         except (ValidationError, TypeError):
             domains = []
         if domains:
-            request_data["query"] = _append_domain_filters(
-                request_data["query"], domains
-            )
+            request_data["query"] = _append_domain_filters(request_data["query"], domains)
 
         result_data: dict[str, object] = dict(request_data)
 
@@ -143,17 +139,14 @@ class TinyfishSearchConfig(BaseSearchConfig):
 
         max_results_str: str = "20"
         if raw_response.request:
-            raw_param: object = (
-                raw_response.request.url.params.get(  # any-ok: httpx QueryParams.get() -> Any
-                    "max_results", "20"
-                )
+            raw_param: object = raw_response.request.url.params.get(  # any-ok: httpx QueryParams.get() -> Any
+                "max_results", "20"
             )
             max_results_str = str(raw_param)
         max_results: int = min(int(max_results_str), 20)
 
         results = [
-            SearchResult(title=item.title, url=item.url, snippet=item.snippet)
-            for item in parsed.results[:max_results]
+            SearchResult(title=item.title, url=item.url, snippet=item.snippet) for item in parsed.results[:max_results]
         ]
 
         return SearchResponse(results=results, object="search")

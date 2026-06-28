@@ -16,7 +16,7 @@ export interface GuardrailCardInfo {
   providerKey?: string;
 }
 
-const ASSET_PREFIX = "../ui/assets/logos/";
+const ASSET_PREFIX = "/ui/assets/logos/";
 
 export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {

@@ -78,11 +78,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # provider transform, where each tool_config point appends at most one
         # cachePoint to the tools. That block also counts toward Anthropic's
         # limit, so reserve a slot for it here to leave room.
-        reserved_blocks = (
-            1
-            if any(p.get("location") == "tool_config" for p in remaining_points)
-            else 0
-        )
+        reserved_blocks = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
 
         processed_messages = self._apply_message_injections(
             points=message_points,
@@ -111,10 +107,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         ``max_blocks`` is reached. Injection points are honored in config order,
         so earlier points win when slots are scarce.
         """
-        used_blocks = sum(
-            AnthropicCacheControlHook._count_cache_control_blocks(msg)
-            for msg in messages
-        )
+        used_blocks = sum(AnthropicCacheControlHook._count_cache_control_blocks(msg) for msg in messages)
 
         limit_reached = False
         for point in points:
@@ -122,27 +115,21 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 limit_reached = True
                 break
 
-            control: ChatCompletionCachedContent = point.get(
-                "control", None
-            ) or ChatCompletionCachedContent(type="ephemeral")
+            control: ChatCompletionCachedContent = point.get("control", None) or ChatCompletionCachedContent(
+                type="ephemeral"
+            )
 
-            for target_index in AnthropicCacheControlHook._resolve_target_indices(
-                point=point, messages=messages
-            ):
+            for target_index in AnthropicCacheControlHook._resolve_target_indices(point=point, messages=messages):
                 if used_blocks >= max_blocks:
                     limit_reached = True
                     break
 
-                if AnthropicCacheControlHook._message_has_cache_control(
-                    messages[target_index]
-                ):
+                if AnthropicCacheControlHook._message_has_cache_control(messages[target_index]):
                     # Client already marked this message; don't overwrite it.
                     continue
 
-                messages[target_index] = (
-                    AnthropicCacheControlHook._safe_insert_cache_control_in_message(
-                        messages[target_index], control
-                    )
+                messages[target_index] = AnthropicCacheControlHook._safe_insert_cache_control_in_message(
+                    messages[target_index], control
                 )
                 used_blocks += 1
 
@@ -190,11 +177,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # Case 2: Target by role
         targetted_role = point.get("role", None)
         if targetted_role is not None:
-            return [
-                idx
-                for idx, msg in enumerate(messages)
-                if msg.get("role") == targetted_role
-            ]
+            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targetted_role]
 
         return []
 
@@ -338,9 +321,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             _init_custom_logger_compatible_class,
         )
 
-        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(
-            non_default_params
-        ):
+        if AnthropicCacheControlHook.should_use_anthropic_cache_control_hook(non_default_params):
             return _init_custom_logger_compatible_class(
                 logging_integration="anthropic_cache_control_hook",
                 internal_usage_cache=None,

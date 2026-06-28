@@ -46,9 +46,7 @@ class LiteLLMResponsesInteractionsConfig:
         # Transform input
         if input is not None:
             responses_request["input"] = (
-                LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
-                    input
-                )
+                LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(input)
             )
 
         # Transform system_instruction -> instructions
@@ -71,9 +69,7 @@ class LiteLLMResponsesInteractionsConfig:
                     # Responses API doesn't have top_k, skip it
                     pass
                 if "max_output_tokens" in generation_config:
-                    responses_request["max_output_tokens"] = generation_config[
-                        "max_output_tokens"
-                    ]
+                    responses_request["max_output_tokens"] = generation_config["max_output_tokens"]
 
         # Pass through other optional params that match
         passthrough_params = ["stream", "store", "metadata", "user"]
@@ -115,11 +111,7 @@ class LiteLLMResponsesInteractionsConfig:
                     content = turn.get("content", [])
 
                     # Transform content array
-                    transformed_content = (
-                        LiteLLMResponsesInteractionsConfig._transform_content_array(
-                            content
-                        )
-                    )
+                    transformed_content = LiteLLMResponsesInteractionsConfig._transform_content_array(content)
 
                     messages.append(
                         {
@@ -141,11 +133,7 @@ class LiteLLMResponsesInteractionsConfig:
                     else:
                         content_list = []
 
-                    transformed_content = (
-                        LiteLLMResponsesInteractionsConfig._transform_content_array(
-                            content_list
-                        )
-                    )
+                    transformed_content = LiteLLMResponsesInteractionsConfig._transform_content_array(content_list)
 
                     messages.append(
                         {
@@ -164,9 +152,7 @@ class LiteLLMResponsesInteractionsConfig:
                     {
                         "role": "user",
                         "content": LiteLLMResponsesInteractionsConfig._transform_content_array(
-                            input.get("content", [])
-                            if isinstance(input.get("content"), list)
-                            else [input]
+                            input.get("content", []) if isinstance(input.get("content"), list) else [input]
                         ),
                     }
                 ],
@@ -244,10 +230,7 @@ class LiteLLMResponsesInteractionsConfig:
                             # of `outputs` / `steps` don't leak into the other.
                             outputs.append({"type": "text", "text": text})
                             model_output_contents.append({"type": "text", "text": text})
-                        elif (
-                            isinstance(content_item, dict)
-                            and content_item.get("type") == "text"
-                        ):
+                        elif isinstance(content_item, dict) and content_item.get("type") == "text":
                             outputs.append({**content_item})
                             model_output_contents.append({**content_item})
                     if model_output_contents:
@@ -299,9 +282,6 @@ class LiteLLMResponsesInteractionsConfig:
                 "total_input_tokens": getattr(usage, "input_tokens", 0),
                 "total_output_tokens": getattr(usage, "output_tokens", 0),
             }
-
-        # Add role
-        interactions_response_dict["role"] = "model"
 
         # Add updated (same as created for now)
         interactions_response_dict["updated"] = created
