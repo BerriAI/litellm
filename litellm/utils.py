@@ -60,6 +60,9 @@ from litellm._lazy_imports import (
     _get_token_counter_new,
 )
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.fallback_generalizations import (
+    match_fallback_generalization,
+)
 from litellm.constants import (
     DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
     DEFAULT_EMBEDDING_PARAM_VALUES,
@@ -5020,6 +5023,34 @@ class PotentialModelNamesAndCustomLLMProvider(TypedDict):
     custom_llm_provider: str
 
 
+def _get_model_info_from_generalization(
+    model: str,
+    potential_model_names: PotentialModelNamesAndCustomLLMProvider,
+    custom_llm_provider: Optional[str],
+) -> Optional[tuple[str, dict]]:
+    """Resolve an unmapped model via a declarative fallback-generalization rule.
+
+    Tries the same name candidates as the exact lookups, in the same order, and
+    returns ``(matched_name, model_info)`` for the first candidate whose rule also
+    satisfies the provider constraint. O(number of rules); only call after the
+    exact lookups have missed.
+    """
+    candidates = [
+        potential_model_names["combined_model_name"],
+        model,
+        potential_model_names["combined_stripped_model_name"],
+        potential_model_names["stripped_model_name"],
+        potential_model_names["split_model"],
+    ]
+    for candidate in candidates:
+        generalized_info = match_fallback_generalization(candidate)
+        if generalized_info is not None and _check_provider_match(
+            model_info=generalized_info, custom_llm_provider=custom_llm_provider
+        ):
+            return candidate, generalized_info
+    return None
+
+
 def _get_potential_model_names(
     model: str, custom_llm_provider: Optional[str]
 ) -> PotentialModelNamesAndCustomLLMProvider:
@@ -5274,6 +5305,15 @@ def _get_model_info_helper(
                         custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
+
+            if _model_info is None:
+                generalization = _get_model_info_from_generalization(
+                    model=model,
+                    potential_model_names=potential_model_names,
+                    custom_llm_provider=custom_llm_provider,
+                )
+                if generalization is not None:
+                    key, _model_info = generalization
 
             if _model_info is None or key is None:
                 raise ValueError(
