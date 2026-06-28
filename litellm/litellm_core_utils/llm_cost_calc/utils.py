@@ -223,14 +223,7 @@ def _get_effective_prompt_tokens_for_tiered_pricing(usage: Usage) -> float:
         audio_tokens = float(getattr(details, "audio_tokens", 0) or 0)
         image_tokens = float(getattr(details, "image_tokens", 0) or 0)
         video_tokens = float(getattr(details, "video_tokens", 0) or 0)
-        detail_total = (
-            text_tokens
-            + audio_tokens
-            + image_tokens
-            + video_tokens
-            + cached_tokens
-            + cache_creation
-        )
+        detail_total = text_tokens + audio_tokens + image_tokens + video_tokens + cached_tokens + cache_creation
         cache_detail_tokens = cached_tokens + cache_creation
         if cache_detail_tokens > 0 and detail_total > prompt_tokens:
             return prompt_tokens
@@ -630,9 +623,7 @@ def _calculate_input_cost(
         # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
         image_token_cost_key = "input_cost_per_image_token"
         if model_info.get(image_token_cost_key) is None:
-            prompt_cost += (
-                float(prompt_tokens_details["image_tokens"]) * prompt_base_cost
-            )
+            prompt_cost += float(prompt_tokens_details["image_tokens"]) * prompt_base_cost
         else:
             prompt_cost += calculate_cost_component(
                 model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
