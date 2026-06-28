@@ -20,11 +20,18 @@ import { fileURLToPath } from "node:url";
 
 const MIN_PYTHON = { major: 3, minor: 10 };
 
+function venvInterpreter(root) {
+  return [join(root, "bin", "python"), join(root, "Scripts", "python.exe")];
+}
+
 export function resolvePythonCommand(env, repoRoot, exists = existsSync) {
   if (env.LITELLM_PYTHON) return env.LITELLM_PYTHON.split(" ").filter(Boolean);
-  const venvCandidates = [join(repoRoot, ".venv", "bin", "python"), join(repoRoot, ".venv", "Scripts", "python.exe")];
-  const venvPython = venvCandidates.find((candidate) => exists(candidate));
-  return venvPython ? [venvPython] : ["python3"];
+  const candidates = [
+    ...(env.VIRTUAL_ENV ? venvInterpreter(env.VIRTUAL_ENV) : []),
+    ...venvInterpreter(join(repoRoot, ".venv")),
+  ];
+  const found = candidates.find((candidate) => exists(candidate));
+  return found ? [found] : ["python3"];
 }
 
 export function parsePythonVersion(stdout) {

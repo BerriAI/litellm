@@ -14,6 +14,13 @@ describe("resolvePythonCommand", () => {
     expect(cmd).toEqual(["uv", "run", "--no-sync", "python"]);
   });
 
+  it("prefers an activated $VIRTUAL_ENV over the repo's .venv", () => {
+    const active = "/active/bin/python";
+    const repoVenv = `${repoRoot}/.venv/bin/python`;
+    const cmd = resolvePythonCommand({ VIRTUAL_ENV: "/active" }, repoRoot, (p) => p === active || p === repoVenv);
+    expect(cmd).toEqual([active]);
+  });
+
   it("prefers the repo's .venv interpreter over a bare python3", () => {
     const venv = `${repoRoot}/.venv/bin/python`;
     const cmd = resolvePythonCommand({}, repoRoot, (p) => p === venv);
