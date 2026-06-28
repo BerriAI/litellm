@@ -1414,6 +1414,19 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
             assert 'ORDER BY "startTime" DESC' in sql_query
             return [mock_spend_logs[0]]
 
+        async def group_by(self, *args, **kwargs):
+            assert kwargs.get("by") == ["call_type"]
+            assert kwargs.get("where") == {"session_id": "session-123"}
+            return [
+                {
+                    "call_type": "completion",
+                    "_count": {"_all": 2},
+                    "_sum": {"spend": 0.30},
+                    "_min": {"startTime": "2024-01-01T00:00:00Z"},
+                    "_max": {"endTime": "2024-01-02T00:00:05Z"},
+                }
+            ]
+
     class MockPrismaClient:
         def __init__(self):
             self.db = MockDB()
@@ -1436,6 +1449,140 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
     assert data["total_pages"] == 2
     assert len(data["data"]) == 1
     assert data["data"][0]["request_id"] == "req1"
+
+    aggregate = data["aggregate"]
+    assert aggregate["total_spend"] == pytest.approx(0.30)
+    assert aggregate["first_start_time"] == "2024-01-01T00:00:00Z"
+    assert aggregate["last_end_time"] == "2024-01-02T00:00:05Z"
+    assert aggregate["call_type_counts"] == {"completion": 2}
+
+
+@pytest.mark.asyncio
+async def test_ui_view_session_spend_logs_aggregate_reflects_whole_session(client, monkeypatch):
+    """Aggregate spans the whole session even when the data page is empty or partial.
+
+    Regression guard for sessions larger than the UI page cap: the dashboard reads
+    `total_spend`, `first_start_time`, `last_end_time`, and `call_type_counts` from
+    `aggregate` so the trace header stays correct when only a slice of rows is fetched.
+    """
+
+    class MockDB:
+        async def count(self, *args, **kwargs):
+            return 10000
+
+        async def query_raw(self, sql_query, session_id, page_size, skip):
+            assert 'ORDER BY "startTime" DESC' in sql_query
+            return []
+
+        async def group_by(self, *args, **kwargs):
+            return [
+                {
+                    "call_type": "completion",
+                    "_count": {"_all": 9000},
+                    "_sum": {"spend": 12.5},
+                    "_min": {"startTime": "2024-01-01T00:00:00Z"},
+                    "_max": {"endTime": "2024-01-01T05:00:00Z"},
+                },
+                {
+                    "call_type": "call_mcp_tool",
+                    "_count": {"_all": 800},
+                    "_sum": {"spend": 0.0},
+                    "_min": {"startTime": "2024-01-01T00:30:00Z"},
+                    "_max": {"endTime": "2024-01-01T04:30:00Z"},
+                },
+                {
+                    "call_type": "asend_message",
+                    "_count": {"_all": 200},
+                    "_sum": {"spend": 1.25},
+                    "_min": {"startTime": "2024-01-01T00:10:00Z"},
+                    "_max": {"endTime": "2024-01-01T05:10:00Z"},
+                },
+            ]
+
+    class MockPrismaClient:
+        def __init__(self):
+            self.db = MockDB()
+            self.db.litellm_spendlogs = self.db
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MockPrismaClient())
+
+    response = client.get(
+        "/spend/logs/session/ui",
+        params={"session_id": "huge", "page": 1, "page_size": 50},
+        headers={"Authorization": "Bearer sk-test"},
+    )
+
+    assert response.status_code == 200
+    aggregate = response.json()["aggregate"]
+    assert aggregate["total_spend"] == pytest.approx(12.5 + 0.0 + 1.25)
+    assert aggregate["first_start_time"] == "2024-01-01T00:00:00Z"
+    assert aggregate["last_end_time"] == "2024-01-01T05:10:00Z"
+    assert aggregate["call_type_counts"] == {
+        "completion": 9000,
+        "call_mcp_tool": 800,
+        "asend_message": 200,
+    }
+
+
+@pytest.mark.asyncio
+async def test_session_aggregate_helper_branches():
+    """Cover the empty group_by and datetime-typed startTime/endTime paths.
+
+    The endpoint-level tests pass ISO strings, which traverse `str(value)` in
+    `_isoformat_or_none`. Real Prisma returns `datetime` objects for `_min`/`_max`
+    timestamps; this test pins that path so the helper keeps returning ISO output
+    when Prisma's behavior shifts back to typed datetimes.
+    """
+    from datetime import datetime as _dt
+
+    from litellm.proxy.spend_tracking.spend_management_endpoints import (
+        _isoformat_or_none,
+        _session_aggregate,
+    )
+
+    assert _isoformat_or_none(None) is None
+    assert _isoformat_or_none(_dt(2024, 1, 2, 3, 4, 5)) == "2024-01-02T03:04:05"
+    assert _isoformat_or_none("2024-01-02T03:04:05Z") == "2024-01-02T03:04:05Z"
+
+    class _EmptyDB:
+        async def group_by(self, *args, **kwargs):
+            return []
+
+    class _EmptyPrisma:
+        def __init__(self):
+            self.db = _EmptyDB()
+            self.db.litellm_spendlogs = self.db
+
+    empty = await _session_aggregate(_EmptyPrisma(), "no-such-session")
+    assert empty == {
+        "total_spend": 0.0,
+        "first_start_time": None,
+        "last_end_time": None,
+        "call_type_counts": {},
+    }
+
+    class _DatetimeDB:
+        async def group_by(self, *args, **kwargs):
+            return [
+                {
+                    "call_type": "completion",
+                    "_count": {"_all": 3},
+                    "_sum": {"spend": 0.45},
+                    "_min": {"startTime": _dt(2024, 5, 1, 10, 0, 0)},
+                    "_max": {"endTime": _dt(2024, 5, 1, 10, 5, 0)},
+                }
+            ]
+
+    class _DatetimePrisma:
+        def __init__(self):
+            self.db = _DatetimeDB()
+            self.db.litellm_spendlogs = self.db
+
+    typed = await _session_aggregate(_DatetimePrisma(), "sid")
+    assert typed["first_start_time"] == "2024-05-01T10:00:00"
+    assert typed["last_end_time"] == "2024-05-01T10:05:00"
+    assert typed["call_type_counts"] == {"completion": 3}
+    assert typed["total_spend"] == pytest.approx(0.45)
 
 
 @pytest.mark.asyncio

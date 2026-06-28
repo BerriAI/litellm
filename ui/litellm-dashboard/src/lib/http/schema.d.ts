@@ -12349,6 +12349,12 @@ export interface paths {
          *             "page": int,
          *             "page_size": int,
          *             "total_pages": int,
+         *             "aggregate": {
+         *                 "total_spend": float,
+         *                 "first_start_time": str | None,
+         *                 "last_end_time": str | None,
+         *                 "call_type_counts": dict[str, int],
+         *             },
          *         }
          */
         get: operations["ui_view_session_spend_logs_spend_logs_session_ui_get"];

@@ -3330,6 +3330,12 @@ async def ui_view_session_spend_logs(
             "page": int,
             "page_size": int,
             "total_pages": int,
+            "aggregate": {
+                "total_spend": float,
+                "first_start_time": str | None,
+                "last_end_time": str | None,
+                "call_type_counts": dict[str, int],
+            },
         }
     """
     from litellm.proxy.proxy_server import prisma_client
@@ -3341,16 +3347,11 @@ async def ui_view_session_spend_logs(
                 detail="Database not connected",
             )
 
-        # Build query conditions
         where_conditions = {"session_id": session_id}
-
-        # Calculate pagination offsets
         skip = (page - 1) * page_size
 
-        # Get total count for pagination metadata
         total_records = await SpendLogsRepository(prisma_client).table.count(where=where_conditions)
 
-        # Query with raw SQL to exclude heavy columns (messages, response, proxy_server_request)
         sql_query = """
             SELECT
                 request_id, call_type, api_key, spend, total_tokens,
@@ -3368,6 +3369,7 @@ async def ui_view_session_spend_logs(
         result = await prisma_client.db.query_raw(sql_query, session_id, page_size, skip)
 
         total_pages = (total_records + page_size - 1) // page_size
+        aggregate = await _session_aggregate(prisma_client, session_id)
 
         return {
             "data": result,
@@ -3375,6 +3377,7 @@ async def ui_view_session_spend_logs(
             "page": page,
             "page_size": page_size,
             "total_pages": total_pages,
+            "aggregate": aggregate,
         }
     except Exception as e:
         if isinstance(e, HTTPException):
@@ -3384,6 +3387,51 @@ async def ui_view_session_spend_logs(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e),
             )
+
+
+def _isoformat_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+async def _session_aggregate(prisma_client: "PrismaClient", session_id: str) -> dict[str, Any]:
+    group_response = await prisma_client.db.litellm_spendlogs.group_by(
+        by=["call_type"],
+        where={"session_id": session_id},
+        count={"_all": True},
+        sum={"spend": True},
+        min={"startTime": True},
+        max={"endTime": True},
+    )
+
+    call_type_counts: dict[str, int] = {}
+    total_spend = 0.0
+    first_start_time: datetime | None = None
+    last_end_time: datetime | None = None
+
+    for row in group_response or []:
+        call_type = row.get("call_type") or "unknown"
+        count_val = (row.get("_count") or {}).get("_all", 0) or 0
+        sum_spend = (row.get("_sum") or {}).get("spend") or 0
+        row_start = (row.get("_min") or {}).get("startTime")
+        row_end = (row.get("_max") or {}).get("endTime")
+
+        call_type_counts[call_type] = call_type_counts.get(call_type, 0) + count_val
+        total_spend += float(sum_spend)
+        if row_start is not None and (first_start_time is None or row_start < first_start_time):
+            first_start_time = row_start
+        if row_end is not None and (last_end_time is None or row_end > last_end_time):
+            last_end_time = row_end
+
+    return {
+        "total_spend": total_spend,
+        "first_start_time": _isoformat_or_none(first_start_time),
+        "last_end_time": _isoformat_or_none(last_end_time),
+        "call_type_counts": call_type_counts,
+    }
 
 
 async def _build_ui_spend_logs_response(
