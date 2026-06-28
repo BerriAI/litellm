@@ -224,15 +224,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         Supports both sync and async requests with fake streaming.
         """
         if acompletion:
-            if isinstance(client, (HTTPHandler, httpx.Client)):
-                raise BaseLLMException(
-                    status_code=400,
-                    message=(
-                        "Vertex Gemma async completion requires an async HTTP "
-                        "client. Pass AsyncHTTPHandler or httpx.AsyncClient."
-                    ),
-                )
-            async_client = cast(Optional[Union[AsyncHTTPHandler, httpx.AsyncClient]], client)
+            async_client = client if isinstance(client, (AsyncHTTPHandler, httpx.AsyncClient)) else None
             return self._async_completion(
                 model=model,
                 messages=messages,
@@ -248,14 +240,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 encoding=encoding,
             )
         else:
-            if isinstance(client, (AsyncHTTPHandler, httpx.AsyncClient)):
-                raise BaseLLMException(
-                    status_code=400,
-                    message=(
-                        "Vertex Gemma sync completion requires a sync HTTP client. Pass HTTPHandler or httpx.Client."
-                    ),
-                )
-            sync_client = cast(Optional[Union[HTTPHandler, httpx.Client]], client)
+            sync_client = client if isinstance(client, (HTTPHandler, httpx.Client)) else None
             return self._sync_completion(
                 model=model,
                 messages=messages,
