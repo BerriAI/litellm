@@ -2452,10 +2452,6 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
-        # Responses agentic interception (e.g. code interpreter) runs the follow-up
-        # loop via the async hook, so it is async-only for now; the sync path returns
-        # the initial response unchanged.
-        return initial_response
 
         if self._has_agentic_completion_hook(logging_obj):
             final_response = run_async_function(
