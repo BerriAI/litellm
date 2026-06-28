@@ -7,6 +7,7 @@ Users can define
 """
 
 import copy
+import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
@@ -30,6 +31,24 @@ else:
 # Anthropic (and Bedrock Claude) reject requests with more than 4 cache_control
 # breakpoints: "A maximum of 4 blocks with cache_control may be provided."
 MAX_CACHE_CONTROL_BLOCKS = 4
+ANTHROPIC_PROMPT_CACHE_TTL_ENV = "ANTHROPIC_PROMPT_CACHE_TTL"
+ANTHROPIC_PROMPT_CACHE_TTL_HEADER = "x-anthropic-prompt-cache-ttl"
+ANTHROPIC_PROMPT_CACHE_WORKLOAD_HEADER = "x-anthropic-prompt-cache-workload"
+ANTHROPIC_PROMPT_CACHE_POLICY_HEADERS = {
+    ANTHROPIC_PROMPT_CACHE_TTL_HEADER,
+    ANTHROPIC_PROMPT_CACHE_WORKLOAD_HEADER,
+}
+ANTHROPIC_PROMPT_CACHE_TTLS = {"off", "5m", "1h", "auto"}
+ANTHROPIC_PROMPT_CACHE_LONG_WORKLOADS = {
+    "eval",
+    "evaluation",
+    "benchmark",
+    "bench",
+    "batch",
+    "pipeline",
+    "long",
+    "long-running",
+}
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
@@ -62,6 +81,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return model, messages, non_default_params
 
+        request_headers = self._extract_request_headers(non_default_params)
+        default_control = self._resolve_default_cache_control(request_headers)
+        self._strip_prompt_cache_policy_headers(non_default_params)
+        if default_control is None:
+            return model, messages, non_default_params
+
         # Create a deep copy of messages to avoid modifying the original list
         processed_messages = copy.deepcopy(messages)
 
@@ -88,6 +113,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             points=message_points,
             messages=processed_messages,
             max_blocks=MAX_CACHE_CONTROL_BLOCKS - reserved_blocks,
+            default_control=default_control,
         )
 
         # Pass through non-message injection points for provider-specific handling
@@ -101,6 +127,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         points: List[CacheControlMessageInjectionPoint],
         messages: List[AllMessageValues],
         max_blocks: int,
+        default_control: ChatCompletionCachedContent,
     ) -> List[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
@@ -122,9 +149,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 limit_reached = True
                 break
 
-            control: ChatCompletionCachedContent = point.get(
-                "control", None
-            ) or ChatCompletionCachedContent(type="ephemeral")
+            control: ChatCompletionCachedContent = (
+                point.get("control", None) or default_control
+            )
 
             for target_index in AnthropicCacheControlHook._resolve_target_indices(
                 point=point, messages=messages
@@ -156,6 +183,100 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
 
         return messages
+
+    @staticmethod
+    def _normalise_prompt_cache_policy(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip().lower()
+
+    @staticmethod
+    def _extract_request_headers(non_default_params: dict) -> dict[str, Any]:
+        proxy_server_request = non_default_params.get("proxy_server_request")
+        if isinstance(proxy_server_request, dict):
+            headers = proxy_server_request.get("headers")
+            if isinstance(headers, dict):
+                return headers
+
+        for metadata_key in ("litellm_metadata", "metadata"):
+            metadata = non_default_params.get(metadata_key)
+            if isinstance(metadata, dict):
+                headers = metadata.get("headers")
+                if isinstance(headers, dict):
+                    return headers
+
+        return {}
+
+    @staticmethod
+    def _strip_prompt_cache_policy_headers(non_default_params: dict) -> None:
+        """Remove gateway-only prompt-cache policy headers before provider calls."""
+        for (
+            header_container
+        ) in AnthropicCacheControlHook._iter_prompt_cache_policy_header_containers(
+            non_default_params
+        ):
+            for key in list(header_container.keys()):
+                if str(key).lower() in ANTHROPIC_PROMPT_CACHE_POLICY_HEADERS:
+                    header_container.pop(key, None)
+
+    @staticmethod
+    def _iter_prompt_cache_policy_header_containers(
+        non_default_params: dict,
+    ) -> list[dict[str, Any]]:
+        header_containers: list[dict[str, Any]] = []
+
+        # `headers` and `extra_headers` can be provider-facing in LiteLLM proxy
+        # flows when client header forwarding is enabled.
+        for params_key in ("headers", "extra_headers"):
+            headers = non_default_params.get(params_key)
+            if isinstance(headers, dict):
+                header_containers.append(headers)
+
+        proxy_server_request = non_default_params.get("proxy_server_request")
+        if isinstance(proxy_server_request, dict):
+            headers = proxy_server_request.get("headers")
+            if isinstance(headers, dict):
+                header_containers.append(headers)
+
+        return header_containers
+
+    @staticmethod
+    def _resolve_default_cache_control(
+        headers: dict[str, Any],
+    ) -> Optional[ChatCompletionCachedContent]:
+        lower_headers = {str(k).lower(): v for k, v in headers.items()}
+        raw_policy = lower_headers.get(ANTHROPIC_PROMPT_CACHE_TTL_HEADER)
+        policy = AnthropicCacheControlHook._normalise_prompt_cache_policy(raw_policy)
+
+        if policy == "":
+            policy = AnthropicCacheControlHook._normalise_prompt_cache_policy(
+                os.getenv(ANTHROPIC_PROMPT_CACHE_TTL_ENV)
+            )
+
+        if policy == "":
+            return ChatCompletionCachedContent(type="ephemeral")
+
+        if policy not in ANTHROPIC_PROMPT_CACHE_TTLS:
+            verbose_logger.warning(
+                "AnthropicCacheControlHook: Ignoring invalid %s policy %r",
+                ANTHROPIC_PROMPT_CACHE_TTL_ENV,
+                policy,
+            )
+            return ChatCompletionCachedContent(type="ephemeral")
+
+        if policy == "off":
+            return None
+
+        if policy == "auto":
+            workload = AnthropicCacheControlHook._normalise_prompt_cache_policy(
+                lower_headers.get(ANTHROPIC_PROMPT_CACHE_WORKLOAD_HEADER)
+            )
+            policy = "1h" if workload in ANTHROPIC_PROMPT_CACHE_LONG_WORKLOADS else "5m"
+
+        return cast(
+            ChatCompletionCachedContent,
+            {"type": "ephemeral", "ttl": policy},
+        )
 
     @staticmethod
     def _resolve_target_indices(
