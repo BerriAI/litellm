@@ -251,7 +251,12 @@ def _check_delegation_ceiling(
 
     if _is_proxy_admin(user_api_key_dict):
         return
-    if _is_ui_team_admin_session(user_api_key_dict, data.team_id):
+    requested_team_id = (
+        data.team_id
+        if data.team_id is not None
+        else (existing_key_row.team_id if existing_key_row is not None else None)
+    )
+    if _is_ui_team_admin_session(user_api_key_dict, requested_team_id):
         return
 
     if (

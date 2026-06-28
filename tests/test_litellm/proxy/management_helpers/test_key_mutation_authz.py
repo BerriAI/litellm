@@ -24,7 +24,6 @@ Each test exercises one rule from the seven-rule policy:
           and is normalized at the json.dumps site.
 """
 
-import math
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -746,6 +745,36 @@ async def test_ui_team_admin_session_exempt_from_ceiling():
         user_api_key_cache=None,
         route_label="/key/generate",
     )
+
+
+@pytest.mark.asyncio
+async def test_regenerate_ui_team_admin_session_uses_existing_key_team_for_exemption():
+    existing = _existing_key(
+        user_id="someone-else",
+        created_by="someone-else",
+        team_id="team-real",
+        max_budget=50.0,
+    )
+    data = RegenerateKeyRequest(key="sk-team", max_budget=1_000_000.0)
+    assert "team_id" not in data.model_fields_set
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+    ):
+        await authorize_key_mutation(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                user_id="alice",
+                team_id=UI_SESSION_TOKEN_TEAM_ID,
+                max_budget=100.0,
+            ),
+            team_table=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=None,
+            route_label="/key/regenerate",
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────
