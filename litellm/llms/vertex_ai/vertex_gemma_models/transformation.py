@@ -13,7 +13,11 @@ from typing import Any, Callable, Dict, List, Optional, Union, cast
 import httpx
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
+    _get_httpx_client,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -151,7 +155,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 json=request_data,
                 timeout=timeout,
             )
-        return HTTPHandler(concurrent_limit=1).post(
+        return _get_httpx_client().post(
             url=api_base,
             headers=headers,
             json=request_data,
@@ -222,6 +226,17 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         Supports both sync and async requests with fake streaming.
         """
         if acompletion:
+            if isinstance(client, (HTTPHandler, httpx.Client)):
+                raise BaseLLMException(
+                    status_code=400,
+                    message=(
+                        "Vertex Gemma async completion requires an async HTTP "
+                        "client. Pass AsyncHTTPHandler or httpx.AsyncClient."
+                    ),
+                )
+            async_client = cast(
+                Optional[Union[AsyncHTTPHandler, httpx.AsyncClient]], client
+            )
             return self._async_completion(
                 model=model,
                 messages=messages,
@@ -232,11 +247,20 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 logging_obj=logging_obj,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                client=client,
+                client=async_client,
                 timeout=timeout,
                 encoding=encoding,
             )
         else:
+            if isinstance(client, (AsyncHTTPHandler, httpx.AsyncClient)):
+                raise BaseLLMException(
+                    status_code=400,
+                    message=(
+                        "Vertex Gemma sync completion requires a sync HTTP client. "
+                        "Pass HTTPHandler or httpx.Client."
+                    ),
+                )
+            sync_client = cast(Optional[Union[HTTPHandler, httpx.Client]], client)
             return self._sync_completion(
                 model=model,
                 messages=messages,
@@ -247,7 +271,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 logging_obj=logging_obj,
                 optional_params=optional_params,
                 litellm_params=litellm_params,
-                client=client,
+                client=sync_client,
                 timeout=timeout,
                 encoding=encoding,
             )
