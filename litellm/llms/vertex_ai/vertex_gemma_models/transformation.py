@@ -123,6 +123,39 @@ class VertexGemmaConfig(OpenAIGPTConfig):
 
         return response_json["predictions"]
 
+    @staticmethod
+    def _resolve_sync_handler(
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, httpx.Client]],
+    ) -> HTTPHandler:
+        """
+        Honor a caller-supplied sync client so a custom transport
+        (proxy, mTLS cert, mock) is never silently dropped.
+        """
+        if isinstance(client, HTTPHandler):
+            return client
+        if isinstance(client, httpx.Client):
+            return HTTPHandler(client=client)
+        return HTTPHandler(concurrent_limit=1)
+
+    @staticmethod
+    def _resolve_async_handler(
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, httpx.AsyncClient]],
+    ) -> AsyncHTTPHandler:
+        """
+        Honor a caller-supplied async client so a custom transport
+        (proxy, mTLS cert, mock) is never silently dropped.
+        """
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.utils import LlmProviders
+
+        if isinstance(client, AsyncHTTPHandler):
+            return client
+        if isinstance(client, httpx.AsyncClient):
+            handler = AsyncHTTPHandler()
+            handler.client = client
+            return handler
+        return get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI)
+
     def completion(
         self,
         model: str,
@@ -137,7 +170,9 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         acompletion: bool,
         litellm_params: dict,
         logger_fn: Optional[Callable] = None,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: Optional[
+            Union[HTTPHandler, AsyncHTTPHandler, httpx.Client, httpx.AsyncClient]
+        ] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         encoding=None,
         custom_llm_provider: str = "vertex_ai",
@@ -188,7 +223,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: Optional[Union[HTTPHandler, httpx.Client]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         encoding: Any = None,
     ):
@@ -224,10 +259,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        if client is None or not isinstance(client, HTTPHandler):
-            http_handler = HTTPHandler(concurrent_limit=1)
-        else:
-            http_handler = client
+        http_handler = self._resolve_sync_handler(client)
 
         response = http_handler.post(
             url=api_base,
@@ -282,13 +314,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         logging_obj: Any,
         optional_params: dict,
         litellm_params: dict,
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        client: Optional[Union[AsyncHTTPHandler, httpx.AsyncClient]] = None,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         encoding: Any = None,
     ):
         """Asynchronous completion request"""
-        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-        from litellm.types.utils import LlmProviders
         from litellm.utils import convert_to_model_response_object
 
         # Check if streaming is requested (will be faked)
@@ -320,12 +350,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            http_handler = get_async_httpx_client(
-                llm_provider=LlmProviders.VERTEX_AI,
-            )
-        else:
-            http_handler = client
+        http_handler = self._resolve_async_handler(client)
 
         response = await http_handler.post(
             url=api_base,
