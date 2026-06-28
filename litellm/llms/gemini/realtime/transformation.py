@@ -184,9 +184,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return mime_types.get(input_audio_format, "application/octet-stream")
 
-    def _manual_turn_detection_enabled(
-        self, session_configuration_request: Optional[RealtimeMessage]
-    ) -> bool:
+    def _manual_turn_detection_enabled(self, session_configuration_request: Optional[RealtimeMessage]) -> bool:
         if not session_configuration_request:
             return False
         try:
@@ -585,9 +583,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         session_configuration_request_dict: BidiGenerateContentSetup = {}
         if session_configuration_request:
             try:
-                session_configuration_request_dict = json.loads(
-                    session_configuration_request
-                ).get("setup", {})
+                session_configuration_request_dict = json.loads(session_configuration_request).get("setup", {})
             except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
                 session_configuration_request_dict = {}
 

@@ -15,10 +15,7 @@ VOLCENGINE_STT_CHUNK_BYTES = 6400
 
 FloatArray = Any
 
-_INSTALL_HINT = (
-    "use uncompressed WAV or install audio decoding extras before calling "
-    "Volcengine audio transcription."
-)
+_INSTALL_HINT = "use uncompressed WAV or install audio decoding extras before calling Volcengine audio transcription."
 
 
 @dataclass
@@ -48,10 +45,7 @@ def resample_to_volcengine_stt_pcm(file_bytes: bytes) -> VolcEnginePcmAudio:
 def chunk_volcengine_stt_pcm(pcm_bytes: bytes) -> list[bytes]:
     if not pcm_bytes:
         return []
-    return [
-        pcm_bytes[i : i + VOLCENGINE_STT_CHUNK_BYTES]
-        for i in range(0, len(pcm_bytes), VOLCENGINE_STT_CHUNK_BYTES)
-    ]
+    return [pcm_bytes[i : i + VOLCENGINE_STT_CHUNK_BYTES] for i in range(0, len(pcm_bytes), VOLCENGINE_STT_CHUNK_BYTES)]
 
 
 def _decode_to_int16_mono(file_bytes: bytes) -> tuple[list[int], int]:
@@ -88,15 +82,9 @@ def _wav_frames_to_int16(frames: bytes, sample_width: int) -> list[int]:
             samples.byteswap()
         return list(samples)
     if sample_width == 3:
-        return [
-            int.from_bytes(frames[i : i + 3], "little", signed=True) >> 8
-            for i in range(0, len(frames) - 2, 3)
-        ]
+        return [int.from_bytes(frames[i : i + 3], "little", signed=True) >> 8 for i in range(0, len(frames) - 2, 3)]
     if sample_width == 4:
-        return [
-            int.from_bytes(frames[i : i + 4], "little", signed=True) >> 16
-            for i in range(0, len(frames) - 3, 4)
-        ]
+        return [int.from_bytes(frames[i : i + 4], "little", signed=True) >> 16 for i in range(0, len(frames) - 3, 4)]
     raise VolcEngineError(
         status_code=400,
         message=f"Unsupported WAV sample width for Volcengine STT: {sample_width}",
@@ -111,10 +99,7 @@ def _mixdown_int16(samples: list[int], channels: int) -> list[int]:
         )
     if channels == 1:
         return samples
-    return [
-        int(sum(samples[i : i + channels]) / channels)
-        for i in range(0, len(samples) - channels + 1, channels)
-    ]
+    return [int(sum(samples[i : i + channels]) / channels) for i in range(0, len(samples) - channels + 1, channels)]
 
 
 def _decode_to_int16_mono_with_optional_deps(
@@ -199,9 +184,7 @@ def _float_array_to_int16_mono(samples_float: "FloatArray") -> list[int]:
     return [int(sample * 32767.0) for sample in samples_float]
 
 
-def _resample_int16(
-    samples: list[int], source_rate: int, target_rate: int
-) -> list[int]:
+def _resample_int16(samples: list[int], source_rate: int, target_rate: int) -> list[int]:
     if source_rate == target_rate or not samples:
         return samples
     target_size = max(1, round(len(samples) * float(target_rate) / float(source_rate)))

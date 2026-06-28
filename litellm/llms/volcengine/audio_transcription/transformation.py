@@ -28,9 +28,7 @@ VOLCENGINE_STT_RESOURCE_IDS = {
 
 
 class VolcEngineAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> list[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return ["language", "response_format"]
 
     def map_openai_params(
@@ -114,9 +112,7 @@ class VolcEngineAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> TranscriptionResponse:
         raise NotImplementedError("Volcengine STT uses a WebSocket handler.")
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict | Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return VolcEngineError(status_code=status_code, message=error_message)
 
 

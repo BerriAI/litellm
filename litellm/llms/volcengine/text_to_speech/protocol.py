@@ -43,9 +43,7 @@ class TtsFrame:
     error_code: int | None = None
 
 
-def encode_json_event(
-    *, event: int, payload: dict[str, Any], session_id: str | None = None
-) -> bytes:
+def encode_json_event(*, event: int, payload: dict[str, Any], session_id: str | None = None) -> bytes:
     return encode_event_frame(
         message_type=MSG_FULL_CLIENT,
         flags=FLAG_EVENT,
@@ -89,14 +87,10 @@ def encode_event_frame(
 
 def decode_event_frame(data: bytes) -> TtsFrame:
     if len(data) < 4:
-        raise VolcEngineError(
-            status_code=502, message="Volcengine TTS frame is too short."
-        )
+        raise VolcEngineError(status_code=502, message="Volcengine TTS frame is too short.")
     b0, b1, b2 = data[0], data[1], data[2]
     if ((b0 >> 4) & 0x0F) != 1 or (b0 & 0x0F) != 1:
-        raise VolcEngineError(
-            status_code=502, message="Volcengine TTS frame has invalid header."
-        )
+        raise VolcEngineError(status_code=502, message="Volcengine TTS frame has invalid header.")
 
     message_type = (b1 >> 4) & 0x0F
     flags = b1 & 0x0F
@@ -107,9 +101,7 @@ def decode_event_frame(data: bytes) -> TtsFrame:
     def read_u32() -> int:
         nonlocal offset
         if offset + 4 > len(data):
-            raise VolcEngineError(
-                status_code=502, message="Volcengine TTS frame is truncated."
-            )
+            raise VolcEngineError(status_code=502, message="Volcengine TTS frame is truncated.")
         value = int.from_bytes(data[offset : offset + 4], "big", signed=False)
         offset += 4
         return value
@@ -117,9 +109,7 @@ def decode_event_frame(data: bytes) -> TtsFrame:
     def read_bytes(size: int) -> bytes:
         nonlocal offset
         if offset + size > len(data):
-            raise VolcEngineError(
-                status_code=502, message="Volcengine TTS frame is truncated."
-            )
+            raise VolcEngineError(status_code=502, message="Volcengine TTS frame is truncated.")
         value = data[offset : offset + size]
         offset += size
         return value

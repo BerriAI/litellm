@@ -66,9 +66,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-VOLCENGINE_REALTIME_DEFAULT_API_BASE = (
-    "wss://openspeech.bytedance.com/api/v3/realtime/dialogue"
-)
+VOLCENGINE_REALTIME_DEFAULT_API_BASE = "wss://openspeech.bytedance.com/api/v3/realtime/dialogue"
 VOLCENGINE_REALTIME_DEFAULT_RESOURCE_ID = "volc.speech.dialog"
 VOLCENGINE_REALTIME_DEFAULT_APP_KEY = "PlgvMymc7f3tQnJ6"
 VOLCENGINE_REALTIME_DEFAULT_MODEL_VERSION = "1.2.1.1"
@@ -113,17 +111,11 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
         self._response_audio_fade_samples_applied = 0
         self._response_audio_started = False
 
-    def validate_environment(
-        self, headers: dict, model: str, api_key: str | None = None
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         resolved_headers: dict[str, Any] = {
-            key: value
-            for key, value in (headers or {}).items()
-            if key.lower().startswith("x-api-")
+            key: value for key, value in (headers or {}).items() if key.lower().startswith("x-api-")
         }
-        _setdefault_header(
-            resolved_headers, "X-Api-Resource-Id", pick_realtime_resource_id(model)
-        )
+        _setdefault_header(resolved_headers, "X-Api-Resource-Id", pick_realtime_resource_id(model))
         _setdefault_header(resolved_headers, "X-Api-App-Key", _get_realtime_app_key())
         _setdefault_header(resolved_headers, "X-Api-Connect-Id", str(uuid.uuid4()))
 
@@ -137,9 +129,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
             return resolved_headers
 
         volcengine_api_key = get_secret_str("VOLCENGINE_API_KEY")
-        specific_speech_key = get_secret_str(
-            "VOLCENGINE_REALTIME_API_KEY"
-        ) or get_secret_str("VOLCENGINE_SPEECH_KEY")
+        specific_speech_key = get_secret_str("VOLCENGINE_REALTIME_API_KEY") or get_secret_str("VOLCENGINE_SPEECH_KEY")
         speech_key = api_key
         if specific_speech_key and (not api_key or api_key == volcengine_api_key):
             speech_key = specific_speech_key
@@ -157,9 +147,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
             ),
         )
 
-    def get_complete_url(
-        self, api_base: str | None, model: str, api_key: str | None = None
-    ) -> str:
+    def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
         if api_base and api_base.startswith(("ws://", "wss://")):
             return api_base
         return VOLCENGINE_REALTIME_DEFAULT_API_BASE
@@ -186,9 +174,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
             session = message_obj.get("session") or {}
             if isinstance(session, dict):
                 self._latest_session = _deep_merge(self._latest_session, session)
-                self._input_sample_rate_hz = _extract_input_sample_rate_hz(
-                    self._latest_session
-                )
+                self._input_sample_rate_hz = _extract_input_sample_rate_hz(self._latest_session)
             else:
                 session = {}
             if self._session_started:
@@ -214,11 +200,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
         if message_type == "input_audio_buffer.append":
             frames: list[RealtimeMessage] = []
             if not self._session_started:
-                frames.extend(
-                    self._start_session_frame(
-                        model=model, session=self._latest_session or {}
-                    )
-                )
+                frames.extend(self._start_session_frame(model=model, session=self._latest_session or {}))
             audio = message_obj.get("audio")
             if not isinstance(audio, str) or not audio:
                 return frames
@@ -226,9 +208,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
                 audio_bytes = base64.b64decode(audio)
             except (binascii.Error, ValueError):
                 return frames
-            audio_bytes = _normalise_input_audio(
-                audio_bytes, self._input_sample_rate_hz
-            )
+            audio_bytes = _normalise_input_audio(audio_bytes, self._input_sample_rate_hz)
             frames.append(
                 encode_audio_event(
                     event=EV_TASK_REQUEST,
@@ -239,19 +219,13 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
             return frames
 
         if message_type == "response.create":
-            self._pending_response_metadata = _extract_response_create_metadata(
-                message_obj
-            )
+            self._pending_response_metadata = _extract_response_create_metadata(message_obj)
             instructions = _extract_response_create_instructions(message_obj)
             if not instructions:
                 return []
             frames: list[RealtimeMessage] = []
             if not self._session_started:
-                frames.extend(
-                    self._start_session_frame(
-                        model=model, session=self._latest_session or {}
-                    )
-                )
+                frames.extend(self._start_session_frame(model=model, session=self._latest_session or {}))
             frames.append(
                 encode_json_event(
                     event=EV_SAY_HELLO,
@@ -286,19 +260,13 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
         logging_obj: LiteLLMLoggingObj,
         realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:
-        current_output_item_id = realtime_response_transform_input[
-            "current_output_item_id"
-        ]
+        current_output_item_id = realtime_response_transform_input["current_output_item_id"]
         current_response_id = realtime_response_transform_input["current_response_id"]
         current_delta_chunks = realtime_response_transform_input["current_delta_chunks"]
-        current_conversation_id = realtime_response_transform_input[
-            "current_conversation_id"
-        ]
+        current_conversation_id = realtime_response_transform_input["current_conversation_id"]
         current_item_chunks = realtime_response_transform_input["current_item_chunks"]
         current_delta_type = realtime_response_transform_input["current_delta_type"]
-        session_configuration_request = realtime_response_transform_input[
-            "session_configuration_request"
-        ]
+        session_configuration_request = realtime_response_transform_input["session_configuration_request"]
 
         if isinstance(message, str):
             message = message.encode("utf-8")
@@ -506,9 +474,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
             )
         ]
 
-    def _session_event(
-        self, event_type: str, model: str
-    ) -> OpenAIRealtimeStreamSessionEvents:
+    def _session_event(self, event_type: str, model: str) -> OpenAIRealtimeStreamSessionEvents:
         session = OpenAIRealtimeStreamSession(
             id=self._session_id,
             modalities=["audio"],
@@ -674,16 +640,8 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
 
         sample_count = len(payload) // 2
         samples = list(struct.unpack(f"<{sample_count}h", payload[: sample_count * 2]))
-        startup_samples = (
-            VOLCENGINE_REALTIME_OUTPUT_SAMPLE_RATE_HZ
-            * VOLCENGINE_REALTIME_STARTUP_SANITIZE_MS
-            // 1000
-        )
-        fade_samples = (
-            VOLCENGINE_REALTIME_OUTPUT_SAMPLE_RATE_HZ
-            * VOLCENGINE_REALTIME_FADE_IN_MS
-            // 1000
-        )
+        startup_samples = VOLCENGINE_REALTIME_OUTPUT_SAMPLE_RATE_HZ * VOLCENGINE_REALTIME_STARTUP_SANITIZE_MS // 1000
+        fade_samples = VOLCENGINE_REALTIME_OUTPUT_SAMPLE_RATE_HZ * VOLCENGINE_REALTIME_FADE_IN_MS // 1000
 
         for index, sample in enumerate(samples):
             if self._response_audio_startup_samples_seen < startup_samples:
@@ -696,10 +654,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
                 else:
                     self._response_audio_started = True
 
-            if (
-                self._response_audio_started
-                and self._response_audio_fade_samples_applied < fade_samples
-            ):
+            if self._response_audio_started and self._response_audio_fade_samples_applied < fade_samples:
                 gain = (self._response_audio_fade_samples_applied + 1) / fade_samples
                 sample = round(sample * gain)
                 self._response_audio_fade_samples_applied += 1
@@ -762,8 +717,7 @@ def _start_session_payload(model: str, session: dict[str, Any]) -> dict[str, Any
 
     payload: dict[str, Any] = {
         "tts": {
-            "speaker": _extract_tts_speaker(session)
-            or VOLCENGINE_REALTIME_DEFAULT_SPEAKER,
+            "speaker": _extract_tts_speaker(session) or VOLCENGINE_REALTIME_DEFAULT_SPEAKER,
             "audio_config": {
                 "channel": 1,
                 "format": "pcm_s16le",
@@ -777,13 +731,10 @@ def _start_session_payload(model: str, session: dict[str, Any]) -> dict[str, Any
                 "sample_rate": VOLCENGINE_REALTIME_INPUT_SAMPLE_RATE_HZ,
                 "channel": 1,
             },
-            "extra": {
-                "end_smooth_window_ms": VOLCENGINE_REALTIME_DEFAULT_END_SMOOTH_WINDOW_MS
-            },
+            "extra": {"end_smooth_window_ms": VOLCENGINE_REALTIME_DEFAULT_END_SMOOTH_WINDOW_MS},
         },
         "dialog": {
-            "bot_name": volcengine_overrides.get("bot_name")
-            or VOLCENGINE_REALTIME_DEFAULT_BOT_NAME,
+            "bot_name": volcengine_overrides.get("bot_name") or VOLCENGINE_REALTIME_DEFAULT_BOT_NAME,
             "system_role": session.get("instructions") or "",
             "speaking_style": volcengine_overrides.get("speaking_style") or "",
             "extra": {
@@ -797,9 +748,7 @@ def _start_session_payload(model: str, session: dict[str, Any]) -> dict[str, Any
     if isinstance(volcengine_overrides.get("asr"), dict):
         payload["asr"] = _deep_merge(payload["asr"], volcengine_overrides["asr"])
     if isinstance(volcengine_overrides.get("dialog"), dict):
-        payload["dialog"] = _deep_merge(
-            payload["dialog"], volcengine_overrides["dialog"]
-        )
+        payload["dialog"] = _deep_merge(payload["dialog"], volcengine_overrides["dialog"])
     return payload
 
 
@@ -851,15 +800,11 @@ def _dialog_update_config(dialog: dict[str, Any]) -> dict[str, Any]:
 
 
 def _tts_update_config(tts: dict[str, Any]) -> dict[str, Any]:
-    update: dict[str, Any] = {
-        "speaker": tts.get("speaker") or VOLCENGINE_REALTIME_DEFAULT_SPEAKER
-    }
+    update: dict[str, Any] = {"speaker": tts.get("speaker") or VOLCENGINE_REALTIME_DEFAULT_SPEAKER}
     audio_config = tts.get("audio_config")
     if isinstance(audio_config, dict):
         mutable_audio_config = {
-            key: audio_config[key]
-            for key in ("speech_rate", "loudness_rate")
-            if key in audio_config
+            key: audio_config[key] for key in ("speech_rate", "loudness_rate") if key in audio_config
         }
         if mutable_audio_config:
             update["audio_config"] = mutable_audio_config
@@ -932,9 +877,7 @@ def _normalise_input_audio(audio_bytes: bytes, source_rate_hz: int | None) -> by
     )
 
 
-def _resample_pcm16_mono(
-    audio_bytes: bytes, source_rate_hz: int, target_rate_hz: int
-) -> bytes:
+def _resample_pcm16_mono(audio_bytes: bytes, source_rate_hz: int, target_rate_hz: int) -> bytes:
     if source_rate_hz <= 0 or target_rate_hz <= 0:
         return audio_bytes
     sample_count = len(audio_bytes) // 2
@@ -955,8 +898,7 @@ def _resample_pcm16_mono(
         right_index = min(left_index + 1, sample_count - 1)
         fraction = source_position - left_index
         sample = round(
-            source_samples[left_index]
-            + (source_samples[right_index] - source_samples[left_index]) * fraction
+            source_samples[left_index] + (source_samples[right_index] - source_samples[left_index]) * fraction
         )
         output_samples.append(max(-32768, min(32767, int(sample))))
     return struct.pack(f"<{len(output_samples)}h", *output_samples)
@@ -1002,9 +944,7 @@ def _new_audio_response_events(
                 "type": "conversation.item.added",
                 "event_id": f"event_{uuid.uuid4()}",
                 "previous_item_id": None,
-                "item": _assistant_audio_item(
-                    item_id=output_item_id, status="in_progress"
-                ),
+                "item": _assistant_audio_item(item_id=output_item_id, status="in_progress"),
             },
         ),
         OpenAIRealtimeResponseContentPartAdded(
@@ -1019,9 +959,7 @@ def _new_audio_response_events(
     ]
 
 
-def _assistant_audio_item(
-    item_id: str, status: str, transcript: str = ""
-) -> OpenAIRealtimeStreamResponseOutputItem:
+def _assistant_audio_item(item_id: str, status: str, transcript: str = "") -> OpenAIRealtimeStreamResponseOutputItem:
     return OpenAIRealtimeStreamResponseOutputItem(
         id=item_id,
         object="realtime.item",
@@ -1076,21 +1014,15 @@ def _get_app_id_access_key(
     if api_key and ":" in api_key:
         app_id, access_key = api_key.split(":", 1)
         return app_id.strip() or None, access_key.strip() or None
-    app_id = get_secret_str("VOLCENGINE_REALTIME_APP_ID") or get_secret_str(
-        "DOUBAO_APP_ID"
-    )
-    access_key = get_secret_str("VOLCENGINE_REALTIME_ACCESS_KEY") or get_secret_str(
-        "DOUBAO_ACCESS_KEY"
-    )
+    app_id = get_secret_str("VOLCENGINE_REALTIME_APP_ID") or get_secret_str("DOUBAO_APP_ID")
+    access_key = get_secret_str("VOLCENGINE_REALTIME_ACCESS_KEY") or get_secret_str("DOUBAO_ACCESS_KEY")
     return app_id, access_key
 
 
 def _has_volcengine_auth_headers(headers: dict[str, Any]) -> bool:
     normalized = {key.lower() for key in headers}
     return "x-api-key" in normalized or (
-        "x-api-app-id" in normalized
-        and "x-api-access-key" in normalized
-        and "x-api-app-key" in normalized
+        "x-api-app-id" in normalized and "x-api-access-key" in normalized and "x-api-app-key" in normalized
     )
 
 
@@ -1161,9 +1093,7 @@ def _input_speech_started_event(item_id: str) -> OpenAIRealtimeEvents:
     )
 
 
-def _input_transcript_event(
-    transcript: str, item_id: str | None = None
-) -> OpenAIRealtimeEvents:
+def _input_transcript_event(transcript: str, item_id: str | None = None) -> OpenAIRealtimeEvents:
     return cast(
         OpenAIRealtimeEvents,
         {

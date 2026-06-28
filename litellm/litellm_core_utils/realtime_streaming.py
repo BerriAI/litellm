@@ -582,9 +582,7 @@ class RealTimeStreaming:
         await self.websocket.send_text(event_str)
         return True
 
-    def _cache_session_configuration_request(
-        self, transformed_message: RealtimeMessage
-    ) -> None:
+    def _cache_session_configuration_request(self, transformed_message: RealtimeMessage) -> None:
         """Store setup payload once sent to backend.
 
         Updates the cached setup on every successful setup send so follow-up
@@ -990,9 +988,7 @@ class RealTimeStreaming:
                         try:
                             raw_response = raw_response.decode("utf-8")
                         except UnicodeDecodeError:
-                            verbose_logger.warning(
-                                "Received non-UTF-8 binary frame from backend, skipping."
-                            )
+                            verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
                             continue
 
                     event = self._parse_backend_event(raw_response)

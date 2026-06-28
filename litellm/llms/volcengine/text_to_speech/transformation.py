@@ -44,9 +44,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-VOLCENGINE_TTS_DEFAULT_API_BASE = (
-    "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
-)
+VOLCENGINE_TTS_DEFAULT_API_BASE = "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
 VOLCENGINE_TTS_DEFAULT_VOICE = "zh_female_vv_uranus_bigtts"
 VOLCENGINE_TTS_SAMPLE_RATE_HZ = 24000
 VOLCENGINE_TTS_CHANNELS = 1
@@ -162,9 +160,7 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
         resolved_api_key = api_key or litellm_params_dict.get("api_key")
         voice_name = voice if isinstance(voice, str) else VOLCENGINE_TTS_DEFAULT_VOICE
         resolved_optional_params = {**optional_params}
-        resource_id = litellm_params_dict.get("resource_id") or pick_tts_resource_id(
-            model
-        )
+        resource_id = litellm_params_dict.get("resource_id") or pick_tts_resource_id(model)
         if aspeech:
             return self._async_dispatch(
                 model=model,
@@ -297,9 +293,7 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
                 encode_json_event(
                     event=EV_START_SESSION,
                     session_id=session_id,
-                    payload=_start_session_payload(
-                        voice=voice, request_model=request_model
-                    ),
+                    payload=_start_session_payload(voice=voice, request_model=request_model),
                 )
             )
             await self._wait_for_event(ws, {EV_SESSION_STARTED}, timeout)
@@ -314,17 +308,10 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
                     },
                 )
             )
-            await ws.send(
-                encode_json_event(
-                    event=EV_FINISH_SESSION, session_id=session_id, payload={}
-                )
-            )
+            await ws.send(encode_json_event(event=EV_FINISH_SESSION, session_id=session_id, payload={}))
             while True:
                 frame = await self._recv_frame(ws, timeout)
-                if (
-                    frame.message_type == MSG_AUDIO_SERVER
-                    and frame.event == EV_TTS_RESPONSE
-                ):
+                if frame.message_type == MSG_AUDIO_SERVER and frame.event == EV_TTS_RESPONSE:
                     audio_chunks.append(bytes(frame.payload))
                     continue
                 if frame.event == EV_SESSION_FINISHED:
@@ -333,16 +320,12 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
 
             try:
                 await ws.send(encode_json_event(event=EV_FINISH_CONNECTION, payload={}))
-                await asyncio.wait_for(
-                    self._wait_for_event(ws, {EV_CONNECTION_FINISHED}, 0.5), 0.5
-                )
+                await asyncio.wait_for(self._wait_for_event(ws, {EV_CONNECTION_FINISHED}, 0.5), 0.5)
             except (asyncio.TimeoutError, ConnectionError, OSError, VolcEngineError):
                 pass
         return b"".join(audio_chunks)
 
-    async def _wait_for_event(
-        self, ws: Any, expected_events: set[int], timeout: float
-    ) -> None:
+    async def _wait_for_event(self, ws: Any, expected_events: set[int], timeout: float) -> None:
         while True:
             frame = await self._recv_frame(ws, timeout)
             if frame.event in expected_events:
@@ -375,9 +358,7 @@ def pick_tts_resource_id(model_name: str | None) -> str:
     return "seed-tts-2.0"
 
 
-def pick_tts_request_model(
-    model_name: str | None, optional_params: dict[str, Any] | None = None
-) -> str | None:
+def pick_tts_request_model(model_name: str | None, optional_params: dict[str, Any] | None = None) -> str | None:
     params = optional_params or {}
     explicit_model = params.get("request_model") or params.get("tts_model")
     if isinstance(explicit_model, str):
@@ -390,9 +371,7 @@ def pick_tts_request_model(
     return None
 
 
-def _start_session_payload(
-    voice: str, request_model: str | None = None
-) -> dict[str, Any]:
+def _start_session_payload(voice: str, request_model: str | None = None) -> dict[str, Any]:
     payload = {
         "user": {"uid": "litellm-proxy"},
         "namespace": "BidirectionalTTS",

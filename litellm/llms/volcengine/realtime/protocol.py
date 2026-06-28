@@ -82,9 +82,7 @@ def encode_json_event(
     )
 
 
-def encode_audio_event(
-    *, event: int, payload: bytes, session_id: str, compression: int = COMP_NONE
-) -> bytes:
+def encode_audio_event(*, event: int, payload: bytes, session_id: str, compression: int = COMP_NONE) -> bytes:
     body = gzip.compress(payload) if compression == COMP_GZIP else payload
     return encode_event_frame(
         message_type=MSG_AUDIO_CLIENT,
@@ -129,14 +127,10 @@ def encode_event_frame(
 
 def decode_realtime_frame(data: bytes) -> RealtimeFrame:
     if len(data) < 4:
-        raise VolcEngineError(
-            status_code=502, message="Volcengine realtime frame is too short."
-        )
+        raise VolcEngineError(status_code=502, message="Volcengine realtime frame is too short.")
     b0, b1, b2 = data[0], data[1], data[2]
     if ((b0 >> 4) & 0x0F) != 1 or (b0 & 0x0F) != 1:
-        raise VolcEngineError(
-            status_code=502, message="Volcengine realtime frame has invalid header."
-        )
+        raise VolcEngineError(status_code=502, message="Volcengine realtime frame has invalid header.")
 
     message_type = (b1 >> 4) & 0x0F
     flags = b1 & 0x0F
@@ -147,9 +141,7 @@ def decode_realtime_frame(data: bytes) -> RealtimeFrame:
     def read_u32() -> int:
         nonlocal offset
         if offset + 4 > len(data):
-            raise VolcEngineError(
-                status_code=502, message="Volcengine realtime frame is truncated."
-            )
+            raise VolcEngineError(status_code=502, message="Volcengine realtime frame is truncated.")
         value = int.from_bytes(data[offset : offset + 4], "big", signed=False)
         offset += 4
         return value
@@ -157,9 +149,7 @@ def decode_realtime_frame(data: bytes) -> RealtimeFrame:
     def read_bytes(size: int) -> bytes:
         nonlocal offset
         if offset + size > len(data):
-            raise VolcEngineError(
-                status_code=502, message="Volcengine realtime frame is truncated."
-            )
+            raise VolcEngineError(status_code=502, message="Volcengine realtime frame is truncated.")
         value = data[offset : offset + size]
         offset += size
         return value

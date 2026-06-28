@@ -199,13 +199,9 @@ class VolcEngineAudioTranscription:
             await ws.send(encode_sauc_json_config(request_payload))
             for chunk in chunk_volcengine_stt_pcm(pcm_bytes):
                 sequence += 1
-                await ws.send(
-                    encode_sauc_audio_chunk(pcm=chunk, sequence=sequence, last=False)
-                )
+                await ws.send(encode_sauc_audio_chunk(pcm=chunk, sequence=sequence, last=False))
             sequence = -(abs(sequence) + 1)
-            await ws.send(
-                encode_sauc_audio_chunk(pcm=b"", sequence=sequence, last=True)
-            )
+            await ws.send(encode_sauc_audio_chunk(pcm=b"", sequence=sequence, last=True))
 
             while True:
                 message = await asyncio.wait_for(ws.recv(), timeout=timeout)
@@ -223,9 +219,7 @@ class VolcEngineAudioTranscription:
 
                 payload = parse_sauc_json_payload(frame)
                 if payload is not None:
-                    new_final_texts, new_latest = _extract_transcript_parts(
-                        payload, frame.flags == FLAG_NEG_SEQ
-                    )
+                    new_final_texts, new_latest = _extract_transcript_parts(payload, frame.flags == FLAG_NEG_SEQ)
                     final_texts.extend(new_final_texts)
                     if new_latest:
                         latest_text = new_latest
@@ -235,9 +229,7 @@ class VolcEngineAudioTranscription:
         return "".join(final_texts).strip() or latest_text.strip()
 
 
-def _extract_transcript_parts(
-    payload: dict[str, Any], is_last_frame: bool
-) -> tuple[list[str], str]:
+def _extract_transcript_parts(payload: dict[str, Any], is_last_frame: bool) -> tuple[list[str], str]:
     result = payload.get("result") if isinstance(payload, dict) else None
     utterances = result.get("utterances") if isinstance(result, dict) else None
     final_texts: list[str] = []
