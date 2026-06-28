@@ -7,7 +7,12 @@ import json
 import os
 import sys
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, AsyncMock
+import pytest
+import httpx
+from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+    LiteLLMMessagesToResponsesAPIHandler,
+)
 
 sys.path.insert(0, os.path.abspath("../../../../../../.."))
 
@@ -99,17 +104,11 @@ class TestContextManagementConversion:
             }
         )
         kwargs = _ADAPTER.translate_request(req)
-        assert kwargs["context_management"] == [
-            {"type": "compaction", "compact_threshold": 100000}
-        ]
+        assert kwargs["context_management"] == [{"type": "compaction", "compact_threshold": 100000}]
 
     def test_translate_request_drops_anthropic_only_context_management(self):
         """context_management with only unknown edit types is omitted from kwargs."""
-        req = _make_request(
-            context_management={
-                "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
-            }
-        )
+        req = _make_request(context_management={"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]})
         kwargs = _ADAPTER.translate_request(req)
         assert "context_management" not in kwargs
 
@@ -134,9 +133,7 @@ class TestOutputConfigStructuredOutput:
 
     def test_output_config_format_json_schema_converted(self):
         """output_config.format.json_schema is converted to OpenAI text.format."""
-        req = _make_request(
-            output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}}
-        )
+        req = _make_request(output_config={"format": {"type": "json_schema", "schema": self._SCHEMA}})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         fmt = kwargs["text"]["format"]
@@ -153,9 +150,7 @@ class TestOutputConfigStructuredOutput:
 
     def test_output_format_still_works(self):
         """The original output_format field still takes precedence when present."""
-        req = _make_request(
-            output_format={"type": "json_schema", "schema": self._SCHEMA}
-        )
+        req = _make_request(output_format={"type": "json_schema", "schema": self._SCHEMA})
         kwargs = _ADAPTER.translate_request(req)
         assert "text" in kwargs
         assert kwargs["text"]["format"]["type"] == "json_schema"
@@ -250,9 +245,7 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert len(result) == 1
-        assert result[0]["content"] == [
-            {"type": "input_image", "image_url": "data:image/png;base64,abc123"}
-        ]
+        assert result[0]["content"] == [{"type": "input_image", "image_url": "data:image/png;base64,abc123"}]
 
     def test_user_url_image(self):
         """User message with URL image source becomes input_image with the URL."""
@@ -268,9 +261,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "input_image", "image_url": "https://example.com/img.jpg"}
-        ]
+        assert result[0]["content"] == [{"type": "input_image", "image_url": "https://example.com/img.jpg"}]
 
     def test_user_base64_image_empty_data_skipped(self):
         """Base64 image with empty data is skipped (no URL can be formed)."""
@@ -341,9 +332,7 @@ class TestTranslateMessagesToResponsesInput:
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "tool_result", "tool_use_id": "call_null", "content": None}
-                ],
+                "content": [{"type": "tool_result", "tool_use_id": "call_null", "content": None}],
             }
         ]
         result = _translate_messages(messages)
@@ -370,9 +359,7 @@ class TestTranslateMessagesToResponsesInput:
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "output_text", "text": "Here is the answer."}
-        ]
+        assert result[0]["content"] == [{"type": "output_text", "text": "Here is the answer."}]
 
     def test_assistant_tool_use_becomes_function_call(self):
         """Assistant tool_use block becomes a top-level function_call item."""
@@ -404,15 +391,11 @@ class TestTranslateMessagesToResponsesInput:
         messages = [
             {
                 "role": "assistant",
-                "content": [
-                    {"type": "thinking", "thinking": "Let me reason step by step."}
-                ],
+                "content": [{"type": "thinking", "thinking": "Let me reason step by step."}],
             }
         ]
         result = _translate_messages(messages)
-        assert result[0]["content"] == [
-            {"type": "output_text", "text": "Let me reason step by step."}
-        ]
+        assert result[0]["content"] == [{"type": "output_text", "text": "Let me reason step by step."}]
 
     def test_assistant_empty_thinking_block_skipped(self):
         """Assistant thinking block with empty thinking text is skipped."""
@@ -587,19 +570,13 @@ class TestTranslateToolChoiceToResponsesAPI:
     """Anthropic tool_choice -> Responses API tool_choice."""
 
     def test_auto_maps_to_auto(self):
-        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "auto"}) == {
-            "type": "auto"
-        }
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "auto"}) == {"type": "auto"}
 
     def test_any_maps_to_required(self):
-        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "any"}) == {
-            "type": "required"
-        }
+        assert _ADAPTER.translate_tool_choice_to_responses_api({"type": "any"}) == {"type": "required"}
 
     def test_specific_tool_maps_to_function(self):
-        result = _ADAPTER.translate_tool_choice_to_responses_api(
-            {"type": "tool", "name": "get_weather"}
-        )
+        result = _ADAPTER.translate_tool_choice_to_responses_api({"type": "tool", "name": "get_weather"})
         assert result == {"type": "function", "name": "get_weather"}
 
     def test_unknown_type_defaults_to_auto(self):
@@ -616,17 +593,13 @@ class TestTranslateThinkingToReasoning:
     """Anthropic thinking param -> Responses API reasoning param."""
 
     def test_budget_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 10000}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
         # Default (reasoning_auto_summary=False): only effort, no summary
         assert result == {"effort": "high"}
         assert result is not None and "summary" not in result
 
     def test_budget_above_threshold_high_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 50000}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 50000})
         assert result is not None
         assert result["effort"] == "high"
         assert "summary" not in result
@@ -652,9 +625,7 @@ class TestTranslateThinkingToReasoning:
         assert result is not None and "summary" not in result
 
     def test_budget_minimal_effort(self):
-        result = _ADAPTER.translate_thinking_to_reasoning(
-            {"type": "enabled", "budget_tokens": 500}
-        )
+        result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 500})
         assert result == {"effort": "minimal"}
         assert result is not None and "summary" not in result
 
@@ -707,9 +678,7 @@ class TestTranslateThinkingToReasoning:
         original = litellm.reasoning_auto_summary
         try:
             litellm.reasoning_auto_summary = True
-            result = _ADAPTER.translate_thinking_to_reasoning(
-                {"type": "enabled", "budget_tokens": 10000}
-            )
+            result = _ADAPTER.translate_thinking_to_reasoning({"type": "enabled", "budget_tokens": 10000})
             assert result == {"effort": "high", "summary": "detailed"}
         finally:
             litellm.reasoning_auto_summary = original
@@ -789,11 +758,7 @@ class TestTranslateRequestBroaderCoverage:
         assert kwargs["top_p"] == 0.9
 
     def test_tools_translated(self):
-        req = _make_request(
-            tools=[
-                {"name": "calculator", "description": "Does math.", "input_schema": {}}
-            ]
-        )
+        req = _make_request(tools=[{"name": "calculator", "description": "Does math.", "input_schema": {}}])
         kwargs = _ADAPTER.translate_request(req)
         assert len(kwargs["tools"]) == 1
         assert kwargs["tools"][0]["name"] == "calculator"
@@ -929,9 +894,7 @@ class TestTranslateResponse:
 
     def test_multiple_text_parts(self):
         """Multiple output_text parts become multiple text content blocks."""
-        response = _make_mock_response(
-            output=[_make_output_message(["Part 1", "Part 2"])]
-        )
+        response = _make_mock_response(output=[_make_output_message(["Part 1", "Part 2"])])
         result: Any = _ADAPTER.translate_response(response)
         assert len(result["content"]) == 2
         assert result["content"][0]["text"] == "Part 1"
@@ -1071,3 +1034,91 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+# ---------------------------------------------------------------------------
+# async_anthropic_messages_handler
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_httpx_post():
+    with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post", new_callable=AsyncMock) as mock_post:
+        yield mock_post
+
+
+@pytest.mark.asyncio
+async def test_responses_api_format_valid(mock_httpx_post):
+    """
+    Test that a valid Responses API format (with "object": "response" and "output")
+    is successfully parsed into an Anthropic Messages response.
+    """
+    mock_response_data = {
+        "object": "response",
+        "model": "deepseek-v4-flash-free",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Hello."}],
+            }
+        ],
+        "stop_reason": "stop",
+    }
+
+    mock_response = httpx.Response(
+        status_code=200,
+        content=json.dumps(mock_response_data).encode("utf-8"),
+        request=httpx.Request("POST", "https://opencode.ai/zen/v1/responses"),
+    )
+    mock_httpx_post.return_value = mock_response
+
+    # Call the handler directly
+    response = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hi"}],
+        model="openai/deepseek-v4-flash-free",
+        api_base="https://opencode.ai/zen/v1",
+        api_key="test-key",
+    )
+
+    assert response["type"] == "message"
+    assert response["role"] == "assistant"
+    assert len(response["content"]) == 1
+    assert response["content"][0]["text"] == "Hello."
+    assert response["stop_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_responses_api_empty_output_max_tokens(mock_httpx_post):
+    """
+    Test that an empty output[] with stop_reason: "max_output_tokens"
+    returns an Anthropic response with stop_reason: "max_tokens"
+    """
+    mock_response_data = {
+        "object": "response",
+        "model": "deepseek-v4-flash-free",
+        "output": [],
+        "stop_reason": "max_output_tokens",
+    }
+
+    mock_response = httpx.Response(
+        status_code=200,
+        content=json.dumps(mock_response_data).encode("utf-8"),
+        request=httpx.Request("POST", "https://opencode.ai/zen/v1/responses"),
+    )
+    mock_httpx_post.return_value = mock_response
+
+    response = await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hi"}],
+        model="openai/deepseek-v4-flash-free",
+        api_base="https://opencode.ai/zen/v1",
+        api_key="test-key",
+    )
+
+    assert response["type"] == "message"
+    assert response["role"] == "assistant"
+    assert len(response["content"]) == 0
+    assert response["stop_reason"] == "max_tokens"
