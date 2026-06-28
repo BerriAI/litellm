@@ -31,6 +31,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 
+# OpenAI's Responses API rejects ``max_output_tokens`` below 16. Anthropic clients
+# (e.g. Claude Code's small warm-up request) may send a smaller ``max_tokens``, so the
+# adapter clamps up to this minimum to avoid an OpenAI 400. See issue #31451.
+RESPONSES_API_MIN_MAX_OUTPUT_TOKENS = 16
+
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
     """
@@ -308,10 +313,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 text_parts = [b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"]
                 responses_kwargs["instructions"] = "\n".join(filter(None, text_parts))
 
-        # max_tokens -> max_output_tokens
+        # max_tokens -> max_output_tokens. The Responses API requires
+        # max_output_tokens >= RESPONSES_API_MIN_MAX_OUTPUT_TOKENS, but Anthropic
+        # clients (e.g. Claude Code's warm-up request) may send a smaller value,
+        # so clamp up to the minimum instead of forwarding a value OpenAI rejects.
         max_tokens = anthropic_request.get("max_tokens")
         if max_tokens:
-            responses_kwargs["max_output_tokens"] = max_tokens
+            responses_kwargs["max_output_tokens"] = max(max_tokens, RESPONSES_API_MIN_MAX_OUTPUT_TOKENS)
 
         # temperature / top_p passed through
         if "temperature" in anthropic_request:

@@ -1071,3 +1071,21 @@ class TestTranslateResponse:
         assert "text" in types
         assert "tool_use" in types
         assert result["stop_reason"] == "tool_use"
+
+
+class TestMaxOutputTokensMinimum:
+    """max_tokens -> max_output_tokens must respect the Responses API minimum (>= 16).
+
+    Anthropic clients (e.g. Claude Code's warm-up request) may send a tiny
+    max_tokens; forwarding it verbatim makes OpenAI's Responses API 400 with
+    "'max_output_tokens': integer below minimum value (Expected a value >= 16)".
+    Regression test for issue #31451.
+    """
+
+    def test_small_max_tokens_is_clamped_to_minimum(self):
+        kwargs = _ADAPTER.translate_request(_make_request(max_tokens=1))
+        assert kwargs["max_output_tokens"] >= 16
+
+    def test_normal_max_tokens_is_preserved(self):
+        kwargs = _ADAPTER.translate_request(_make_request(max_tokens=1024))
+        assert kwargs["max_output_tokens"] == 1024
