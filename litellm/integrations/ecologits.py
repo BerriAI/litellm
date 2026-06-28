@@ -10,10 +10,14 @@ and other downstream loggers), and increments Prometheus Counters for
 each impact value so users can graph energy, CO2eq, water, etc., for example, in
 Grafana the same way they graph token counts.
 
-The hook used is ``async_logging_hook``, which fires in the FIRST loop of
-``async_log_success_event`` — before any other callback observes the data.
-To guarantee "before all other gateway callbacks", register this logger
-first in the callbacks list:
+The hook used is ``async_logging_hook``. ``async_log_success_event`` runs two
+sequential loops over the callback list: the first calls ``async_logging_hook``
+on every callback, the second calls ``async_log_success_event`` on every
+callback. The first loop completes before the second begins, so this
+enrichment is in place before any downstream logger (Langfuse, Prometheus,
+Datadog, SpendLogs) reads the data in its success handler. Order in the
+callbacks list does not matter, though listing ecologits first can help convey
+the mental model:
 
     litellm_settings:
       callbacks: ["ecologits", "prometheus", "langfuse"]
