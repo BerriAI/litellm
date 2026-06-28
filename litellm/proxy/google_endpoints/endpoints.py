@@ -173,11 +173,7 @@ async def google_count_tokens(request: Request, model_name: str):
     from litellm.proxy._types import TokenCountRequest
 
     # Translate contents to openai format messages using the adapter
-    messages = (
-        GoogleGenAIAdapter()
-        .translate_generate_content_to_completion(model_name, contents)
-        .get("messages", [])
-    )
+    messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
 
     token_request = TokenCountRequest(
         model=model_name,

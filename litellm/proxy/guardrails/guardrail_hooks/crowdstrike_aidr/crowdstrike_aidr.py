@@ -51,9 +51,7 @@ class _ImageUrlContentPart(BaseModel):
     image_url: _ImageUrl
 
 
-_ContentPart = Annotated[
-    Union[_TextContentPart, _ImageUrlContentPart], Field(discriminator="type")
-]
+_ContentPart = Annotated[Union[_TextContentPart, _ImageUrlContentPart], Field(discriminator="type")]
 
 
 class _Message(BaseModel):
@@ -96,11 +94,7 @@ def _extract_text_from_content(content: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict) and item.get("type") == "text"
-        ]
+        parts = [item.get("text", "") for item in content if isinstance(item, dict) and item.get("type") == "text"]
         return "\n".join(parts)
     return ""
 
@@ -137,9 +131,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             api_base (Optional[str]): The CrowdStrike AIDR API base URL. Reads from CS_AIDR_BASE_URL env var if None.
             **kwargs: Additional arguments passed to the CustomGuardrail base class.
         """
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         self.api_key = api_key or os.environ.get("CS_AIDR_TOKEN")
         if not self.api_key:
@@ -159,9 +151,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             f"Initialized CrowdStrike AIDR Guardrail: name={guardrail_name}, api_base={self.api_base}"
         )
 
-    async def _call_crowdstrike_aidr_guard(
-        self, payload: dict[str, Any], hook_name: str
-    ) -> dict[str, Any]:
+    async def _call_crowdstrike_aidr_guard(self, payload: dict[str, Any], hook_name: str) -> dict[str, Any]:
         """
         Makes the API call to the CrowdStrike AIDR AI Guard endpoint.
         The function itself will raise an error if a response should be blocked,
@@ -190,9 +180,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             f"CrowdStrike AIDR Guardrail ({hook_name}): Calling endpoint {endpoint} with payload: {payload}"
         )
 
-        response = await self.async_handler.post(
-            url=endpoint, json=payload, headers=headers
-        )
+        response = await self.async_handler.post(url=endpoint, json=payload, headers=headers)
         response.raise_for_status()
 
         result: dict[str, Any] = response.json()
@@ -214,9 +202,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
         return result
 
-    def _build_guard_input_for_request(
-        self, inputs: GenericGuardrailAPIInputs
-    ) -> Optional[_GuardInput]:
+    def _build_guard_input_for_request(self, inputs: GenericGuardrailAPIInputs) -> Optional[_GuardInput]:
         guard_input = _GuardInput(messages=[], tools=[])
         structured_messages = inputs.get("structured_messages")
         texts = inputs.get("texts", [])
@@ -227,17 +213,11 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 content = _normalize_content(message.get("content"))
                 if content is None or len(content) == 0:
                     content = ""
-                guard_input.messages.append(
-                    _Message(role=message["role"], content=content)
-                )
+                guard_input.messages.append(_Message(role=message["role"], content=content))
         elif texts:
-            guard_input.messages = [
-                _Message(role="user", content=text) for text in texts
-            ]
+            guard_input.messages = [_Message(role="user", content=text) for text in texts]
         else:
-            verbose_proxy_logger.warning(
-                "CrowdStrike AIDR Guardrail: No messages or texts provided for input request"
-            )
+            verbose_proxy_logger.warning("CrowdStrike AIDR Guardrail: No messages or texts provided for input request")
             return None
 
         if tools:
@@ -250,9 +230,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
     ) -> Optional[_GuardInput]:
         output_texts: list[str] = inputs.get("texts", [])
         if len(output_texts) == 0:
-            verbose_proxy_logger.warning(
-                "CrowdStrike AIDR Guardrail: No text in output response."
-            )
+            verbose_proxy_logger.warning("CrowdStrike AIDR Guardrail: No text in output response.")
             return None
 
         input_messages = request_data.get("messages", [])
@@ -261,8 +239,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             messages=[
                 _Message(role=role, content=content)
                 for (role, content) in (
-                    (message["role"], _normalize_content(message.get("content")))
-                    for message in input_messages
+                    (message["role"], _normalize_content(message.get("content"))) for message in input_messages
                 )
                 if content is not None and len(content) > 0
             ]
@@ -275,19 +252,8 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         num_assistant_messages: int,
     ) -> list[str]:
         transformed_messages = guard_output.get("messages", [])
-        tail = (
-            transformed_messages[-num_assistant_messages:]
-            if num_assistant_messages > 0
-            else []
-        )
-        return [
-            (
-                _extract_text_from_content(msg.get("content"))
-                if isinstance(msg, dict)
-                else ""
-            )
-            for msg in tail
-        ]
+        tail = transformed_messages[-num_assistant_messages:] if num_assistant_messages > 0 else []
+        return [(_extract_text_from_content(msg.get("content")) if isinstance(msg, dict) else "") for msg in tail]
 
     @log_guardrail_information
     @override
@@ -298,9 +264,7 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        verbose_proxy_logger.debug(
-            f"CrowdStrike AIDR Guardrail: Applying guardrail to {input_type}"
-        )
+        verbose_proxy_logger.debug(f"CrowdStrike AIDR Guardrail: Applying guardrail to {input_type}")
 
         # Extract inputs
         texts = inputs.get("texts", [])
@@ -343,14 +307,10 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
                 extra_info["user_name"] = user_email
             ai_guard_payload["extra_info"] = extra_info
 
-        ai_guard_response = await self._call_crowdstrike_aidr_guard(
-            ai_guard_payload, hook_name
-        )
+        ai_guard_response = await self._call_crowdstrike_aidr_guard(ai_guard_payload, hook_name)
 
         if "body" in request_data or "messages" in request_data:
-            add_guardrail_to_applied_guardrails_header(
-                request_data=request_data, guardrail_name=self.guardrail_name
-            )
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
         result = ai_guard_response.get("result", {})
         if not result.get("transformed"):
@@ -363,18 +323,13 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             # for every message in guard_output.
             all_messages = guard_output.get("messages", [])
             transformed_texts = [
-                _extract_text_from_content(
-                    msg.get("content") if isinstance(msg, dict) else ""
-                )
-                for msg in all_messages
+                _extract_text_from_content(msg.get("content") if isinstance(msg, dict) else "") for msg in all_messages
             ]
         else:
             # For responses, guard_input contained history + assistant messages
             # appended at the end. Extract only the assistant tail.
             num_assistant = len(texts)
-            transformed_texts = self._extract_transformed_texts(
-                guard_output, num_assistant
-            )
+            transformed_texts = self._extract_transformed_texts(guard_output, num_assistant)
 
         result_inputs: GenericGuardrailAPIInputs = {"texts": transformed_texts}
         if tools:

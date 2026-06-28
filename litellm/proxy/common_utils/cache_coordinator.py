@@ -63,17 +63,13 @@ class EventDrivenCacheCoordinator:
         self._query_in_progress = False
         self._log_prefix = log_prefix
 
-    async def _get_cached(
-        self, cache_key: str, cache: AsyncCacheProtocol
-    ) -> Optional[Any]:
+    async def _get_cached(self, cache_key: str, cache: AsyncCacheProtocol) -> Optional[Any]:
         """Return value from cache if present, else None."""
         return await cache.async_get_cache(key=cache_key)
 
     def _log_cache_hit(self, value: T) -> None:
         if self._log_prefix:
-            verbose_proxy_logger.debug(
-                "%s Cache hit, value: %s", self._log_prefix, value
-            )
+            verbose_proxy_logger.debug("%s Cache hit, value: %s", self._log_prefix, value)
 
     def _log_cache_miss(self) -> None:
         if self._log_prefix:
@@ -86,9 +82,7 @@ class EventDrivenCacheCoordinator:
         async with self._lock:
             if self._query_in_progress and self._event is not None:
                 if self._log_prefix:
-                    verbose_proxy_logger.debug(
-                        "%s Load in flight, waiting for signal", self._log_prefix
-                    )
+                    verbose_proxy_logger.debug("%s Load in flight, waiting for signal", self._log_prefix)
                 return self._event
             self._query_in_progress = True
             self._event = asyncio.Event()
@@ -108,9 +102,7 @@ class EventDrivenCacheCoordinator:
         """Wait for loader to finish, then read from cache."""
         await event.wait()
         if self._log_prefix:
-            verbose_proxy_logger.debug(
-                "%s Signal received, reading from cache", self._log_prefix
-            )
+            verbose_proxy_logger.debug("%s Signal received, reading from cache", self._log_prefix)
         value: Optional[T] = await cache.async_get_cache(key=cache_key)
         if value is not None and self._log_prefix:
             verbose_proxy_logger.debug(
@@ -119,9 +111,7 @@ class EventDrivenCacheCoordinator:
                 value,
             )
         elif value is None and self._log_prefix:
-            verbose_proxy_logger.debug(
-                "%s Signal received but cache still empty", self._log_prefix
-            )
+            verbose_proxy_logger.debug("%s Signal received but cache still empty", self._log_prefix)
         return value
 
     async def _load_and_cache(
@@ -165,9 +155,7 @@ class EventDrivenCacheCoordinator:
             self._query_in_progress = False
             if self._event is not None:
                 if self._log_prefix:
-                    verbose_proxy_logger.debug(
-                        "%s Signaling all waiting requests", self._log_prefix
-                    )
+                    verbose_proxy_logger.debug("%s Signaling all waiting requests", self._log_prefix)
                 self._event.set()
                 self._event = None
 

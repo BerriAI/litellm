@@ -18,9 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
-TOKEN_ENDPOINT_TEMPLATE = (
-    "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-)
+TOKEN_ENDPOINT_TEMPLATE = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 # Protection scope cache TTL in seconds (1 hour, per Microsoft recommendation).
@@ -49,9 +47,7 @@ class PurviewGuardrailBase:
         # (typically CustomGuardrail).
         super().__init__(**kwargs)
 
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
@@ -63,9 +59,7 @@ class PurviewGuardrailBase:
 
         # Protection scope cache: user_id -> (etag, scope_response, fetched_at)
         # Capped at 1000 entries (LRU eviction) to avoid unbounded growth.
-        self._scope_cache: OrderedDict[str, Tuple[str, Dict[str, Any], float]] = (
-            OrderedDict()
-        )
+        self._scope_cache: OrderedDict[str, Tuple[str, Dict[str, Any], float]] = OrderedDict()
         self._scope_cache_maxsize = 1000
         # Use a threading.Lock (not asyncio.Lock) because this lock is acquired
         # from both the proxy's main asyncio event loop and from short-lived
@@ -113,9 +107,7 @@ class PurviewGuardrailBase:
         # token was actually received, not when the request started.
         with self._cache_lock:
             self._token_cache = (access_token, time.time() + expires_in)
-        verbose_proxy_logger.debug(
-            "Purview: acquired new OAuth2 token (expires_in=%ds)", expires_in
-        )
+        verbose_proxy_logger.debug("Purview: acquired new OAuth2 token (expires_in=%ds)", expires_in)
         return access_token
 
     # ------------------------------------------------------------------
@@ -142,9 +134,7 @@ class PurviewGuardrailBase:
             headers.update(extra_headers)
 
         verbose_proxy_logger.debug("Purview Graph POST %s", url)
-        response = await self.async_handler.post(
-            url=url, headers=headers, json=json_body
-        )
+        response = await self.async_handler.post(url=url, headers=headers, json=json_body)
         response.raise_for_status()
         response_json: Dict[str, Any] = response.json()
         response_headers = dict(response.headers)
@@ -155,9 +145,7 @@ class PurviewGuardrailBase:
     # Protection scopes
     # ------------------------------------------------------------------
 
-    async def _compute_protection_scopes(
-        self, user_id: str
-    ) -> Tuple[str, Dict[str, Any]]:
+    async def _compute_protection_scopes(self, user_id: str) -> Tuple[str, Dict[str, Any]]:
         """Call protectionScopes/compute and cache with ETag.
 
         Returns:
@@ -172,10 +160,7 @@ class PurviewGuardrailBase:
                 self._scope_cache.move_to_end(user_id)
                 return cached[0], cached[1]
 
-        url = (
-            f"{GRAPH_API_BASE}/users/{encoded_user_id}"
-            "/dataSecurityAndGovernance/protectionScopes/compute"
-        )
+        url = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/protectionScopes/compute"
         body: Dict[str, Any] = {
             "activities": "uploadText,downloadText",
             "locations": [
@@ -225,10 +210,7 @@ class PurviewGuardrailBase:
             correlation_id: Optional conversation/thread ID.
         """
         encoded_user_id = self._encode_graph_user_id(user_id)
-        url = (
-            f"{GRAPH_API_BASE}/users/{encoded_user_id}"
-            "/dataSecurityAndGovernance/processContent"
-        )
+        url = f"{GRAPH_API_BASE}/users/{encoded_user_id}/dataSecurityAndGovernance/processContent"
         body: Dict[str, Any] = {
             "contentToProcess": {
                 "contentEntries": [
@@ -279,9 +261,7 @@ class PurviewGuardrailBase:
     # User ID resolution
     # ------------------------------------------------------------------
 
-    def _resolve_user_id(
-        self, data: Dict[str, Any], user_api_key_dict: Any
-    ) -> Optional[str]:
+    def _resolve_user_id(self, data: Dict[str, Any], user_api_key_dict: Any) -> Optional[str]:
         """Resolve the Entra user object ID from request data or auth context.
 
         Returns the strongest available identity walking down four sources, in
@@ -324,9 +304,7 @@ class PurviewGuardrailBase:
         md = litellm_params.get("metadata")
         return md if isinstance(md, dict) else {}
 
-    def _resolve_trusted_user_id(
-        self, data: Dict[str, Any], user_api_key_dict: Any
-    ) -> Optional[str]:
+    def _resolve_trusted_user_id(self, data: Dict[str, Any], user_api_key_dict: Any) -> Optional[str]:
         """Resolve user ID from API-key/JWT-bound identity for blocking DLP.
 
         Uses only ``UserAPIKeyAuth.user_id`` (bound on the LiteLLM key or JWT).
@@ -347,9 +325,7 @@ class PurviewGuardrailBase:
 
         return None
 
-    def _resolve_user_id_from_logging_kwargs(
-        self, kwargs: Dict[str, Any]
-    ) -> Optional[str]:
+    def _resolve_user_id_from_logging_kwargs(self, kwargs: Dict[str, Any]) -> Optional[str]:
         """Trusted-identity-only resolver for logging-only hooks.
 
         Uses only the proxy-injected ``user_api_key_user_id`` (populated from
@@ -423,9 +399,7 @@ class PurviewGuardrailBase:
                 joined = "\n".join(s.strip() for s in prompt if isinstance(s, str))
                 return joined.strip() or None
             if all(isinstance(x, int) for x in prompt):
-                verbose_proxy_logger.debug(
-                    "Purview DLP: completions prompt is token ids only; skipping text scan"
-                )
+                verbose_proxy_logger.debug("Purview DLP: completions prompt is token ids only; skipping text scan")
                 return None
             str_parts = [x for x in prompt if isinstance(x, str)]
             if str_parts:
@@ -445,33 +419,19 @@ class PurviewGuardrailBase:
         args: List[str] = []
 
         # tool_calls: [{"function": {"arguments": "..."}}]
-        tool_calls = (
-            message.get("tool_calls")
-            if isinstance(message, dict)
-            else getattr(message, "tool_calls", None)
-        )
+        tool_calls = message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
         if tool_calls:
             for tc in tool_calls:
-                fn = (
-                    tc.get("function")
-                    if isinstance(tc, dict)
-                    else getattr(tc, "function", None)
-                )
+                fn = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
                 if fn is None:
                     continue
-                arguments = (
-                    fn.get("arguments")
-                    if isinstance(fn, dict)
-                    else getattr(fn, "arguments", None)
-                )
+                arguments = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
                 if isinstance(arguments, str) and arguments.strip():
                     args.append(arguments)
 
         # Legacy function_call: {"arguments": "..."}
         function_call = (
-            message.get("function_call")
-            if isinstance(message, dict)
-            else getattr(message, "function_call", None)
+            message.get("function_call") if isinstance(message, dict) else getattr(message, "function_call", None)
         )
         if function_call is not None:
             arguments = (
@@ -484,9 +444,7 @@ class PurviewGuardrailBase:
 
         return args
 
-    def get_prompt_text_for_dlp(
-        self, messages: List["AllMessageValues"]
-    ) -> Optional[str]:
+    def get_prompt_text_for_dlp(self, messages: List["AllMessageValues"]) -> Optional[str]:
         """Concatenate text from every chat message (all roles) for pre-call DLP.
 
         Evaluates the same payload the model receives, not only the trailing user

@@ -134,9 +134,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
                             text_content.append(item.get("text", ""))
                         elif item.get("type") == "image_url":
                             # For Qwen3, we can include image placeholders
-                            text_content.append(
-                                "<|vision_start|><|image_pad|><|vision_end|>"
-                            )
+                            text_content.append("<|vision_start|><|image_pad|><|vision_end|>")
                     content = "".join(text_content)
                 prompt_parts.append(f"<|im_start|>user\n{content}<|im_end|>")
             elif role == "assistant":
@@ -144,9 +142,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
                     # Handle tool calls
                     for tool_call in tool_calls:
                         function_name = tool_call.get("function", {}).get("name", "")
-                        function_args = tool_call.get("function", {}).get(
-                            "arguments", ""
-                        )
+                        function_args = tool_call.get("function", {}).get("arguments", "")
                         prompt_parts.append(
                             f'<|im_start|>assistant\n<tool_call>\n{{"name": "{function_name}", "arguments": "{function_args}"}}\n</tool_call><|im_end|>'
                         )

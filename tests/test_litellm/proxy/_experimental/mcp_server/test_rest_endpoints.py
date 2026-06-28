@@ -271,6 +271,155 @@ class TestExecuteWithMcpClient:
         )
 
     @pytest.mark.asyncio
+    async def test_interactive_oauth_resolves_forwarded_token_via_presented_store(
+        self, monkeypatch
+    ):
+        """Interactive authorization_code preview (oauth2, no client credentials): the forwarded
+        just-authorized token is resolved THROUGH the v2 resolver via a one-shot presented store
+        (cred_provider), not the caller-override path. The bare token (Bearer stripped) is the
+        upstream credential and is not also forwarded in extra_headers."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="linear",
+            url="https://mcp.linear.app/mcp",
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://mcp.linear.app/authorize",
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer forwarded-user-token"},
+        )
+
+        assert result["status"] == "ok"
+        # Resolved via the v2 resolver, never the caller-override header
+        assert captured["mcp_auth_header"] is None
+        provider = captured["cred_provider"]
+        assert provider is not None
+        token = await provider._oauth_token_store.fetch("u", "s")
+        assert token is not None and token.access_token == "forwarded-user-token"
+        # The resolver supplies the bearer, so it is not also forwarded as a caller header
+        extra_headers = captured.get("extra_headers") or {}
+        assert not any(k.lower() == "authorization" for k in extra_headers)
+
+    @pytest.mark.asyncio
+    async def test_m2m_does_not_build_presented_store(self, monkeypatch):
+        """M2M (client_credentials): to_server_spec returns None, so no presented provider is built;
+        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before)."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="m2m-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2,
+            token_url="https://auth.example.com/token",
+            credentials={"client_id": "my-id", "client_secret": "my-secret"},
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer sk-litellm-api-key"},
+        )
+
+        assert result["status"] == "ok"
+        assert captured.get("cred_provider") is None
+        assert captured["mcp_auth_header"] is None
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_does_not_build_presented_store(self, monkeypatch):
+        """OBO / token-exchange (auth_type oauth2_token_exchange, not oauth2): excluded by the
+        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="obo-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_url="https://auth.example.com/token",
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer subject-jwt"},
+        )
+
+        assert result["status"] == "ok"
+        assert captured.get("cred_provider") is None
+
+    @pytest.mark.asyncio
     async def test_catches_exception_group(self, monkeypatch):
         """MCP SDK's anyio TaskGroup raises BaseExceptionGroup which does not
         inherit from Exception.  The handler must catch it and return an error
@@ -1660,9 +1809,9 @@ class TestPreviewOpenAPITools:
         names = [t["name"] for t in result["tools"]]
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in names:
-            assert anthropic_re.match(
-                name
-            ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            assert anthropic_re.match(name), (
+                f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            )
         assert "actions_download-job-logs-for-workflow-run" in names
         assert "pulls_list-files" in names
 
@@ -1719,9 +1868,7 @@ class TestPreviewOpenAPITools:
 
         registered_summary_to_name: dict = {}
 
-        def fake_create_tool_function(
-            path, method, operation, base_url
-        ):  # noqa: ANN001
+        def fake_create_tool_function(path, method, operation, base_url):  # noqa: ANN001
             def _f():
                 return None
 
@@ -1734,9 +1881,7 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(
-                self, name, description, input_schema, handler
-            ):  # noqa: ANN001
+            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(

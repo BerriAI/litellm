@@ -53,6 +53,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
     CiscoAIDefenseGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
+    HeadroomGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -119,6 +122,7 @@ class SupportedGuardrailIntegrations(Enum):
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
+    HEADROOM = "headroom"
 
 
 class Role(Enum):
@@ -377,17 +381,13 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
         default=None,
         description="Path to a JSON file containing ad-hoc recognizers for Presidio",
     )
-    mock_redacted_text: Optional[dict] = Field(
-        default=None, description="Mock redacted text for testing"
-    )
+    mock_redacted_text: Optional[dict] = Field(default=None, description="Mock redacted text for testing")
 
 
 class BedrockGuardrailConfigModel(BaseModel):
     """Configuration parameters for the AWS Bedrock guardrail"""
 
-    guardrailIdentifier: Optional[str] = Field(
-        default=None, description="The ID of your guardrail on Bedrock"
-    )
+    guardrailIdentifier: Optional[str] = Field(default=None, description="The ID of your guardrail on Bedrock")
     guardrailVersion: Optional[str] = Field(
         default=None,
         description="The version of your Bedrock guardrail (e.g., DRAFT or version number)",
@@ -396,59 +396,29 @@ class BedrockGuardrailConfigModel(BaseModel):
         default=False,
         description="If True, will not raise an exception when the guardrail is blocked. Useful for OpenWebUI where exceptions can end the chat flow.",
     )
-    aws_region_name: Optional[str] = Field(
-        default=None, description="AWS region where your guardrail is deployed"
-    )
-    aws_access_key_id: Optional[str] = Field(
-        default=None, description="AWS access key ID for authentication"
-    )
-    aws_secret_access_key: Optional[str] = Field(
-        default=None, description="AWS secret access key for authentication"
-    )
-    aws_session_token: Optional[str] = Field(
-        default=None, description="AWS session token for temporary credentials"
-    )
-    aws_session_name: Optional[str] = Field(
-        default=None, description="Name of the AWS session"
-    )
-    aws_profile_name: Optional[str] = Field(
-        default=None, description="AWS profile name for credential retrieval"
-    )
-    aws_role_name: Optional[str] = Field(
-        default=None, description="AWS role name for assuming roles"
-    )
+    aws_region_name: Optional[str] = Field(default=None, description="AWS region where your guardrail is deployed")
+    aws_access_key_id: Optional[str] = Field(default=None, description="AWS access key ID for authentication")
+    aws_secret_access_key: Optional[str] = Field(default=None, description="AWS secret access key for authentication")
+    aws_session_token: Optional[str] = Field(default=None, description="AWS session token for temporary credentials")
+    aws_session_name: Optional[str] = Field(default=None, description="Name of the AWS session")
+    aws_profile_name: Optional[str] = Field(default=None, description="AWS profile name for credential retrieval")
+    aws_role_name: Optional[str] = Field(default=None, description="AWS role name for assuming roles")
     aws_web_identity_token: Optional[str] = Field(
         default=None, description="Web identity token for AWS role assumption"
     )
-    aws_sts_endpoint: Optional[str] = Field(
-        default=None, description="AWS STS endpoint URL"
-    )
-    aws_bedrock_runtime_endpoint: Optional[str] = Field(
-        default=None, description="AWS Bedrock runtime endpoint URL"
-    )
+    aws_sts_endpoint: Optional[str] = Field(default=None, description="AWS STS endpoint URL")
+    aws_bedrock_runtime_endpoint: Optional[str] = Field(default=None, description="AWS Bedrock runtime endpoint URL")
 
 
 class LakeraV2GuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lakera AI v2 guardrail"""
 
-    api_key: Optional[str] = Field(
-        default=None, description="API key for the Lakera AI service"
-    )
-    api_base: Optional[str] = Field(
-        default=None, description="Base URL for the Lakera AI API"
-    )
-    project_id: Optional[str] = Field(
-        default=None, description="Project ID for the Lakera AI project"
-    )
-    payload: Optional[bool] = Field(
-        default=True, description="Whether to include payload in the response"
-    )
-    breakdown: Optional[bool] = Field(
-        default=True, description="Whether to include breakdown in the response"
-    )
-    metadata: Optional[Dict] = Field(
-        default=None, description="Additional metadata to include in the request"
-    )
+    api_key: Optional[str] = Field(default=None, description="API key for the Lakera AI service")
+    api_base: Optional[str] = Field(default=None, description="Base URL for the Lakera AI API")
+    project_id: Optional[str] = Field(default=None, description="Project ID for the Lakera AI project")
+    payload: Optional[bool] = Field(default=True, description="Whether to include payload in the response")
+    breakdown: Optional[bool] = Field(default=True, description="Whether to include breakdown in the response")
+    metadata: Optional[Dict] = Field(default=None, description="Additional metadata to include in the request")
     dev_info: Optional[bool] = Field(
         default=True,
         description="Whether to include developer information in the response",
@@ -462,15 +432,9 @@ class LakeraV2GuardrailConfigModel(BaseModel):
 class LassoGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Lasso guardrail"""
 
-    lasso_user_id: Optional[str] = Field(
-        default=None, description="User ID for the Lasso guardrail"
-    )
-    lasso_conversation_id: Optional[str] = Field(
-        default=None, description="Conversation ID for the Lasso guardrail"
-    )
-    mask: Optional[bool] = Field(
-        default=False, description="Enable content masking using Lasso classifix API"
-    )
+    lasso_user_id: Optional[str] = Field(default=None, description="User ID for the Lasso guardrail")
+    lasso_conversation_id: Optional[str] = Field(default=None, description="Conversation ID for the Lasso guardrail")
+    mask: Optional[bool] = Field(default=False, description="Enable content masking using Lasso classifix API")
 
 
 class PillarGuardrailConfigModel(BaseModel):
@@ -544,21 +508,11 @@ class ZscalerAIGuardConfigModel(BaseModel):
 class JavelinGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
-    guard_name: Optional[str] = Field(
-        default=None, description="Name of the Javelin guard to use"
-    )
-    api_version: Optional[str] = Field(
-        default="v1", description="API version for Javelin service"
-    )
-    metadata: Optional[Dict] = Field(
-        default=None, description="Additional metadata to send with requests"
-    )
-    application: Optional[str] = Field(
-        default=None, description="Application name for Javelin service"
-    )
-    config: Optional[Dict] = Field(
-        default=None, description="Additional configuration for the guardrail"
-    )
+    guard_name: Optional[str] = Field(default=None, description="Name of the Javelin guard to use")
+    api_version: Optional[str] = Field(default="v1", description="API version for Javelin service")
+    metadata: Optional[Dict] = Field(default=None, description="Additional metadata to send with requests")
+    application: Optional[str] = Field(default=None, description="Application name for Javelin service")
+    config: Optional[Dict] = Field(default=None, description="Additional configuration for the guardrail")
 
 
 class ContentFilterAction(str, Enum):
@@ -572,9 +526,7 @@ class BlockedWord(BaseModel):
     """Represents a blocked word with its action and optional description"""
 
     keyword: str = Field(description="The keyword to block or mask")
-    action: ContentFilterAction = Field(
-        description="Action to take when keyword is detected (BLOCK or MASK)"
-    )
+    action: ContentFilterAction = Field(description="Action to take when keyword is detected (BLOCK or MASK)")
     description: Optional[str] = Field(
         default=None,
         description="Optional description explaining why this keyword is sensitive",
@@ -599,9 +551,7 @@ class ContentFilterPattern(BaseModel):
         default=None,
         description="Name for this pattern (used in logging and error messages)",
     )
-    action: ContentFilterAction = Field(
-        description="Action to take when pattern matches (BLOCK or MASK)"
-    )
+    action: ContentFilterAction = Field(description="Action to take when pattern matches (BLOCK or MASK)")
 
 
 class ContentFilterConfigModel(BaseModel):
@@ -635,15 +585,9 @@ class ContentFilterConfigModel(BaseModel):
     )
 
 
-class BaseLitellmParams(
-    ContentFilterConfigModel
-):  # works for new and patch update guardrails
-    api_key: Optional[str] = Field(
-        default=None, description="API key for the guardrail service"
-    )
-    api_base: Optional[str] = Field(
-        default=None, description="Base URL for the guardrail service API"
-    )
+class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
+    api_key: Optional[str] = Field(default=None, description="API key for the guardrail service")
+    api_base: Optional[str] = Field(default=None, description="Base URL for the guardrail service API")
 
     experimental_use_latest_role_message_only: Optional[bool] = Field(
         default=False,
@@ -682,12 +626,8 @@ class BaseLitellmParams(
     )
 
     # guardrails ai params
-    guard_name: Optional[str] = Field(
-        default=None, description="Name of the guardrail in guardrails.ai"
-    )
-    default_on: Optional[bool] = Field(
-        default=None, description="Whether the guardrail is enabled by default"
-    )
+    guard_name: Optional[str] = Field(default=None, description="Name of the guardrail in guardrails.ai")
+    default_on: Optional[bool] = Field(default=None, description="Whether the guardrail is enabled by default")
 
     ################## PII control params #################
     ########################################################
@@ -701,13 +641,9 @@ class BaseLitellmParams(
     )
 
     # pangea params
-    pangea_input_recipe: Optional[str] = Field(
-        default=None, description="Recipe for input (LLM request)"
-    )
+    pangea_input_recipe: Optional[str] = Field(default=None, description="Recipe for input (LLM request)")
 
-    pangea_output_recipe: Optional[str] = Field(
-        default=None, description="Recipe for output (LLM response)"
-    )
+    pangea_output_recipe: Optional[str] = Field(default=None, description="Recipe for output (LLM response)")
 
     model: Optional[str] = Field(
         default=None,
@@ -735,19 +671,13 @@ class BaseLitellmParams(
     )
 
     # Model Armor params
-    template_id: Optional[str] = Field(
-        default=None, description="The ID of your Model Armor template"
-    )
-    location: Optional[str] = Field(
-        default=None, description="Google Cloud location/region (e.g., us-central1)"
-    )
+    template_id: Optional[str] = Field(default=None, description="The ID of your Model Armor template")
+    location: Optional[str] = Field(default=None, description="Google Cloud location/region (e.g., us-central1)")
     credentials: Optional[str] = Field(
         default=None,
         description="Path to Google Cloud credentials JSON file or JSON string",
     )
-    api_endpoint: Optional[str] = Field(
-        default=None, description="Optional custom API endpoint for Model Armor"
-    )
+    api_endpoint: Optional[str] = Field(default=None, description="Optional custom API endpoint for Model Armor")
     fail_on_error: Optional[bool] = Field(
         default=True,
         description=(
@@ -843,21 +773,15 @@ class BaseLitellmParams(
     @model_validator(mode="after")
     def validate_sensitive_data_routing(self) -> "BaseLitellmParams":
         if self.on_sensitive_data == "route" and not self.sensitive_data_route_to_model:
-            raise ValueError(
-                "sensitive_data_route_to_model must be set when on_sensitive_data='route'"
-            )
+            raise ValueError("sensitive_data_route_to_model must be set when on_sensitive_data='route'")
         return self
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
 class Mode(BaseModel):
-    tags: Dict[str, Union[str, List[str]]] = Field(
-        description="Tags for the guardrail mode"
-    )
-    default: Optional[Union[str, List[str]]] = Field(
-        default=None, description="Default mode when no tags match"
-    )
+    tags: Dict[str, Union[str, List[str]]] = Field(description="Tags for the guardrail mode")
+    default: Optional[Union[str, List[str]]] = Field(default=None, description="Default mode when no tags match")
 
 
 class LitellmParams(
@@ -865,6 +789,7 @@ class LitellmParams(
     PresidioConfigModel,
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
+    HeadroomGuardrailConfigModel,
     RepelloAIGuardrailConfigModel,
     LassoGuardrailConfigModel,
     PillarGuardrailConfigModel,
@@ -965,9 +890,7 @@ class GuardrailInfoResponse(BaseModel):
     guardrail_info: Optional[Dict] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = (
-        GUARDRAIL_DEFINITION_LOCATION.CONFIG
-    )
+    guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

@@ -40,12 +40,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
         data: dict,
         call_type: str,
     ) -> Optional[Union[Exception, str, dict]]:
-        if (
-            self.should_run_guardrail(
-                data=data, event_type=GuardrailEventHooks.pre_call
-            )
-            is not True
-        ):
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is not True:
             return data
 
         unregistered = self._find_unregistered_mcp_servers(data)
@@ -98,9 +93,7 @@ class MCPSecurityGuardrail(CustomGuardrail):
         if not tools or not isinstance(tools, list):
             return set()
 
-        requested_servers = MCPSecurityGuardrail._extract_mcp_server_names_from_tools(
-            tools
-        )
+        requested_servers = MCPSecurityGuardrail._extract_mcp_server_names_from_tools(tools)
         if not requested_servers:
             return set()
 

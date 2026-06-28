@@ -78,9 +78,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         Returns:
             List of model names prefixed with "lemonade/"
         """
-        api_base, api_key = self._get_openai_compatible_provider_info(
-            api_base=api_base, api_key=api_key
-        )
+        api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
 
         if api_base is None:
             raise ValueError(
@@ -173,9 +171,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         if model.startswith("lemonade/"):
             model = model.split("/", 1)[1]
 
-        api_base, api_key = self._get_openai_compatible_provider_info(
-            api_base=api_base, api_key=api_key
-        )
+        api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)
         encoded_model = quote(model, safe="")
 
         try:
@@ -211,19 +207,10 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         # lemonade is openai compatible, we just need to set this to custom_openai and have the api_base be lemonade's endpoint
         passed_api_base = api_base
-        api_base = (
-            api_base
-            or get_secret_str("LEMONADE_API_BASE")
-            or "http://localhost:8000/api/v1"
-        )  # type: ignore
+        api_base = api_base or get_secret_str("LEMONADE_API_BASE") or "http://localhost:8000/api/v1"  # type: ignore
         key = self._DEFAULT_API_KEY
         if passed_api_base is None or api_key:
-            key = (
-                api_key
-                or litellm.lemonade_key
-                or get_secret_str("LEMONADE_API_KEY")
-                or self._DEFAULT_API_KEY
-            )
+            key = api_key or litellm.lemonade_key or get_secret_str("LEMONADE_API_KEY") or self._DEFAULT_API_KEY
         return api_base, key
 
     def _get_auth_headers(self, api_key: Optional[str]) -> dict:

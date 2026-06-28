@@ -9,9 +9,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> RubrikLogger:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> RubrikLogger:
     import litellm
 
     rubrik_callback = RubrikLogger(

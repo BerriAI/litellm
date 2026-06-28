@@ -54,20 +54,14 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
                 message["content"] = "".join(item.get("text") or "" for item in content)
 
         if is_async:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=True
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=True)
         else:
-            return super()._transform_messages(
-                messages=messages, model=model, is_async=False
-            )
+            return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = (
-            api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
-        )  # type: ignore
+        api_base = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL  # type: ignore
         dynamic_api_key = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
 

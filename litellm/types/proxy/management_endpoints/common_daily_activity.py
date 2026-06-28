@@ -48,35 +48,19 @@ class KeyMetricWithMetadata(MetricBase):
 class MetricWithMetadata(MetricBase):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     # API key breakdown for this metric (e.g., which API keys are using this MCP server)
-    api_key_breakdown: Dict[str, KeyMetricWithMetadata] = Field(
-        default_factory=dict
-    )  # api_key -> {metrics, metadata}
+    api_key_breakdown: Dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
 
 
 class BreakdownMetrics(BaseModel):
     """Breakdown of spend by different dimensions"""
 
-    mcp_servers: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # mcp_server -> {metrics, metadata}
-    models: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # model -> {metrics, metadata}
-    model_groups: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # model_group -> {metrics, metadata}
-    providers: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # provider -> {metrics, metadata}
-    endpoints: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # endpoint -> {metrics, metadata}
-    api_keys: Dict[str, KeyMetricWithMetadata] = Field(
-        default_factory=dict
-    )  # api_key -> {metrics, metadata}
-    entities: Dict[str, MetricWithMetadata] = Field(
-        default_factory=dict
-    )  # entity -> {metrics, metadata}
+    mcp_servers: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # mcp_server -> {metrics, metadata}
+    models: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # model -> {metrics, metadata}
+    model_groups: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # model_group -> {metrics, metadata}
+    providers: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # provider -> {metrics, metadata}
+    endpoints: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # endpoint -> {metrics, metadata}
+    api_keys: Dict[str, KeyMetricWithMetadata] = Field(default_factory=dict)  # api_key -> {metrics, metadata}
+    entities: Dict[str, MetricWithMetadata] = Field(default_factory=dict)  # entity -> {metrics, metadata}
 
 
 class DailySpendData(BaseModel):

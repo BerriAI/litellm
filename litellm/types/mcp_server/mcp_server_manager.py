@@ -35,12 +35,8 @@ class MCPServer(BaseModel):
     disallowed_tools: Optional[List[str]] = None
     tool_name_to_display_name: Optional[Dict[str, str]] = None
     tool_name_to_description: Optional[Dict[str, str]] = None
-    allowed_params: Optional[Dict[str, List[str]]] = (
-        None  # map of tool names to allowed parameter lists
-    )
-    static_headers: Optional[Dict[str, str]] = (
-        None  # static headers to forward to the MCP server
-    )
+    allowed_params: Optional[Dict[str, List[str]]] = None  # map of tool names to allowed parameter lists
+    static_headers: Optional[Dict[str, str]] = None  # static headers to forward to the MCP server
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.

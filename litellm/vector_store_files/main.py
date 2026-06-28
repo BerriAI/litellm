@@ -43,11 +43,7 @@ def _prepare_registry_credentials(
     if litellm.vector_store_registry is None:
         return
     try:
-        registry_credentials = (
-            litellm.vector_store_registry.get_credentials_for_vector_store(
-                vector_store_id
-            )
-        )
+        registry_credentials = litellm.vector_store_registry.get_credentials_for_vector_store(vector_store_id)
         if registry_credentials:
             kwargs.update(registry_credentials)
     except Exception:
@@ -136,14 +132,10 @@ def create(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
-            raise ValueError(
-                f"Vector store file create is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store file create is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
-        create_request: VectorStoreFileCreateRequest = (
-            VectorStoreFileRequestUtils.get_create_request_params(local_vars)
-        )
+        create_request: VectorStoreFileCreateRequest = VectorStoreFileRequestUtils.get_create_request_params(local_vars)
         create_request["file_id"] = file_id
 
         litellm_logging_obj.update_from_kwargs(
@@ -252,9 +244,7 @@ def list(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[
-    VectorStoreFileListResponse, Coroutine[Any, Any, VectorStoreFileListResponse]
-]:
+) -> Union[VectorStoreFileListResponse, Coroutine[Any, Any, VectorStoreFileListResponse]]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -271,14 +261,10 @@ def list(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
-            raise ValueError(
-                f"Vector store file list is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store file list is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
-        list_query: VectorStoreFileListQueryParams = (
-            VectorStoreFileRequestUtils.get_list_query_params(local_vars)
-        )
+        list_query: VectorStoreFileListQueryParams = VectorStoreFileRequestUtils.get_list_query_params(local_vars)
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -385,9 +371,7 @@ def retrieve(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
-            raise ValueError(
-                f"Vector store file retrieve is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store file retrieve is not supported for {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -478,9 +462,7 @@ def retrieve_content(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[
-    VectorStoreFileContentResponse, Coroutine[Any, Any, VectorStoreFileContentResponse]
-]:
+) -> Union[VectorStoreFileContentResponse, Coroutine[Any, Any, VectorStoreFileContentResponse]]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -497,9 +479,7 @@ def retrieve_content(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
-            raise ValueError(
-                f"Vector store file content retrieve is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store file content retrieve is not supported for {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
@@ -613,14 +593,10 @@ def update(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
-            raise ValueError(
-                f"Vector store file update is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store file update is not supported for {custom_llm_provider}")
 
         local_vars.update(kwargs)
-        update_request: VectorStoreFileUpdateRequest = (
-            VectorStoreFileRequestUtils.get_update_request_params(local_vars)
-        )
+        update_request: VectorStoreFileUpdateRequest = VectorStoreFileRequestUtils.get_update_request_params(local_vars)
         update_request["attributes"] = attributes
 
         litellm_logging_obj.update_from_kwargs(
@@ -715,9 +691,7 @@ def delete(
     timeout: Optional[Union[float, httpx.Timeout]] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[
-    VectorStoreFileDeleteResponse, Coroutine[Any, Any, VectorStoreFileDeleteResponse]
-]:
+) -> Union[VectorStoreFileDeleteResponse, Coroutine[Any, Any, VectorStoreFileDeleteResponse]]:
     local_vars = locals()
     try:
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
@@ -734,9 +708,7 @@ def delete(
             provider=LlmProviders(custom_llm_provider)
         )
         if provider_config is None:
-            raise ValueError(
-                f"Vector store file delete is not supported for {custom_llm_provider}"
-            )
+            raise ValueError(f"Vector store file delete is not supported for {custom_llm_provider}")
 
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,

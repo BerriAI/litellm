@@ -44,9 +44,7 @@ def build_opik_payload(
     standard_logging_metadata = standard_logging_object.get("metadata", {}) or {}
 
     # Extract and merge Opik metadata
-    opik_metadata = extractors.extract_opik_metadata(
-        litellm_metadata, standard_logging_metadata
-    )
+    opik_metadata = extractors.extract_opik_metadata(litellm_metadata, standard_logging_metadata)
 
     # Extract project name
     current_project_name = opik_metadata.get("project_name", project_name)

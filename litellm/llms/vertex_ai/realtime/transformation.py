@@ -118,11 +118,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         from litellm.types.llms.vertex_ai import GeminiResponseModalities
 
         response_modalities: list[GeminiResponseModalities] = ["AUDIO"]
-        full_model_path = (
-            f"projects/{self._project}"
-            f"/locations/{self._location}"
-            f"/publishers/google/models/{model}"
-        )
+        full_model_path = f"projects/{self._project}/locations/{self._location}/publishers/google/models/{model}"
         setup_config: BidiGenerateContentSetup = {
             "model": full_model_path,
             "generationConfig": {"responseModalities": response_modalities},
@@ -146,11 +142,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
     def _vertex_model_path(self, model: str) -> str:
         """Return the fully-qualified Vertex AI model resource path."""
-        return (
-            f"projects/{self._project}"
-            f"/locations/{self._location}"
-            f"/publishers/google/models/{model}"
-        )
+        return f"projects/{self._project}/locations/{self._location}/publishers/google/models/{model}"
 
     def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
         """Build Vertex AI setup configuration with proper model path and defaults."""
@@ -161,9 +153,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # settings would be silently dropped because ``map_openai_params`` only
         # recognises the flat OpenAI-beta key names.
         session_params = self._normalize_session_payload_for_mapping(session_params)
-        setup_config = self.map_openai_params(
-            optional_params={}, non_default_params=session_params
-        )
+        setup_config = self.map_openai_params(optional_params={}, non_default_params=session_params)
 
         # Use full Vertex AI model path
         setup_config["model"] = self._vertex_model_path(model)
@@ -184,13 +174,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         # that need that behaviour must accept that VAD is off.
         client_turn_detection = session_params.get("turn_detection")
         client_disabled_auto_response = (
-            isinstance(client_turn_detection, dict)
-            and client_turn_detection.get("create_response") is False
+            isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False
         )
         realtime_input_config = setup_config.setdefault("realtimeInputConfig", {})
-        automatic_detection = realtime_input_config.setdefault(
-            "automaticActivityDetection", {}
-        )
+        automatic_detection = realtime_input_config.setdefault("automaticActivityDetection", {})
         if not client_disabled_auto_response:
             automatic_detection["disabled"] = False
         automatic_detection.setdefault("silenceDurationMs", 800)
@@ -220,14 +207,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
         if msg_type == "session.update":
             if session_configuration_request is None:
-                setup_config = self._build_vertex_ai_setup_config(
-                    model, json_message.get("session") or {}
-                )
+                setup_config = self._build_vertex_ai_setup_config(model, json_message.get("session") or {})
                 gemini_setup_msg = json.dumps({"setup": setup_config})
 
-                verbose_logger.debug(
-                    "Vertex AI Realtime: Sending initial setup with tools to backend"
-                )
+                verbose_logger.debug("Vertex AI Realtime: Sending initial setup with tools to backend")
                 return [gemini_setup_msg]
 
             # A follow-up session.update can't be forwarded as a second setup
@@ -235,13 +218,8 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
             # silencing the audio-transcription guardrail's create_response
             # disable, surface a warning so operators know the model will
             # auto-respond before the guardrail can gate it on Vertex AI.
-            client_turn_detection = GeminiRealtimeConfig._extract_turn_detection(
-                json_message.get("session") or {}
-            )
-            if (
-                isinstance(client_turn_detection, dict)
-                and client_turn_detection.get("create_response") is False
-            ):
+            client_turn_detection = GeminiRealtimeConfig._extract_turn_detection(json_message.get("session") or {})
+            if isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False:
                 verbose_logger.warning(
                     "Vertex AI Realtime: Dropping subsequent session.update "
                     "(turn_detection.create_response=False) — Vertex Live "
@@ -250,11 +228,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
                     "Vertex AI in non-deferred mode."
                 )
             else:
-                verbose_logger.debug(
-                    "Vertex AI Realtime: Ignoring session.update (setup already sent)"
-                )
+                verbose_logger.debug("Vertex AI Realtime: Ignoring session.update (setup already sent)")
             return []
 
-        return super().transform_realtime_request(
-            message, model, session_configuration_request
-        )
+        return super().transform_realtime_request(message, model, session_configuration_request)

@@ -6,15 +6,14 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.types.router import Deployment
 
-_FORM_CONTENT_TYPES: frozenset[str] = frozenset(
-    {"application/x-www-form-urlencoded", "multipart/form-data"}
-)
+_FORM_CONTENT_TYPES: frozenset[str] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -55,9 +54,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             return {}
 
         # Check if we already read and parsed the body
-        _cached_request_body: Optional[dict] = _safe_get_request_parsed_body(
-            request=request
-        )
+        _cached_request_body: Optional[dict] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
             return _cached_request_body
 
@@ -95,27 +92,34 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                 try:
                     parsed_body = orjson.loads(body)
                 except orjson.JSONDecodeError as e:
+                    # The surrogate-repair fallback below runs two full-body re.sub
+                    # passes, which block the event loop on multi-MB malformed bodies.
+                    # Above the configured size, skip the repair and raise the 400 now.
+                    repair_limit_bytes = MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB * 1024 * 1024
+                    if repair_limit_bytes > 0 and len(body) > repair_limit_bytes:
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        raise ProxyException(
+                            message=f"Invalid JSON payload: {str(e)}",
+                            type="invalid_request_error",
+                            param="request_body",
+                            code=status.HTTP_400_BAD_REQUEST,
+                        )
+
                     # First try the standard json module which is more forgiving
                     # First decode bytes to string if needed
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
 
                     # Replace invalid surrogate pairs
                     # This regex finds incomplete surrogate pairs
-                    body_str = re.sub(
-                        r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
-                    )
+                    body_str = re.sub(r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str)
                     # This regex finds low surrogates without high surrogates
-                    body_str = re.sub(
-                        r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
-                    )
+                    body_str = re.sub(r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str)
 
                     try:
                         parsed_body = json.loads(body_str)
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
-                        verbose_proxy_logger.error(
-                            f"Invalid JSON payload received: {str(e)}"
-                        )
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
                         raise ProxyException(
                             message=f"Invalid JSON payload: {str(e)}",
                             type="invalid_request_error",
@@ -133,20 +137,14 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
-        verbose_proxy_logger.exception(
-            "Unexpected error reading request body - {}".format(e)
-        )
+        verbose_proxy_logger.exception("Unexpected error reading request body - {}".format(e))
         return {}
 
 
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if (
-        hasattr(request, "scope")
-        and "parsed_body" in request.scope
-        and isinstance(request.scope["parsed_body"], tuple)
-    ):
+    if hasattr(request, "scope") and "parsed_body" in request.scope and isinstance(request.scope["parsed_body"], tuple):
         accepted_keys, parsed_body = request.scope["parsed_body"]
         return {key: parsed_body[key] for key in accepted_keys}
     return None
@@ -160,9 +158,7 @@ def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
             return dict(request.query_params)
         return {}
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unexpected error reading request query params - {}".format(e)
-        )
+        verbose_proxy_logger.debug("Unexpected error reading request query params - {}".format(e))
         return {}
 
 
@@ -175,9 +171,7 @@ def _safe_set_request_parsed_body(
             return
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unexpected error setting request parsed body - {}".format(e)
-        )
+        verbose_proxy_logger.debug("Unexpected error setting request parsed body - {}".format(e))
 
 
 def _safe_get_request_headers(request: Optional[Request]) -> dict:
@@ -195,15 +189,11 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
     if isinstance(cached, dict):
         return cached
     if cached is not None:
-        verbose_proxy_logger.debug(
-            "Unexpected cached request headers type - {}".format(type(cached))
-        )
+        verbose_proxy_logger.debug("Unexpected cached request headers type - {}".format(type(cached)))
     try:
         headers = dict(request.headers)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unexpected error reading request headers - {}".format(e)
-        )
+        verbose_proxy_logger.debug("Unexpected error reading request headers - {}".format(e))
         headers = {}
     try:
         if state is not None:
@@ -240,10 +230,8 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[Deployment] = (
-                llm_router.get_deployment_by_model_group_name(
-                    model_group_name=request_data["model"]
-                )
+            deployment: Optional[Deployment] = llm_router.get_deployment_by_model_group_name(
+                model_group_name=request_data["model"]
             )
             if (
                 deployment
@@ -252,9 +240,7 @@ def check_file_size_under_limit(
             ):
                 max_file_size_mb = deployment.litellm_params.max_file_size_mb
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Got error when checking file size: %s", (str(e))
-            )
+            verbose_proxy_logger.error("Got error when checking file size: %s", (str(e)))
 
     if max_file_size_mb is not None:
         verbose_proxy_logger.debug(
@@ -359,9 +345,7 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     return {}
 
 
-def extract_nested_form_metadata(
-    form_data: Dict[str, Any], prefix: str = "litellm_metadata["
-) -> Dict[str, Any]:
+def extract_nested_form_metadata(form_data: Dict[str, Any], prefix: str = "litellm_metadata[") -> Dict[str, Any]:
     """
     Extract nested metadata from form data with bracket notation.
 
@@ -408,9 +392,7 @@ def extract_nested_form_metadata(
 
         # Skip UploadFile objects - they should not be in metadata
         if isinstance(value, UploadFile):
-            verbose_proxy_logger.warning(
-                f"Skipping UploadFile in metadata extraction for key: {key}"
-            )
+            verbose_proxy_logger.warning(f"Skipping UploadFile in metadata extraction for key: {key}")
             continue
 
         # Extract the nested path from bracket notation
@@ -423,9 +405,7 @@ def extract_nested_form_metadata(
             parts = path_string.split("][")
 
             if not parts or not parts[0]:
-                verbose_proxy_logger.warning(
-                    f"Invalid metadata key format (empty path): {key}"
-                )
+                verbose_proxy_logger.warning(f"Invalid metadata key format (empty path): {key}")
                 continue
 
             # Navigate/create nested dictionary structure
@@ -442,9 +422,7 @@ def extract_nested_form_metadata(
                 if isinstance(current, dict):
                     current[parts[-1]] = value
                 else:
-                    verbose_proxy_logger.warning(
-                        f"Cannot set value - parent is not a dict for key: {key}"
-                    )
+                    verbose_proxy_logger.warning(f"Cannot set value - parent is not a dict for key: {key}")
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {str(e)}")
@@ -567,6 +545,4 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
             f"populate_request_with_path_params: Updated request_data with vector_store_ids={request_data.get('vector_store_ids')}"
         )
     else:
-        verbose_proxy_logger.debug(
-            f"populate_request_with_path_params: No vector_store_id present in path={path}"
-        )
+        verbose_proxy_logger.debug(f"populate_request_with_path_params: No vector_store_id present in path={path}")

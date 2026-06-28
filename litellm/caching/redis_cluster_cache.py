@@ -37,9 +37,7 @@ class RedisClusterCache(RedisCache):
         if self.redis_async_redis_cluster_client:
             return self.redis_async_redis_cluster_client
 
-        _redis_client = get_redis_async_client(
-            connection_pool=self.async_redis_conn_pool, **self.redis_kwargs
-        )
+        _redis_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
         if isinstance(_redis_client, RedisCluster):
             self.redis_async_redis_cluster_client = _redis_client
 

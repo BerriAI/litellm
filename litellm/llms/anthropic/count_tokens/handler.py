@@ -54,9 +54,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             # Validate the request
             self.validate_request(model, messages)
 
-            verbose_logger.debug(
-                f"Processing Anthropic CountTokens request for model: {model}"
-            )
+            verbose_logger.debug(f"Processing Anthropic CountTokens request for model: {model}")
 
             # Transform request to Anthropic format
             request_body = self.transform_request_to_count_tokens(
@@ -77,14 +75,10 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             headers = self.get_required_headers(api_key)
 
             # Use LiteLLM's async httpx client
-            async_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.ANTHROPIC
-            )
+            async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.ANTHROPIC)
 
             # Use provided timeout or fall back to litellm.request_timeout
-            request_timeout = (
-                timeout if timeout is not None else litellm.request_timeout
-            )
+            request_timeout = timeout if timeout is not None else litellm.request_timeout
 
             response = await async_client.post(
                 endpoint_url,

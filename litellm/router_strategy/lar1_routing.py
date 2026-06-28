@@ -35,15 +35,9 @@ def lar1_thresholds_from_args(
 ) -> dict[str, float]:
     args = routing_strategy_args or {}
     return {
-        "low": _coerce_threshold(
-            args.get("confidence_threshold_low"), DEFAULT_THRESHOLDS["low"]
-        ),
-        "medium": _coerce_threshold(
-            args.get("confidence_threshold_medium"), DEFAULT_THRESHOLDS["medium"]
-        ),
-        "high": _coerce_threshold(
-            args.get("confidence_threshold_high"), DEFAULT_THRESHOLDS["high"]
-        ),
+        "low": _coerce_threshold(args.get("confidence_threshold_low"), DEFAULT_THRESHOLDS["low"]),
+        "medium": _coerce_threshold(args.get("confidence_threshold_medium"), DEFAULT_THRESHOLDS["medium"]),
+        "high": _coerce_threshold(args.get("confidence_threshold_high"), DEFAULT_THRESHOLDS["high"]),
     }
 
 
@@ -66,8 +60,7 @@ def _normalize_thresholds(thresholds: Optional[dict[str, float]]) -> dict[str, f
     high = merged["high"]
     if not (0 < low < medium < high < 1):
         raise ValueError(
-            "LAR-1 thresholds must satisfy 0 < low < medium < high < 1, "
-            f"got low={low}, medium={medium}, high={high}"
+            f"LAR-1 thresholds must satisfy 0 < low < medium < high < 1, got low={low}, medium={medium}, high={high}"
         )
     return merged
 
@@ -75,16 +68,12 @@ def _normalize_thresholds(thresholds: Optional[dict[str, float]]) -> dict[str, f
 def _parse_lar1_metadata(request_kwargs: dict) -> LAR1Metadata:
     lar1_raw = request_kwargs.get("metadata", {}).get("lar1", {})
     if not isinstance(lar1_raw, dict):
-        verbose_router_logger.warning(
-            f"[LAR-1] Invalid lar1 metadata type: {type(lar1_raw).__name__}. Using defaults"
-        )
+        verbose_router_logger.warning(f"[LAR-1] Invalid lar1 metadata type: {type(lar1_raw).__name__}. Using defaults")
         return LAR1Metadata()
     try:
         return LAR1Metadata.model_validate(lar1_raw)
     except ValidationError as exc:
-        verbose_router_logger.warning(
-            f"[LAR-1] Invalid lar1 metadata: {exc}. Using defaults"
-        )
+        verbose_router_logger.warning(f"[LAR-1] Invalid lar1 metadata: {exc}. Using defaults")
         return LAR1Metadata()
 
 
@@ -138,8 +127,7 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
         else:
             actual_type = selected.get("model_info", {}).get("type", "unknown")
             verbose_router_logger.warning(
-                f"[LAR-1] No deployment for type '{target}', "
-                f"fallback to deployment type '{actual_type}'"
+                f"[LAR-1] No deployment for type '{target}', fallback to deployment type '{actual_type}'"
             )
         return selected
 
@@ -187,6 +175,5 @@ class LAR1RoutingStrategy(CustomRoutingStrategyBase):
 
     def get_available_deployment(self, *args, **kwargs):
         raise NotImplementedError(
-            "LAR-1 routing only supports async routing. "
-            "Enable async_only_mode on the router or use acompletion."
+            "LAR-1 routing only supports async routing. Enable async_only_mode on the router or use acompletion."
         )

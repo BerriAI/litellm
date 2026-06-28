@@ -33,11 +33,7 @@ class PromptLayerLogger:
                     tags = kwargs["litellm_params"]["metadata"]["pl_tags"]
 
                 # Remove "pl_tags" from metadata
-                metadata = {
-                    k: v
-                    for k, v in kwargs["litellm_params"]["metadata"].items()
-                    if k != "pl_tags"
-                }
+                metadata = {k: v for k, v in kwargs["litellm_params"]["metadata"].items() if k != "pl_tags"}
 
             print_verbose(
                 f"Prompt Layer Logging - Enters logging function for model kwargs: {new_kwargs}\n, response: {response_obj}"
@@ -68,9 +64,7 @@ class PromptLayerLogger:
             if not request_response.json().get("success", False):
                 raise Exception("Promptlayer did not successfully log the response!")
 
-            print_verbose(
-                f"Prompt Layer Logging: success - final response object: {request_response.text}"
-            )
+            print_verbose(f"Prompt Layer Logging: success - final response object: {request_response.text}")
 
             if "request_id" in response_json:
                 if metadata:
@@ -82,9 +76,7 @@ class PromptLayerLogger:
                             "metadata": metadata,
                         },
                     )
-                    print_verbose(
-                        f"Prompt Layer Logging: success - metadata post response object: {response.text}"
-                    )
+                    print_verbose(f"Prompt Layer Logging: success - metadata post response object: {response.text}")
 
         except Exception:
             print_verbose(f"error: Prompt Layer Error - {traceback.format_exc()}")

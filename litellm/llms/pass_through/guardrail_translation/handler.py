@@ -43,15 +43,11 @@ class PassThroughEndpointHandler(BaseTranslation):
         if litellm_logging_obj is None:
             return None
 
-        passthrough_config = getattr(
-            litellm_logging_obj, "passthrough_guardrails_config", None
-        )
+        passthrough_config = getattr(litellm_logging_obj, "passthrough_guardrails_config", None)
         if not passthrough_config or not guardrail_name:
             return None
 
-        return PassthroughGuardrailHandler.get_settings(
-            passthrough_config, guardrail_name
-        )
+        return PassthroughGuardrailHandler.get_settings(passthrough_config, guardrail_name)
 
     def _extract_text_for_guardrail(
         self,
@@ -83,13 +79,9 @@ class PassThroughEndpointHandler(BaseTranslation):
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         payload_to_check = {
-            k: v
-            for k, v in data.items()
-            if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
+            k: v for k, v in data.items() if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
         }
-        verbose_proxy_logger.debug(
-            "PassThroughEndpointHandler: Using full payload for guardrail"
-        )
+        verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
         return safe_dumps(payload_to_check)
 
     async def process_input_messages(
@@ -115,9 +107,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         text_to_check = self._extract_text_for_guardrail(data, field_expressions)
 
         if not text_to_check:
-            verbose_proxy_logger.debug(
-                "PassThroughEndpointHandler: No text to check, skipping guardrail"
-            )
+            verbose_proxy_logger.debug("PassThroughEndpointHandler: No text to check, skipping guardrail")
             return data
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
@@ -153,9 +143,7 @@ class PassThroughEndpointHandler(BaseTranslation):
             user_api_key_dict: User API key metadata to pass to guardrails
         """
         if not isinstance(response, dict):
-            verbose_proxy_logger.debug(
-                "PassThroughEndpointHandler: Response is not a dict, skipping"
-            )
+            verbose_proxy_logger.debug("PassThroughEndpointHandler: Response is not a dict, skipping")
             return response
 
         guardrail_name = guardrail_to_apply.guardrail_name
@@ -177,22 +165,14 @@ class PassThroughEndpointHandler(BaseTranslation):
         # Use the real request_data if provided (proxy path), otherwise
         # create a standalone dict (SDK / direct-call path).
         if request_data is None:
-            request_data = (
-                {"response": response}
-                if not isinstance(response, dict)
-                else response.copy()
-            )
+            request_data = {"response": response} if not isinstance(response, dict) else response.copy()
         else:
             if "response" not in request_data:
-                request_data["response"] = (
-                    response if not isinstance(response, dict) else response.copy()
-                )
+                request_data["response"] = response if not isinstance(response, dict) else response.copy()
 
         # Add user API key metadata with prefixed keys
         if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
 
@@ -300,13 +280,9 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         return getattr(handler_cls, "de_anonymize_event_stream", None)
 
     @staticmethod
-    def supports_event_stream_de_anonymization(
-        provider: Optional[str], endpoint: Optional[str]
-    ) -> bool:
+    def supports_event_stream_de_anonymization(provider: Optional[str], endpoint: Optional[str]) -> bool:
         handler_cls = _get_provider_handlers().get(provider or "")
-        endpoint_check = getattr(
-            handler_cls, "event_stream_endpoint_is_de_anonymizable", None
-        )
+        endpoint_check = getattr(handler_cls, "event_stream_endpoint_is_de_anonymizable", None)
         if endpoint_check is None:
             return False
         return endpoint_check(endpoint or "")
@@ -319,13 +295,10 @@ class LlmPassthroughRouteHandler(BaseTranslation):
         data: dict,
     ) -> bytes:
         provider = data.get("custom_llm_provider")
-        de_anonymize = LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(
-            provider
-        )
+        de_anonymize = LlmPassthroughRouteHandler._resolve_event_stream_de_anonymizer(provider)
         if de_anonymize is None:
             verbose_proxy_logger.debug(
-                "LlmPassthroughRouteHandler: no event-stream handler for provider=%s, "
-                "leaving stream unmodified",
+                "LlmPassthroughRouteHandler: no event-stream handler for provider=%s, leaving stream unmodified",
                 provider,
             )
             return body_bytes

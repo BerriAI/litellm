@@ -96,46 +96,26 @@ class DatabaseURLSettings(BaseSettings):
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
     direct_url: str | None = Field(default=None, validation_alias="DIRECT_URL")
     database_host: str | None = Field(default=None, validation_alias="DATABASE_HOST")
-    database_port: str = Field(
-        default=_DEFAULT_PG_PORT, validation_alias="DATABASE_PORT"
-    )
+    database_port: str = Field(default=_DEFAULT_PG_PORT, validation_alias="DATABASE_PORT")
     database_user: str | None = Field(
         default=None,
         validation_alias=AliasChoices("DATABASE_USER", "DATABASE_USERNAME"),
     )
     database_name: str | None = Field(default=None, validation_alias="DATABASE_NAME")
-    database_schema: str | None = Field(
-        default=None, validation_alias="DATABASE_SCHEMA"
-    )
-    database_password: str | None = Field(
-        default=None, validation_alias="DATABASE_PASSWORD"
-    )
+    database_schema: str | None = Field(default=None, validation_alias="DATABASE_SCHEMA")
+    database_password: str | None = Field(default=None, validation_alias="DATABASE_PASSWORD")
 
     # Read replica
-    database_url_read_replica: str | None = Field(
-        default=None, validation_alias="DATABASE_URL_READ_REPLICA"
-    )
-    database_host_read_replica: str | None = Field(
-        default=None, validation_alias="DATABASE_HOST_READ_REPLICA"
-    )
-    database_port_read_replica: str | None = Field(
-        default=None, validation_alias="DATABASE_PORT_READ_REPLICA"
-    )
+    database_url_read_replica: str | None = Field(default=None, validation_alias="DATABASE_URL_READ_REPLICA")
+    database_host_read_replica: str | None = Field(default=None, validation_alias="DATABASE_HOST_READ_REPLICA")
+    database_port_read_replica: str | None = Field(default=None, validation_alias="DATABASE_PORT_READ_REPLICA")
     database_user_read_replica: str | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "DATABASE_USER_READ_REPLICA", "DATABASE_USERNAME_READ_REPLICA"
-        ),
+        validation_alias=AliasChoices("DATABASE_USER_READ_REPLICA", "DATABASE_USERNAME_READ_REPLICA"),
     )
-    database_name_read_replica: str | None = Field(
-        default=None, validation_alias="DATABASE_NAME_READ_REPLICA"
-    )
-    database_schema_read_replica: str | None = Field(
-        default=None, validation_alias="DATABASE_SCHEMA_READ_REPLICA"
-    )
-    database_password_read_replica: str | None = Field(
-        default=None, validation_alias="DATABASE_PASSWORD_READ_REPLICA"
-    )
+    database_name_read_replica: str | None = Field(default=None, validation_alias="DATABASE_NAME_READ_REPLICA")
+    database_schema_read_replica: str | None = Field(default=None, validation_alias="DATABASE_SCHEMA_READ_REPLICA")
+    database_password_read_replica: str | None = Field(default=None, validation_alias="DATABASE_PASSWORD_READ_REPLICA")
 
     @classmethod
     def from_env(cls) -> "DatabaseURLSettings":
@@ -170,9 +150,7 @@ class DatabaseURLSettings(BaseSettings):
             name = cast(str, self.database_name)
             # IAM token is already URL-quoted by generate_iam_auth_token;
             # user/name embedded raw (parity with proxy_cli.py / IAMEndpoint).
-            token = rds_iam_token.generate_iam_auth_token(
-                db_host=host, db_port=self.database_port, db_user=user
-            )
+            token = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=self.database_port, db_user=user)
             url = f"postgresql://{user}:{token}@{host}:{self.database_port}/{name}"
             if self.database_schema:
                 url += f"?schema={self.database_schema}"
@@ -230,9 +208,7 @@ class DatabaseURLSettings(BaseSettings):
                 )
             user = cast(str, user)
             name = cast(str, name)
-            token = rds_iam_token.generate_iam_auth_token(
-                db_host=host, db_port=port, db_user=user
-            )
+            token = rds_iam_token.generate_iam_auth_token(db_host=host, db_port=port, db_user=user)
             url = f"postgresql://{user}:{token}@{host}:{port}/{name}"
             if schema:
                 url += f"?schema={schema}"

@@ -82,13 +82,13 @@ install-hooks:
 	./scripts/install_git_hooks.sh
 
 # Formatting
-# 88-column wrap matches the Black width the whole repo is formatted to; ruff.toml's
-# global line-length is 120 (for E501/isort), so 88 is forced here.
+# Wrap width is ruff.toml's single source of truth (line-length = 120), shared by the
+# formatter, E501, and the import sorter so there's no 88-vs-120 split to reconcile.
 format: install-dev
-	cd litellm && $(UV_RUN) ruff format --line-length 88 --exclude '/enterprise/' . && cd ..
+	cd litellm && $(UV_RUN) ruff format --exclude '/enterprise/' . && cd ..
 
 format-check: install-dev
-	cd litellm && $(UV_RUN) ruff format --check --line-length 88 --exclude '/enterprise/' . && cd ..
+	cd litellm && $(UV_RUN) ruff format --check --exclude '/enterprise/' . && cd ..
 
 # Linting targets
 lint-ruff: install-dev

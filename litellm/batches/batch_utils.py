@@ -10,9 +10,7 @@ from litellm.utils import token_counter
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
 ) -> Tuple[float, Usage, List[str]]:
@@ -36,18 +34,14 @@ async def calculate_batch_cost_and_usage(
         custom_llm_provider=custom_llm_provider,
         model_name=model_name,
     )
-    batch_models = _get_batch_models_from_file_content(
-        file_content_dictionary, model_name
-    )
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
 
     return batch_cost, batch_usage, batch_models
 
 
 async def _handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
     model_name: Optional[str] = None,
     litellm_params: Optional[dict] = None,
 ) -> Tuple[float, Usage, List[str]]:
@@ -76,9 +70,7 @@ async def _handle_completed_batch(
         model_name=model_name,
     )
 
-    batch_models = _get_batch_models_from_file_content(
-        file_content_dictionary, model_name
-    )
+    batch_models = _get_batch_models_from_file_content(file_content_dictionary, model_name)
 
     return batch_cost, batch_usage, batch_models
 
@@ -104,9 +96,7 @@ def _get_batch_models_from_file_content(
 
 def _batch_cost_calculator(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_name: Optional[str] = None,
     model_info: Optional[ModelInfo] = None,
 ) -> float:
@@ -118,9 +108,7 @@ def _batch_cost_calculator(
         and model_name
         and getattr(litellm, "disable_vertex_batch_output_transformation", False)
     ):
-        batch_cost, _ = calculate_vertex_ai_batch_cost_and_usage(
-            file_content_dictionary, model_name
-        )
+        batch_cost, _ = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
         verbose_logger.debug("vertex_ai_total_cost=%s", batch_cost)
         return batch_cost
 
@@ -181,9 +169,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
             )
             total_cost += p_cost + c_cost
         except Exception as e:
-            verbose_logger.debug(
-                "vertex_ai batch cost calculation error for line: %s", str(e)
-            )
+            verbose_logger.debug("vertex_ai batch cost calculation error for line: %s", str(e))
 
         prompt_tokens += _prompt
         completion_tokens += _completion
@@ -206,9 +192,7 @@ def calculate_vertex_ai_batch_cost_and_usage(
 
 async def _get_batch_output_file_content_as_dictionary(
     batch: Batch,
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     litellm_params: Optional[dict] = None,
 ) -> List[dict]:
     """
@@ -235,12 +219,8 @@ async def _get_batch_output_file_content_as_dictionary(
     is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
     if is_base64_unified_file_id:
         try:
-            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(
-                ";"
-            )[0]
-            verbose_logger.debug(
-                f"Extracted LLM output file ID from unified file ID: {file_id}"
-            )
+            file_id = is_base64_unified_file_id.split("llm_output_file_id,")[1].split(";")[0]
+            verbose_logger.debug(f"Extracted LLM output file ID from unified file ID: {file_id}")
         except (IndexError, AttributeError) as e:
             verbose_logger.error(
                 f"Failed to extract LLM output file ID from unified file ID: {batch.output_file_id}, error: {e}"
@@ -380,9 +360,7 @@ def _count_entry_tokens(
 
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_info: Optional[ModelInfo] = None,
 ) -> float:
     """
@@ -393,9 +371,7 @@ def _get_batch_job_cost_from_file_content(
     try:
         total_cost: float = 0.0
         # parse the file content as json
-        verbose_logger.debug(
-            "file_content_dictionary=%s", json.dumps(file_content_dictionary, indent=4)
-        )
+        verbose_logger.debug("file_content_dictionary=%s", json.dumps(file_content_dictionary, indent=4))
         for _item in file_content_dictionary:
             if _batch_response_was_successful(_item):
                 _response_body = _get_response_from_batch_job_output_file(_item)
@@ -424,9 +400,7 @@ def _get_batch_job_cost_from_file_content(
 
 def _get_batch_job_total_usage_from_file_content(
     file_content_dictionary: List[dict],
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"
-    ] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"] = "openai",
     model_name: Optional[str] = None,
 ) -> Usage:
     """
@@ -437,9 +411,7 @@ def _get_batch_job_total_usage_from_file_content(
         and model_name
         and getattr(litellm, "disable_vertex_batch_output_transformation", False)
     ):
-        _, batch_usage = calculate_vertex_ai_batch_cost_and_usage(
-            file_content_dictionary, model_name
-        )
+        _, batch_usage = calculate_vertex_ai_batch_cost_and_usage(file_content_dictionary, model_name)
         return batch_usage
 
     # For other providers, use the existing logic
@@ -488,11 +460,7 @@ def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
                 # Nested pre-tokenized prompt: every int contributes a
                 # token. Mixed string/int items still count.
                 total += sum(1 if isinstance(t, int) else 0 for t in chunk)
-                total += sum(
-                    token_counter(model=model, text=t)
-                    for t in chunk
-                    if isinstance(t, str)
-                )
+                total += sum(token_counter(model=model, text=t) for t in chunk if isinstance(t, str))
         return total
     return 0
 

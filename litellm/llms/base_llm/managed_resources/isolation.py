@@ -89,11 +89,7 @@ def can_access_resource(
         return True
 
     team_id = user_api_key_dict.team_id
-    if (
-        team_id is not None
-        and resource_team_id is not None
-        and resource_team_id == team_id
-    ):
+    if team_id is not None and resource_team_id is not None and resource_team_id == team_id:
         return True
 
     return False

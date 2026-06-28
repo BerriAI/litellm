@@ -459,6 +459,38 @@ describe("useKeys", () => {
     const callUrl = mockFetch.mock.calls[0][0];
     expect(callUrl).not.toContain("project_id");
   });
+
+  it("should pass agentID filter to the API", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useKeys(1, 10, { agentID: "agent-123" }), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).toContain("agent_id=agent-123");
+  });
+
+  it("should not include agent_id param when agentID is null", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useKeys(1, 10, { agentID: null }), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).not.toContain("agent_id");
+  });
 });
 
 describe("useDeletedKeys", () => {

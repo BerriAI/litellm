@@ -83,11 +83,7 @@ class CohereRerankConfig(BaseRerankConfig):
         optional_params: dict | None = None,
     ) -> dict:
         if api_key is None:
-            api_key = (
-                get_secret_str("COHERE_API_KEY")
-                or get_secret_str("CO_API_KEY")
-                or litellm.cohere_key
-            )
+            api_key = get_secret_str("COHERE_API_KEY") or get_secret_str("CO_API_KEY") or litellm.cohere_key
 
         if api_key is None:
             raise ValueError(
@@ -148,9 +144,7 @@ class CohereRerankConfig(BaseRerankConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise CohereError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
         return RerankResponse(**raw_response_json)
 

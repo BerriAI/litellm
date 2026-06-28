@@ -431,11 +431,7 @@ def init_bedrock_client(
         config = boto3.session.Config()  # type: ignore
 
     ### CHECK STS ###
-    if (
-        aws_web_identity_token is not None
-        and aws_role_name is not None
-        and aws_session_name is not None
-    ):
+    if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -474,9 +470,7 @@ def init_bedrock_client(
             verify=ssl_verify,
         )
 
-        sts_response = sts_client.assume_role(
-            RoleArn=aws_role_name, RoleSessionName=aws_session_name
-        )
+        sts_response = sts_client.assume_role(RoleArn=aws_role_name, RoleSessionName=aws_session_name)
 
         client = boto3.client(
             service_name="bedrock-runtime",
@@ -523,9 +517,7 @@ def init_bedrock_client(
             verify=ssl_verify,
         )
     if extra_headers:
-        client.meta.events.register(
-            "before-sign.bedrock-runtime.*", add_custom_header(extra_headers)
-        )
+        client.meta.events.register("before-sign.bedrock-runtime.*", add_custom_header(extra_headers))
 
     return client
 
@@ -568,9 +560,7 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
     """
 
     if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
-        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[
-            response_tool_name
-        ]
+        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[response_tool_name]
     return response_tool_name
 
 
@@ -687,10 +677,7 @@ def get_bedrock_base_model(model: str) -> str:
 
     if potential_region in get_bedrock_cross_region_inference_regions():
         return model.split(".", 1)[1]
-    elif (
-        alt_potential_region in _get_all_bedrock_regions()
-        and len(model.split("/", 1)) > 1
-    ):
+    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
 
     return model
@@ -754,10 +741,7 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) 
     if ceiling is None:
         return
 
-    if (
-        _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort]
-        > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]
-    ):
+    if _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort] > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]:
         output_config["effort"] = ceiling
 
 
@@ -821,9 +805,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> dict:
         return headers
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         return []
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
@@ -923,9 +905,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         # Check for nova spec prefixes (nova/ and nova-2/)
         _model_after_bedrock = model.replace("bedrock/", "", 1)
-        if _model_after_bedrock.startswith(
-            "nova-2/"
-        ) or _model_after_bedrock.startswith("nova/"):
+        if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
             return "converse"
 
         if is_bedrock_application_inference_profile_arn(model):
@@ -933,10 +913,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
 
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if (
-            base_model in litellm.bedrock_converse_models
-            or alt_model in litellm.bedrock_converse_models
-        ):
+        if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
             return "converse"
         return "invoke"
 
@@ -962,9 +939,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return model.replace("claude_platform/", "", 1)
 
     @staticmethod
-    def map_claude_platform_auth_params(
-        passed_params: dict, optional_params: dict
-    ) -> dict:
+    def map_claude_platform_auth_params(passed_params: dict, optional_params: dict) -> dict:
         """
         Map Claude Platform route auth params that are not OpenAI request params.
         """
@@ -1100,9 +1075,7 @@ def get_bedrock_chat_config(model: str):
         The appropriate Bedrock config class instance
     """
     bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
-        model=model
-    )
+    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model=model)
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
@@ -1135,10 +1108,7 @@ def get_bedrock_chat_config(model: str):
     if bedrock_invoke_provider == "amazon":
         return litellm.AmazonTitanConfig()
     elif bedrock_invoke_provider == "anthropic":
-        if (
-            base_model
-            in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
-        ):
+        if base_model in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names():
             return litellm.AmazonAnthropicConfig()
         else:
             return litellm.AmazonAnthropicClaudeConfig()
@@ -1224,9 +1194,7 @@ def build_bedrock_stream_error(
     if exception_type is not None and response_stream_shape is not None:
         member = response_stream_shape.members.get(exception_type)
         if member is not None:
-            modeled_status = (
-                (member.metadata or {}).get("error", {}).get("httpStatusCode")
-            )
+            modeled_status = (member.metadata or {}).get("error", {}).get("httpStatusCode")
             if modeled_status is not None:
                 status_code = int(modeled_status)
 
@@ -1296,9 +1264,7 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     # Try to parse as JSON array first (e.g., '["interleaved-thinking-2025-05-14", "claude-code-20250219"]')
     if isinstance(anthropic_beta_header, str):
         anthropic_beta_header = anthropic_beta_header.strip()
-        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith(
-            "]"
-        ):
+        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
             try:
                 parsed = json.loads(anthropic_beta_header)
                 if isinstance(parsed, list):
@@ -1360,9 +1326,7 @@ class CommonBatchFilesUtils:
 
         return s3_parts[0], s3_parts[1]  # bucket, key
 
-    def extract_model_from_s3_file_path(
-        self, s3_uri: str, optional_params: dict
-    ) -> str:
+    def extract_model_from_s3_file_path(self, s3_uri: str, optional_params: dict) -> str:
         """
         Extract model ID from S3 file path.
 
@@ -1371,9 +1335,7 @@ class CommonBatchFilesUtils:
         """
         # Check if model is provided in optional_params first
         if "model" in optional_params and optional_params["model"]:
-            return self.get_bedrock_model_id_from_litellm_model(
-                optional_params["model"]
-            )
+            return self.get_bedrock_model_id_from_litellm_model(optional_params["model"])
 
         # Extract model from S3 URI path
         # Expected format: s3://bucket/litellm-bedrock-files-{model}-{uuid}.jsonl
@@ -1426,9 +1388,7 @@ class CommonBatchFilesUtils:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         # Get AWS credentials using existing methods
-        aws_region_name = self._base_aws._get_aws_region_name(
-            optional_params=optional_params, model=""
-        )
+        aws_region_name = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
         credentials = self._base_aws.get_credentials(
             aws_access_key_id=optional_params.get("aws_access_key_id"),
             aws_secret_access_key=optional_params.get("aws_secret_access_key"),
@@ -1459,19 +1419,13 @@ class CommonBatchFilesUtils:
 
         # Create AWS request and sign it
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
-        request = AWSRequest(
-            method=method_upper, url=endpoint_url, data=request_data, headers=headers
-        )
+        request = AWSRequest(method=method_upper, url=endpoint_url, data=request_data, headers=headers)
         sigv4.add_auth(request)
         prepped = request.prepare()
 
         return (
             dict(prepped.headers),
-            (
-                request_data.encode("utf-8")
-                if isinstance(request_data, str)
-                else request_data
-            ),
+            (request_data.encode("utf-8") if isinstance(request_data, str) else request_data),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:
@@ -1520,14 +1474,10 @@ class CommonBatchFilesUtils:
 
         # Get bucket name
         bucket_name = (
-            litellm_params.get("s3_bucket_name")
-            or optional_params.get("s3_bucket_name")
-            or os.getenv(bucket_env_var)
+            litellm_params.get("s3_bucket_name") or optional_params.get("s3_bucket_name") or os.getenv(bucket_env_var)
         )
         if not bucket_name:
-            raise ValueError(
-                f"S3 bucket name is required. Set 's3_bucket_name' parameter or {bucket_env_var} env var"
-            )
+            raise ValueError(f"S3 bucket name is required. Set 's3_bucket_name' parameter or {bucket_env_var} env var")
 
         # Generate unique object key
         timestamp = int(time.time())
@@ -1542,6 +1492,4 @@ class CommonBatchFilesUtils:
         """
         Get Bedrock-specific error class.
         """
-        return BedrockError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)

@@ -7,9 +7,7 @@ from ...litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from ...types.router import LiteLLM_Params
 
 
-def get_api_base(
-    model: str, optional_params: Union[dict, LiteLLM_Params]
-) -> Optional[str]:
+def get_api_base(model: str, optional_params: Union[dict, LiteLLM_Params]) -> Optional[str]:
     """
     Returns the api base used for calling the model.
 
@@ -34,9 +32,7 @@ def get_api_base(
         elif "model" in optional_params:
             _optional_params = LiteLLM_Params(**optional_params)
         else:  # prevent needing to copy and pop the dict
-            _optional_params = LiteLLM_Params(
-                model=model, **optional_params
-            )  # convert to pydantic object
+            _optional_params = LiteLLM_Params(model=model, **optional_params)  # convert to pydantic object
     except Exception:
         return None
     # get llm provider
@@ -68,10 +64,7 @@ def get_api_base(
 
     stream: bool = getattr(optional_params, "stream", False)
 
-    if (
-        _optional_params.vertex_location is not None
-        and _optional_params.vertex_project is not None
-    ):
+    if _optional_params.vertex_location is not None and _optional_params.vertex_project is not None:
         from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
         from litellm.types.llms.vertex_ai import VertexPartnerProvider
 
@@ -105,13 +98,9 @@ def get_api_base(
 
     if custom_llm_provider == "gemini":
         if stream:
-            _api_base = "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent".format(
-                model
-            )
+            _api_base = "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent".format(model)
         else:
-            _api_base = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(
-                model
-            )
+            _api_base = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent".format(model)
         return _api_base
     elif custom_llm_provider == "openai":
         _api_base = "https://api.openai.com"

@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.agents import (
     AgentConfig,
+    AgentKeySummary,
     AgentMakePublicResponse,
     AgentResponse,
     MakeAgentsPublicRequest,
@@ -68,18 +69,43 @@ def _build_merged_agent_card(
 router = APIRouter()
 
 
+async def _attach_keys_to_agents(agents: list[AgentResponse], prisma_client) -> None:
+    """Attach each agent's virtual keys, derived from the key table's agent_id
+    foreign key. Mirrors how spend is joined into the agent response so the UI
+    never has to cross-reference a full key dump client-side. Only non-secret
+    fields are exposed (alias, masked key_name, hashed token)."""
+    agent_ids = [agent.agent_id for agent in agents]
+    if not agent_ids:
+        return
+    key_rows = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"agent_id": {"in": agent_ids}},
+    )
+    keys_by_agent: dict[str, list[AgentKeySummary]] = {}
+    for row in key_rows:
+        keys_by_agent.setdefault(row.agent_id, []).append(
+            AgentKeySummary(
+                token=row.token,
+                key_alias=row.key_alias,
+                key_name=row.key_name,
+            )
+        )
+    for agent in agents:
+        agent.keys = keys_by_agent.get(agent.agent_id)
+
+
 def _redact_sensitive_agent_fields(
-    agents: List[AgentResponse],
-) -> List[AgentResponse]:
+    agents: list[AgentResponse],
+) -> list[AgentResponse]:
     """
     Return copies of the given agents with sensitive configuration fields
     redacted.  The original objects are not modified.
     """
-    redacted: List[AgentResponse] = []
+    redacted: list[AgentResponse] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
         copy.static_headers = None
         copy.extra_headers = None
+        copy.keys = None
         if copy.litellm_params:
             copy.litellm_params = _get_masked_values(
                 copy.litellm_params,
@@ -107,12 +133,8 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
-AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = float(
-    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0")
-)
-AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(
-    os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0")
-)
+AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0"))
+AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS = float(os.environ.get("LITELLM_AGENT_HEALTH_CHECK_GATHER_TIMEOUT", "30.0"))
 
 
 async def _check_agent_url_health(
@@ -199,9 +221,7 @@ async def get_agents(
             returned_agents = global_agent_registry.get_agent_list()
         else:
             # Get allowed agents from object_permission (key/team level)
-            allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(
-                user_api_key_auth=user_api_key_dict
-            )
+            allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
 
             # If no restrictions (empty list), return all agents
             if len(allowed_agent_ids) == 0:
@@ -209,9 +229,7 @@ async def get_agents(
             else:
                 # Filter agents by allowed IDs
                 all_agents = global_agent_registry.get_agent_list()
-                returned_agents = [
-                    agent for agent in all_agents if agent.agent_id in allowed_agent_ids
-                ]
+                returned_agents = [agent for agent in all_agents if agent.agent_id in allowed_agent_ids]
 
         # Fetch current spend from DB for all returned agents
         from litellm.proxy.proxy_server import prisma_client
@@ -226,14 +244,14 @@ async def get_agents(
                 for agent in returned_agents:
                     if agent.agent_id in spend_map:
                         agent.spend = spend_map[agent.agent_id]
+                await _attach_keys_to_agents(returned_agents, prisma_client)
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
             if agent.litellm_params is None:
                 agent.litellm_params = {}
-            agent.litellm_params["is_public"] = (
-                litellm.public_agent_groups is not None
-                and (agent.agent_id in litellm.public_agent_groups)
+            agent.litellm_params["is_public"] = litellm.public_agent_groups is not None and (
+                agent.agent_id in litellm.public_agent_groups
             )
 
         # Redact sensitive fields for non-admin users
@@ -245,21 +263,11 @@ async def get_agents(
             returned_agents = _redact_sensitive_agent_fields(returned_agents)
 
         if health_check:
-            agents_with_url = [
-                agent
-                for agent in returned_agents
-                if (agent.agent_card_params or {}).get("url")
-            ]
-            agents_without_url = [
-                agent
-                for agent in returned_agents
-                if not (agent.agent_card_params or {}).get("url")
-            ]
+            agents_with_url = [agent for agent in returned_agents if (agent.agent_card_params or {}).get("url")]
+            agents_without_url = [agent for agent in returned_agents if not (agent.agent_card_params or {}).get("url")]
             try:
                 health_results = await asyncio.wait_for(
-                    asyncio.gather(
-                        *[_check_agent_url_health(agent) for agent in agents_with_url]
-                    ),
+                    asyncio.gather(*[_check_agent_url_health(agent) for agent in agents_with_url]),
                     timeout=AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
                 )
             except asyncio.TimeoutError:
@@ -275,25 +283,17 @@ async def get_agents(
                     }
                     for agent in agents_with_url
                 ]
-            healthy_ids = {
-                result["agent_id"] for result in health_results if result["healthy"]
-            }
-            returned_agents = [
-                agent for agent in agents_with_url if agent.agent_id in healthy_ids
-            ] + agents_without_url
+            healthy_ids = {result["agent_id"] for result in health_results if result["healthy"]}
+            returned_agents = [agent for agent in agents_with_url if agent.agent_id in healthy_ids] + agents_without_url
 
         return returned_agents
     except HTTPException:
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {}".format(
-                str(e)
-            )
+            "litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {}".format(str(e))
         )
-        raise HTTPException(
-            status_code=500, detail={"error": f"Internal server error: {str(e)}"}
-        )
+        raise HTTPException(status_code=500, detail={"error": f"Internal server error: {str(e)}"})
 
 
 #### CRUD ENDPOINTS FOR AGENTS ####
@@ -408,9 +408,7 @@ async def create_agent(
         # Also register in memory
         try:
             AGENT_REGISTRY.register_agent(agent_config=result)
-            verbose_proxy_logger.info(
-                f"Successfully registered agent '{agent_name}' (ID: {agent_id}) in memory"
-            )
+            verbose_proxy_logger.info(f"Successfully registered agent '{agent_name}' (ID: {agent_id}) in memory")
         except Exception as reg_error:
             verbose_proxy_logger.warning(
                 f"Failed to register agent '{agent_name}' (ID: {agent_id}) in memory: {reg_error}"
@@ -455,9 +453,7 @@ async def get_agent_by_id(
             AgentRequestHandler,
         )
 
-        is_allowed = await AgentRequestHandler.is_agent_allowed(
-            agent_id=agent_id, user_api_key_auth=user_api_key_dict
-        )
+        is_allowed = await AgentRequestHandler.is_agent_allowed(agent_id=agent_id, user_api_key_auth=user_api_key_dict)
         if not is_allowed:
             raise HTTPException(
                 status_code=403,
@@ -480,26 +476,20 @@ async def get_agent_by_id(
                 agent_dict = agent_row.model_dump()
                 if agent_row.object_permission is not None:
                     try:
-                        agent_dict["object_permission"] = (
-                            agent_row.object_permission.model_dump()
-                        )
+                        agent_dict["object_permission"] = agent_row.object_permission.model_dump()
                     except Exception:
-                        agent_dict["object_permission"] = (
-                            agent_row.object_permission.dict()
-                        )
+                        agent_dict["object_permission"] = agent_row.object_permission.dict()
                 agent = AgentResponse(**agent_dict)  # type: ignore
         else:
             # Agent found in memory — refresh spend from DB
-            db_row = await AgentsRepository(prisma_client).table.find_unique(
-                where={"agent_id": agent_id}
-            )
+            db_row = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
             if db_row is not None:
                 agent.spend = db_row.spend
 
         if agent is None:
-            raise HTTPException(
-                status_code=404, detail=f"Agent with ID {agent_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+
+        await _attach_keys_to_agents([agent], prisma_client)
 
         # Redact sensitive fields for non-admin users
         is_admin = (
@@ -565,22 +555,16 @@ async def update_agent(
     _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         # Check if agent exists
-        existing_agent = await AgentsRepository(prisma_client).table.find_unique(
-            where={"agent_id": agent_id}
-        )
+        existing_agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
         if existing_agent is not None:
             existing_agent = dict(existing_agent)
 
         if existing_agent is None:
-            raise HTTPException(
-                status_code=404, detail=f"Agent with ID {agent_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
@@ -673,22 +657,16 @@ async def patch_agent(
     _check_agent_management_permission(user_api_key_dict)
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         # Check if agent exists
-        existing_agent = await AgentsRepository(prisma_client).table.find_unique(
-            where={"agent_id": agent_id}
-        )
+        existing_agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
         if existing_agent is not None:
             existing_agent = dict(existing_agent)
 
         if existing_agent is None:
-            raise HTTPException(
-                status_code=404, detail=f"Agent with ID {agent_id} not found"
-            )
+            raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
         # Get the user ID from the API key auth
         updated_by = user_api_key_dict.user_id or "unknown"
@@ -770,20 +748,14 @@ async def delete_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await AgentsRepository(prisma_client).table.find_unique(
-            where={"agent_id": agent_id}
-        )
+        existing_agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
         if existing_agent is not None:
             existing_agent = dict[Any, Any](existing_agent)
 
         if existing_agent is None:
-            raise HTTPException(
-                status_code=404, detail=f"Agent with ID {agent_id} not found in DB."
-            )
+            raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found in DB.")
 
-        await AGENT_REGISTRY.delete_agent_from_db(
-            agent_id=agent_id, prisma_client=prisma_client
-        )
+        await AGENT_REGISTRY.delete_agent_from_db(agent_id=agent_id, prisma_client=prisma_client)
 
         AGENT_REGISTRY.deregister_agent(agent_name=existing_agent.get("agent_name"))  # type: ignore
 
@@ -834,9 +806,7 @@ async def make_agent_public(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         # Update the public model groups
@@ -860,16 +830,12 @@ async def make_agent_public(
         agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
         if agent is None:
             # check if agent exists in DB
-            agent = await AgentsRepository(prisma_client).table.find_unique(
-                where={"agent_id": agent_id}
-            )
+            agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
             if agent is not None:
                 agent = AgentResponse(**agent.model_dump())  # type: ignore
 
             if agent is None:
-                raise HTTPException(
-                    status_code=404, detail=f"Agent with ID {agent_id} not found"
-                )
+                raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
         if litellm.public_agent_groups is None:
             litellm.public_agent_groups = []
@@ -951,9 +917,7 @@ async def make_agents_public(
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
 
     try:
         # Update the public model groups
@@ -983,16 +947,12 @@ async def make_agents_public(
             agent = AGENT_REGISTRY.get_agent_by_id(agent_id=agent_id)
             if agent is None:
                 # check if agent exists in DB
-                agent = await AgentsRepository(prisma_client).table.find_unique(
-                    where={"agent_id": agent_id}
-                )
+                agent = await AgentsRepository(prisma_client).table.find_unique(where={"agent_id": agent_id})
                 if agent is not None:
                     agent = AgentResponse(**agent.model_dump())  # type: ignore
 
                 if agent is None:
-                    raise HTTPException(
-                        status_code=404, detail=f"Agent with ID {agent_id} not found"
-                    )
+                    raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
 
         litellm.public_agent_groups = request.agent_ids
 
@@ -1054,9 +1014,7 @@ async def get_agent_daily_activity(
     agent_ids_list = agent_ids.split(",") if agent_ids else None
     exclude_agent_ids_list: Optional[List[str]] = None
     if exclude_agent_ids:
-        exclude_agent_ids_list = (
-            exclude_agent_ids.split(",") if exclude_agent_ids else None
-        )
+        exclude_agent_ids_list = exclude_agent_ids.split(",") if exclude_agent_ids else None
 
     # Without scoping, an empty `agent_ids` query returned every agent's
     # spend/token rows on the proxy. Restrict non-admin callers to the
@@ -1069,9 +1027,7 @@ async def get_agent_daily_activity(
 
     where_condition: Dict[str, Any] = {}
     if not _user_has_admin_view(user_api_key_dict):
-        permitted_agent_ids = await AgentRequestHandler.get_allowed_agents(
-            user_api_key_auth=user_api_key_dict
-        )
+        permitted_agent_ids = await AgentRequestHandler.get_allowed_agents(user_api_key_auth=user_api_key_dict)
         # `get_allowed_agents` returns an empty list when the caller's key
         # and team carry no agent restrictions. For activity scoping that's
         # not "see everything" — fall back to the agents the caller
@@ -1090,9 +1046,7 @@ async def get_agent_daily_activity(
 
         if agent_ids_list:
             permitted_agent_id_set = set(permitted_agent_ids)
-            agent_ids_list = [
-                aid for aid in agent_ids_list if aid in permitted_agent_id_set
-            ]
+            agent_ids_list = [aid for aid in agent_ids_list if aid in permitted_agent_id_set]
         else:
             agent_ids_list = list(permitted_agent_ids)
 
@@ -1119,12 +1073,8 @@ async def get_agent_daily_activity(
     if agent_ids_list:
         where_condition["agent_id"] = {"in": list(agent_ids_list)}
 
-    agent_records = await AgentsRepository(prisma_client).table.find_many(
-        where=where_condition
-    )
-    agent_metadata = {
-        agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records
-    }
+    agent_records = await AgentsRepository(prisma_client).table.find_many(where=where_condition)
+    agent_metadata = {agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records}
 
     return await get_daily_activity(
         prisma_client=prisma_client,

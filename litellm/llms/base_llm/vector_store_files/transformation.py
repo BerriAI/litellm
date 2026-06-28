@@ -52,9 +52,7 @@ class BaseVectorStoreFilesConfig(ABC):
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(
-        self, litellm_params: Dict[str, Any]
-    ) -> VectorStoreFileAuthCredentials: ...
+    def get_auth_credentials(self, litellm_params: Dict[str, Any]) -> VectorStoreFileAuthCredentials: ...
 
     @abstractmethod
     def get_vector_store_file_endpoints_by_type(

@@ -30,13 +30,9 @@ from urllib.parse import quote
 # module is reloaded (e.g. ``importlib.reload``). Tests that override these
 # variables must reload this module — see
 # ``tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_identity_env.py``.
-LITELLM_MCP_SERVER_NAME = os.environ.get(
-    "LITELLM_MCP_SERVER_NAME", "litellm-mcp-server"
-)
+LITELLM_MCP_SERVER_NAME = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_DESCRIPTION = os.environ.get(
-    "LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM"
-)
+LITELLM_MCP_SERVER_DESCRIPTION = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
 MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 
@@ -391,9 +387,7 @@ def is_tool_name_prefixed(
     return True
 
 
-def validate_mcp_server_name(
-    server_name: str, raise_http_exception: bool = False
-) -> None:
+def validate_mcp_server_name(server_name: str, raise_http_exception: bool = False) -> None:
     """
     Validate that MCP server name does not contain 'MCP_TOOL_PREFIX_SEPARATOR'.
 
@@ -410,9 +404,7 @@ def validate_mcp_server_name(
             from fastapi import HTTPException
             from starlette import status
 
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message}
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message})
         else:
             raise Exception(error_message)
 
@@ -527,9 +519,7 @@ def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
     return _ENV_VAR_PATTERN.sub(_sub, value)
 
 
-def interpolate_headers(
-    headers: Mapping[str, str], variables: Mapping[str, str]
-) -> Dict[str, str]:
+def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]) -> Dict[str, str]:
     """Return a copy of ``headers`` with every value passed through ``interpolate_env_vars``."""
     return {k: interpolate_env_vars(v, variables) for k, v in headers.items()}
 

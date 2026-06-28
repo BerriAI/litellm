@@ -118,10 +118,7 @@ class LiteLLM_TeamTable(TeamBase):
         if isinstance(values, BaseModel):
             values = values.model_dump()
 
-        if (
-            isinstance(values.get("members_with_roles"), dict)
-            and not values["members_with_roles"]
-        ):
+        if isinstance(values.get("members_with_roles"), dict) and not values["members_with_roles"]:
             values["members_with_roles"] = []
 
         for field in dict_fields:

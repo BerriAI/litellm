@@ -47,9 +47,7 @@ class LegacyMapper:
         _LEGACY_FREQUENCY_PENALTY: lambda d: d.request_params.frequency_penalty,
         _LEGACY_PRESENCE_PENALTY: lambda d: d.request_params.presence_penalty,
         _LEGACY_STOP_SEQUENCES: lambda d: (
-            list(d.request_params.stop_sequences)
-            if d.request_params.stop_sequences
-            else None
+            list(d.request_params.stop_sequences) if d.request_params.stop_sequences else None
         ),
     }
 
@@ -62,9 +60,7 @@ class LegacyMapper:
     _SERVICE_ATTRS: dict[str, Callable[[ServiceSpanData], AttrValue | None]] = {
         _LEGACY_SERVICE: lambda d: d.service_name,
         _LEGACY_CALL_TYPE: lambda d: d.call_type,
-        _LEGACY_ERROR: lambda d: (
-            d.error.message if d.error is not None and d.error.message else None
-        ),
+        _LEGACY_ERROR: lambda d: d.error.message if d.error is not None and d.error.message else None,
     }
 
     def map(self, data: SpanData) -> AttributeMap:

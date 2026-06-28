@@ -98,9 +98,7 @@ class GenericGuardrailAPIRequest(BaseModel):
         description="LiteLLM library version running this proxy.",
     )
     additional_provider_specific_params: Optional[Dict[str, Any]] = None
-    tool_calls: Optional[
-        Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]
-    ] = None
+    tool_calls: Optional[Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]] = None
     model: Optional[str] = None  # the model being used for the LLM call
 
 

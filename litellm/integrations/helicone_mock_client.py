@@ -32,6 +32,4 @@ _config = MockClientConfig(
     patch_http_handler=True,  # Patch HTTPHandler.post directly
 )
 
-create_mock_helicone_client, should_use_helicone_mock = create_mock_client_factory(
-    _config
-)
+create_mock_helicone_client, should_use_helicone_mock = create_mock_client_factory(_config)

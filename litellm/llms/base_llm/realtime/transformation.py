@@ -30,9 +30,7 @@ class BaseRealtimeConfig(ABC):
         pass
 
     @abstractmethod
-    def get_complete_url(
-        self, api_base: Optional[str], model: str, api_key: Optional[str] = None
-    ) -> str:
+    def get_complete_url(self, api_base: Optional[str], model: str, api_key: Optional[str] = None) -> str:
         """
         OPTIONAL
 
@@ -71,9 +69,7 @@ class BaseRealtimeConfig(ABC):
     ) -> bool:  # initial configuration message sent to setup the realtime session
         return False
 
-    def session_configuration_request(
-        self, model: str
-    ) -> Optional[str]:  # message sent to setup the realtime session
+    def session_configuration_request(self, model: str) -> Optional[str]:  # message sent to setup the realtime session
         return None
 
     def transform_session_created_event(
