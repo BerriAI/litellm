@@ -460,6 +460,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # status -> stop_reason override
         if response.status == "incomplete":
             stop_reason = "max_tokens"
+        elif getattr(response, "stop_reason", None) == "max_output_tokens":
+            stop_reason = "max_tokens"
 
         # usage
         raw_usage: Optional[ResponseAPIUsage] = response.usage
@@ -471,8 +473,14 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             output_tokens=output_tokens,
         )
 
+        import uuid
+
+        response_id = getattr(response, "id", None)
+        if not response_id:
+            response_id = f"msg_{uuid.uuid4().hex}"
+
         return AnthropicMessagesResponse(
-            id=response.id,
+            id=response_id,
             type="message",
             role="assistant",
             model=response.model or "unknown-model",
