@@ -3,6 +3,13 @@
 nameOverride: ""
 fullnameOverride: ""
 
+# Extra labels added to the common labels of every chart-created object
+# (Deployments, Services, HPAs, Ingress, ServiceAccounts, migration Job).
+# Useful for tools that select resources by label, e.g. Kyverno policies,
+# cost-allocation, or ownership tracking. Selector/matchLabels are left
+# untouched so these are safe to add or change on an existing release.
+extraLabels: {}
+
 imagePullSecrets: []
 
 # Optional Ingress wiring the three component Services behind a single L7
