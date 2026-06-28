@@ -496,6 +496,43 @@ def test_mcp_span_parents_to_propagated_meta_trace_context(make_payload, span_na
     ]
 
 
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_ignores_client_supplied_baggage(make_payload, span_name):
+    """The MCP span must NOT honor W3C Baggage from the client's ``params._meta``.
+
+    ``params._meta`` is caller-controlled and the baggage processor stamps
+    allowlisted baggage keys onto every span, so extracting remote baggage would
+    let a client spoof a span's identity (e.g. ``litellm.team.id``). The propagator
+    extracts trace context only, so the spoofed keys never reach the span while the
+    legitimate traceparent parenting still works."""
+    logger, exporter = _logger()
+    transport = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(transport)
+    token = set_mcp_message_trace_carrier(
+        {
+            "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+            "baggage": "litellm.team.id=spoofed-team,litellm.metadata.user_api_key_user_id=attacker",
+        }
+    )
+    try:
+        asyncio.run(
+            logger.async_log_success_event(
+                {"standard_logging_object": make_payload()}, None, None, None
+            )
+        )
+    finally:
+        reset_mcp_message_trace_carrier(token)
+    transport.end()
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    # Trace context still honored: proves the carrier was processed, not dropped wholesale.
+    assert span.parent is not None and span.parent.span_id == 0x2222222222222222
+    # ...but the client's spoofed identity baggage never lands as a span attribute.
+    assert span.attributes.get(LiteLLM.TEAM_ID) != "spoofed-team"
+    assert "litellm.metadata.user_api_key_user_id" not in span.attributes
+
+
 def test_mcp_span_malformed_traceparent_starts_root():
     """A malformed traceparent in ``params._meta`` must not crash or parent to a
     bogus span: the propagator ignores it, so the span starts its own root trace and

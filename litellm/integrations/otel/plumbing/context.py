@@ -4,19 +4,13 @@ from contextvars import ContextVar, Token
 from typing import Mapping
 
 from opentelemetry import baggage
-from opentelemetry.baggage.propagation import W3CBaggagePropagator
 from opentelemetry.context import Context, get_current
-from opentelemetry.propagators.composite import CompositePropagator
 from opentelemetry.trace import Link, Span, get_current_span, set_span_in_context
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
 _PROPAGATOR = TraceContextTextMapPropagator()
-# MCP propagates W3C Trace Context *and* Baggage in ``params._meta`` (SEP-414), so
-# the MCP span extracts both — trace context for the remote parent, baggage so the
-# client's baggage (e.g. user id) rides onto the span and downstream calls.
-_MCP_PROPAGATOR = CompositePropagator([TraceContextTextMapPropagator(), W3CBaggagePropagator()])
 
 # The request's root span — the FastAPI-owned SERVER span — captured ONCE when the
 # proxy first resolves it, so request-level spans (the LLM call, guardrails) can
@@ -149,13 +143,19 @@ def resolve_mcp_span_context(
       ``params._meta`` (a *remote* parent), and
     * record the transport/session span as a *link*, never the parent.
 
+    Only trace context (``traceparent``/``tracestate``) is extracted, never the
+    client's W3C Baggage: ``params._meta`` is caller-controlled, and the otel
+    baggage processor stamps allowlisted baggage keys (``litellm.team.id``,
+    ``litellm.metadata.*``, ...) onto the span as attributes, so honoring remote
+    baggage would let a client spoof a span's identity attribution.
+
     With no propagated context the returned context carries no span, so the span
     starts its own root trace (still linked to the transport). The base context is
     explicitly empty so an absent ``traceparent`` can never fall through to the
     ambient (stale session) span.
     """
     source = carrier if carrier is not None else _mcp_message_trace_carrier.get()
-    parent = _MCP_PROPAGATOR.extract(dict(source or {}), context=Context())
+    parent = _PROPAGATOR.extract(dict(source or {}), context=Context())
     transport = request_root_span()
     links = (Link(transport.get_span_context()),) if transport is not None else ()
     return parent, links

@@ -230,19 +230,23 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
 
 
 def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[Dict[str, str]]:
-    """The W3C trace context (``traceparent``/``tracestate``/``baggage``) the MCP
-    client propagated in the request's ``params._meta`` (SEP-414), or ``None``.
+    """The W3C trace context (``traceparent``/``tracestate``) the MCP client
+    propagated in the request's ``params._meta`` (SEP-414), or ``None``.
 
     Per the OTel MCP semconv the MCP span parents to this propagated context rather
     than to the HTTP/session transport (which is recorded as a link instead), so a
     streamable-HTTP session that multiplexes many messages does not glue every
-    message under the session's first request.
+    message under the session's first request. The client's W3C Baggage is
+    deliberately excluded: it is caller-controlled, and the otel baggage processor
+    stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,
+    ...) onto the span, so honoring remote baggage would let a client spoof a
+    span's identity attribution.
     """
     meta = getattr(req_ctx, "meta", None)
     extra = getattr(meta, "model_extra", None)
     if not isinstance(extra, dict):
         return None
-    carrier = {key: extra[key] for key in ("traceparent", "tracestate", "baggage") if isinstance(extra.get(key), str)}
+    carrier = {key: extra[key] for key in ("traceparent", "tracestate") if isinstance(extra.get(key), str)}
     return carrier or None
 
 

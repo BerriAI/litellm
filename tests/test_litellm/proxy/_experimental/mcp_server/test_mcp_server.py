@@ -6456,7 +6456,12 @@ class TestMCPMetaTraceCarrier:
     shape (extra='allow' preserves the unprefixed keys), not just an injected
     carrier."""
 
-    def test_extracts_w3c_keys_and_excludes_other_meta(self):
+    def test_extracts_trace_context_and_excludes_baggage_and_other_meta(self):
+        """Only traceparent/tracestate are carried. The client's W3C ``baggage`` is
+        deliberately dropped even though it rides in params._meta: it is
+        caller-controlled, and the otel baggage processor stamps allowlisted baggage
+        keys onto the span, so honoring it would let a client spoof a span's identity
+        (e.g. ``litellm.team.id``). Dropping it at the source is the regression guard."""
         from types import SimpleNamespace
 
         from mcp.types import RequestParams
@@ -6469,7 +6474,7 @@ class TestMCPMetaTraceCarrier:
             {
                 "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
                 "tracestate": "rojo=1",
-                "baggage": "userId=alice",
+                "baggage": "litellm.team.id=spoofed-team,litellm.metadata.user_api_key_user_id=attacker",
                 "progressToken": "p1",
             }
         )
@@ -6477,8 +6482,8 @@ class TestMCPMetaTraceCarrier:
         assert carrier == {
             "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
             "tracestate": "rojo=1",
-            "baggage": "userId=alice",
         }
+        assert "baggage" not in carrier
 
     def test_none_when_no_trace_context(self):
         from types import SimpleNamespace
