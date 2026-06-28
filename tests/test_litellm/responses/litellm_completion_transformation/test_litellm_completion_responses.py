@@ -800,6 +800,44 @@ class TestFunctionCallTransformation:
         assert [m.get("role") for m in messages] == ["user", "assistant"]
         assert "hello there" in str(messages[1].get("content"))
 
+    def test_is_blank_assistant_message_detection(self):
+        """Cover the blank-detection branches across content shapes."""
+        is_blank = LiteLLMCompletionResponsesConfig._is_blank_assistant_message
+
+        assert is_blank({"role": "assistant", "content": None})
+        assert is_blank({"role": "assistant", "content": ""})
+        assert is_blank({"role": "assistant", "content": "   "})
+        assert is_blank({"role": "assistant", "content": []})
+        assert is_blank(
+            {"role": "assistant", "content": [{"type": "text", "text": "  "}]}
+        )
+
+        assert not is_blank({"role": "user", "content": ""})
+        assert not is_blank(
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "c"}]}
+        )
+        assert not is_blank({"role": "assistant", "content": "hello"})
+        assert not is_blank({"role": "assistant", "content": 123})
+        assert not is_blank(
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+        )
+        assert not is_blank(
+            {
+                "role": "assistant",
+                "content": [{"type": "image_url", "image_url": {"url": "u"}}],
+            }
+        )
+
+    def test_is_empty_text_part_detection(self):
+        """Cover the empty-text-part branches including non-dict and non-text parts."""
+        is_empty = LiteLLMCompletionResponsesConfig._is_empty_text_part
+
+        assert is_empty({"type": "text", "text": ""})
+        assert is_empty({"type": None, "text": "   "})
+        assert not is_empty("not a dict")
+        assert not is_empty({"type": "text", "text": "x"})
+        assert not is_empty({"type": "image_url", "image_url": {"url": "u"}})
+
     def test_complete_request_transformation_with_function_calls(self):
         """Test the complete request transformation that would be used by the responses API"""
         test_input = [
