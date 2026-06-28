@@ -2626,18 +2626,8 @@ class BaseLLMHTTPHandler:
 
         initial_response = responses_api_provider_config.transform_response_api_response(
             model=model,
-            messages=(
-                input
-                if isinstance(input, list)
-                else [{"role": "user", "content": input}]
-            ),
-            anthropic_messages_provider_config=responses_api_provider_config,
-            anthropic_messages_optional_request_params=response_api_optional_request_params,
+            raw_response=response,
             logging_obj=logging_obj,
-            stream=False,
-            custom_llm_provider=custom_llm_provider,
-            kwargs=dict(litellm_params),
-            api_surface="responses",
         )
 
         final_response = await self._call_agentic_completion_hooks(
