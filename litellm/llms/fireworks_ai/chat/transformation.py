@@ -425,14 +425,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
         if supports_pdf_input_value is not None:
             provider_specific_model_info["supports_pdf_input"] = supports_pdf_input_value
 
-        if supports_vision_value is not None:
-            provider_specific_model_info["supports_vision"] = supports_vision_value
-
-        if supports_pdf_input_value is not None:
-            provider_specific_model_info["supports_pdf_input"] = (
-                supports_pdf_input_value
-            )
-
         return provider_specific_model_info
 
     def transform_request(
