@@ -15,9 +15,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
         firewall_id=getattr(litellm_params, "deepkeep_firewall_id", None),
-        unreachable_fallback=getattr(
-            litellm_params, "unreachable_fallback", "fail_closed"
-        ),
+        unreachable_fallback=getattr(litellm_params, "unreachable_fallback", "fail_closed"),
         extra_headers=getattr(litellm_params, "extra_headers", None),
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,

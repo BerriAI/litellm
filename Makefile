@@ -127,8 +127,7 @@ lint-ruff-FULL-dev: install-dev
 	else echo "No changed .py files to check."; fi
 
 lint-basedpyright: install-dev
-	git fetch origin litellm_internal_staging
-	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
+	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py
 
 lint-basedpyright-budget-update: install-dev
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update

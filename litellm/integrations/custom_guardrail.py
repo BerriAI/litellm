@@ -474,9 +474,7 @@ class CustomGuardrail(CustomLogger):
                     return True
         return False
 
-    async def async_pre_call_deployment_hook(
-        self, kwargs: dict[str, Any], call_type: CallTypes | None
-    ) -> dict | None:
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
         from litellm.proxy._types import UserAPIKeyAuth
 
         # should run guardrail

@@ -349,9 +349,7 @@ class GuardrailRegistry:
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
-    async def get_guardrail_by_name_from_db(
-        self, guardrail_name: str, prisma_client: PrismaClient
-    ) -> Guardrail | None:
+    async def get_guardrail_by_name_from_db(self, guardrail_name: str, prisma_client: PrismaClient) -> Guardrail | None:
         """
         Get a guardrail by its name from the database
         """
@@ -703,9 +701,7 @@ class InMemoryGuardrailHandler:
         # Initialize fresh (will add new callback to litellm.callbacks)
         return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
 
-    def sync_guardrail_from_db(
-        self, guardrail: Guardrail, config_file_path: str | None = None
-    ) -> Guardrail | None:
+    def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
         This is the method to call during DB polling.

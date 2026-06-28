@@ -16,9 +16,7 @@ class DeepKeepGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-class DeepKeepGuardrailConfigModel(
-    GuardrailConfigModel[DeepKeepGuardrailConfigModelOptionalParams]
-):
+class DeepKeepGuardrailConfigModel(GuardrailConfigModel[DeepKeepGuardrailConfigModelOptionalParams]):
     api_key: Optional[str] = Field(
         default=None,
         description=(

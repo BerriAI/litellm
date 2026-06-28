@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BUDGET_PATH = REPO_ROOT / "basedpyright-code-budget.json"
 PYRIGHT_CONFIG = REPO_ROOT / "pyrightconfig.json"
 DEFAULT_BASE = "origin/litellm_internal_staging"
+_FALLBACK_BASE = "upstream/litellm_internal_staging"
 
 # Bucket for a basedpyright diagnostic with no `rule`. Counted so it's gated.
 UNCODED = "<uncoded>"
@@ -128,9 +129,7 @@ def base_counts(ref: str) -> dict[str, int]:
     exe = shutil.which("basedpyright") or "basedpyright"
     with _temp_worktree(ref) as worktree:
         shutil.copy(PYRIGHT_CONFIG, worktree / "pyrightconfig.json")
-        proc = subprocess.run(
-            [exe, "--outputjson"], cwd=worktree, capture_output=True, text=True
-        )
+        proc = subprocess.run([exe, "--outputjson"], cwd=worktree, capture_output=True, text=True)
         return count_basedpyright(proc.stdout, root=worktree)
 
 
@@ -149,9 +148,7 @@ def evaluate(
     return sorted(breaches)
 
 
-def is_vacuous_run(
-    counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]
-) -> bool:
+def is_vacuous_run(counts: Mapping[str, int], budget: Mapping[str, Mapping[str, int]]) -> bool:
     """True when nothing was parsed but the budget expects errors -- the
     signature of a type checker that crashed or produced no output. The CI pipe
     swallows the tool's exit code (`tool || true`), so without this guard an
@@ -164,16 +161,12 @@ def cmd_update(counts: Mapping[str, int]) -> None:
     budget = {
         code: {
             "baseline": count,
-            "slack": (
-                existing[code]["slack"] if code in existing else _seed_slack(count)
-            ),
+            "slack": (existing[code]["slack"] if code in existing else _seed_slack(count)),
         }
         for code, count in sorted(counts.items())
     }
     BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
-    print(
-        f"Re-captured basedpyright per-rule budget: {len(budget)} rules, {sum(counts.values())} errors total"
-    )
+    print(f"Re-captured basedpyright per-rule budget: {len(budget)} rules, {sum(counts.values())} errors total")
 
 
 def cmd_check(base_ref: str) -> None:
@@ -204,9 +197,7 @@ def cmd_check(base_ref: str) -> None:
         return
     print("FAIL: basedpyright errors exceed the per-rule ceiling:")
     for breach in breaches:
-        print(
-            f"  {breach.code}: total {breach.total} over cap {breach.cap} (this change added {breach.added})"
-        )
+        print(f"  {breach.code}: total {breach.total} over cap {breach.cap} (this change added {breach.added})")
     print(
         "Reduce the new errors or remove an equal number elsewhere; the ceiling is "
         "baseline + slack in basedpyright-code-budget.json."
@@ -214,6 +205,36 @@ def cmd_check(base_ref: str) -> None:
     summary = "; ".join(f"{b.code} {b.total}/{b.cap} (+{b.added})" for b in breaches)
     print(f"BREACHED RULES: {summary}")
     raise SystemExit(1)
+
+
+def _resolve_base(ref: str) -> str:
+    """Return ref if it resolves locally; fall back to the upstream/ equivalent.
+
+    Forks with a different 'origin' (e.g. Azure DevOps) won't have
+    'origin/litellm_internal_staging', so we try 'upstream/...' before
+    giving up.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return ref
+    fallback = ref.replace("origin/", "upstream/", 1)
+    if fallback != ref:
+        fb = subprocess.run(
+            ["git", "rev-parse", "--verify", fallback],
+            cwd=REPO_ROOT,
+            capture_output=True,
+        )
+        if fb.returncode == 0:
+            print(
+                f"Note: '{ref}' not found, using '{fallback}' as base.",
+                file=sys.stderr,
+            )
+            return fallback
+    return ref  # let the caller fail with a clear error
 
 
 def main() -> None:
@@ -224,7 +245,7 @@ def main() -> None:
     if args.update:
         cmd_update(count_basedpyright(sys.stdin.read()))
     else:
-        cmd_check(args.base)
+        cmd_check(_resolve_base(args.base))
 
 
 if __name__ == "__main__":

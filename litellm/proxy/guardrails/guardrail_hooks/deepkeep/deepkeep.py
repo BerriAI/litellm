@@ -75,9 +75,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         extra_headers: dict[str, str] | None = None,
         **kwargs: Any,
     ):
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # API key
         deepkeep_api_key = api_key or os.environ.get("DEEPKEEP_API_KEY")
@@ -111,9 +109,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         else:
             self.api_base = f"{base_url}{_DEEPKEEP_GUARDRAIL_ENDPOINT}"
 
-        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
-            unreachable_fallback
-        )
+        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = unreachable_fallback
         self.extra_headers: dict[str, str] = extra_headers or {}
 
         # Set supported event hooks
@@ -169,10 +165,7 @@ class DeepKeepGuardrail(CustomGuardrail):
                 result_metadata[key] = value
 
         # Handle the token → hash alias (only when no explicit hash was provided)
-        if (
-            metadata_dict.get("user_api_key_token") is not None
-            and "user_api_key_hash" not in result_metadata
-        ):
+        if metadata_dict.get("user_api_key_token") is not None and "user_api_key_hash" not in result_metadata:
             result_metadata["user_api_key_hash"] = metadata_dict["user_api_key_token"]
 
         return result_metadata
@@ -197,9 +190,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         http_status_code: int | None = None,
     ) -> GenericGuardrailAPIInputs:
         """Allow the request to proceed when the guardrail is unreachable (fail-open mode)."""
-        status_suffix = (
-            f" http_status_code={http_status_code}" if http_status_code else ""
-        )
+        status_suffix = f" http_status_code={http_status_code}" if http_status_code else ""
         verbose_proxy_logger.critical(
             "DeepKeep guardrail unreachable (fail-open). Proceeding without guardrail.%s "
             "guardrail_name=%s api_base=%s input_type=%s litellm_call_id=%s litellm_trace_id=%s",
@@ -225,9 +216,7 @@ class DeepKeepGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         """Handle errors from the DeepKeep API with fail-open/fail-closed logic."""
         if is_unreachable and self.unreachable_fallback == "fail_open":
-            http_status_code = getattr(
-                getattr(error, "response", None), "status_code", None
-            )
+            http_status_code = getattr(getattr(error, "response", None), "status_code", None)
             return self._fail_open_passthrough(
                 inputs=inputs,
                 input_type=input_type,
@@ -300,9 +289,7 @@ class DeepKeepGuardrail(CustomGuardrail):
             GuardrailRaisedException: If the guardrail blocks the request.
             DeepKeepGuardrailAPIError: If the API call fails (in fail-closed mode).
         """
-        verbose_proxy_logger.debug(
-            "DeepKeep guardrail: applying guardrail, input_type=%s", input_type
-        )
+        verbose_proxy_logger.debug("DeepKeep guardrail: applying guardrail, input_type=%s", input_type)
 
         texts = inputs.get("texts", [])
         images = inputs.get("images")
@@ -320,9 +307,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         additional_params: dict[str, Any] = {"firewall_id": self.firewall_id}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_body)
         if dynamic_params:
-            additional_params.update(
-                {k: v for k, v in dynamic_params.items() if k != "firewall_id"}
-            )
+            additional_params.update({k: v for k, v in dynamic_params.items() if k != "firewall_id"})
 
         # Extract user API key metadata
         user_metadata = self._extract_user_api_key_metadata(request_data)
@@ -360,12 +345,8 @@ class DeepKeepGuardrail(CustomGuardrail):
             action = response_json.get("action", "NONE")
 
             if action == "BLOCKED":
-                error_message = (
-                    response_json.get("blocked_reason") or "Content violates policy"
-                )
-                verbose_proxy_logger.warning(
-                    "DeepKeep guardrail blocked request: %s", error_message
-                )
+                error_message = response_json.get("blocked_reason") or "Content violates policy"
+                verbose_proxy_logger.warning("DeepKeep guardrail blocked request: %s", error_message)
                 raise GuardrailRaisedException(
                     guardrail_name=GUARDRAIL_NAME,
                     message=error_message,
@@ -384,9 +365,7 @@ class DeepKeepGuardrail(CustomGuardrail):
         except GuardrailRaisedException:
             raise
         except Timeout as e:
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj
-            )
+            return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
         except httpx.HTTPStatusError as e:
             status_code = getattr(getattr(e, "response", None), "status_code", None)
             is_unreachable = status_code in (502, 503, 504)
@@ -394,13 +373,9 @@ class DeepKeepGuardrail(CustomGuardrail):
                 e, inputs, input_type, logging_obj, is_unreachable=is_unreachable
             )
         except httpx.RequestError as e:
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj
-            )
+            return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
         except Exception as e:
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj, is_unreachable=False
-            )
+            return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj, is_unreachable=False)
 
     @staticmethod
     def get_config_model() -> type | None:
