@@ -248,6 +248,10 @@ class EcoLogitsLogger(CustomLogger):
         * deterministic: ``{"value": 1.3e-5, "unit": "kWh"}``
         * range:         ``{"value": {"min": 1e-5, "max": 2e-5}, "unit": "kWh"}``
 
+        Flat top-level ``min`` / ``max`` siblings of ``value`` are also
+        tolerated, for an API revision that exposes the range that way. The
+        fallback runs only when ``value`` produced no bounds, so an entry
+        carrying both shapes never double-counts.
         """
         raw_value = entry.get("value")
         if isinstance(raw_value, (int, float)):
@@ -256,6 +260,10 @@ class EcoLogitsLogger(CustomLogger):
             for bound in ("min", "max"):
                 if bound in raw_value:
                     yield bound, raw_value[bound]
+        else:
+            for bound in ("min", "max"):
+                if bound in entry:
+                    yield bound, entry[bound]
 
     def _build_payload(self, kwargs: dict, result: object) -> dict | None:
         provider = kwargs.get("custom_llm_provider") or kwargs.get(
