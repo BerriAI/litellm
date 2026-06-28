@@ -124,37 +124,77 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         return response_json["predictions"]
 
     @staticmethod
-    def _resolve_sync_handler(
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, httpx.Client]],
-    ) -> HTTPHandler:
-        """
-        Honor a caller-supplied sync client so a custom transport
-        (proxy, mTLS cert, mock) is never silently dropped.
-        """
+    def _sync_post(
+        client: Optional[Union[HTTPHandler, httpx.Client]],
+        api_base: str,
+        headers: dict,
+        request_data: dict,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
         if isinstance(client, HTTPHandler):
-            return client
+            return client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
         if isinstance(client, httpx.Client):
-            return HTTPHandler(client=client)
-        return HTTPHandler(concurrent_limit=1)
+            if timeout is None:
+                return client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data,
+                )
+            return client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        return HTTPHandler(concurrent_limit=1).post(
+            url=api_base,
+            headers=headers,
+            json=request_data,
+            timeout=timeout,
+        )
 
     @staticmethod
-    def _resolve_async_handler(
-        client: Optional[Union[HTTPHandler, AsyncHTTPHandler, httpx.AsyncClient]],
-    ) -> AsyncHTTPHandler:
-        """
-        Honor a caller-supplied async client so a custom transport
-        (proxy, mTLS cert, mock) is never silently dropped.
-        """
+    async def _async_post(
+        client: Optional[Union[AsyncHTTPHandler, httpx.AsyncClient]],
+        api_base: str,
+        headers: dict,
+        request_data: dict,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.types.utils import LlmProviders
 
         if isinstance(client, AsyncHTTPHandler):
-            return client
+            return await client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
         if isinstance(client, httpx.AsyncClient):
-            handler = AsyncHTTPHandler()
-            handler.client = client
-            return handler
-        return get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI)
+            if timeout is None:
+                return await client.post(
+                    url=api_base,
+                    headers=headers,
+                    json=request_data,
+                )
+            return await client.post(
+                url=api_base,
+                headers=headers,
+                json=request_data,
+                timeout=timeout,
+            )
+        return await get_async_httpx_client(llm_provider=LlmProviders.VERTEX_AI).post(
+            url=api_base,
+            headers=headers,
+            json=request_data,
+            timeout=timeout,
+        )
 
     def completion(
         self,
@@ -259,12 +299,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler = self._resolve_sync_handler(client)
-
-        response = http_handler.post(
-            url=api_base,
+        response = self._sync_post(
+            client=client,
+            api_base=api_base,
             headers=headers,
-            json=request_data,
+            request_data=request_data,
             timeout=timeout,
         )
 
@@ -350,12 +389,11 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         )
 
         # Make the HTTP request
-        http_handler = self._resolve_async_handler(client)
-
-        response = await http_handler.post(
-            url=api_base,
+        response = await self._async_post(
+            client=client,
+            api_base=api_base,
             headers=headers,
-            json=request_data,
+            request_data=request_data,
             timeout=timeout,
         )
 
