@@ -1,4 +1,4 @@
-from typing import Any, Union
+from typing import Any
 
 from httpx import Headers, Response
 
@@ -115,7 +115,7 @@ class VolcEngineAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raise NotImplementedError("Volcengine STT uses a WebSocket handler.")
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
+        self, error_message: str, status_code: int, headers: dict | Headers
     ) -> BaseLLMException:
         return VolcEngineError(status_code=status_code, message=error_message)
 

@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Any, Coroutine, Union
+from typing import TYPE_CHECKING, Any, Coroutine
 
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -52,7 +52,7 @@ class VolcEngineAudioTranscription:
         api_base: str | None,
         atranscription: bool = False,
         provider_config: VolcEngineAudioTranscriptionConfig | None = None,
-    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+    ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         config = provider_config or VolcEngineAudioTranscriptionConfig()
         if atranscription:
             return self.async_audio_transcriptions(

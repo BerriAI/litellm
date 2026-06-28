@@ -2,7 +2,7 @@ import asyncio
 import uuid
 import wave
 from io import BytesIO
-from typing import TYPE_CHECKING, Any, Coroutine, Union
+from typing import TYPE_CHECKING, Any, Coroutine
 
 import httpx
 
@@ -79,7 +79,7 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         optional_params: dict,
-        voice: Union[str, dict] | None = None,
+        voice: str | dict | None = None,
         drop_params: bool = False,
         kwargs: dict = {},
     ) -> tuple[str | None, dict]:
@@ -143,19 +143,17 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: Union[str, dict] | None,
+        voice: str | dict | None,
         optional_params: dict,
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         extra_headers: dict[str, Any] | None,
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
         **kwargs: Any,
-    ) -> Union[
-        HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
-    ]:
+    ) -> HttpxBinaryResponseContent | Coroutine[Any, Any, HttpxBinaryResponseContent]:
         endpoint = self.get_complete_url(
             model=model,
             api_base=api_base,
@@ -199,7 +197,7 @@ class VolcEngineTextToSpeechConfig(BaseTextToSpeechConfig):
         voice: str,
         optional_params: dict,
         logging_obj: "LiteLLMLoggingObj",
-        timeout: Union[float, httpx.Timeout],
+        timeout: float | httpx.Timeout,
         api_base: str,
         api_key: str | None,
         resource_id: str,
@@ -441,7 +439,7 @@ def _safe_tts_payload(frame: Any) -> str:
         return "unparseable error payload"
 
 
-def _timeout_seconds(timeout: Union[float, httpx.Timeout, None]) -> float:
+def _timeout_seconds(timeout: float | httpx.Timeout | None) -> float:
     if isinstance(timeout, (int, float)):
         return float(timeout)
     if timeout is not None:

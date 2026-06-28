@@ -3,7 +3,7 @@ import binascii
 import json
 import math
 import struct
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from litellm._uuid import uuid
 from litellm.llms.base_llm.realtime.transformation import (
@@ -281,7 +281,7 @@ class VolcEngineRealtimeConfig(BaseRealtimeConfig):
 
     def transform_realtime_response(
         self,
-        message: Union[str, bytes],
+        message: str | bytes,
         model: str,
         logging_obj: LiteLLMLoggingObj,
         realtime_response_transform_input: RealtimeResponseTransformInput,
