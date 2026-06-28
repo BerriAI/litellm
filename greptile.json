@@ -1,0 +1,3 @@
+{
+  "ignorePatterns": "litellm/proxy/_experimental/out/\nlitellm/proxy/_experimental/out/**"
+}
