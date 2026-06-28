@@ -256,31 +256,34 @@ def shipped_cost_map(monkeypatch):
         set_fallback_generalizations(previous_rules)
 
 
-def test_shipped_rule_prices_unmapped_high_version_claude_at_opus_tier(shipped_cost_map):
-    """An unmapped Claude >= 4.6 resolves via the version-gated adaptive-thinking rule,
-    which inherits the Opus-tier pricing (so an unknown model is over-costed rather than
-    silently free) and adds ``supports_adaptive_thinking``."""
+def test_shipped_rule_marks_unmapped_high_version_claude_adaptive_without_pricing(
+    shipped_cost_map,
+):
+    """An unmapped Claude >= 4.6 resolves via the version-gated adaptive-thinking rule, which
+    inherits routing and capabilities from the base rule and adds ``supports_adaptive_thinking``.
+    The rule carries no pricing, so cost stays unpriced (zero, not a fabricated number) rather
+    than reporting a confidently-wrong price."""
     model = "claude-opus-9-9"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model)
     assert info["litellm_provider"] == "anthropic"
-    assert info["input_cost_per_token"] == 5e-06
-    assert info["output_cost_per_token"] == 2.5e-05
-    assert info["cache_creation_input_token_cost"] == 6.25e-06
-    assert info["cache_read_input_token_cost"] == 5e-07
     assert info["supports_adaptive_thinking"] is True
+    assert info["supports_function_calling"] is True
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
 
 
-def test_shipped_rule_prices_unmapped_low_version_claude_without_adaptive(shipped_cost_map):
-    """An unmapped Claude < 4.6 falls through to the version-neutral anthropic-claude rule:
-    same Opus-tier pricing, but no ``supports_adaptive_thinking`` flag, so a sub-4.6 alias
-    such as ``claude-opus-4-0`` is still priced yet never marked adaptive."""
+def test_shipped_rule_resolves_unmapped_low_version_claude_without_adaptive(shipped_cost_map):
+    """An unmapped Claude < 4.6 falls through to the version-neutral anthropic-claude rule: it
+    gets provider routing and baseline capabilities but no ``supports_adaptive_thinking`` flag,
+    so a sub-4.6 alias such as ``claude-opus-4-0`` resolves yet is never marked adaptive."""
     model = "claude-opus-4-0"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model)
     assert info["litellm_provider"] == "anthropic"
-    assert info["input_cost_per_token"] == 5e-06
+    assert info["supports_function_calling"] is True
     assert info.get("supports_adaptive_thinking") is None
+    assert not info.get("input_cost_per_token")
 
 
 def test_shipped_adaptive_rule_gates_on_version_not_pricing(shipped_cost_map):

@@ -44275,17 +44275,13 @@
       {
         "name": "anthropic-claude",
         "pattern": "^claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?$",
-        "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Version-neutral fallback that prices an unmapped Claude at the current Opus tier so an unknown model is over-costed rather than billed as free.",
+        "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Version-neutral fallback that gives an unmapped Claude provider routing and baseline capabilities; it carries no pricing, so cost stays on the standard unpriced behavior rather than a guessed number.",
         "model_info": {
           "litellm_provider": "anthropic",
           "mode": "chat",
           "max_input_tokens": 200000,
           "max_output_tokens": 64000,
           "max_tokens": 64000,
-          "input_cost_per_token": 5e-06,
-          "output_cost_per_token": 2.5e-05,
-          "cache_creation_input_token_cost": 6.25e-06,
-          "cache_read_input_token_cost": 5e-07,
           "supports_function_calling": true,
           "supports_parallel_function_calling": true,
           "supports_vision": true,
