@@ -148,7 +148,9 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     unmapped future Claudes, while leaving the dated Claude 4.0 names
     ("...-4-20250514") unflagged so a date can never be mistaken for a 4.6+ minor
     version. The version-neutral anthropic-claude pricing rule must not flag it, so
-    an unmapped sub-4.6 name is priced but stays non-adaptive."""
+    an unmapped sub-4.6 name is priced but stays non-adaptive. The adaptive rule must
+    inherit pricing from the pricing rule via ``extends`` and carry only its delta, so
+    the Opus-tier price block is never duplicated across rules."""
     backup = GetModelCostMap.load_local_model_cost_map()
 
     rules = backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
@@ -158,6 +160,10 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
     )
     assert "supports_adaptive_thinking" not in pricing_rule["model_info"]
     assert adaptive_rule["model_info"]["supports_adaptive_thinking"] is True
+
+    assert "extends" not in pricing_rule
+    assert adaptive_rule.get("extends") == "anthropic-claude"
+    assert adaptive_rule["model_info"] == {"supports_adaptive_thinking": True}
 
     for adaptive in [
         "anthropic.claude-opus-4-8",

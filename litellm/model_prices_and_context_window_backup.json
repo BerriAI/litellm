@@ -44027,26 +44027,8 @@
       {
         "name": "anthropic-claude-adaptive-thinking",
         "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
+        "extends": "anthropic-claude",
         "model_info": {
-          "litellm_provider": "anthropic",
-          "mode": "chat",
-          "max_input_tokens": 200000,
-          "max_output_tokens": 64000,
-          "max_tokens": 64000,
-          "input_cost_per_token": 5e-06,
-          "output_cost_per_token": 2.5e-05,
-          "cache_creation_input_token_cost": 6.25e-06,
-          "cache_read_input_token_cost": 5e-07,
-          "supports_function_calling": true,
-          "supports_parallel_function_calling": true,
-          "supports_vision": true,
-          "supports_tool_choice": true,
-          "supports_assistant_prefill": true,
-          "supports_prompt_caching": true,
-          "supports_response_schema": true,
-          "supports_reasoning": true,
-          "supports_pdf_input": true,
-          "supports_system_messages": true,
           "supports_adaptive_thinking": true
         }
       },

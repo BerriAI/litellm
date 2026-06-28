@@ -104,6 +104,55 @@ def test_setting_rules_invalidates_compiled_cache(restore_generalizations):
     assert match_fallback_generalization("bbb-1") == {"v": 2}
 
 
+def test_extends_inherits_parent_and_own_overrides(restore_generalizations):
+    """A rule's ``extends`` pulls in the parent's model_info; its own keys win on conflict,
+    so a narrow rule carries only its delta instead of duplicating the parent."""
+    restore_generalizations(
+        [
+            {
+                "name": "base",
+                "pattern": r"^base-only$",
+                "model_info": {
+                    "litellm_provider": "anthropic",
+                    "input_cost_per_token": 5e-06,
+                    "supports_vision": True,
+                },
+            },
+            {
+                "name": "child",
+                "pattern": r"^kid-",
+                "extends": "base",
+                "model_info": {
+                    "supports_adaptive_thinking": True,
+                    "supports_vision": False,
+                },
+            },
+        ]
+    )
+    matched = match_fallback_generalization("kid-1")
+    assert matched == {
+        "litellm_provider": "anthropic",
+        "input_cost_per_token": 5e-06,
+        "supports_vision": False,
+        "supports_adaptive_thinking": True,
+    }
+
+
+def test_extends_with_unknown_parent_keeps_own_model_info(restore_generalizations):
+    """A dangling ``extends`` is non-fatal: the rule resolves to its own model_info."""
+    restore_generalizations(
+        [
+            {
+                "name": "orphan",
+                "pattern": r"^orphan-",
+                "extends": "does-not-exist",
+                "model_info": {"litellm_provider": "openai"},
+            }
+        ]
+    )
+    assert match_fallback_generalization("orphan-1") == {"litellm_provider": "openai"}
+
+
 # --------------------------------------------------------------------------- #
 # End-to-end: provider routing + model-info resolution
 # --------------------------------------------------------------------------- #
@@ -208,9 +257,9 @@ def shipped_cost_map(monkeypatch):
 
 
 def test_shipped_rule_prices_unmapped_high_version_claude_at_opus_tier(shipped_cost_map):
-    """An unmapped Claude >= 4.6 resolves to the self-contained adaptive-thinking rule:
-    Opus-tier pricing (so an unknown model is over-costed rather than silently free) and
-    ``supports_adaptive_thinking`` together, from one rule with no merging."""
+    """An unmapped Claude >= 4.6 resolves via the version-gated adaptive-thinking rule,
+    which inherits the Opus-tier pricing (so an unknown model is over-costed rather than
+    silently free) and adds ``supports_adaptive_thinking``."""
     model = "claude-opus-9-9"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model)
