@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolvePythonCommand,
   parsePythonVersion,
+  probePythonVersion,
   isSupportedPython,
   unsupportedPythonMessage,
 } from "../scripts/gen-api-types.mjs";
@@ -46,6 +47,32 @@ describe("parsePythonVersion", () => {
 
   it("returns null on unparseable output", () => {
     expect(parsePythonVersion("not a version")).toBeNull();
+  });
+});
+
+describe("probePythonVersion", () => {
+  it("probes the interpreter from the repo root, matching the spec-dump cwd", () => {
+    let seenCwd: string | undefined;
+    const exec = (_bin: string, _args: string[], opts: { cwd?: string }) => {
+      seenCwd = opts.cwd;
+      return "3.11\n";
+    };
+    const version = probePythonVersion(["python3"], repoRoot, exec);
+    expect(seenCwd).toBe(repoRoot);
+    expect(version).toEqual({ major: 3, minor: 11 });
+  });
+
+  it("resolves a repo-root-relative interpreter against the repo root, not the dashboard cwd", () => {
+    let seenBin: string | undefined;
+    let seenCwd: string | undefined;
+    const exec = (bin: string, _args: string[], opts: { cwd?: string }) => {
+      seenBin = bin;
+      seenCwd = opts.cwd;
+      return "3.12\n";
+    };
+    probePythonVersion([".venv/bin/python"], repoRoot, exec);
+    expect(seenBin).toBe(".venv/bin/python");
+    expect(seenCwd).toBe(repoRoot);
   });
 });
 

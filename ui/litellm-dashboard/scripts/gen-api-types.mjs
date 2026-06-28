@@ -55,12 +55,17 @@ export function unsupportedPythonMessage(pythonCommand, version) {
   );
 }
 
-function assertSupportedPython(pythonCommand) {
+export function probePythonVersion(pythonCommand, cwd, exec = execFileSync) {
   const probe = "import sys; print('.'.join(map(str, sys.version_info[:2])))";
-  const stdout = execFileSync(pythonCommand[0], [...pythonCommand.slice(1), "-c", probe], {
+  const stdout = exec(pythonCommand[0], [...pythonCommand.slice(1), "-c", probe], {
+    cwd,
     encoding: "utf8",
   });
-  const version = parsePythonVersion(stdout);
+  return parsePythonVersion(stdout);
+}
+
+function assertSupportedPython(pythonCommand, cwd) {
+  const version = probePythonVersion(pythonCommand, cwd);
   if (!isSupportedPython(version)) {
     throw new Error(unsupportedPythonMessage(pythonCommand, version));
   }
@@ -89,7 +94,7 @@ function main() {
   ].join("\n");
 
   try {
-    assertSupportedPython(python);
+    assertSupportedPython(python, repoRoot);
 
     execFileSync(python[0], [...python.slice(1), "-c", dumpSpec, specPath], {
       cwd: repoRoot,
