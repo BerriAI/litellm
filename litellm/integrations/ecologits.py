@@ -123,30 +123,19 @@ class EcoLogitsLogger(CustomLogger):
         timeout: float | None = None,
     ) -> None:
         super().__init__()
-        self.api_base = (
-            api_base or os.getenv("ECOLOGITS_API_BASE") or ECOLOGITS_DEFAULT_API_BASE
-        )
-        self.default_electricity_mix_zone = default_electricity_mix_zone or os.getenv(
-            "ECOLOGITS_ELECTRICITY_MIX_ZONE"
-        )
+        self.api_base = api_base or os.getenv("ECOLOGITS_API_BASE") or ECOLOGITS_DEFAULT_API_BASE
+        self.default_electricity_mix_zone = default_electricity_mix_zone or os.getenv("ECOLOGITS_ELECTRICITY_MIX_ZONE")
         self.timeout = timeout if timeout is not None else ECOLOGITS_DEFAULT_TIMEOUT_S
-        self.async_http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
-    async def async_logging_hook(
-        self, kwargs: dict, result: object, call_type: str
-    ) -> tuple[dict, object]:
+    async def async_logging_hook(self, kwargs: dict, result: object, call_type: str) -> tuple[dict, object]:
         try:
             # Respect the `no-log` gate. This hook runs in the FIRST loop of
             # async_log_success_event, BEFORE should_run_callback() applies the
             # no-log gate to the regular success handlers, so we must re-apply
             # it here — otherwise a no-log request would still POST model,
             # provider, token count, latency, and zone to the EcoLogits API.
-            if (
-                kwargs.get("litellm_params", {}).get("no-log") is True
-                and not litellm.global_disable_no_log_param
-            ):
+            if kwargs.get("litellm_params", {}).get("no-log") is True and not litellm.global_disable_no_log_param:
                 return kwargs, result
 
             payload = self._build_payload(kwargs=kwargs, result=result)
@@ -161,8 +150,7 @@ class EcoLogitsLogger(CustomLogger):
 
             if response.status_code != 200:
                 verbose_logger.warning(
-                    "EcoLogits: estimations endpoint returned status %s for "
-                    "model=%s provider=%s",
+                    "EcoLogits: estimations endpoint returned status %s for model=%s provider=%s",
                     response.status_code,
                     payload.get("model_name"),
                     payload.get("provider"),
@@ -176,8 +164,7 @@ class EcoLogitsLogger(CustomLogger):
                 ecologits_data=ecologits_data,
                 model=payload.get("model_name"),
                 custom_llm_provider=kwargs.get("custom_llm_provider"),
-                zone=payload.get("electricity_mix_zone")
-                or ECOLOGITS_DEFAULT_ZONE_LABEL,
+                zone=payload.get("electricity_mix_zone") or ECOLOGITS_DEFAULT_ZONE_LABEL,
             )
         except Exception as e:
             verbose_logger.warning(
@@ -266,21 +253,14 @@ class EcoLogitsLogger(CustomLogger):
                     yield bound, entry[bound]
 
     def _build_payload(self, kwargs: dict, result: object) -> dict | None:
-        provider = kwargs.get("custom_llm_provider") or kwargs.get(
-            "litellm_params", {}
-        ).get("custom_llm_provider")
+        provider = kwargs.get("custom_llm_provider") or kwargs.get("litellm_params", {}).get("custom_llm_provider")
 
         model = kwargs.get("model")
 
         output_token_count = self._extract_completion_tokens(result)
         request_latency = self._extract_request_latency_seconds(kwargs)
 
-        if (
-            not provider
-            or not model
-            or output_token_count is None
-            or request_latency is None
-        ):
+        if not provider or not model or output_token_count is None or request_latency is None:
             return None
 
         ecologits_provider = ECOLOGITS_CONVERSION_MODEL_NAME.get(provider, provider)
@@ -347,9 +327,7 @@ class EcoLogitsLogger(CustomLogger):
         if result is None:
             return None
         usage = None
-        if isinstance(
-            result, (litellm.ModelResponse, litellm.EmbeddingResponse)
-        ) and hasattr(result, "usage"):
+        if isinstance(result, (litellm.ModelResponse, litellm.EmbeddingResponse)) and hasattr(result, "usage"):
             usage = result["usage"]
         elif isinstance(result, dict):
             usage = result.get("usage")
