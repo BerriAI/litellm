@@ -15,9 +15,7 @@ class LlamafileChatConfig(OpenAIGPTConfig):
 
         If both are None, a fake API key is returned.
         """
-        return (
-            api_key or get_secret_str("LLAMAFILE_API_KEY") or "fake-api-key"
-        )  # llamafile does not require an API key
+        return api_key or get_secret_str("LLAMAFILE_API_KEY") or "fake-api-key"  # llamafile does not require an API key
 
     @staticmethod
     def _resolve_api_base(api_base: Optional[str] = None) -> Optional[str]:
@@ -27,11 +25,7 @@ class LlamafileChatConfig(OpenAIGPTConfig):
         If both are None, a default Llamafile server URL is returned.
         See: https://github.com/Mozilla-Ocho/llamafile/blob/bd1bbe9aabb1ee12dbdcafa8936db443c571eb9d/README.md#L61
         """
-        return (
-            api_base
-            or get_secret_str("LLAMAFILE_API_BASE")
-            or "http://127.0.0.1:8080/v1"
-        )  # type: ignore
+        return api_base or get_secret_str("LLAMAFILE_API_BASE") or "http://127.0.0.1:8080/v1"  # type: ignore
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
