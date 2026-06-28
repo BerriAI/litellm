@@ -98,6 +98,13 @@ def test_extract_key_with_filename():
     assert key == "auth.py"
 
 
+def test_extract_key_with_windows_file_path():
+    msg = {"role": "user", "content": r"File: C:\repo\auth.py"}
+    used: set = set()
+    key = extract_key(msg, fallback_index=0, used_keys=used)
+    assert key == "auth.py"
+
+
 def test_extract_key_fallback():
     msg = {"role": "user", "content": "Some random content without a filename"}
     used: set = set()
