@@ -1106,7 +1106,7 @@ async def _get_oauth_metadata_json(discovery_url: str) -> Optional[dict[str, obj
             discovery_url,
             headers={"Accept": "application/json"},
         )
-    except Exception as exc:
+    except httpx.HTTPError as exc:
         verbose_logger.debug(
             "MCP OAuth upstream authorization-server metadata fetch error for %s: %s",
             discovery_url,
@@ -1117,7 +1117,7 @@ async def _get_oauth_metadata_json(discovery_url: str) -> Optional[dict[str, obj
         return None
     try:
         decoded: object = response.json()
-    except Exception:
+    except ValueError:
         return None
     if not isinstance(decoded, dict):
         return None
