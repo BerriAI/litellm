@@ -28,38 +28,32 @@ from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCrede
 
 class TestBaseOpenAIPassThroughHandler:
     def test_join_url_paths(self):
-        print("\nTesting _join_url_paths method...")
 
         # Test joining base URL with no path and a path
         base_url = httpx.URL("https://api.example.com")
         path = "/v1/chat/completions"
         result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
-        print(f"Base URL with no path: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test joining base URL with path and another path
         base_url = httpx.URL("https://api.example.com/v1")
         path = "/chat/completions"
         result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
-        print(f"Base URL with path: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test with path not starting with slash
         base_url = httpx.URL("https://api.example.com/v1")
         path = "chat/completions"
         result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
-        print(f"Path without leading slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
         # Test with base URL having trailing slash
         base_url = httpx.URL("https://api.example.com/v1/")
         path = "/chat/completions"
         result = BaseOpenAIPassThroughHandler._join_url_paths(base_url, path, litellm.LlmProviders.OPENAI.value)
-        print(f"Base URL with trailing slash: '{base_url}' + '{path}' → '{result}'")
         assert str(result) == "https://api.example.com/v1/chat/completions"
 
     def test_append_openai_beta_header(self):
-        print("\nTesting _append_openai_beta_header method...")
 
         # Create mock requests with different paths
         assistants_request = MagicMock(spec=Request)
@@ -74,13 +68,11 @@ class TestBaseOpenAIPassThroughHandler:
 
         # Test with assistants API request
         result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistants_request)
-        print(f"Assistants API request: Added header: {result}")
         assert result["OpenAI-Beta"] == "assistants=v2"
 
         # Test with non-assistants API request
         headers = {"authorization": "Bearer test_key"}
         result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, non_assistants_request)
-        print(f"Non-assistants API request: Headers: {result}")
         assert "OpenAI-Beta" not in result
 
         # Test with assistant in the path
@@ -90,11 +82,9 @@ class TestBaseOpenAIPassThroughHandler:
 
         headers = {"authorization": "Bearer test_key"}
         result = BaseOpenAIPassThroughHandler._append_openai_beta_header(headers, assistant_request)
-        print(f"Assistant API request: Added header: {result}")
         assert result["OpenAI-Beta"] == "assistants=v2"
 
     def test_assemble_headers(self):
-        print("\nTesting _assemble_headers method...")
 
         # Mock request
         mock_request = MagicMock(spec=Request)
@@ -111,14 +101,12 @@ class TestBaseOpenAIPassThroughHandler:
             },
         ):
             result = BaseOpenAIPassThroughHandler._assemble_headers(api_key, mock_request)
-            print(f"Assembled headers: {result}")
             assert result["authorization"] == "Bearer test_api_key"
             assert result["api-key"] == "test_api_key"
             assert result["test-header"] == "value"
 
     @patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route")
     async def test_base_openai_pass_through_handler(self, mock_create_pass_through):
-        print("\nTesting _base_openai_pass_through_handler method...")
 
         # Mock dependencies
         mock_request = MagicMock(spec=Request)
@@ -130,9 +118,8 @@ class TestBaseOpenAIPassThroughHandler:
         mock_endpoint_func = AsyncMock(return_value={"result": "success"})
         mock_create_pass_through.return_value = mock_endpoint_func
 
-        print("Testing standard endpoint pass-through...")
         # Test with standard endpoint
-        result = await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
+        _result = await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
             endpoint="/chat/completions",
             request=mock_request,
             fastapi_response=mock_response,
@@ -143,18 +130,14 @@ class TestBaseOpenAIPassThroughHandler:
         )
 
         # Verify the result
-        print(f"Result from handler: {result}")
         assert result == {"result": "success"}
 
         # Verify create_pass_through_route was called with correct parameters
         call_args = mock_create_pass_through.call_args[1]
-        print(f"create_pass_through_route called with endpoint: {call_args['endpoint']}")
-        print(f"create_pass_through_route called with target: {call_args['target']}")
         assert call_args["endpoint"] == "/chat/completions"
         assert call_args["target"] == "https://api.openai.com/v1/chat/completions"
 
         # Verify endpoint_func was called with correct parameters
-        print("Verifying endpoint_func call parameters...")
         mock_endpoint_func.assert_awaited_once()
         assert mock_endpoint_func.await_args is not None
         # The endpoint_func is called with request, fastapi_response, user_api_key_dict
@@ -257,14 +240,13 @@ class TestVertexAIPassThroughHandler:
 
             # Call the route
             try:
-                result = await vertex_proxy_route(
+                _result = await vertex_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
                     user_api_key_dict={"api_key": "test-key"},
                 )
             except Exception as e:
-                print(f"Error: {e}")
 
             # Verify create_pass_through_route was called with correct arguments
             mock_create_route.assert_called_once_with(
@@ -359,14 +341,13 @@ class TestVertexAIPassThroughHandler:
 
             # Call the route
             try:
-                result = await vertex_proxy_route(
+                _result = await vertex_proxy_route(
                     endpoint=endpoint,
                     request=mock_request,
                     fastapi_response=mock_response,
                     user_api_key_dict={"api_key": "test-key"},
                 )
             except Exception as e:
-                print(f"Error: {e}")
 
             # Verify create_pass_through_route was called with correct arguments
             mock_create_route.assert_called_once_with(
@@ -463,8 +444,6 @@ class TestVertexAIPassThroughHandler:
                     fastapi_response=mock_response,
                 )
             except Exception as e:
-                traceback.print_exc()
-                print(f"Error: {e}")
 
             # Verify default credentials were used
             mock_create_route.assert_called_once_with(
@@ -551,8 +530,6 @@ class TestVertexAIPassThroughHandler:
                     fastapi_response=mock_response,
                 )
             except Exception as e:
-                traceback.print_exc()
-                print(f"Error: {e}")
 
             # Verify create_pass_through_route was called with correct arguments
             mock_create_route.assert_called_once_with(
@@ -584,7 +561,7 @@ class TestVertexAIPassThroughHandler:
                 mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
                 # Call the function
-                result = await vertex_proxy_route(
+                _result = await vertex_proxy_route(
                     endpoint="v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-1.5-pro:generateContent",
                     request=mock_request,
                     fastapi_response=mock_response,
@@ -907,7 +884,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
             mock_create_route.return_value = mock_endpoint_func
 
             # Call the route
-            result = await vertex_discovery_proxy_route(
+            _result = await vertex_discovery_proxy_route(
                 endpoint=endpoint,
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -942,7 +919,7 @@ class TestVertexAIDiscoveryPassThroughHandler:
                 mock_pass_through.return_value = AsyncMock(return_value={"status": "success"})
 
                 # Call the function
-                result = await vertex_discovery_proxy_route(
+                _result = await vertex_discovery_proxy_route(
                     endpoint="v1/projects/test-project/locations/us-central1/dataStores/default/servingConfigs/default:search",
                     request=mock_request,
                     fastapi_response=mock_response,
@@ -993,7 +970,7 @@ class TestBedrockLLMProxyRoute:
                 "model/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/r742sbn2zckd/converse"
             )
 
-            result = await bedrock_llm_proxy_route(
+            _result = await bedrock_llm_proxy_route(
                 endpoint=endpoint,
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -1001,7 +978,7 @@ class TestBedrockLLMProxyRoute:
             )
 
             mock_processor.base_passthrough_process_llm_request.assert_called_once()
-            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
+            _call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
 
             # For application-inference-profile, model should be "arn:aws:bedrock:us-east-1:026090525607:application-inference-profile/r742sbn2zckd"
             assert (
@@ -1033,14 +1010,14 @@ class TestBedrockLLMProxyRoute:
             # Test regular model endpoint
             endpoint = "model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
 
-            result = await bedrock_llm_proxy_route(
+            _result = await bedrock_llm_proxy_route(
                 endpoint=endpoint,
                 request=mock_request,
                 fastapi_response=mock_response,
                 user_api_key_dict=mock_user_api_key_dict,
             )
             mock_processor.base_passthrough_process_llm_request.assert_called_once()
-            call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
+            _call_kwargs = mock_processor.base_passthrough_process_llm_request.call_args.kwargs
 
             # For regular models, model should be just the model ID
             assert call_kwargs["model"] == "anthropic.claude-3-sonnet-20240229-v1:0"
@@ -1307,7 +1284,7 @@ class TestLLMPassthroughFactoryProxyRoute:
             mock_endpoint_func = AsyncMock(return_value="success")
             mock_create_route.return_value = mock_endpoint_func
 
-            result = await llm_passthrough_factory_proxy_route(
+            _result = await llm_passthrough_factory_proxy_route(
                 custom_llm_provider=LlmProviders.VLLM,
                 endpoint="/chat/completions",
                 request=mock_request,
@@ -1464,7 +1441,7 @@ class TestVLLMProxyRoute:
             return_value=httpx.Response(200, json={"response": "success"})
         )
 
-        result = await vllm_proxy_route(
+        _result = await vllm_proxy_route(
             endpoint="/models",
             request=mock_request,
             fastapi_response=mock_fastapi_response,
@@ -1504,7 +1481,7 @@ class TestVLLMProxyRoute:
         mock_user_api_key_dict = MagicMock()
         mock_factory_route.return_value = "factory_success"
 
-        result = await vllm_proxy_route(
+        _result = await vllm_proxy_route(
             endpoint="/chat/completions",
             request=mock_request,
             fastapi_response=mock_fastapi_response,
@@ -1593,7 +1570,7 @@ class TestForwardHeaders:
             mock_logging_obj.post_call_failure_hook = AsyncMock()
 
             # Call pass_through_request with forward_headers=True
-            result = await pass_through_request(
+            _result = await pass_through_request(
                 request=mock_request,
                 target=target_url,
                 custom_headers=custom_headers,
@@ -1689,7 +1666,7 @@ class TestForwardHeaders:
             mock_logging_obj.post_call_failure_hook = AsyncMock()
 
             # Call pass_through_request with forward_headers=False (default)
-            result = await pass_through_request(
+            _result = await pass_through_request(
                 request=mock_request,
                 target=target_url,
                 custom_headers=custom_headers,
@@ -1787,7 +1764,7 @@ class TestForwardHeaders:
                 mock_endpoint_func = AsyncMock(return_value="success")
                 mock_create_route.return_value = mock_endpoint_func
 
-                result = await llm_passthrough_factory_proxy_route(
+                _result = await llm_passthrough_factory_proxy_route(
                     custom_llm_provider=LlmProviders.OPENAI,
                     endpoint="/chat/completions",
                     request=mock_request,
@@ -1799,7 +1776,7 @@ class TestForwardHeaders:
                 mock_create_route.assert_called_once()
 
                 # Get the call arguments to verify _forward_headers parameter
-                call_kwargs = mock_create_route.call_args[1]
+                _call_kwargs = mock_create_route.call_args[1]
 
                 # Note: The current implementation doesn't explicitly pass _forward_headers
                 # This test documents the current behavior. If _forward_headers should be
@@ -1880,7 +1857,7 @@ class TestMilvusProxyRoute:
             mock_create_route.return_value = mock_endpoint_func
 
             # Call the route
-            result = await milvus_proxy_route(
+            _result = await milvus_proxy_route(
                 endpoint="vectors/search",
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -2242,7 +2219,7 @@ class TestOpenAIPassthroughRoute:
             mock_create_route.return_value = mock_endpoint_func
 
             # Call the route with /v1/responses endpoint
-            result = await openai_proxy_route(
+            _result = await openai_proxy_route(
                 endpoint="v1/responses",
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -2289,7 +2266,7 @@ class TestOpenAIPassthroughRoute:
             mock_endpoint_func = AsyncMock(return_value={"id": "chatcmpl-123", "choices": []})
             mock_create_route.return_value = mock_endpoint_func
 
-            result = await openai_proxy_route(
+            _result = await openai_proxy_route(
                 endpoint="v1/chat/completions",
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -2355,7 +2332,7 @@ class TestOpenAIPassthroughRoute:
             mock_endpoint_func = AsyncMock(return_value={"id": "asst_123", "object": "assistant"})
             mock_create_route.return_value = mock_endpoint_func
 
-            result = await openai_proxy_route(
+            _result = await openai_proxy_route(
                 endpoint="v1/assistants",
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -2403,7 +2380,7 @@ class TestCursorProxyRoute:
             mock_endpoint_func = AsyncMock(return_value={"agents": [], "nextCursor": None})
             mock_create_route.return_value = mock_endpoint_func
 
-            result = await cursor_proxy_route(
+            _result = await cursor_proxy_route(
                 endpoint="v0/agents",
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -2482,7 +2459,7 @@ class TestCursorProxyRoute:
             mock_endpoint_func = AsyncMock(return_value={"models": []})
             mock_create_route.return_value = mock_endpoint_func
 
-            result = await cursor_proxy_route(
+            _result = await cursor_proxy_route(
                 endpoint="v0/models",
                 request=mock_request,
                 fastapi_response=mock_response,
@@ -2558,7 +2535,7 @@ class TestCursorProxyRoute:
             )
             mock_create_route.return_value = mock_endpoint_func
 
-            result = await cursor_proxy_route(
+            _result = await cursor_proxy_route(
                 endpoint="v0/agents",
                 request=mock_request,
                 fastapi_response=mock_response,
