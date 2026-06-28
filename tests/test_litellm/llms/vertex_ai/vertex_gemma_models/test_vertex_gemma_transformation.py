@@ -712,3 +712,143 @@ class TestVertexGemmaCompletion:
 
         custom_client.post.assert_awaited_once()
         assert response.choices[0].message.content == "hi from async client"
+
+    def test_sync_completion_honors_raw_httpx_client_transport(self):
+        """
+        Regression for the reviewer's concern: a caller-supplied
+        httpx.Client(transport=MockTransport(...)) must be honored on the sync
+        path. Before the fix the isinstance(client, HTTPHandler) check failed
+        for a raw httpx client, so a brand-new default handler was created and
+        the caller's transport was silently dropped, sending the request to the
+        real Vertex endpoint.
+        """
+        import httpx
+
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.types.utils import ModelResponse
+
+        captured = {}
+
+        def transport_handler(request):
+            captured["count"] = captured.get("count", 0) + 1
+            captured["url"] = str(request.url)
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                status_code=200,
+                json=_make_gemma_vertex_response(content="from mock transport"),
+            )
+
+        mock_client = httpx.Client(transport=httpx.MockTransport(transport_handler))
+
+        try:
+            with patch.object(
+                HTTPHandler,
+                "__init__",
+                side_effect=AssertionError("raw httpx.Client must not be wrapped"),
+            ):
+                response = VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=False,
+                    litellm_params={},
+                    client=mock_client,
+                )
+
+                assert not mock_client.is_closed
+
+                second_response = VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi again"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=False,
+                    litellm_params={},
+                    client=mock_client,
+                )
+        finally:
+            mock_client.close()
+
+        assert captured["count"] == 2
+        assert captured.get("url") == "https://should-not-be-reached.invalid/v1:predict"
+        assert captured["body"]["instances"][0]["@requestFormat"] == "chatCompletions"
+        assert isinstance(response, ModelResponse)
+        assert response.choices[0].message.content == "from mock transport"
+        assert response.usage.total_tokens == 114
+        assert second_response.choices[0].message.content == "from mock transport"
+
+    @pytest.mark.asyncio
+    async def test_async_completion_honors_raw_httpx_client_transport(self):
+        """Async counterpart: a raw httpx.AsyncClient transport must be honored."""
+        import httpx
+
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.types.utils import ModelResponse
+
+        captured = {}
+
+        def transport_handler(request):
+            captured["url"] = str(request.url)
+            captured["body"] = json.loads(request.content)
+            captured["timeout"] = request.extensions.get("timeout")
+            return httpx.Response(
+                status_code=200,
+                json=_make_gemma_vertex_response(content="async from mock transport"),
+            )
+
+        mock_client = httpx.AsyncClient(
+            timeout=5.0,
+            transport=httpx.MockTransport(transport_handler),
+        )
+
+        try:
+            with patch.object(
+                AsyncHTTPHandler,
+                "__init__",
+                side_effect=AssertionError("raw AsyncClient must not be wrapped"),
+            ):
+                response = await VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=True,
+                    litellm_params={},
+                    client=mock_client,
+                )
+        finally:
+            await mock_client.aclose()
+
+        assert captured.get("url") == "https://should-not-be-reached.invalid/v1:predict"
+        assert captured["body"]["instances"][0]["@requestFormat"] == "chatCompletions"
+        assert isinstance(response, ModelResponse)
+        assert response.choices[0].message.content == "async from mock transport"
+        assert response.usage.total_tokens == 114
+        assert captured["timeout"] == {
+            "connect": 5.0,
+            "read": 5.0,
+            "write": 5.0,
+            "pool": 5.0,
+        }
