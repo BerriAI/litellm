@@ -2095,9 +2095,6 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     plugins: list[PluginConfig] | None = Field(
         None, description="external services registered as embeddable UI plugins"
     )
-    plugins: list[PluginConfig] | None = Field(
-        None, description="external services registered as embeddable UI plugins"
-    )
     key_management_system: Optional[KeyManagementSystem] = Field(
         None, description="key manager to load keys from / decrypt keys with"
     )
