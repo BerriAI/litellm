@@ -35,9 +35,7 @@ class SseServerTransport:
     """
 
     _endpoint: str
-    _read_stream_writers: dict[
-        UUID, MemoryObjectSendStream[types.JSONRPCMessage | Exception]
-    ]
+    _read_stream_writers: dict[UUID, MemoryObjectSendStream[types.JSONRPCMessage | Exception]]
 
     def __init__(self, endpoint: str) -> None:
         """
@@ -48,9 +46,7 @@ class SseServerTransport:
         super().__init__()
         self._endpoint = endpoint
         self._read_stream_writers = {}
-        verbose_logger.debug(
-            f"SseServerTransport initialized with endpoint: {endpoint}"
-        )
+        verbose_logger.debug(f"SseServerTransport initialized with endpoint: {endpoint}")
 
     @asynccontextmanager
     async def connect_sse(self, request: Request):
@@ -75,9 +71,7 @@ class SseServerTransport:
 
         sse_stream_writer: MemoryObjectSendStream[dict[str, Any]]
         sse_stream_reader: MemoryObjectReceiveStream[dict[str, Any]]
-        sse_stream_writer, sse_stream_reader = anyio.create_memory_object_stream(
-            0, dict[str, Any]
-        )
+        sse_stream_writer, sse_stream_reader = anyio.create_memory_object_stream(0, dict[str, Any])
 
         async def sse_writer():
             verbose_logger.debug("Starting SSE writer")
@@ -90,25 +84,19 @@ class SseServerTransport:
                     await sse_stream_writer.send(
                         {
                             "event": "message",
-                            "data": message.model_dump_json(
-                                by_alias=True, exclude_none=True
-                            ),
+                            "data": message.model_dump_json(by_alias=True, exclude_none=True),
                         }
                     )
 
         async with anyio.create_task_group() as tg:
-            response = EventSourceResponse(
-                content=sse_stream_reader, data_sender_callable=sse_writer
-            )
+            response = EventSourceResponse(content=sse_stream_reader, data_sender_callable=sse_writer)
             verbose_logger.debug("Starting SSE response task")
             tg.start_soon(response, request.scope, request.receive, request._send)
 
             verbose_logger.debug("Yielding read and write streams")
             yield (read_stream, write_stream)
 
-    async def handle_post_message(
-        self, scope: Scope, receive: Receive, send: Send
-    ) -> Response:
+    async def handle_post_message(self, scope: Scope, receive: Receive, send: Send) -> Response:
         verbose_logger.debug("Handling POST message")
         request = Request(scope, receive)
 

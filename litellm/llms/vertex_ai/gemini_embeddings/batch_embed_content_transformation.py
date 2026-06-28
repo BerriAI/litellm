@@ -140,9 +140,7 @@ def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
 
     for element in input:
         if isinstance(element, list):
-            if any(
-                _is_multimodal_element(sub) for sub in element if isinstance(sub, str)
-            ):
+            if any(_is_multimodal_element(sub) for sub in element if isinstance(sub, str)):
                 return True
         elif isinstance(element, str) and _is_multimodal_element(element):
             return True
@@ -242,13 +240,8 @@ def transform_openai_input_gemini_content(
                 raise ValueError("Nested input list must not be empty")
             for sub in element:
                 if not isinstance(sub, str):
-                    raise ValueError(
-                        f"Elements inside a nested input list must be strings, got {type(sub)}"
-                    )
-            parts = [
-                _build_part_for_input(sub, resolved_files=resolved_files)
-                for sub in element
-            ]
+                    raise ValueError(f"Elements inside a nested input list must be strings, got {type(sub)}")
+            parts = [_build_part_for_input(sub, resolved_files=resolved_files) for sub in element]
         else:
             parts = [_build_part_for_input(element, resolved_files=resolved_files)]
         request = EmbedContentRequest(
@@ -322,11 +315,7 @@ def _parse_usage_metadata(raw_usage_metadata: object) -> Optional[UsageMetadata]
 def _flatten_input(input: GeminiEmbeddingInput) -> tuple[str, ...]:
     if isinstance(input, str):
         return (input,)
-    return tuple(
-        sub
-        for element in input
-        for sub in (element if isinstance(element, list) else [element])
-    )
+    return tuple(sub for element in input for sub in (element if isinstance(element, list) else [element]))
 
 
 def _is_image_element(
@@ -354,17 +343,11 @@ def _count_input_images(
     input: GeminiEmbeddingInput,
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> int:
-    return sum(
-        1
-        for element in _flatten_input(input)
-        if _is_image_element(element, resolved_files)
-    )
+    return sum(1 for element in _flatten_input(input) if _is_image_element(element, resolved_files))
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:
-    return sum(
-        detail["tokenCount"] for detail in details if detail["modality"] == modality
-    )
+    return sum(detail["tokenCount"] for detail in details if detail["modality"] == modality)
 
 
 def _fallback_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
@@ -388,28 +371,20 @@ def _usage_from_embed_content_response(
     prompt_tokens = usage_metadata.get("promptTokenCount", 0)
     total_tokens = usage_metadata.get("totalTokenCount") or prompt_tokens
 
-    details: Sequence[PromptTokensDetails] = (
-        usage_metadata.get("promptTokensDetails") or ()
-    )
+    details: Sequence[PromptTokensDetails] = usage_metadata.get("promptTokensDetails") or ()
     text_tokens = _tokens_for_modality(details, "TEXT")
     audio_tokens = _tokens_for_modality(details, "AUDIO")
     video_tokens = _tokens_for_modality(details, "VIDEO")
     image_count = _count_input_images(input, resolved_files)
 
-    video_length_seconds = (
-        video_tokens / _VIDEO_TOKENS_PER_SECOND if video_tokens > 0 else 0.0
-    )
-    audio_length_seconds = (
-        audio_tokens / _AUDIO_TOKENS_PER_SECOND if audio_tokens > 0 else 0.0
-    )
+    video_length_seconds = video_tokens / _VIDEO_TOKENS_PER_SECOND if video_tokens > 0 else 0.0
+    audio_length_seconds = audio_tokens / _AUDIO_TOKENS_PER_SECOND if audio_tokens > 0 else 0.0
 
     # generic_cost_per_token rewrites text_tokens to the full prompt minus
     # other modalities when both text_tokens and image_count are zero. For
     # video, that misallocates video tokens to text; a 1-token floor sidesteps
     # the rewrite and keeps billing on input_cost_per_video_per_second.
-    needs_video_text_floor = (
-        video_length_seconds > 0 and text_tokens == 0 and image_count == 0
-    )
+    needs_video_text_floor = video_length_seconds > 0 and text_tokens == 0 and image_count == 0
     resolved_text_tokens = 1 if needs_video_text_floor else text_tokens
 
     return Usage(
@@ -447,9 +422,7 @@ def process_embed_content_response(
         EmbeddingResponse with single embedding
     """
     if "embedding" not in response_json:
-        raise ValueError(
-            f"embedContent response missing 'embedding' field: {response_json}"
-        )
+        raise ValueError(f"embedContent response missing 'embedding' field: {response_json}")
 
     embedding_data = response_json["embedding"]
 
@@ -495,25 +468,17 @@ def process_response(
         text_elements: List[str] = []
         for e in input_list:
             if isinstance(e, list):
-                text_elements.extend(
-                    sub
-                    for sub in e
-                    if isinstance(sub, str) and not _is_multimodal_element(sub)
-                )
+                text_elements.extend(sub for sub in e if isinstance(sub, str) and not _is_multimodal_element(sub))
             elif isinstance(e, str) and not _is_multimodal_element(e):
                 text_elements.append(e)
         if text_elements:
-            input_text = get_formatted_prompt(
-                data={"input": text_elements}, call_type="embedding"
-            )
+            input_text = get_formatted_prompt(data={"input": text_elements}, call_type="embedding")
             prompt_tokens = token_counter(model=model, text=input_text)
         else:
             prompt_tokens = 0
     else:
         input_text = get_formatted_prompt(data={"input": input}, call_type="embedding")
         prompt_tokens = token_counter(model=model, text=input_text)
-    model_response.usage = Usage(
-        prompt_tokens=prompt_tokens, total_tokens=prompt_tokens
-    )
+    model_response.usage = Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
     return model_response

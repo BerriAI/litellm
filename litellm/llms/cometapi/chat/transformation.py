@@ -36,9 +36,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         """
         Map OpenAI format parameters to CometAPI format
         """
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # CometAPI-specific parameters (if any)
         extra_body: dict[str, Any] = {}
@@ -63,9 +61,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         Remove cache control flags from messages and tools if not supported
         """
         # For CometAPI, use default behavior (remove cache control)
-        return super().remove_cache_control_flag_from_messages_and_tools(
-            model, messages, tools
-        )
+        return super().remove_cache_control_flag_from_messages_and_tools(model, messages, tools)
 
     def transform_request(
         self,
@@ -82,9 +78,7 @@ class CometAPIConfig(OpenAIGPTConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         extra_body = optional_params.pop("extra_body", {})
-        response = super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        response = super().transform_request(model, messages, optional_params, litellm_params, headers)
         response.update(extra_body)
         return response
 
@@ -169,9 +163,7 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
             # Handle error in chunk
             if "error" in chunk:
                 error_chunk = chunk["error"]
-                error_message = "CometAPI Error: {}".format(
-                    error_chunk.get("message", "Unknown error")
-                )
+                error_message = "CometAPI Error: {}".format(error_chunk.get("message", "Unknown error"))
                 raise CometAPIException(
                     message=error_message,
                     status_code=error_chunk.get("code", 400),
@@ -183,9 +175,7 @@ class CometAPIChatCompletionStreamingHandler(BaseModelResponseIterator):
             for choice in chunk["choices"]:
                 # Handle reasoning content if present
                 if "delta" in choice and "reasoning" in choice["delta"]:
-                    choice["delta"]["reasoning_content"] = choice["delta"].get(
-                        "reasoning"
-                    )
+                    choice["delta"]["reasoning_content"] = choice["delta"].get("reasoning")
                 new_choices.append(choice)
 
             return ModelResponseStream(
