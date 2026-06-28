@@ -218,6 +218,7 @@ class _CompletionDispatchContext:
     _azure_detection_model: str
     acompletion: bool
     api_base: Optional[str]
+    api_base_from_call: bool
     api_key: Optional[str]
     api_version: Optional[str]
     client: Any

@@ -41,6 +41,7 @@ from typing import (
     cast,
     get_args,
 )
+from urllib.parse import urlparse
 
 from litellm._logging import _redact_string
 from litellm._uuid import uuid
@@ -290,6 +291,26 @@ from .types.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
+
+
+def _is_openai_api_base(api_base: Optional[str]) -> bool:
+    if api_base is None:
+        return True
+    return urlparse(api_base).hostname == "api.openai.com"
+
+
+def _resolve_openai_api_key_for_api_base(
+    api_key: Optional[str],
+    api_base: Optional[str],
+    api_base_from_call: bool,
+) -> Optional[str]:
+    if api_key is not None:
+        return api_key
+    if api_base_from_call and not _is_openai_api_base(api_base):
+        return None
+    return litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+
+
 openai_audio_transcriptions = OpenAIAudioTranscription()
 nvidia_riva_audio_transcriptions = NvidiaRivaAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
@@ -1600,8 +1621,10 @@ def _complete_text_completion_openai(
     openai.api_version = None
     # set API KEY
 
-    api_key = (
-        api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
+    api_key = _resolve_openai_api_key_for_api_base(
+        api_key=api_key,
+        api_base=api_base,
+        api_base_from_call=ctx.api_base_from_call,
     )
 
     headers = headers or litellm.headers
@@ -2168,11 +2191,10 @@ def _complete_aiohttp_openai(
         or "https://api.openai.com/v1"
     )
     # set API KEY
-    api_key = (
-        api_key
-        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-        or litellm.openai_key
-        or get_secret("OPENAI_API_KEY")
+    api_key = _resolve_openai_api_key_for_api_base(
+        api_key=api_key,
+        api_base=api_base,
+        api_base_from_call=ctx.api_base_from_call,
     )
 
     headers = headers or litellm.headers
@@ -2392,11 +2414,10 @@ def _complete_custom_openai(
     )
     openai.organization = organization
     # set API KEY
-    api_key = (
-        api_key
-        or litellm.api_key  # for deepinfra/perplexity/anyscale/friendliai we check in get_llm_provider and pass in the api key from there
-        or litellm.openai_key
-        or get_secret("OPENAI_API_KEY")
+    api_key = _resolve_openai_api_key_for_api_base(
+        api_key=api_key,
+        api_base=api_base,
+        api_base_from_call=ctx.api_base_from_call,
     )
 
     headers = headers or litellm.headers
@@ -5122,6 +5143,7 @@ def completion(  # type: ignore
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
+    api_base_from_call = api_base is not None or base_url is not None
     mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
     mock_timeout = cast(Optional[bool], kwargs.get("mock_timeout", None))
@@ -5615,6 +5637,7 @@ def completion(  # type: ignore
             _azure_detection_model=_azure_detection_model,
             acompletion=acompletion,
             api_base=api_base,
+            api_base_from_call=api_base_from_call,
             api_key=api_key,
             api_version=api_version,
             client=client,
