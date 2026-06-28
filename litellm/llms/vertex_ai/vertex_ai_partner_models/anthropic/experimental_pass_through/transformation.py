@@ -49,17 +49,15 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         )
         headers["Authorization"] = f"Bearer {access_token}"
 
-        # Calculate api_base if not provided
-        if api_base is None:
-            api_base = self.get_complete_vertex_url(
-                custom_api_base=api_base,
-                vertex_location=vertex_ai_location,
-                vertex_project=vertex_ai_project,
-                project_id=project_id or "",
-                partner=VertexPartnerProvider.claude,
-                stream=optional_params.get("stream", False),
-                model=model,
-            )
+        api_base = self.get_complete_vertex_url(
+            custom_api_base=api_base,
+            vertex_location=vertex_ai_location,
+            vertex_project=vertex_ai_project,
+            project_id=project_id or "",
+            partner=VertexPartnerProvider.claude,
+            stream=optional_params.get("stream", False),
+            model=model,
+        )
 
         headers["content-type"] = "application/json"
 
