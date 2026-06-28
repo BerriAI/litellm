@@ -44266,6 +44266,7 @@
       {
         "name": "anthropic-claude-adaptive-thinking",
         "pattern": "(?:opus|sonnet|haiku)[-._](?:4[-._](?:[6-9]|[1-9]\\d)(?!\\d)|(?:[5-9]|[1-9]\\d{1,})[-._]\\d{1,2}(?!\\d))",
+        "description": "Claude opus/sonnet/haiku at version 4.6 or higher: 4.6 through 4.99, then any 5.x, 6.x or later major. The minor is capped at two digits so an 8-digit date suffix such as claude-opus-4-20250514 is never read as a >= 4.6 minor. Turns on adaptive thinking for new families with no code change.",
         "extends": "anthropic-claude",
         "model_info": {
           "supports_adaptive_thinking": true
@@ -44274,6 +44275,7 @@
       {
         "name": "anthropic-claude",
         "pattern": "^claude-[a-z]+-\\d+[-.]\\d+(?:-\\d{8})?$",
+        "description": "Any Claude family-major-minor id, optionally with an 8-digit date suffix, anchored to the whole name. Version-neutral fallback that prices an unmapped Claude at the current Opus tier so an unknown model is over-costed rather than billed as free.",
         "model_info": {
           "litellm_provider": "anthropic",
           "mode": "chat",

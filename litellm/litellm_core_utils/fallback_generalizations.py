@@ -24,6 +24,9 @@ instead of duplicating the parent's pricing block. Inheritance is resolved once,
 at install time, against each rule's raw (unresolved) ``model_info``; it is a
 single level (a parent that itself extends is not chained).
 
+Any other keys on a rule (for example a free-text ``description`` documenting what
+the regex matches) are ignored by the engine and exist only for the reader.
+
 The compiled-regex list is built once and cached. ``match_fallback_generalization``
 is O(number of rules); callers must only invoke it on a cache miss.
 """
