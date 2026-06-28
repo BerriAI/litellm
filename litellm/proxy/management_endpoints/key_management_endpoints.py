@@ -3372,18 +3372,31 @@ async def _copy_cache_value(
     destination_key: str,
     ttl: int | None,
     user_api_key_cache: UserApiKeyCache,
-) -> None:
+) -> bool:
     value = await user_api_key_cache.async_get_cache(key=source_key)
     if value is None:
-        return
+        return False
     if ttl is None:
         await user_api_key_cache.async_set_cache(key=destination_key, value=value)
-        return
-    await user_api_key_cache.async_set_cache(
-        key=destination_key,
-        value=value,
-        ttl=ttl,
-    )
+    else:
+        await user_api_key_cache.async_set_cache(
+            key=destination_key,
+            value=value,
+            ttl=ttl,
+        )
+    return True
+
+
+def _parse_model_budget_entry(
+    model: str, budget_info: object
+) -> tuple[str, BudgetConfig, int] | None:
+    try:
+        budget_config = BudgetConfig.model_validate(budget_info)
+        if budget_config.budget_duration is None:
+            return None
+        return (model, budget_config, duration_in_seconds(budget_config.budget_duration))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 async def _migrate_model_max_budget_cache_on_regenerate(
@@ -3396,42 +3409,46 @@ async def _migrate_model_max_budget_cache_on_regenerate(
     if not model_max_budget:
         return
 
+    valid_budgets = tuple(
+        entry
+        for entry in (
+            _parse_model_budget_entry(model, budget_info)
+            for model, budget_info in model_max_budget.items()
+        )
+        if entry is not None
+    )
+    if not valid_budgets:
+        return
+
     start_time_source_key = (
         f"{VIRTUAL_KEY_BUDGET_START_TIME_CACHE_KEY_PREFIX}:{old_api_key_hash}"
     )
     start_time_destination_key = (
         f"{VIRTUAL_KEY_BUDGET_START_TIME_CACHE_KEY_PREFIX}:{new_api_key_hash}"
     )
-    budget_start_time = await user_api_key_cache.async_get_cache(
-        key=start_time_source_key
+
+    start_time_ttl = await _get_cache_ttl_seconds(
+        cache_key=start_time_source_key,
+        user_api_key_cache=user_api_key_cache,
+    )
+    if start_time_ttl is None:
+        budget_start_time = await user_api_key_cache.async_get_cache(
+            key=start_time_source_key
+        )
+        max_duration_seconds = max(duration for _, _, duration in valid_budgets)
+        start_time_ttl = _remaining_ttl_from_budget_start_time(
+            budget_start_time=budget_start_time,
+            budget_duration_seconds=max_duration_seconds,
+        )
+
+    await _copy_cache_value(
+        source_key=start_time_source_key,
+        destination_key=start_time_destination_key,
+        ttl=start_time_ttl,
+        user_api_key_cache=user_api_key_cache,
     )
 
-    for model, budget_info in model_max_budget.items():
-        try:
-            budget_config = BudgetConfig.model_validate(budget_info)
-            if budget_config.budget_duration is None:
-                continue
-            budget_duration_seconds = duration_in_seconds(budget_config.budget_duration)
-        except Exception:  # noqa: BLE001
-            continue
-
-        start_time_ttl = await _get_cache_ttl_seconds(
-            cache_key=start_time_source_key,
-            user_api_key_cache=user_api_key_cache,
-        )
-        if start_time_ttl is None:
-            start_time_ttl = _remaining_ttl_from_budget_start_time(
-                budget_start_time=budget_start_time,
-                budget_duration_seconds=budget_duration_seconds,
-            )
-
-        await _copy_cache_value(
-            source_key=start_time_source_key,
-            destination_key=start_time_destination_key,
-            ttl=start_time_ttl,
-            user_api_key_cache=user_api_key_cache,
-        )
-
+    for model, budget_config, _ in valid_budgets:
         old_spend_keys = _model_max_budget_spend_cache_keys(
             api_key_hash=old_api_key_hash,
             model=model,
@@ -3447,12 +3464,14 @@ async def _migrate_model_max_budget_cache_on_regenerate(
                 cache_key=source_key,
                 user_api_key_cache=user_api_key_cache,
             )
-            await _copy_cache_value(
+            copied = await _copy_cache_value(
                 source_key=source_key,
                 destination_key=destination_key,
                 ttl=spend_ttl or start_time_ttl,
                 user_api_key_cache=user_api_key_cache,
             )
+            if copied:
+                await user_api_key_cache.async_delete_cache(source_key)
 
 
 @router.post(
