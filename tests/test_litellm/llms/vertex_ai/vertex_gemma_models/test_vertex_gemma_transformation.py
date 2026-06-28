@@ -613,8 +613,8 @@ class TestVertexGemmaCompletion:
 
         with (
             patch(
-                "litellm.llms.vertex_ai.vertex_gemma_models.transformation.HTTPHandler"
-            ) as mock_handler_cls,
+                "litellm.llms.vertex_ai.vertex_gemma_models.transformation._get_httpx_client"
+            ) as mock_get_client,
             patch(
                 "litellm.llms.vertex_ai.vertex_gemma_models.main.VertexAIGemmaModels._ensure_access_token",
                 return_value=("fake-access-token", "PROJECT_ID"),
@@ -625,7 +625,7 @@ class TestVertexGemmaCompletion:
             mock_response.status_code = 200
             mock_response.json.return_value = vertex_response
             mock_client.post = Mock(return_value=mock_response)
-            mock_handler_cls.return_value = mock_client
+            mock_get_client.return_value = mock_client
 
             response = litellm.completion(
                 model="vertex_ai/gemma/gemma-3-12b-it-1222199011122",
@@ -637,6 +637,7 @@ class TestVertexGemmaCompletion:
             )
 
             # The HTTP call must have been made exactly once
+            mock_get_client.assert_called_once()
             mock_client.post.assert_called_once()
             call_args = mock_client.post.call_args
             assert call_args.kwargs["url"].endswith(":predict")
@@ -791,6 +792,70 @@ class TestVertexGemmaCompletion:
         assert response.usage.total_tokens == 114
         assert second_response.choices[0].message.content == "from mock transport"
 
+    def test_sync_completion_rejects_async_client(self):
+        import asyncio
+        import httpx
+
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.types.utils import ModelResponse
+
+        mock_client = httpx.AsyncClient(transport=httpx.MockTransport(Mock()))
+
+        try:
+            with patch.object(
+                VertexGemmaConfig,
+                "_sync_post",
+                side_effect=AssertionError("sync post must not be called"),
+            ):
+                with pytest.raises(BaseLLMException) as exc_info:
+                    VertexGemmaConfig().completion(
+                        model="gemma-3-12b-it",
+                        messages=[{"role": "user", "content": "hi"}],
+                        api_base="https://should-not-be-reached.invalid/v1:predict",
+                        api_key="fake-token",
+                        custom_prompt_dict={},
+                        model_response=ModelResponse(),
+                        print_verbose=lambda *args, **kwargs: None,
+                        logging_obj=Mock(),
+                        optional_params={},
+                        acompletion=False,
+                        litellm_params={},
+                        client=mock_client,
+                    )
+        finally:
+            asyncio.run(mock_client.aclose())
+
+        assert exc_info.value.status_code == 400
+        assert "sync completion requires a sync HTTP client" in exc_info.value.message
+
+        with patch.object(
+            VertexGemmaConfig,
+            "_sync_post",
+            side_effect=AssertionError("sync post must not be called"),
+        ):
+            with pytest.raises(BaseLLMException) as exc_info:
+                VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=False,
+                    litellm_params={},
+                    client=Mock(spec=AsyncHTTPHandler),
+                )
+
+        assert exc_info.value.status_code == 400
+        assert "sync completion requires a sync HTTP client" in exc_info.value.message
+
     @pytest.mark.asyncio
     async def test_async_completion_honors_raw_httpx_client_transport(self):
         """Async counterpart: a raw httpx.AsyncClient transport must be honored."""
@@ -852,3 +917,67 @@ class TestVertexGemmaCompletion:
             "write": 5.0,
             "pool": 5.0,
         }
+
+    @pytest.mark.asyncio
+    async def test_async_completion_rejects_sync_client(self):
+        import httpx
+
+        from litellm.llms.base_llm.chat.transformation import BaseLLMException
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.vertex_ai.vertex_gemma_models.transformation import (
+            VertexGemmaConfig,
+        )
+        from litellm.types.utils import ModelResponse
+
+        mock_client = httpx.Client(transport=httpx.MockTransport(Mock()))
+
+        try:
+            with patch.object(
+                VertexGemmaConfig,
+                "_async_post",
+                side_effect=AssertionError("async post must not be called"),
+            ):
+                with pytest.raises(BaseLLMException) as exc_info:
+                    await VertexGemmaConfig().completion(
+                        model="gemma-3-12b-it",
+                        messages=[{"role": "user", "content": "hi"}],
+                        api_base="https://should-not-be-reached.invalid/v1:predict",
+                        api_key="fake-token",
+                        custom_prompt_dict={},
+                        model_response=ModelResponse(),
+                        print_verbose=lambda *args, **kwargs: None,
+                        logging_obj=Mock(),
+                        optional_params={},
+                        acompletion=True,
+                        litellm_params={},
+                        client=mock_client,
+                    )
+        finally:
+            mock_client.close()
+
+        assert exc_info.value.status_code == 400
+        assert "async completion requires an async HTTP client" in exc_info.value.message
+
+        with patch.object(
+            VertexGemmaConfig,
+            "_async_post",
+            side_effect=AssertionError("async post must not be called"),
+        ):
+            with pytest.raises(BaseLLMException) as exc_info:
+                await VertexGemmaConfig().completion(
+                    model="gemma-3-12b-it",
+                    messages=[{"role": "user", "content": "hi"}],
+                    api_base="https://should-not-be-reached.invalid/v1:predict",
+                    api_key="fake-token",
+                    custom_prompt_dict={},
+                    model_response=ModelResponse(),
+                    print_verbose=lambda *args, **kwargs: None,
+                    logging_obj=Mock(),
+                    optional_params={},
+                    acompletion=True,
+                    litellm_params={},
+                    client=Mock(spec=HTTPHandler),
+                )
+
+        assert exc_info.value.status_code == 400
+        assert "async completion requires an async HTTP client" in exc_info.value.message
