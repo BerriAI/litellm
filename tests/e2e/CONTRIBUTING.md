@@ -9,8 +9,35 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-1. Use litellm-config.yml in gateway/ if your tests require adding new models
-2. Deploy a docker image in docker-compose.yml to run your e2e tests
+The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with its Postgres and Redis, serving `gateway/litellm-config.yml`; add any model, pricing override, or guardrail your test needs to that file and read it back in the test rather than hardcoding values. `gateway/` holds proxy configuration only, so never put tests there
+
+## Running the tests locally
+
+1. Create a .env file and add provider keys:
+   ```bash
+   OPENAI_API_KEY="sk-..."
+   ANTHROPIC_API_KEY="sk-..."
+ 
+2. Bring the stack up from this directory:
+
+   ```bash
+   docker compose up -d
+   curl -fs http://localhost:4000/health/liveliness
+   ```
+
+3. Run a suite against it; the harness reads `LITELLM_PROXY_URL` (default `http://localhost:4000`):
+
+   ```bash
+   uv run pytest tests/e2e/llm_translation/ -v
+   ```
+
+4. Tear it down when you're done:
+
+   ```bash
+   docker compose down -v
+   ```
+
+Tests marked `@pytest.mark.e2e` skip when no proxy answers `/health/liveliness`, so a run that reports everything skipped means the stack isn't up, not that anything passed
 
 ## What a complete test looks like
 
@@ -61,7 +88,7 @@ If a step is missing, the test is not done. That is the whole pattern
 Keep the cases for one feature inside a class so the file reads as a spec for how that feature behaves in production. The class name says what is under test; each method is one behavior. Think of it as documenting the contract, with the rough intent being
 
 ```python
-# pseudo-code to convey intent, not the real API
+# pseudo-code to convey intent
 class TestPromptCompression:
     def test_prompt_compression_add_to_virtual_key(self):
         new_key = self.resources.create_key(user_id, compression=True)  # turn the feature on
