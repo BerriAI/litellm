@@ -4084,3 +4084,75 @@ async def test_auth_path_caches_team_object_under_canonical_team_id_key():
     assert served is not None and served.team_id == team_id
     assert cache.get_cache(key=team_id) is None
     assert cache.get_cache(key=None) is None
+class _RecordingSpendDB:
+    """Captures the SQL and bound params the global-spend loader issues and
+    returns a fixed SUM, so a test can assert which window was queried."""
+
+    def __init__(self, total_spend):
+        self.total_spend = total_spend
+        self.calls = []
+
+    async def query_raw(self, query=None, *params):
+        self.calls.append((query, params))
+        return [{"total_spend": self.total_spend}]
+
+
+class _RecordingPrismaClient:
+    def __init__(self, total_spend):
+        self.db = _RecordingSpendDB(total_spend)
+
+
+@pytest.mark.asyncio
+async def test_global_spend_windowed_to_budget_duration(monkeypatch):
+    """Regression for #31292: the global ``max_budget`` is enforced over the
+    configured ``budget_duration`` window, not a hardcoded 30-day total.
+
+    With ``budget_duration='1d'`` the loader must sum ``LiteLLM_SpendLogs`` over
+    the trailing day (86400s as a bound param) and must NOT read the fixed
+    30-day ``MonthlyGlobalSpend`` view. Pre-fix this summed ``MonthlyGlobalSpend``
+    regardless of duration, so a trailing-30-day total above the daily cap would
+    429 even when no single day exceeded it."""
+    from litellm.proxy.auth import user_api_key_auth as uapi
+
+    monkeypatch.setattr(litellm, "budget_duration", "1d", raising=False)
+
+    prisma = _RecordingPrismaClient(total_spend=42.5)
+    cache = DualCache()
+
+    spend = await uapi._fetch_global_spend_with_event_coordination(
+        cache_key="test_global_spend_1d:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma,
+    )
+
+    assert spend == 42.5
+    assert len(prisma.db.calls) == 1
+    query, params = prisma.db.calls[0]
+    assert "MonthlyGlobalSpend" not in query
+    assert 'FROM "LiteLLM_SpendLogs"' in query
+    assert "make_interval" in query
+    assert params == (86400,)
+
+
+@pytest.mark.asyncio
+async def test_global_spend_falls_back_to_30day_view_without_duration(monkeypatch):
+    """When no ``budget_duration`` is configured the loader keeps the legacy
+    fixed-30-day ``MonthlyGlobalSpend`` view, preserving prior behaviour."""
+    from litellm.proxy.auth import user_api_key_auth as uapi
+
+    monkeypatch.setattr(litellm, "budget_duration", None, raising=False)
+
+    prisma = _RecordingPrismaClient(total_spend=10.0)
+    cache = DualCache()
+
+    spend = await uapi._fetch_global_spend_with_event_coordination(
+        cache_key="test_global_spend_legacy:spend",
+        user_api_key_cache=cache,
+        prisma_client=prisma,
+    )
+
+    assert spend == 10.0
+    assert len(prisma.db.calls) == 1
+    query, params = prisma.db.calls[0]
+    assert 'FROM "MonthlyGlobalSpend"' in query
+    assert params == ()
