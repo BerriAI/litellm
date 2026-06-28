@@ -62,9 +62,7 @@ class BedrockRealtime(BaseAWSLLM):
                 EnvironmentCredentialsResolver,
             )
         except ImportError:
-            raise ImportError(
-                "Missing aws_sdk_bedrock_runtime. Install with: pip install aws-sdk-bedrock-runtime"
-            )
+            raise ImportError("Missing aws_sdk_bedrock_runtime. Install with: pip install aws-sdk-bedrock-runtime")
 
         # Get AWS region
         if aws_region_name is None:
@@ -81,9 +79,7 @@ class BedrockRealtime(BaseAWSLLM):
         else:
             endpoint_uri = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
-        verbose_proxy_logger.debug(
-            f"Bedrock Realtime: Connecting to {endpoint_uri} with model {model}"
-        )
+        verbose_proxy_logger.debug(f"Bedrock Realtime: Connecting to {endpoint_uri} with model {model}")
 
         # Initialize Bedrock client with aws_sdk_bedrock_runtime
         config = Config(
@@ -97,15 +93,11 @@ class BedrockRealtime(BaseAWSLLM):
 
         try:
             # Initialize the bidirectional stream
-            bedrock_stream = (
-                await bedrock_client.invoke_model_with_bidirectional_stream(
-                    InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
-                )
+            bedrock_stream = await bedrock_client.invoke_model_with_bidirectional_stream(
+                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
             )
 
-            verbose_proxy_logger.debug(
-                "Bedrock Realtime: Bidirectional stream established"
-            )
+            verbose_proxy_logger.debug("Bedrock Realtime: Bidirectional stream established")
 
             # Track state for transformation
             session_state = {
@@ -148,13 +140,9 @@ class BedrockRealtime(BaseAWSLLM):
             )
 
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error in BedrockRealtime.async_realtime: {e}"
-            )
+            verbose_proxy_logger.exception(f"Error in BedrockRealtime.async_realtime: {e}")
             try:
-                await websocket.close(
-                    code=1011, reason=_redact_string(f"Internal error: {str(e)}")
-                )
+                await websocket.close(code=1011, reason=_redact_string(f"Internal error: {str(e)}"))
             except Exception:
                 pass
             raise
@@ -177,35 +165,25 @@ class BedrockRealtime(BaseAWSLLM):
             while True:
                 # Receive message from client
                 message = await client_ws.receive_text()
-                verbose_proxy_logger.debug(
-                    f"Bedrock Realtime: Received from client: {message[:200]}"
-                )
+                verbose_proxy_logger.debug(f"Bedrock Realtime: Received from client: {message[:200]}")
 
                 # Transform OpenAI format to Bedrock format
                 transformed_messages = transformation_config.transform_realtime_request(
                     message=message,
                     model=model,
-                    session_configuration_request=session_state.get(
-                        "session_configuration_request"
-                    ),
+                    session_configuration_request=session_state.get("session_configuration_request"),
                 )
 
                 # Send transformed messages to Bedrock
                 for bedrock_message in transformed_messages:
                     event = InvokeModelWithBidirectionalStreamInputChunk(
-                        value=BidirectionalInputPayloadPart(
-                            bytes_=bedrock_message.encode("utf-8")
-                        )
+                        value=BidirectionalInputPayloadPart(bytes_=bedrock_message.encode("utf-8"))
                     )
                     await bedrock_stream.input_stream.send(event)
-                    verbose_proxy_logger.debug(
-                        f"Bedrock Realtime: Sent to Bedrock: {bedrock_message[:200]}"
-                    )
+                    verbose_proxy_logger.debug(f"Bedrock Realtime: Sent to Bedrock: {bedrock_message[:200]}")
 
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Client to Bedrock forwarding ended: {e}", exc_info=True
-            )
+            verbose_proxy_logger.debug(f"Client to Bedrock forwarding ended: {e}", exc_info=True)
             # Close the Bedrock stream input
             try:
                 await bedrock_stream.input_stream.close()
@@ -230,29 +208,19 @@ class BedrockRealtime(BaseAWSLLM):
 
                 if result.value and result.value.bytes_:
                     bedrock_response = result.value.bytes_.decode("utf-8")
-                    verbose_proxy_logger.debug(
-                        f"Bedrock Realtime: Received from Bedrock: {bedrock_response[:200]}"
-                    )
+                    verbose_proxy_logger.debug(f"Bedrock Realtime: Received from Bedrock: {bedrock_response[:200]}")
 
                     # Transform Bedrock format to OpenAI format
                     from litellm.types.realtime import RealtimeResponseTransformInput
 
                     realtime_response_transform_input: RealtimeResponseTransformInput = {
-                        "current_output_item_id": session_state.get(
-                            "current_output_item_id"
-                        ),
+                        "current_output_item_id": session_state.get("current_output_item_id"),
                         "current_response_id": session_state.get("current_response_id"),
-                        "current_conversation_id": session_state.get(
-                            "current_conversation_id"
-                        ),
-                        "current_delta_chunks": session_state.get(
-                            "current_delta_chunks"
-                        ),
+                        "current_conversation_id": session_state.get("current_conversation_id"),
+                        "current_delta_chunks": session_state.get("current_delta_chunks"),
                         "current_item_chunks": session_state.get("current_item_chunks"),
                         "current_delta_type": session_state.get("current_delta_type"),
-                        "session_configuration_request": session_state.get(
-                            "session_configuration_request"
-                        ),
+                        "session_configuration_request": session_state.get("session_configuration_request"),
                     }
 
                     transformed_response = transformation_config.transform_realtime_response(
@@ -265,27 +233,13 @@ class BedrockRealtime(BaseAWSLLM):
                     # Update session state
                     session_state.update(
                         {
-                            "current_output_item_id": transformed_response.get(
-                                "current_output_item_id"
-                            ),
-                            "current_response_id": transformed_response.get(
-                                "current_response_id"
-                            ),
-                            "current_conversation_id": transformed_response.get(
-                                "current_conversation_id"
-                            ),
-                            "current_delta_chunks": transformed_response.get(
-                                "current_delta_chunks"
-                            ),
-                            "current_item_chunks": transformed_response.get(
-                                "current_item_chunks"
-                            ),
-                            "current_delta_type": transformed_response.get(
-                                "current_delta_type"
-                            ),
-                            "session_configuration_request": transformed_response.get(
-                                "session_configuration_request"
-                            ),
+                            "current_output_item_id": transformed_response.get("current_output_item_id"),
+                            "current_response_id": transformed_response.get("current_response_id"),
+                            "current_conversation_id": transformed_response.get("current_conversation_id"),
+                            "current_delta_chunks": transformed_response.get("current_delta_chunks"),
+                            "current_item_chunks": transformed_response.get("current_item_chunks"),
+                            "current_delta_type": transformed_response.get("current_delta_type"),
+                            "session_configuration_request": transformed_response.get("session_configuration_request"),
                         }
                     )
 
@@ -294,14 +248,10 @@ class BedrockRealtime(BaseAWSLLM):
                     for openai_message in openai_messages:
                         message_json = json.dumps(openai_message)
                         await client_ws.send_text(message_json)
-                        verbose_proxy_logger.debug(
-                            f"Bedrock Realtime: Sent to client: {message_json[:200]}"
-                        )
+                        verbose_proxy_logger.debug(f"Bedrock Realtime: Sent to client: {message_json[:200]}")
 
         except Exception as e:
-            verbose_proxy_logger.debug(
-                f"Bedrock to client forwarding ended: {e}", exc_info=True
-            )
+            verbose_proxy_logger.debug(f"Bedrock to client forwarding ended: {e}", exc_info=True)
             # Close the client WebSocket
             try:
                 await client_ws.close()

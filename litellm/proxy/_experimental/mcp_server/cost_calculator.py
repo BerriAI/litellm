@@ -32,9 +32,7 @@ class MCPCostCalculator:
         # Get the response cost from logging object model_call_details
         # This is set when a user modifies the response in a post_mcp_tool_call_hook
         #########################################################
-        response_cost = litellm_logging_obj.model_call_details.get(
-            "response_cost", None
-        )
+        response_cost = litellm_logging_obj.model_call_details.get("response_cost", None)
         if response_cost is not None:
             return response_cost
 
@@ -44,9 +42,7 @@ class MCPCostCalculator:
         mcp_tool_call_metadata: StandardLoggingMCPToolCall = (
             cast(
                 StandardLoggingMCPToolCall,
-                litellm_logging_obj.model_call_details.get(
-                    "mcp_tool_call_metadata", {}
-                ),
+                litellm_logging_obj.model_call_details.get("mcp_tool_call_metadata", {}),
             )
             or {}
         )
@@ -56,12 +52,8 @@ class MCPCostCalculator:
         #########################################################
         # User defined cost per query
         #########################################################
-        default_cost_per_query = mcp_server_cost_info.get(
-            "default_cost_per_query", None
-        )
-        tool_name_to_cost_per_query: dict = (
-            mcp_server_cost_info.get("tool_name_to_cost_per_query", {}) or {}
-        )
+        default_cost_per_query = mcp_server_cost_info.get("default_cost_per_query", None)
+        tool_name_to_cost_per_query: dict = mcp_server_cost_info.get("tool_name_to_cost_per_query", {}) or {}
         tool_name = mcp_tool_call_metadata.get("name", "")
 
         #########################################################

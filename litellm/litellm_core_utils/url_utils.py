@@ -169,9 +169,7 @@ def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bo
         return False
 
     normalized_host = _normalize_host(parsed.hostname)
-    configured_entries = (
-        [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
-    )
+    configured_entries = [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
     for entry in configured_entries or []:
         if not isinstance(entry, str):
             continue
@@ -272,9 +270,7 @@ def validate_url(url: str) -> Tuple[str, str]:
 
     # Resolve hostname and validate ALL addresses
     try:
-        addrinfo = socket.getaddrinfo(
-            hostname, effective_port, proto=socket.IPPROTO_TCP
-        )
+        addrinfo = socket.getaddrinfo(hostname, effective_port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as e:
         raise SSRFError(f"DNS resolution failed for '{hostname}': {e}")
 
@@ -311,9 +307,7 @@ def validate_url(url: str) -> Tuple[str, str]:
     else:
         new_netloc = ip_host
 
-    rewritten = urlunparse(
-        (parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, "")
-    )
+    rewritten = urlunparse((parsed.scheme, new_netloc, parsed.path, parsed.params, parsed.query, ""))
 
     return rewritten, host_header
 

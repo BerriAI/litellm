@@ -45,9 +45,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             )
 
             user_counter_key = f"spend:user:{user_id}"
-            if user_counter_key in get_reserved_counter_keys(
-                user_api_key_dict.budget_reservation
-            ):
+            if user_counter_key in get_reserved_counter_keys(user_api_key_dict.budget_reservation):
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
@@ -66,9 +64,7 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
 
             # CHECK IF REQUEST ALLOWED
             if curr_spend >= max_budget:
-                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
-                    data.get("model") if data else None
-                )
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model") if data else None)
                 raise ProxyRateLimitError(
                     detail="Max budget limit reached.",
                     rate_limit_type=RateLimitType.BUDGET,

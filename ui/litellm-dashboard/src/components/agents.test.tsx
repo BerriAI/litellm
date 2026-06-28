@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentsPanel from "./agents";
 import * as networking from "./networking";
@@ -7,7 +7,6 @@ import * as networking from "./networking";
 vi.mock("./networking", () => ({
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
   deleteAgentCall: vi.fn(),
-  keyListCall: vi.fn().mockResolvedValue({ keys: [] }),
 }));
 
 vi.mock("./agents/add_agent_form", () => ({
@@ -79,6 +78,34 @@ describe("AgentsPanel", () => {
     await waitFor(() => {
       expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
     });
+  });
+
+  it("should show Active when an agent has keys and Needs Setup when it has none", async () => {
+    vi.mocked(networking.getAgentsList).mockResolvedValue({
+      agents: [
+        {
+          agent_id: "agent-with-key",
+          agent_name: "Keyed Agent",
+          litellm_params: { model: "gpt-4" },
+          spend: 0,
+          keys: [{ token: "hash-aaa", key_alias: "primary", key_name: "sk-...aaa" }],
+        },
+        {
+          agent_id: "agent-no-key",
+          agent_name: "Keyless Agent",
+          litellm_params: { model: "gpt-4" },
+          spend: 0,
+          keys: [],
+        },
+      ],
+    });
+
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+
+    const keyedRow = (await screen.findByText("Keyed Agent")).closest("tr")!;
+    const keylessRow = screen.getByText("Keyless Agent").closest("tr")!;
+    expect(within(keyedRow).getByText("Active")).toBeInTheDocument();
+    expect(within(keylessRow).getByText("Needs Setup")).toBeInTheDocument();
   });
 
   it("should call getAgentsList with health_check=true when toggle is enabled", async () => {

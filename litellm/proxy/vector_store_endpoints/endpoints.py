@@ -42,9 +42,9 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
     Raises:
         HTTPException: If user doesn't have access to the vector store
     """
-    vector_store_to_run: Optional[
-        LiteLLM_ManagedVectorStore
-    ] = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
+    vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = await get_litellm_managed_vector_store(
+        vector_store_id=vector_store_id
+    )
     if vector_store_to_run is not None:
         if user_api_key_dict is not None:
             await assert_user_can_access_vector_store(
@@ -56,9 +56,7 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
 
         if "litellm_credential_name" in vector_store_to_run:
-            data["litellm_credential_name"] = vector_store_to_run.get(
-                "litellm_credential_name"
-            )
+            data["litellm_credential_name"] = vector_store_to_run.get("litellm_credential_name")
 
         if "litellm_params" in vector_store_to_run:
             litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
@@ -222,9 +220,7 @@ async def vector_store_create(
             )
 
         # Get managed vector stores hook
-        managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook(
-            "managed_vector_stores"
-        )
+        managed_vector_stores: Any = proxy_logging_obj.get_proxy_hook("managed_vector_stores")
         if managed_vector_stores is None:
             raise HTTPException(
                 status_code=500,
@@ -277,12 +273,8 @@ async def vector_store_create(
         )
 
 
-@router.get(
-    "/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
-)
-@router.get(
-    "/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
-)
+@router.get("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.get("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
 async def vector_store_retrieve(
     request: Request,
     vector_store_id: str,
@@ -414,12 +406,8 @@ async def vector_store_list(
         )
 
 
-@router.post(
-    "/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
-)
-@router.post(
-    "/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
-)
+@router.post("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.post("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
 async def vector_store_update(
     request: Request,
     vector_store_id: str,
@@ -484,12 +472,8 @@ async def vector_store_update(
         )
 
 
-@router.delete(
-    "/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
-)
-@router.delete(
-    "/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)]
-)
+@router.delete("/v1/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
+@router.delete("/vector_stores/{vector_store_id}", dependencies=[Depends(user_api_key_auth)])
 async def vector_store_delete(
     request: Request,
     vector_store_id: str,
@@ -589,9 +573,9 @@ async def index_create(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
     ## 1. check if index already exists
-    existing_index = await ManagedVectorStoreIndexRepository(
-        prisma_client
-    ).table.find_unique(where={"index_name": index_create_request.index_name})
+    existing_index = await ManagedVectorStoreIndexRepository(prisma_client).table.find_unique(
+        where={"index_name": index_create_request.index_name}
+    )
 
     ## 2. set created_by and updated_by
 
@@ -605,8 +589,6 @@ async def index_create(
     index_data = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
-    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(
-        data=jsonify_object(index_data)
-    )
+    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(data=jsonify_object(index_data))
 
     return new_index.model_dump()

@@ -59,11 +59,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         )
 
         # Fallback to environment or litellm config
-        project_id = (
-            vertex_project
-            or get_secret_str("VERTEXAI_PROJECT")
-            or litellm.vertex_project
-        )
+        project_id = vertex_project or get_secret_str("VERTEXAI_PROJECT") or litellm.vertex_project
 
         if not project_id:
             raise ValueError(
@@ -207,19 +203,13 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         rerank_results = []
         for result in results:
             rerank_results.append(
-                RerankResponseResult(
-                    index=result["index"], relevance_score=result["relevance_score"]
-                )
+                RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
             )
 
         # Create meta object
-        meta = RerankResponseMeta(
-            billed_units=RerankBilledUnits(search_units=len(records))
-        )
+        meta = RerankResponseMeta(billed_units=RerankBilledUnits(search_units=len(records)))
 
-        return RerankResponse(
-            id=f"vertex_ai_rerank_{model}", results=rerank_results, meta=meta
-        )
+        return RerankResponse(id=f"vertex_ai_rerank_{model}", results=rerank_results, meta=meta)
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
