@@ -300,6 +300,149 @@ async def test_update_explicit_spend_requires_admin():
     assert exc.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_update_explicit_max_budget_null_clear_requires_admin():
+    """Non-admin owner sending `max_budget: null` clears the existing
+    cap. `is_budget_change` keys off model_fields_set so the explicit
+    clear trips the admin gate, not the personal-key fast path."""
+    data = UpdateKeyRequest(key="sk-alice", max_budget=None)
+    assert "max_budget" in data.model_fields_set
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+        side_effect=HTTPException(status_code=403, detail={"error": "not authorized"}),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await authorize_key_mutation(
+                data=data,
+                existing_key_row=_existing_key(max_budget=10.0),
+                user_api_key_dict=_internal_user(),
+                team_table=None,
+                prisma_client=MagicMock(),
+                user_api_key_cache=None,
+                route_label="/key/update",
+            )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_unchanged_max_budget_resubmit_does_not_require_admin():
+    """A no-op resubmit of the same max_budget value is not a budget
+    change, so the personal-key fast path still applies. The diff is
+    against the existing value, not against `None`."""
+    data = UpdateKeyRequest(key="sk-alice", max_budget=10.0, metadata={"team": "data"})
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+    ) as check:
+        await authorize_key_mutation(
+            data=data,
+            existing_key_row=_existing_key(max_budget=10.0),
+            user_api_key_dict=_internal_user(),
+            team_table=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=None,
+            route_label="/key/update",
+        )
+    check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_temp_budget_increase_requires_admin():
+    """temp_budget_increase is added to the stored max_budget at
+    request time, so it's a budget change and must go through the
+    admin gate. Without this, a personal-key owner could bump their
+    own effective cap arbitrarily."""
+    from datetime import datetime, timedelta, timezone
+
+    data = UpdateKeyRequest(
+        key="sk-alice",
+        temp_budget_increase=1_000_000.0,
+        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+        side_effect=HTTPException(status_code=403, detail={"error": "not authorized"}),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await authorize_key_mutation(
+                data=data,
+                existing_key_row=_existing_key(),
+                user_api_key_dict=_internal_user(),
+                team_table=None,
+                prisma_client=MagicMock(),
+                user_api_key_cache=None,
+                route_label="/key/update",
+            )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_team_admin_temp_budget_increase_over_ceiling_rejected():
+    """A team admin passes the admin gate, but the delegation ceiling
+    must still apply to the effective cap (base + temp_budget_increase)
+    so they can't bump a key past their own authority."""
+    from datetime import datetime, timedelta, timezone
+
+    existing = _existing_key(
+        user_id="someone-else",
+        created_by="someone-else",
+        team_id="team-x",
+        max_budget=50.0,
+    )
+    data = UpdateKeyRequest(
+        key="sk-team",
+        temp_budget_increase=1_000_000.0,
+        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await authorize_key_mutation(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=_internal_user(max_budget=100.0),
+                team_table=None,
+                prisma_client=MagicMock(),
+                user_api_key_cache=None,
+                route_label="/key/update",
+            )
+    assert exc.value.status_code == 400
+    assert "temp_budget_increase" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_temp_budget_increase_nan_rejected_for_admin():
+    """NaN hygiene applies to temp_budget_increase too. Without this,
+    a NaN bump silently disables enforcement on the key."""
+    from datetime import datetime, timedelta, timezone
+
+    data = UpdateKeyRequest(
+        key="sk-alice",
+        temp_budget_increase=float("nan"),
+        temp_budget_expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await authorize_key_mutation(
+                data=data,
+                existing_key_row=_existing_key(),
+                user_api_key_dict=_admin(),
+                team_table=None,
+                prisma_client=MagicMock(),
+                user_api_key_cache=None,
+                route_label="/key/update",
+            )
+    assert exc.value.status_code == 400
+    assert "finite" in str(exc.value.detail)
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Rule 3 — numeric hygiene + delegation ceiling on every write path
 # ─────────────────────────────────────────────────────────────────────

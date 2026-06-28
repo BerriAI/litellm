@@ -186,10 +186,22 @@ async def _check_budget_admin_authority(
         return
     if prisma_client is None:
         return
+    # max_budget detection keys off model_fields_set, not None vs non-None,
+    # so an explicit `max_budget: null` from a non-admin owner that clears
+    # the existing cap trips the gate too. temp_budget_increase / expiry
+    # are an additive bump applied at request time
+    # (_update_key_budget_with_temp_budget_increase), so a non-admin
+    # sneaking a $1M temp_budget_increase through the personal-key fast
+    # path would silently inflate the effective cap — gate the same.
+    max_budget_changed = "max_budget" in data.model_fields_set and data.max_budget != getattr(
+        existing_key_row, "max_budget", None
+    )
     is_budget_change = (
-        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
+        max_budget_changed
         or getattr(data, "spend", None) is not None
         or "budget_limits" in data.model_fields_set
+        or "temp_budget_increase" in data.model_fields_set
+        or "temp_budget_expiry" in data.model_fields_set
     )
     caller_is_creator = (
         user_api_key_dict.user_id is not None
@@ -233,6 +245,9 @@ def _check_delegation_ceiling(
     if data.budget_limits:
         for window in data.budget_limits:
             _reject_non_finite(window.max_budget, "budget_limits entry max_budget")
+    temp_increase = getattr(data, "temp_budget_increase", None)
+    if temp_increase is not None:
+        _reject_non_finite(temp_increase, "temp_budget_increase")
 
     if _is_proxy_admin(user_api_key_dict):
         return
@@ -265,6 +280,31 @@ def _check_delegation_ceiling(
                 )
             },
         )
+
+    # temp_budget_increase is added to the stored max_budget at request
+    # time (_update_key_budget_with_temp_budget_increase), so the
+    # effective cap a team admin can grant is base + bump. Check the
+    # bump itself against the ceiling, and the resulting effective cap
+    # against the ceiling, so a $1M bump on a $50 base on a $100-ceiling
+    # caller is rejected even though neither piece alone exceeds it.
+    if temp_increase is not None:
+        base = (
+            data.max_budget
+            if data.max_budget is not None
+            else (getattr(existing_key_row, "max_budget", None) if existing_key_row is not None else None)
+        )
+        effective = (base or 0.0) + temp_increase
+        if effective > delegation_ceiling:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"temp_budget_increase ({temp_increase}) raises the effective "
+                        f"max_budget to {effective}, which cannot exceed the caller's "
+                        f"own max_budget ({delegation_ceiling})."
+                    )
+                },
+            )
 
     if not data.budget_limits:
         return
