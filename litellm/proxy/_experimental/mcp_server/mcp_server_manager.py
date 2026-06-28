@@ -2656,13 +2656,19 @@ class MCPServerManager:
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
-            verbose_logger.warning(f"Timeout while listing tools from {server_name}")
+            verbose_logger.warning(
+                f"Timeout while listing tools from {server_name}. "
+                "The MCP server took too long to respond. Check if the server is running and accessible."
+            )
             return []
         except asyncio.CancelledError:
             verbose_logger.warning(f"Task cancelled while listing tools from {server_name}")
             return []
         except ConnectionError as e:
-            verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
+            verbose_logger.warning(
+                f"Connection error while listing tools from {server_name}: {str(e)}. "
+                "Check that the URL is correct and the server is reachable."
+            )
             return []
         except Exception as e:
             if should_surface_upstream_auth:
@@ -2675,7 +2681,10 @@ class MCPServerManager:
                         www_authenticate=www_authenticate,
                         server_name=server_name,
                     ) from e
-            verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
+            verbose_logger.warning(
+                f"Error listing tools from {server_name}: {type(e).__name__}: {str(e)}. "
+                "Check proxy logs for full traceback."
+            )
             return []
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024

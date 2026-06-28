@@ -514,7 +514,7 @@ if MCP_AVAILABLE:
             return {
                 "tools": [],
                 "error": "server_error",
-                "message": f"Failed to get tools from server {server.name}: {str(e)}",
+                "message": f"Failed to get tools from server {server.name}: {_connection_error_message(e)}",
             }
         return {
             "tools": list_tools_result,
@@ -665,7 +665,7 @@ if MCP_AVAILABLE:
                         list_tools_result.extend(tools_result)
                     except Exception as e:
                         verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-                        errors.append(f"{server.name}: {str(e)}")
+                        errors.append(f"{server.name}: {_connection_error_message(e)}")
                         continue
 
                 if errors and not list_tools_result:
@@ -698,7 +698,7 @@ if MCP_AVAILABLE:
             return {
                 "tools": [],
                 "error": "unexpected_error",
-                "message": f"An unexpected error occurred: {str(e)}",
+                "message": f"An unexpected error occurred: {_connection_error_message(e)}",
             }
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
