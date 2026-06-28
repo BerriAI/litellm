@@ -11166,7 +11166,7 @@ async def test_bulk_update_team_keys_team_member_with_permission(monkeypatch):
         monkeypatch,
         find_many=[key_a],
         find_unique=AsyncMock(return_value=key_a),
-        update_data=AsyncMock(return_value={"data": _updated({"max_budget": 50.0})}),
+        update_data=AsyncMock(return_value={"data": _updated({"tpm_limit": 100})}),
     )
     auth_check = AsyncMock()
     monkeypatch.setattr(
@@ -11174,11 +11174,14 @@ async def test_bulk_update_team_keys_team_member_with_permission(monkeypatch):
         auth_check,
     )
 
+    # Non-budget bulk edit: team member with KEY_UPDATE grant. Budget-field
+    # edits via bulk require admin authority on top of the team-member grant
+    # and are covered by sibling tests.
     response = await bulk_update_team_keys(
         data=BulkUpdateTeamKeysRequest(
             team_id="team-abc",
             all_keys_in_team=True,
-            update_fields=KeyUpdateFields(max_budget=50.0),
+            update_fields=KeyUpdateFields(tpm_limit=100),
         ),
         user_api_key_dict=_internal_user(),
         litellm_changed_by=None,

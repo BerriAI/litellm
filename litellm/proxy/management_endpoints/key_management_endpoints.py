@@ -74,6 +74,7 @@ from litellm.proxy.management_endpoints.common_utils import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
+from litellm.proxy.management_helpers.key_mutation_authz import authorize_key_mutation
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
@@ -669,12 +670,21 @@ async def _common_key_generation_helper(
             prisma_client=prisma_client,
         )
 
-    # Capture caller-supplied max_budget and team_id before any defaults or
-    # upperbound params can fill them, so the ceiling check and its team-key
-    # exemption key off what the caller explicitly requested, not a value that
-    # default_key_generate_params injected.
-    _requested_max_budget = data.max_budget
-    _requested_team_id = data.team_id
+    # Run policy on what the CALLER explicitly requested, before
+    # default_key_generate_params / _enforce_upperbound_key_params can
+    # fill or coerce fields. A config-defaulted max_budget must not
+    # spuriously fail the caller's delegation ceiling, and an upperbound
+    # injection must not change the caller's submitted shape that the
+    # policy sees.
+    await authorize_key_mutation(
+        data=data,
+        existing_key_row=None,
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_table,
+        prisma_client=prisma_client,
+        user_api_key_cache=None,
+        route_label="/key/generate",
+    )
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
@@ -698,51 +708,6 @@ async def _common_key_generation_helper(
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
-
-    # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
-    # cannot grant a key a higher budget than their own authority.
-    is_ui_session_team_key = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID and _requested_team_id is not None
-    # Session tokens (lite login) carry max_budget=None to avoid a per-session
-    # LLM spend cap, but that None must not be read as "unlimited delegation
-    # authority". A personal key (no team) has no team-budget enforcement at
-    # request time, so a session token cannot delegate any budget for one.
-    if (
-        user_api_key_dict.is_session_token
-        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not is_ui_session_team_key
-        and _requested_max_budget is not None
-        and team_table is None
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": (
-                    f"max_budget ({_requested_max_budget}) cannot be set without "
-                    "specifying team_id when using a CLI session token."
-                )
-            },
-        )
-    delegation_ceiling = (
-        user_api_key_dict.max_budget
-        if user_api_key_dict.max_budget is not None
-        else (team_table.max_budget if user_api_key_dict.is_session_token and team_table is not None else None)
-    )
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not is_ui_session_team_key
-        and _requested_max_budget is not None
-        and delegation_ceiling is not None
-        and _requested_max_budget > delegation_ceiling
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": (
-                    f"max_budget ({_requested_max_budget}) cannot exceed the caller's "
-                    f"own max_budget ({delegation_ceiling})."
-                )
-            },
-        )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -1984,6 +1949,21 @@ async def _process_single_key_update(
                 prisma_client=prisma_client,
             )
 
+    # Bulk update entry point: /key/bulk_update and /team/key/bulk_update
+    # construct UpdateKeyRequest objects and call this helper directly, so
+    # the per-key /key/update gates in _validate_update_key_data do not run.
+    # Authorize the mutation here so the same policy applies on the bulk
+    # paths.
+    await authorize_key_mutation(
+        data=update_key_request,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_obj,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route_label="/key/bulk_update",
+    )
+
     # Validate team change if team is being changed
     if is_different_team(data=update_key_request, existing_key_row=existing_key_row):
         if llm_router is None:
@@ -2135,70 +2115,9 @@ async def _validate_update_key_data(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Cross-key authorization. Previously only gated on max_budget/spend
-    # changes, which let a non-admin blanket-rewrite any OTHER field on
-    # any key (models, alias, metadata, tpm_limit, rpm_limit,
-    # allowed_routes, guardrails, blocked, duration, permissions, …) as
-    # long as they avoided budget/spend.
-    #
-    # Policy:
-    # - Key owner (same user_id): may update non-budget fields on their
-    #   own key without the admin check.
-    # - Team member with /key/update grant (on a team key): may update
-    #   non-budget fields. Team membership + permission is already
-    #   enforced by can_team_member_execute_key_management_endpoint
-    #   above, which raises 401 for non-members or members without the
-    #   grant — so reaching this point on a team key means the caller
-    #   was authorized via member_permissions. This preserves the
-    #   documented member_permissions feature while still blocking the
-    #   cross-org attack (an outside org admin is not a member of the
-    #   victim team and gets rejected at the earlier check).
-    # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
-    #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
-    #   / key-owner / team-admin / org-admin of the key).
-    # - max_budget / spend / budget_limits: always require the admin
-    #   check, even for the key owner or a team member (matches the
-    #   existing admin-only budget semantics).  budget_limits uses
-    #   model_fields_set because an explicit null/[] clears the field
-    #   and must gate the same as setting or changing it.
-    # - spend gates on presence alone (not a value diff): the DB spend
-    #   lags the live cross-pod counter, so letting an "unchanged" spend
-    #   through the non-admin path would let a key owner / team member
-    #   overwrite the live counter below real usage and silently weaken
-    #   enforcement.
-    _is_budget_change = (
-        (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
-        or data.spend is not None
-        or "budget_limits" in data.model_fields_set
-    )
-
-    # Personal-key bypass: the caller both created the key AND still owns it
-    # (user_id == caller).  Checking only created_by would let a demoted admin
-    # who originally created a key for another user continue editing it without
-    # admin authorization after the key was reassigned.
-    caller_is_creator = (
-        user_api_key_dict.user_id is not None
-        and getattr(existing_key_row, "created_by", None) == user_api_key_dict.user_id
-        and getattr(existing_key_row, "user_id", None) == user_api_key_dict.user_id
-    )
-    # Team keys: can_team_member_execute_key_management_endpoint (called above)
-    # already validated team membership + /key/update permission and would have
-    # raised if the caller lacked it.  Reaching this point on a team key for a
-    # non-budget change means the caller was authorized — skip the redundant
-    # _check_key_admin_access that would otherwise require team/org admin status.
-    _key_is_team_key = getattr(existing_key_row, "team_id", None) is not None
-    can_skip_admin_check = (caller_is_creator or _key_is_team_key) and not _is_budget_change
-    if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
-        hashed_key = existing_key_row.token
-        await _check_key_admin_access(
-            user_api_key_dict=user_api_key_dict,
-            hashed_token=hashed_key,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
-        )
-
-    # Check team limits if key has a team_id (from request or existing key)
+    # Resolve team_obj before invoking the policy helper so the
+    # delegation-ceiling check can consult team budget for session
+    # tokens acting on a team key.
     team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
     _team_id_to_check = data.team_id or getattr(existing_key_row, "team_id", None)
     if _team_id_to_check is not None:
@@ -2230,6 +2149,16 @@ async def _validate_update_key_data(
                 data=data,
                 prisma_client=prisma_client,
             )
+
+    await authorize_key_mutation(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_obj,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        route_label="/key/update",
+    )
 
     # Validate key against project limits if project_id is being set
     _project_id_to_check = getattr(data, "project_id", None) or getattr(existing_key_row, "project_id", None)
@@ -3383,7 +3312,7 @@ async def generate_key_helper_fn(
     update_key_values: Optional[dict] = None,
     key_alias: Optional[str] = None,
     allowed_cache_controls: Optional[list] = [],
-    permissions: Optional[dict] = {},
+    permissions: Optional[dict] = None,
     model_max_budget: Optional[dict] = {},
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
@@ -3448,7 +3377,10 @@ async def generate_key_helper_fn(
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
-    permissions_json = json.dumps(permissions)
+    # Preserve historical DB shape: serialize an empty dict (not None) when
+    # the caller passed no permissions, so downstream readers that expect
+    # a dict after json.loads continue to work.
+    permissions_json = json.dumps(permissions if permissions is not None else {})
     router_settings_json = safe_dumps(router_settings) if router_settings is not None else safe_dumps({})
 
     # Add model_rpm_limit and model_tpm_limit to metadata
@@ -4460,19 +4392,29 @@ async def regenerate_key_fn(
 
         # Gate access_group_ids on regenerate, same as /key/generate and
         # /key/update. Use the existing key's team since the body may omit it.
+        regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+        if _key_in_db.team_id is not None:
+            regenerate_team_table = await get_team_object(
+                team_id=_key_in_db.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                check_db_only=True,
+            )
         if data is not None and data.access_group_ids:
-            regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
-            if _key_in_db.team_id is not None:
-                regenerate_team_table = await get_team_object(
-                    team_id=_key_in_db.team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    check_db_only=True,
-                )
             TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
                 user_api_key_dict=user_api_key_dict,
                 team_table=regenerate_team_table,
                 access_group_ids=data.access_group_ids,
+            )
+        if data is not None:
+            await authorize_key_mutation(
+                data=data,
+                existing_key_row=_key_in_db,
+                user_api_key_dict=user_api_key_dict,
+                team_table=regenerate_team_table,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                route_label="/key/regenerate",
             )
 
         verbose_proxy_logger.info(
