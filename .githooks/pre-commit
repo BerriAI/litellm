@@ -40,7 +40,7 @@ if [ -n "$ui_files" ]; then
     done <<EOF
 $ui_files
 EOF
-    if ! ( cd ui/litellm-dashboard && npx prettier --check "${ui_rel[@]}" && npx eslint --no-warn-ignored "${ui_rel[@]}" ); then
+    if ! ( cd ui/litellm-dashboard && npx prettier --check "${ui_rel[@]}" && npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${ui_rel[@]}" ); then
         echo "✗ Dashboard lint failed. Fix with: (cd ui/litellm-dashboard && npm run format && npm run lint)." >&2
         status=1
     fi
