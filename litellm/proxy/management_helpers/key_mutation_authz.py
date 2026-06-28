@@ -268,18 +268,34 @@ def _check_delegation_ceiling(
     if delegation_ceiling is None:
         return
 
-    max_budget_changed = data.max_budget is not None and (
-        existing_key_row is None or data.max_budget != existing_key_row.max_budget
-    )
-    if max_budget_changed and data.max_budget > delegation_ceiling:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": (
-                    f"max_budget ({data.max_budget}) cannot exceed the caller's own max_budget ({delegation_ceiling})."
-                )
-            },
-        )
+    existing_max_budget = getattr(existing_key_row, "max_budget", None) if existing_key_row is not None else None
+    max_budget_in_fields_set = "max_budget" in data.model_fields_set
+    max_budget_changed = max_budget_in_fields_set and data.max_budget != existing_max_budget
+    if max_budget_changed:
+        # An explicit `max_budget: null` from a team/org admin removes the
+        # existing cap entirely, so the resulting effective max is
+        # unbounded — that exceeds any finite delegation_ceiling. Treat
+        # the clear the same as setting an over-ceiling value.
+        if data.max_budget is None and existing_max_budget is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"Clearing max_budget would remove the existing cap "
+                        f"({existing_max_budget}) and exceed the caller's own "
+                        f"max_budget ({delegation_ceiling})."
+                    )
+                },
+            )
+        if data.max_budget is not None and data.max_budget > delegation_ceiling:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": (
+                        f"max_budget ({data.max_budget}) cannot exceed the caller's own max_budget ({delegation_ceiling})."
+                    )
+                },
+            )
 
     # temp_budget_increase is added to the stored max_budget at request
     # time (_update_key_budget_with_temp_budget_increase), so the

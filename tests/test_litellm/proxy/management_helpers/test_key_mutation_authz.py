@@ -415,6 +415,90 @@ async def test_update_team_admin_temp_budget_increase_over_ceiling_rejected():
 
 
 @pytest.mark.asyncio
+async def test_update_team_admin_max_budget_null_clear_rejected():
+    """A team admin passes the admin gate but cannot clear an existing
+    finite cap with `max_budget: null` — the resulting effective max is
+    unbounded, which exceeds any finite delegation ceiling."""
+    existing = _existing_key(
+        user_id="someone-else",
+        created_by="someone-else",
+        team_id="team-x",
+        max_budget=1_000_000.0,
+    )
+    data = UpdateKeyRequest(key="sk-team", max_budget=None)
+    assert "max_budget" in data.model_fields_set
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await authorize_key_mutation(
+                data=data,
+                existing_key_row=existing,
+                user_api_key_dict=_internal_user(max_budget=100.0),
+                team_table=None,
+                prisma_client=MagicMock(),
+                user_api_key_cache=None,
+                route_label="/key/update",
+            )
+    assert exc.value.status_code == 400
+    assert "Clearing max_budget" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_max_budget_null_when_existing_is_already_null_allowed():
+    """Counterpart: a no-op clear (existing cap already null) is not a
+    change to the effective budget, so the ceiling check passes. Pins
+    the diff semantic."""
+    existing = _existing_key(
+        user_id="someone-else",
+        created_by="someone-else",
+        team_id="team-x",
+        max_budget=None,
+    )
+    data = UpdateKeyRequest(key="sk-team", max_budget=None)
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+    ):
+        await authorize_key_mutation(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=_internal_user(max_budget=100.0),
+            team_table=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=None,
+            route_label="/key/update",
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_proxy_admin_max_budget_null_clear_allowed():
+    """Proxy admin is exempt from the delegation ceiling, so they CAN
+    clear an existing cap. Pins the carve-out from rule 5."""
+    existing = _existing_key(
+        user_id="someone-else",
+        created_by="someone-else",
+        team_id="team-x",
+        max_budget=1_000_000.0,
+    )
+    data = UpdateKeyRequest(key="sk-team", max_budget=None)
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+        new_callable=AsyncMock,
+    ):
+        await authorize_key_mutation(
+            data=data,
+            existing_key_row=existing,
+            user_api_key_dict=_admin(),
+            team_table=None,
+            prisma_client=MagicMock(),
+            user_api_key_cache=None,
+            route_label="/key/update",
+        )
+
+
+@pytest.mark.asyncio
 async def test_update_temp_budget_increase_nan_rejected_for_admin():
     """NaN hygiene applies to temp_budget_increase too. Without this,
     a NaN bump silently disables enforcement on the key."""
