@@ -191,12 +191,11 @@ class QdrantSemanticCache(BaseCache):
     def _get_embedding(self, prompt: str, metadata: Dict[str, Any] | None = None) -> EmbeddingResponse:
         """Embed via the proxy Router when it serves the model, else direct."""
         try:
-            from litellm.proxy.proxy_server import llm_model_list, llm_router
+            from litellm.proxy.proxy_server import llm_router
         except ImportError:
-            llm_model_list = None
             llm_router = None
 
-        router = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        router = resolve_embedding_router(self.embedding_model, llm_router)
         if router is not None:
             return router.embedding(
                 model=self.embedding_model,
@@ -212,12 +211,11 @@ class QdrantSemanticCache(BaseCache):
 
     async def _get_async_embedding(self, prompt: str, metadata: Dict[str, Any] | None = None) -> EmbeddingResponse:
         try:
-            from litellm.proxy.proxy_server import llm_model_list, llm_router
+            from litellm.proxy.proxy_server import llm_router
         except ImportError:
-            llm_model_list = None
             llm_router = None
 
-        router = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
+        router = resolve_embedding_router(self.embedding_model, llm_router)
         if router is not None:
             return await router.aembedding(
                 model=self.embedding_model,
