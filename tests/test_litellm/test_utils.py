@@ -45,6 +45,22 @@ def local_model_cost_map(monkeypatch):
         litellm.get_model_info.cache_clear()
 
 
+def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
+    """supports_adaptive_thinking must flow through get_model_info like every other
+    capability flag: both from an explicit cost-map entry and from a
+    fallback-generalization rule for an unmapped model. Regression: the field shipped
+    in the JSON but was never declared on ModelInfo nor copied during construction, so
+    get_model_info (and _supports_factory) silently dropped it for any provider-prefixed
+    or unmapped name."""
+    explicit = litellm.get_model_info(model="claude-opus-4-8")
+    assert explicit["supports_adaptive_thinking"] is True
+
+    generalized = litellm.get_model_info(
+        model="claude-opus-4-9", custom_llm_provider="anthropic"
+    )
+    assert generalized["supports_adaptive_thinking"] is True
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -945,6 +961,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     actual_json.pop(
         "sample_spec", None
     )  # remove the sample, whose schema is inconsistent with the real data
+    actual_json.pop(
+        "fallback_generalizations", None
+    )  # reserved meta key, not a model entry
 
     # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
@@ -1145,9 +1164,7 @@ def test_check_provider_match_none_value_matches_any_provider():
         is True
     )
     # When custom_llm_provider is also None nothing constrains the match.
-    assert (
-        litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
-    )
+    assert litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
 
 
 def test_get_provider_rerank_config():
@@ -1512,8 +1529,7 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print(
-            """
+        print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1528,8 +1544,7 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """
-        )
+        """)
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1891,8 +1906,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1945,8 +1959,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2160,8 +2173,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2214,8 +2226,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2429,8 +2440,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2483,8 +2493,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [

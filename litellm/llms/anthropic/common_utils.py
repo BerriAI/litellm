@@ -375,10 +375,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _is_adaptive_thinking_model(model: str) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).
 
-        Sourced solely from the model cost map's ``supports_adaptive_thinking`` flag,
-        resolved through provider prefixes. A model that resolves to no mapped entry
-        (an unmapped alias or a future release not yet in the map) is treated as
-        non-adaptive until a ``fallback_generalizations`` rule covers it.
+        The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
+        entry, or a ``fallback_generalizations`` rule for unknown Claude models. The
+        version gate (>= 4.6, including provider-prefixed Bedrock/Vertex ids that map to
+        no exact entry) lives entirely in that declarative rule, not here.
         """
         return AnthropicModelInfo._supports_model_capability(model, "supports_adaptive_thinking")
 
