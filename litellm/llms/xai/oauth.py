@@ -62,9 +62,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(
-                b"<html><body><h1>xAI authorization state mismatch.</h1></body></html>"
-            )
+            self.wfile.write(b"<html><body><h1>xAI authorization state mismatch.</h1></body></html>")
             return
 
         self.send_response(200)
@@ -87,30 +85,18 @@ class _CallbackServer(HTTPServer):
 
 
 class XAIOAuthAuthenticator:
-    def __init__(
-        self, http_client: Optional[Union[httpx.Client, HTTPHandler]] = None
-    ) -> None:
-        self.token_dir = get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser(
-            "~/.config/litellm/xai_oauth"
-        )
-        self.auth_file = os.path.join(
-            self.token_dir, get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json"
-        )
+    def __init__(self, http_client: Optional[Union[httpx.Client, HTTPHandler]] = None) -> None:
+        self.token_dir = get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser("~/.config/litellm/xai_oauth")
+        self.auth_file = os.path.join(self.token_dir, get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json")
         self.http_client = http_client
 
     def get_api_base(self) -> str:
-        return (
-            get_secret_str("XAI_OAUTH_API_BASE")
-            or get_secret_str("XAI_API_BASE")
-            or XAI_API_BASE
-        )
+        return get_secret_str("XAI_OAUTH_API_BASE") or get_secret_str("XAI_API_BASE") or XAI_API_BASE
 
     def get_access_token(self) -> str:
         auth_data = self._read_auth_file()
         if not auth_data:
-            raise XAIOAuthLoginRequiredError(
-                "xAI OAuth login required. Run `litellm xai-oauth login`."
-            )
+            raise XAIOAuthLoginRequiredError("xAI OAuth login required. Run `litellm xai-oauth login`.")
 
         access_token = auth_data.get("access_token")
         if access_token and not self._is_expired(auth_data):
@@ -118,9 +104,7 @@ class XAIOAuthAuthenticator:
 
         refresh_token = auth_data.get("refresh_token")
         if not refresh_token:
-            raise XAIOAuthLoginRequiredError(
-                "xAI OAuth refresh token missing. Run `litellm xai-oauth login`."
-            )
+            raise XAIOAuthLoginRequiredError("xAI OAuth refresh token missing. Run `litellm xai-oauth login`.")
 
         with _XAI_OAUTH_REFRESH_LOCK:
             locked_auth_data = self._read_auth_file() or auth_data
@@ -156,9 +140,7 @@ class XAIOAuthAuthenticator:
         )
 
         if no_browser or not webbrowser.open(authorize_url):
-            sys.stdout.write(
-                f"Open this URL to authenticate with xAI:\n{authorize_url}\n"
-            )
+            sys.stdout.write(f"Open this URL to authenticate with xAI:\n{authorize_url}\n")
             sys.stdout.flush()
 
         result = self._wait_for_callback(server)
@@ -245,9 +227,7 @@ class XAIOAuthAuthenticator:
 
     def _discover(self) -> Dict[str, str]:
         try:
-            response = self._client().get(
-                XAI_OAUTH_DISCOVERY_URL, headers={"Accept": "application/json"}
-            )
+            response = self._client().get(XAI_OAUTH_DISCOVERY_URL, headers={"Accept": "application/json"})
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise XAIOAuthError(
@@ -256,17 +236,13 @@ class XAIOAuthAuthenticator:
         try:
             data = response.json()
         except ValueError as exc:
-            raise XAIOAuthError(
-                "xAI OAuth discovery response was not valid JSON"
-            ) from exc
+            raise XAIOAuthError("xAI OAuth discovery response was not valid JSON") from exc
         authorization_endpoint = data.get("authorization_endpoint")
         token_endpoint = data.get("token_endpoint")
         if not authorization_endpoint or not token_endpoint:
             raise XAIOAuthError("xAI OAuth discovery missing endpoints")
         return {
-            "authorization_endpoint": self._validate_xai_endpoint(
-                authorization_endpoint
-            ),
+            "authorization_endpoint": self._validate_xai_endpoint(authorization_endpoint),
             "token_endpoint": self._validate_xai_endpoint(token_endpoint),
         }
 
@@ -274,29 +250,19 @@ class XAIOAuthAuthenticator:
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
         if parsed.scheme != "https" or (host != "x.ai" and not host.endswith(".x.ai")):
-            raise XAIOAuthError(
-                f"xAI OAuth discovery returned unexpected endpoint: {url}"
-            )
+            raise XAIOAuthError(f"xAI OAuth discovery returned unexpected endpoint: {url}")
         return url
 
     def _pkce_pair(self) -> Tuple[str, str]:
-        verifier = (
-            base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
-        )
-        challenge = (
-            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-            .rstrip(b"=")
-            .decode()
-        )
+        verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         return verifier, challenge
 
     def _start_callback_server(self, state: str) -> Tuple[_CallbackServer, str]:
         last_error: Optional[OSError] = None
         for port in (XAI_OAUTH_REDIRECT_PORT, 0):
             try:
-                server = _CallbackServer(
-                    (XAI_OAUTH_REDIRECT_HOST, port), _CallbackHandler
-                )
+                server = _CallbackServer((XAI_OAUTH_REDIRECT_HOST, port), _CallbackHandler)
                 server.expected_state = state
                 server.callback_result = None
                 actual_port = server.server_address[1]
@@ -338,9 +304,7 @@ class XAIOAuthAuthenticator:
             server.server_close()
         raise XAIOAuthError("Timed out waiting for xAI OAuth callback")
 
-    def _exchange_token(
-        self, token_endpoint: str, data: Dict[str, str]
-    ) -> Dict[str, Any]:
+    def _exchange_token(self, token_endpoint: str, data: Dict[str, str]) -> Dict[str, Any]:
         try:
             response = self._client().post(
                 token_endpoint,
@@ -396,9 +360,7 @@ class XAIOAuthAuthenticator:
         token_endpoint = self._validate_xai_endpoint(token_endpoint)
         refresh_token = auth_data.get("refresh_token")
         if not refresh_token:
-            raise XAIOAuthLoginRequiredError(
-                "xAI OAuth refresh token missing. Run `litellm xai-oauth login`."
-            )
+            raise XAIOAuthLoginRequiredError("xAI OAuth refresh token missing. Run `litellm xai-oauth login`.")
 
         token_payload = self._exchange_token(
             token_endpoint,

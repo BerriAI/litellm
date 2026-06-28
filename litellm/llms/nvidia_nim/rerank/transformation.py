@@ -156,9 +156,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             api_key = get_secret_str("NVIDIA_NIM_API_KEY") or litellm.api_key
 
         if api_key is None:
-            raise ValueError(
-                "Nvidia NIM API key is required. Please set 'NVIDIA_NIM_API_KEY' in your environment"
-            )
+            raise ValueError("Nvidia NIM API key is required. Please set 'NVIDIA_NIM_API_KEY' in your environment")
 
         default_headers = {
             "Authorization": f"Bearer {api_key}",
@@ -235,18 +233,12 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         }
 
         # Add optional top_k parameter if provided (already mapped from top_n in map_cohere_rerank_params)
-        if (
-            "top_k" in optional_rerank_params
-            and optional_rerank_params.get("top_k") is not None
-        ):  # type: ignore
+        if "top_k" in optional_rerank_params and optional_rerank_params.get("top_k") is not None:  # type: ignore
             request_data["top_k"] = optional_rerank_params.get("top_k")  # type: ignore
 
         # Add Nvidia-specific truncate parameter if provided
         # This is passed through from non_default_params, not in base OptionalRerankParams
-        if (
-            "truncate" in optional_rerank_params
-            and optional_rerank_params.get("truncate") is not None
-        ):  # type: ignore
+        if "truncate" in optional_rerank_params and optional_rerank_params.get("truncate") is not None:  # type: ignore
             truncate_value = optional_rerank_params.get("truncate")  # type: ignore
             if truncate_value in ["NONE", "END"]:
                 request_data["truncate"] = truncate_value  # type: ignore
@@ -305,9 +297,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         rankings = nvidia_response.get("rankings", [])
 
         # Get original documents from request if we need to include them
-        original_passages: List[NvidiaNimPassageObject] = request_data.get(
-            "passages", []
-        )
+        original_passages: List[NvidiaNimPassageObject] = request_data.get("passages", [])
 
         for ranking in rankings:
             result_item: RerankResponseResult = {
@@ -327,9 +317,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         usage = raw_response_json.get("usage", {})
         total_tokens = usage.get("total_tokens", 0)
 
-        billed_units: RerankBilledUnits = {
-            "total_tokens": total_tokens if total_tokens > 0 else len(results)
-        }
+        billed_units: RerankBilledUnits = {"total_tokens": total_tokens if total_tokens > 0 else len(results)}
 
         meta: RerankResponseMeta = {"billed_units": billed_units}
 
