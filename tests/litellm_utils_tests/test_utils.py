@@ -1656,6 +1656,36 @@ def test_get_valid_models_openai_proxy(monkeypatch):
         assert "litellm_proxy/gpt-5.5" in valid_models
 
 
+def test_get_valid_models_custom_openai(monkeypatch):
+    from litellm.utils import get_valid_models
+    import litellm
+
+    mock_response_data = {
+        "object": "list",
+        "data": [
+            {
+                "id": "my-custom-model",
+                "object": "model",
+                "created": 1686935002,
+                "owned_by": "organization-owner",
+            },
+        ],
+    }
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_response_data
+
+    with patch.object(litellm.module_level_client, "get", return_value=mock_response):
+        valid_models = get_valid_models(
+            check_provider_endpoint=True,
+            custom_llm_provider="custom_openai",
+            api_key="sk-1234",
+            api_base="https://my-openai-compatible-endpoint/v1",
+        )
+        assert "my-custom-model" in valid_models
+
+
 def test_get_valid_models_fireworks_ai(monkeypatch):
     from litellm.utils import get_valid_models
     import litellm
