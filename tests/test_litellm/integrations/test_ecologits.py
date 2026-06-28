@@ -42,13 +42,15 @@ def _ensure_ecologits_counters_registered():
     ``REGISTRY.get_sample_value`` then returns ``None`` and every measured
     delta collapses to ``0.0``. The Counter objects themselves survive, so
     re-registering the ones that went missing restores observability without
-    resetting their accumulated values (the tests measure deltas).
-    """
+    resetting their accumulated values (the tests measure deltas)."""
+
     from litellm.integrations.ecologits import _ECOLOGITS_COUNTERS
 
-    for counter in _ECOLOGITS_COUNTERS.values():
-        if counter not in REGISTRY._collector_to_names:
+    for counter in (_ECOLOGITS_COUNTERS or {}).values():
+        try:
             REGISTRY.register(counter)
+        except ValueError:
+            pass
     yield
 
 
