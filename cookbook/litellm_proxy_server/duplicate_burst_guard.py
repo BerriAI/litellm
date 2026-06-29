@@ -9,10 +9,15 @@ litellm_settings:
 
 This is an in-memory, single-process example. Use a shared store if your proxy
 runs multiple workers or needs duplicate detection across instances.
+
+The request fingerprint uses a whitelist of model-affecting fields and scopes
+duplicates by request user/session before API-key owner. Adjust those fields if
+your deployment needs different duplicate semantics.
 """
 
 import asyncio
 import hashlib
+import json
 import time
 from collections import defaultdict, deque
 from collections.abc import Mapping
@@ -24,6 +29,34 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import CallTypesLiteral
+
+FINGERPRINT_REQUEST_KEYS = (
+    "model",
+    "messages",
+    "prompt",
+    "input",
+    "temperature",
+    "max_tokens",
+    "max_completion_tokens",
+    "top_p",
+    "stop",
+    "stream",
+    "tools",
+    "tool_choice",
+    "functions",
+    "function_call",
+    "response_format",
+    "n",
+    "presence_penalty",
+    "frequency_penalty",
+    "logit_bias",
+    "seed",
+    "modalities",
+    "audio",
+    "reasoning_effort",
+    "thinking",
+    "extra_body",
+)
 
 
 class DuplicateBurstGuard(CustomLogger):
@@ -85,64 +118,35 @@ class DuplicateBurstGuard(CustomLogger):
         user_api_key_dict: Optional[UserAPIKeyAuth],
         call_type: CallTypesLiteral,
     ) -> str:
-        messages_value = data.get("messages")
-        system_prompt = ""
-        last_user_prompt = ""
-        prompt = ""
-
-        if isinstance(messages_value, list):
-            messages = cast(list[object], messages_value)
-            for message in messages:
-                if not isinstance(message, Mapping):
-                    continue
-                message_data = cast(Mapping[str, object], message)
-                if message_data.get("role") == "system" and not system_prompt:
-                    system_prompt = self._content_text(message_data.get("content"))
-                if message_data.get("role") == "user":
-                    last_user_prompt = self._content_text(message_data.get("content"))
-        else:
-            prompt = self._content_text(data.get("prompt"))
-
         metadata_value = data.get("metadata")
         metadata: Mapping[str, object]
         if isinstance(metadata_value, Mapping):
             metadata = cast(Mapping[str, object], metadata_value)
         else:
             metadata = {}
+        key_user_id: object = None
+        if user_api_key_dict is not None:
+            key_user_id = user_api_key_dict.user_id
         user_id: object = (
-            (user_api_key_dict.user_id if user_api_key_dict is not None else None)
-            or data.get("user")
+            data.get("user")
             or metadata.get("user_id")
             or metadata.get("session_id")
+            or key_user_id
             or "anonymous"
         )
-        raw = "|".join(
-            (
-                str(user_id),
-                str(call_type),
-                str(data.get("model", "")),
-                str(data.get("temperature", "")),
-                str(data.get("max_tokens", "")),
-                system_prompt,
-                last_user_prompt,
-                prompt,
-            )
+        request = {key: data[key] for key in FINGERPRINT_REQUEST_KEYS if key in data}
+        raw = json.dumps(
+            {
+                "call_type": call_type,
+                "request": request,
+                "request_identity": user_id,
+            },
+            default=str,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-    def _content_text(self, content: object) -> str:
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
-            content_items = cast(list[object], content)
-            return "\n".join(
-                text
-                for item in content_items
-                if isinstance(item, Mapping)
-                for text in [cast(Mapping[str, object], item).get("text")]
-                if isinstance(text, str)
-            )
-        return ""
 
 
 duplicate_burst_guard = DuplicateBurstGuard()
