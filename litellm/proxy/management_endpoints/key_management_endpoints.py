@@ -4494,12 +4494,15 @@ async def regenerate_key_fn(
                 access_group_ids=data.access_group_ids,
             )
             _regen_object_permission_dict = _object_permission_to_dict(data.object_permission)
-            await validate_key_mcp_servers_against_team(
+            normalized_object_permission = await validate_key_mcp_servers_against_team(
                 object_permission=_regen_object_permission_dict,
                 team_obj=regenerate_team_table,
                 prisma_client=prisma_client,
                 is_proxy_admin=_regen_is_proxy_admin,
             )
+            if normalized_object_permission is not None:
+                data.object_permission = LiteLLM_ObjectPermissionBase(**normalized_object_permission)
+                _regen_object_permission_dict = normalized_object_permission
             await validate_key_search_tools_against_team(
                 object_permission=_regen_object_permission_dict,
                 team_obj=regenerate_team_table,
