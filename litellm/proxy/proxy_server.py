@@ -12736,6 +12736,9 @@ async def alerting_settings(
         "minor_outage_alert_threshold": {"type": "Integer"},
         "major_outage_alert_threshold": {"type": "Integer"},
         "max_outage_alert_list_size": {"type": "Integer"},
+        "key_budget_alert_thresholds": {"type": "List"},
+        "team_budget_alert_thresholds": {"type": "List"},
+        "user_budget_alert_thresholds": {"type": "List"},
     }
 
     _slack_alerting: SlackAlerting = proxy_logging_obj.slack_alerting_instance

@@ -200,6 +200,9 @@ export function KeyEditView({
       Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
         ? keyData.allowed_routes.join(", ")
         : "",
+    budget_alert_thresholds: Array.isArray(keyData.metadata?.budget_alert_thresholds)
+      ? keyData.metadata.budget_alert_thresholds.join(", ")
+      : "",
   };
 
   useEffect(() => {
@@ -229,6 +232,9 @@ export function KeyEditView({
         Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0
           ? keyData.allowed_routes.join(", ")
           : "",
+      budget_alert_thresholds: Array.isArray(keyData.metadata?.budget_alert_thresholds)
+        ? keyData.metadata.budget_alert_thresholds.join(", ")
+        : "",
     });
   }, [keyData, form]);
 
@@ -284,6 +290,18 @@ export function KeyEditView({
         [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
       if (allowedRoutesUnchanged) {
         delete values.allowed_routes;
+      }
+
+      if (typeof values.budget_alert_thresholds === "string") {
+        const trimmed = values.budget_alert_thresholds.trim();
+        if (trimmed !== "") {
+          values.budget_alert_thresholds = trimmed
+            .split(",")
+            .map((s: string) => parseFloat(s.trim()))
+            .filter((n: number) => !isNaN(n));
+        } else {
+          delete values.budget_alert_thresholds;
+        }
       }
 
       if (neverExpire) {
@@ -470,6 +488,14 @@ export function KeyEditView({
         }
       >
         <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+      </Form.Item>
+
+      <Form.Item
+        label="Budget Alert Thresholds"
+        name="budget_alert_thresholds"
+        tooltip="Comma-separated fractions of max_budget at which to fire webhook alerts (e.g. 0.8, 0.85, 0.95). Overrides the global defaults."
+      >
+        <Input placeholder="e.g. 0.8, 0.85, 0.95" />
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">

@@ -552,7 +552,14 @@ class SlackAlerting(CustomBatchLogger):
 
         # send alert
         if event is not None and user_info.event_group is not None:
-            _cache_key = "budget_alerts:{}:{}".format(event, _id)
+            # Include threshold level in cache key so each configured threshold fires its own alert
+            # rather than the first crossing suppressing all subsequent ones.
+            _threshold_suffix = (
+                f":{int(user_info.budget_percentage_used * 100)}"
+                if user_info.budget_percentage_used is not None
+                else ""
+            )
+            _cache_key = "budget_alerts:{}:{}{}".format(event, _id, _threshold_suffix)
             result = await _cache.async_get_cache(key=_cache_key)
             if result is None:
                 webhook_event = WebhookEvent(
@@ -633,6 +640,11 @@ class SlackAlerting(CustomBatchLogger):
             elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
                 event_message += "15% Threshold Crossed"
+            elif user_info.budget_percentage_used is not None:
+                # Caller specified the exact threshold crossed (e.g. from multi-threshold check
+                # functions). Use it to fire the event even when outside the fixed Slack buckets.
+                event = "threshold_crossed"
+                event_message += f"{int(user_info.budget_percentage_used * 100)}% Threshold Crossed"
 
         return event, event_message
 
@@ -655,7 +667,7 @@ class SlackAlerting(CustomBatchLogger):
         Create a standard message for a budget alert
         """
         _all_fields_as_dict = user_info.model_dump(exclude_none=True)
-        _all_fields_as_dict.pop("token")
+        _all_fields_as_dict.pop("token", None)
         msg = ""
         for k, v in _all_fields_as_dict.items():
             if isinstance(v, Litellm_EntityType):
@@ -1073,34 +1085,39 @@ Model Info:
 
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
-        Sends structured alert to webhook, if set.
+        Sends structured alert to all configured budget-alert webhook URLs.
 
-        Currently only implemented for budget alerts
+        URL resolution order:
+          1. alert_to_webhook_url["budget_alerts"] from config
+          2. WEBHOOK_URL env var
 
-        Returns -> True if sent, False if not.
-
-        Raises Exception
-            - if WEBHOOK_URL is not set
+        Returns True if at least one POST succeeded.
+        Raises Exception if no URL is configured.
         """
-
-        webhook_url = os.getenv("WEBHOOK_URL", None)
-        if webhook_url is None:
-            raise Exception("Missing webhook_url from environment")
+        urls: List[str] = []
+        if self.alert_to_webhook_url:
+            configured = self.alert_to_webhook_url.get(AlertType.budget_alerts)
+            if configured:
+                urls = [configured] if isinstance(configured, str) else list(configured)
+        if not urls:
+            env_url = os.getenv("WEBHOOK_URL")
+            if env_url:
+                urls = [env_url]
+        if not urls:
+            raise Exception(
+                "No webhook URL configured for budget_alerts (set alert_to_webhook_url.budget_alerts or WEBHOOK_URL)"
+            )
 
         payload = webhook_event.model_dump_json()
         headers = {"Content-type": "application/json"}
-
-        response = await self.async_http_handler.post(
-            url=webhook_url,
-            headers=headers,
-            data=payload,
-        )
-        if response.status_code == 200:
-            return True
-        else:
-            print("Error sending webhook alert. Error=", response.text)  # noqa: T201
-
-        return False
+        any_success = False
+        for url in urls:
+            response = await self.async_http_handler.post(url=url, headers=headers, data=payload)
+            if response.status_code == 200:
+                any_success = True
+            else:
+                verbose_proxy_logger.warning("Error sending webhook alert to %s: %s", url, response.text)
+        return any_success
 
     async def _check_if_using_premium_email_feature(
         self,

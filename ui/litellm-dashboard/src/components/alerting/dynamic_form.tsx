@@ -29,20 +29,34 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   const [form] = Form.useForm();
 
   const onFinish = () => {
-    console.log(`INSIDE ONFINISH`);
     const formData = form.getFieldsValue();
     const isEmpty = Object.entries(formData).every(([key, value]) => {
       if (typeof value === "boolean") {
-        return false; // Boolean values are never considered empty
+        return false;
       }
       return value === "" || value === null || value === undefined;
     });
-    console.log(`formData: ${JSON.stringify(formData)}, isEmpty: ${isEmpty}`);
     if (!isEmpty) {
-      handleSubmit(formData);
-    } else {
-      console.log("Some form fields are empty.");
+      const converted = Object.fromEntries(
+        Object.entries(formData).map(([key, val]) => {
+          const setting = alertingSettings.find((s) => s.field_name === key);
+          if (setting?.field_type === "List" && typeof val === "string" && val.trim() !== "") {
+            const parsed = val
+              .split(",")
+              .map((s: string) => parseFloat(s.trim()))
+              .filter((n: number) => !isNaN(n));
+            return [key, parsed];
+          }
+          return [key, val];
+        })
+      );
+      handleSubmit(converted);
     }
+  };
+
+  const listDisplayValue = (fieldValue: any): string => {
+    if (Array.isArray(fieldValue)) return fieldValue.join(", ");
+    return fieldValue || "";
   };
 
   return (
@@ -76,6 +90,12 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
                     <Switch
                       checked={value.field_value}
                       onChange={(checked) => handleInputChange(value.field_name, checked)}
+                    />
+                  ) : value.field_type === "List" ? (
+                    <Input
+                      value={listDisplayValue(value.field_value)}
+                      onChange={(e) => handleInputChange(value.field_name, e.target.value)}
+                      placeholder="e.g. 0.8, 0.85, 0.95"
                     />
                   ) : (
                     <Input value={value.field_value} onChange={(e) => handleInputChange(value.field_name, e)} />
@@ -112,6 +132,12 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
                       handleInputChange(value.field_name, checked);
                       form.setFieldsValue({ [value.field_name]: checked });
                     }}
+                  />
+                ) : value.field_type === "List" ? (
+                  <Input
+                    value={listDisplayValue(value.field_value)}
+                    onChange={(e) => handleInputChange(value.field_name, e.target.value)}
+                    placeholder="e.g. 0.8, 0.85, 0.95"
                   />
                 ) : (
                   <Input value={value.field_value} onChange={(e) => handleInputChange(value.field_name, e)} />

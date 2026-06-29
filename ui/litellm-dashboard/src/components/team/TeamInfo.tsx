@@ -538,6 +538,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   .map((email: string) => email.trim())
                   .filter((email: string) => email.length > 0)
               : values.soft_budget_alerting_emails || [],
+          ...(typeof values.budget_alert_thresholds === "string" && values.budget_alert_thresholds.trim() !== ""
+            ? {
+                budget_alert_thresholds: values.budget_alert_thresholds
+                  .split(",")
+                  .map((s: string) => parseFloat(s.trim()))
+                  .filter((n: number) => !isNaN(n)),
+              }
+            : {}),
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
         ...(values.policies?.length > 0 ? { policies: values.policies } : {}),
@@ -958,12 +966,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       soft_budget_alerting_emails: Array.isArray(info.metadata?.soft_budget_alerting_emails)
                         ? info.metadata.soft_budget_alerting_emails.join(", ")
                         : "",
+                      budget_alert_thresholds: Array.isArray(info.metadata?.budget_alert_thresholds)
+                        ? info.metadata.budget_alert_thresholds.join(", ")
+                        : "",
                       metadata: info.metadata
                         ? JSON.stringify(
                             (({
                               logging,
                               secret_manager_settings,
                               soft_budget_alerting_emails,
+                              budget_alert_thresholds,
                               model_tpm_limit,
                               model_rpm_limit,
                               allowed_passthrough_routes,
@@ -1040,6 +1052,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       tooltip="Comma-separated email addresses to receive alerts when the soft budget is reached"
                     >
                       <Input placeholder="example1@test.com, example2@test.com" />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Budget Alert Thresholds"
+                      name="budget_alert_thresholds"
+                      tooltip="Comma-separated fractions of max_budget at which to fire webhook alerts (e.g. 0.8, 0.85, 0.95). Overrides the global defaults."
+                    >
+                      <Input placeholder="e.g. 0.8, 0.85, 0.95" />
                     </Form.Item>
 
                     <Accordion className="mt-4 mb-4">

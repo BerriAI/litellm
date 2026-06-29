@@ -1742,6 +1742,7 @@ async def _user_api_key_auth_builder(
                         valid_token=valid_token,
                         proxy_logging_obj=proxy_logging_obj,
                         user_obj=user_obj,
+                        thresholds=proxy_logging_obj.slack_alerting_instance.alerting_args.key_budget_alert_thresholds,
                     )
 
                     # Check 5. Token Spend is under budget

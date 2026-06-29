@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { TextInput, SelectItem } from "@tremor/react";
 
-import { Button as Button2, Modal, Form, Select as Select2, InputNumber } from "antd";
+import { Button as Button2, Modal, Form, Input, Select as Select2, InputNumber } from "antd";
 
 import NumericalInput from "./shared/numerical_input";
 import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
@@ -20,7 +20,13 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
 
   useEffect(() => {
     form.resetFields();
-  }, [user]);
+    form.setFieldValue(
+      "budget_alert_thresholds",
+      Array.isArray(user?.metadata?.budget_alert_thresholds)
+        ? user.metadata.budget_alert_thresholds.join(", ")
+        : ""
+    );
+  }, [user, form]);
 
   const handleCancel = async () => {
     form.resetFields();
@@ -28,7 +34,17 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
   };
 
   const handleEditSubmit = async (formValues: Record<string, any>) => {
-    // Call API to update team with teamId and values
+    if (typeof formValues.budget_alert_thresholds === "string") {
+      const trimmed = formValues.budget_alert_thresholds.trim();
+      if (trimmed !== "") {
+        formValues.budget_alert_thresholds = trimmed
+          .split(",")
+          .map((s: string) => parseFloat(s.trim()))
+          .filter((n: number) => !isNaN(n));
+      } else {
+        delete formValues.budget_alert_thresholds;
+      }
+    }
     onSubmit(formValues);
     form.resetFields();
     onCancel();
@@ -93,6 +109,14 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
 
           <Form.Item label="Reset Budget" name="budget_duration">
             <BudgetDurationDropdown />
+          </Form.Item>
+
+          <Form.Item
+            label="Budget Alert Thresholds"
+            name="budget_alert_thresholds"
+            tooltip="Comma-separated fractions of max_budget at which to fire webhook alerts (e.g. 0.8, 0.85, 0.95). Overrides the global defaults."
+          >
+            <Input placeholder="e.g. 0.8, 0.85, 0.95" />
           </Form.Item>
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
