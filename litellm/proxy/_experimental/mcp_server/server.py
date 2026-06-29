@@ -1322,6 +1322,44 @@ if MCP_AVAILABLE:
             verbose_logger.warning(f"_prefetch_oauth_creds_for_user: failed to prefetch for user={user_id}: {e}")
             return {}
 
+    def _apply_extra_header_patterns(
+        patterns: list[str],
+        normalized_raw_headers: dict[str, str],
+        extra_headers: dict[str, str],
+        strip_caller_authorization: bool,
+    ) -> None:
+        """Apply extra_headers patterns (exact or wildcard) to forward client headers.
+
+        Wildcard matches are filtered against LiteLLM internal credential and
+        control headers to prevent broad patterns from leaking caller credentials
+        to upstream MCP servers.  Exact-name entries bypass this filter so admins
+        can explicitly forward a specific internal header when needed.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _is_internal_header,
+        )
+
+        for header_pattern in patterns:
+            if not isinstance(header_pattern, str):
+                continue
+            pattern_lower = header_pattern.lower()
+            if pattern_lower.endswith("*"):
+                prefix = pattern_lower[:-1]
+                for raw_key, raw_val in normalized_raw_headers.items():
+                    if raw_key.startswith(prefix):
+                        if raw_key == "authorization" and strip_caller_authorization:
+                            continue
+                        if _is_internal_header(raw_key):
+                            continue
+                        extra_headers[raw_key] = raw_val
+            else:
+                if pattern_lower == "authorization" and strip_caller_authorization:
+                    continue
+                header_value = normalized_raw_headers.get(pattern_lower)
+                if header_value is None:
+                    continue
+                extra_headers[header_pattern] = header_value
+
     def _prepare_mcp_server_headers(
         server: MCPServer,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]],
@@ -1379,15 +1417,12 @@ if MCP_AVAILABLE:
                 user_api_key_auth=user_api_key_auth,
             )
 
-            for header in server.extra_headers:
-                if not isinstance(header, str):
-                    continue
-                if header.lower() == "authorization" and strip_caller_authorization:
-                    continue
-                header_value = normalized_raw_headers.get(header.lower())
-                if header_value is None:
-                    continue
-                extra_headers[header] = header_value
+            _apply_extra_header_patterns(
+                server.extra_headers,
+                normalized_raw_headers,
+                extra_headers,
+                strip_caller_authorization,
+            )
 
         # Reset to None if no headers were actually added
         if extra_headers is not None and len(extra_headers) == 0:
