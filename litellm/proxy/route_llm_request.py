@@ -423,13 +423,23 @@ async def route_request(
 
     await add_shared_session_to_data(data)
 
-raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
+    raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
 
     # Propagate route_type so downstream filters (protocol_routing) can inspect
     # the incoming protocol without changing existing function signatures.
     data["_route_type"] = route_type
 
     data.pop("enable_tag_filtering", None)
+
+    # Strip [1m]/[1M] suffix from model name for routing.
+    # The suffix signals 1M context support; the actual header injection
+    # happens in the Anthropic handler via _original_model.
+    import re as _re
+
+    _model = data.get("model")
+    if _model and _re.search(r"\[1m\]$", _model, _re.IGNORECASE):
+        data["_original_model"] = _model
+        data["model"] = _re.sub(r"\[1m\]$", "", _model, flags=_re.IGNORECASE)
 
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
