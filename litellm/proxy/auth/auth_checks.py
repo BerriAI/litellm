@@ -2896,11 +2896,6 @@ def _can_object_call_model(
         _model = llm_router._get_model_from_alias(model)
         if _model:
             potential_models.append(_model)
-    # Expand the team-alias TARGET so it is checked against the caller's
-    # allowlist (key.models / team.models / org.models). The legacy
-    # `_model_in_team_aliases` short-circuit treated any alias source as
-    # authorized regardless of target — that let a key bypass its own
-    # `models` allowlist whenever the team had a matching alias.
     if team_model_aliases and isinstance(model, str) and model in team_model_aliases:
         potential_models.append(team_model_aliases[model])
 
