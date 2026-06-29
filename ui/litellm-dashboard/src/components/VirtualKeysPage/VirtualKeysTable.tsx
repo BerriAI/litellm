@@ -68,7 +68,7 @@ const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
 
 export function VirtualKeysTable() {
   const { accessToken } = useAuthorized();
-  const { data: fetchedOrganizations } = useOrganizations();
+  const { data: fetchedOrganizations, isLoading: isOrgsLoading } = useOrganizations();
   const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
@@ -98,7 +98,7 @@ export function VirtualKeysTable() {
 
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
 
-  const { data: fetchedTeams } = useQuery<Team[]>({
+  const { data: fetchedTeams, isLoading: isTeamsLoading } = useQuery<Team[]>({
     queryKey: ["allTeamsForKeyFilters", accessToken],
     queryFn: async () => (accessToken ? await fetchAllTeams(accessToken) : []),
     enabled: !!accessToken,
@@ -593,6 +593,7 @@ export function VirtualKeysTable() {
       name: "Team ID",
       label: "Team ID",
       isSearchable: true,
+      loading: isTeamsLoading,
       searchFn: async (searchText: string) => {
         if (!allTeams || allTeams.length === 0) return [];
 
@@ -612,6 +613,7 @@ export function VirtualKeysTable() {
       name: "Organization ID",
       label: "Organization ID",
       isSearchable: true,
+      loading: isOrgsLoading,
       searchFn: async (searchText: string) => {
         if (!resolvedOrganizations || resolvedOrganizations.length === 0) return [];
 
