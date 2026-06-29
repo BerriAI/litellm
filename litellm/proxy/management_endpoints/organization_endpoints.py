@@ -198,6 +198,11 @@ async def new_organization(
     }'
     ```
     """
+    from litellm.proxy.management_endpoints.logging_exporter_validation import (
+        validate_logging_exporter_assignment,
+    )
+
+    validate_logging_exporter_assignment(getattr(data, "metadata", None), user_api_key_dict)
 
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
@@ -452,6 +457,12 @@ async def update_organization(
 
     # Create validated data model
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
+
+    from litellm.proxy.management_endpoints.logging_exporter_validation import (
+        validate_logging_exporter_assignment,
+    )
+
+    validate_logging_exporter_assignment(getattr(data, "metadata", None), user_api_key_dict)
 
     # Validate budget values are not negative
     if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):

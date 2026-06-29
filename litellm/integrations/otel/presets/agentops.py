@@ -39,6 +39,7 @@ class _AgentOpsSettings(BaseSettings):
 def agentops_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     """Build the AgentOps config without any network I/O.
 
@@ -49,17 +50,24 @@ def agentops_preset(
     """
     settings = _AgentOpsSettings()
     base = config_overrides or OpenTelemetryV2Config()
+    # Contribute the global AgentOps exporter only when an API key is configured.
+    # Without it the lazy-auth exporter has nothing to mint a JWT from and every
+    # export fails; admin-owned destinations carry their own credentials.
+    global_exporter = (
+        (
+            ExporterSpec(
+                kind=_AGENTOPS_EXPORTER_KIND,
+                endpoint=_AGENTOPS_ENDPOINT,
+                options={"api_key": settings.api_key},
+                owner=ExporterOwner.AGENTOPS,
+            ),
+        )
+        if settings.api_key
+        else ()
+    )
     return base.model_copy(
         update={
-            "exporters": [
-                *base.exporters,
-                ExporterSpec(
-                    kind=_AGENTOPS_EXPORTER_KIND,
-                    endpoint=_AGENTOPS_ENDPOINT,
-                    options=({"api_key": settings.api_key} if settings.api_key else None),
-                    owner=ExporterOwner.AGENTOPS,
-                ),
-            ],
+            "exporters": [*base.exporters, *global_exporter],
             "resource_attributes": {
                 **base.resource_attributes,
                 "service.name": settings.service_name,

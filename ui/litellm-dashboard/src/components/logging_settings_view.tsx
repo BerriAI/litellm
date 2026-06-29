@@ -13,6 +13,12 @@ interface LoggingConfig {
 interface LoggingSettingsViewProps {
   loggingConfigs?: LoggingConfig[];
   disabledCallbacks?: string[];
+  // Destinations this identity assigned itself, via metadata.logging_exporters.
+  loggingExporters?: string[];
+  // Destinations that target this identity via the credential's own scope
+  // (credential_info.access.{teams,orgs,global}) -- the other direction. The
+  // resolver unions both at request time; the UI unions them here for display.
+  scopedExporters?: string[];
   variant?: "card" | "inline";
   className?: string;
 }
@@ -20,6 +26,8 @@ interface LoggingSettingsViewProps {
 export function LoggingSettingsView({
   loggingConfigs = [],
   disabledCallbacks = [],
+  loggingExporters = [],
+  scopedExporters = [],
   variant = "card",
   className = "",
 }: LoggingSettingsViewProps) {
@@ -57,6 +65,46 @@ export function LoggingSettingsView({
 
   const content = (
     <div className="space-y-6">
+      {/* Logging Exporters: the union of destinations routing to this identity.
+          Own = destinations this identity listed in its metadata.logging_exporters.
+          Via scope = destinations whose credential_info.access targets this identity
+          (a team/org id, or global). Both directions count; we render them together,
+          marking how each entry was resolved. */}
+      <div className="space-y-3">
+        {(() => {
+          const ownSet = new Set(loggingExporters);
+          const scopedOnly = scopedExporters.filter((name) => !ownSet.has(name));
+          const entries = [
+            ...loggingExporters.map((name) => ({ name, source: "own" as const })),
+            ...scopedOnly.map((name) => ({ name, source: "scope" as const })),
+          ];
+          return (
+            <>
+              <div className="flex items-center gap-2">
+                <CogIcon className="h-4 w-4 text-blue-600" />
+                <span className="font-semibold text-gray-900">Logging Exporters</span>
+                <Tag color="blue">{entries.length}</Tag>
+              </div>
+              {entries.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {entries.map((entry, index) => (
+                    <Tag key={index} color={entry.source === "own" ? "blue" : "geekblue"}>
+                      {entry.name}
+                      {entry.source === "scope" ? " (via scope)" : ""}
+                    </Tag>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-50 border border-gray-200">
+                  <CogIcon className="h-4 w-4 text-gray-400" />
+                  <span className="text-gray-500 text-sm">No logging exporters assigned</span>
+                </div>
+              )}
+            </>
+          );
+        })()}
+      </div>
+
       {/* Logging Integrations Section */}
       <div className="space-y-3">
         <div className="flex items-center gap-2">

@@ -76,6 +76,7 @@ interface EditTeamModalProps {
 
 import { updateExistingKeys } from "@/utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import LoggingExportersSelect from "./logging_credentials/LoggingExportersSelect";
 import { Member, teamCreateCall } from "./networking";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 
@@ -468,6 +469,22 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
           formValues.metadata = JSON.stringify(metadata);
         }
+
+        // Merge admin-owned logging_exporters into metadata at create time so the
+        // user can assign destinations from the new-team form (instead of create-then-edit).
+        if (Array.isArray(formValues.logging_exporters) && formValues.logging_exporters.length > 0) {
+          let metadata: Record<string, unknown> = {};
+          if (typeof formValues.metadata === "string" && formValues.metadata.trim().length > 0) {
+            try {
+              metadata = JSON.parse(formValues.metadata);
+            } catch (e) {
+              console.warn("Invalid JSON in metadata field, starting with empty object");
+            }
+          }
+          metadata = { ...metadata, logging_exporters: formValues.logging_exporters };
+          formValues.metadata = JSON.stringify(metadata);
+        }
+        delete formValues.logging_exporters;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
@@ -1569,6 +1586,14 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                   <b>Logging Settings</b>
                 </AccordionHeader>
                 <AccordionBody>
+                  <Form.Item
+                    label="Logging Exporters"
+                    name="logging_exporters"
+                    tooltip="Admin-owned trace destinations this team exports to. Resolved server-side and fanned out (added to the key's and org's). Manage destinations under Settings -> Logging Callbacks."
+                    className="mt-4"
+                  >
+                    <LoggingExportersSelect />
+                  </Form.Item>
                   <div className="mt-4">
                     <PremiumLoggingSettings
                       value={loggingSettings}

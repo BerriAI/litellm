@@ -10,7 +10,6 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
-from litellm.types.utils import StandardCallbackDynamicParams
 
 
 class _ArizeSettings(BaseSettings):
@@ -24,21 +23,30 @@ class _ArizeSettings(BaseSettings):
 def arize_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
     arize_cfg = _V1ArizeLogger.get_arize_config()
     headers = _arize_headers(arize_cfg)
     base = config_overrides or OpenTelemetryV2Config()
+    # Contribute the global Arize exporter only when Arize credentials are
+    # configured. Without them it points at the Arize cloud with no auth and every
+    # export fails PERMISSION_DENIED; admin-owned destinations carry their own
+    # credentials and are appended by the router instead.
+    global_exporter = (
+        (
+            ExporterSpec(
+                kind=arize_cfg.protocol or "otlp_grpc",
+                endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",
+                headers=headers,
+                owner=ExporterOwner.ARIZE_AX,
+            ),
+        )
+        if headers
+        else ()
+    )
     return base.model_copy(
         update={
-            "exporters": [
-                *base.exporters,
-                ExporterSpec(
-                    kind=arize_cfg.protocol or "otlp_grpc",
-                    endpoint=arize_cfg.endpoint or "https://otlp.arize.com/v1",
-                    headers=headers,
-                    owner=ExporterOwner.ARIZE_AX,
-                ),
-            ],
+            "exporters": [*base.exporters, *global_exporter],
             "mapper_names": ensure_mappers(base.mapper_names, "openinference"),
             "resource_attributes": {
                 **base.resource_attributes,
@@ -59,16 +67,3 @@ def _arize_headers(arize_cfg) -> str | None:
         # credentials are configured.
         return _ArizeSettings().otlp_traces_headers
     return ",".join(pieces)
-
-
-def arize_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
-    """Per-request Arize OTLP headers from team/key dynamic params."""
-    headers: dict[str, str] = {}
-    # ``arize_space_key`` is the suggested param and wins over ``arize_space_id``.
-    space = params.get("arize_space_key") or params.get("arize_space_id")
-    if space:
-        headers["arize-space-id"] = space
-    api_key = params.get("arize_api_key")
-    if api_key:
-        headers["api_key"] = api_key
-    return headers

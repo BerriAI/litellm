@@ -27,6 +27,7 @@ import { fetchTeamModels } from "../organisms/create_key_button";
 import NumericalInput from "../shared/numerical_input";
 import { Tag } from "../tag_management/types";
 import EditLoggingSettings from "../team/EditLoggingSettings";
+import LoggingExportersSelect from "../logging_credentials/LoggingExportersSelect";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
 
 interface KeyEditViewProps {
@@ -190,6 +191,7 @@ export function KeyEditView({
       accessGroups: keyData.object_permission?.agent_access_groups || [],
     },
     logging_settings: extractLoggingSettings(keyData.metadata),
+    logging_exporters: keyData.metadata?.logging_exporters || [],
     disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
       ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
       : [],
@@ -219,6 +221,7 @@ export function KeyEditView({
       },
       mcp_tool_permissions: keyData.object_permission?.mcp_tool_permissions || {},
       logging_settings: extractLoggingSettings(keyData.metadata),
+      logging_exporters: keyData.metadata?.logging_exporters || [],
       disabled_callbacks: Array.isArray(keyData.metadata?.litellm_disabled_callbacks)
         ? mapInternalToDisplayNames(keyData.metadata.litellm_disabled_callbacks)
         : [],
@@ -731,6 +734,14 @@ export function KeyEditView({
           <Input value={projectDisplay ?? ""} disabled />
         </Form.Item>
       )}
+      <Form.Item
+        label="Logging Exporters"
+        name="logging_exporters"
+        tooltip="Trace destinations this key exports to. Resolved server-side and unioned with the team's and org's destinations. Destinations are created by the proxy admin; team admins may attach any of them to keys in their team."
+      >
+        <LoggingExportersSelect />
+      </Form.Item>
+
       <Form.Item label="Logging Settings" name="logging_settings">
         <EditLoggingSettings
           value={form.getFieldValue("logging_settings")}

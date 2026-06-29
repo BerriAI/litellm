@@ -988,6 +988,13 @@ async def new_team(
     ```
     """
     try:
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_user_org_admin_for_org_id,
+        )
+        from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            LOGGING_EXPORTERS_KEY,
+            validate_logging_exporter_assignment,
+        )
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
         )
@@ -998,6 +1005,21 @@ async def new_team(
             prisma_client,
             user_api_key_cache,
         )
+
+        # New team has no admins yet, so only proxy admin or an org admin of
+        # the destination org may assign logging exporters at creation time.
+        # Skip the org-admin lookup entirely when the field isn't being
+        # written, to avoid hitting the cache for unrelated /team/new calls.
+        if isinstance(data.metadata, dict) and LOGGING_EXPORTERS_KEY in data.metadata:
+            validate_logging_exporter_assignment(
+                data.metadata,
+                user_api_key_dict,
+                caller_is_org_admin=await _is_user_org_admin_for_org_id(
+                    user_api_key_dict=user_api_key_dict,
+                    organization_id=data.organization_id,
+                ),
+                scope_org_id=data.organization_id,
+            )
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -1637,6 +1659,12 @@ async def update_team(
     ```
     """
     try:
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_user_org_admin_for_team,
+        )
+        from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            validate_logging_exporter_assignment,
+        )
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
             llm_router,
@@ -1685,10 +1713,33 @@ async def update_team(
             )
 
         # Verify caller has access to manage this team
+        team_for_auth = LiteLLM_TeamTable(**existing_team_row.model_dump())
         await _verify_team_access(
-            team_obj=LiteLLM_TeamTable(**existing_team_row.model_dump()),
+            team_obj=team_for_auth,
             user_api_key_dict=user_api_key_dict,
         )
+
+        # logging_exporters on /team/update is proxy-admin or org-admin only:
+        # team-admins are blocked at the route gate (test_team_update_authz_
+        # matrix pins this) and the role matrix documents ❌ for team-admin on
+        # this path. Pass only the org-admin flag so the validator can't
+        # silently grant team-admins if the route gate is ever widened. The
+        # validator no-ops when the effective value doesn't change; pass the
+        # stored metadata so removal-via-omission gates too (Veria F4).
+        if isinstance(data.metadata, dict):
+            existing_team_metadata = (
+                existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else None
+            )
+            validate_logging_exporter_assignment(
+                data.metadata,
+                user_api_key_dict,
+                caller_is_org_admin=await _is_user_org_admin_for_team(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
+                ),
+                existing_metadata=existing_team_metadata,
+                scope_team_id=getattr(team_for_auth, "team_id", None),
+                scope_org_id=getattr(team_for_auth, "organization_id", None),
+            )
 
         _check_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
 

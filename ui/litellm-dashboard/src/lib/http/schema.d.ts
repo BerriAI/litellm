@@ -2423,6 +2423,13 @@ export interface paths {
         /**
          * Get Credentials
          * @description [BETA] endpoint. This might change unexpectedly.
+         *
+         *     Proxy admins see every credential (values masked). Team-admins and
+         *     org-admins see only logging-typed destinations so they can self-assign
+         *     them; provider credentials stay invisible to non-PROXY_ADMINs. Plain
+         *     internal users with no team-admin or org-admin status get 403 — they
+         *     have no use for the list and shouldn't see destination names, hosts,
+         *     or scope metadata (Veria F2).
          */
         get: operations["get_credentials_credentials_get"];
         put?: never;
@@ -2499,6 +2506,11 @@ export interface paths {
         /**
          * Update Credential
          * @description [BETA] endpoint. This might change unexpectedly.
+         *
+         *     Both ``credential_values`` and ``credential_info`` are optional; a team-admin
+         *     typically patches only ``credential_info.access`` to grant or revoke their
+         *     own team. A proxy admin may patch either or both. See
+         *     ``decide_credential_patch`` for the exact contract.
          */
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
@@ -31432,6 +31444,27 @@ export interface components {
             workers: components["schemas"]["WorkerRegistryEntry"][];
         };
         /**
+         * UpdateCredentialItem
+         * @description PATCH body for ``/credentials/{name}``.
+         *
+         *     Both ``credential_values`` and ``credential_info`` are optional so a caller
+         *     can patch one without sending the other (team-admins patching access without
+         *     knowing the upstream secrets; proxy admins rotating values without touching
+         *     access). ``credential_name`` is optional because most patches don't rename.
+         */
+        UpdateCredentialItem: {
+            /** Credential Info */
+            credential_info?: {
+                [key: string]: unknown;
+            } | null;
+            /** Credential Name */
+            credential_name?: string | null;
+            /** Credential Values */
+            credential_values?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
          */
@@ -37166,7 +37199,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CredentialItem"];
+                "application/json": components["schemas"]["UpdateCredentialItem"];
             };
         };
         responses: {

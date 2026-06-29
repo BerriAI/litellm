@@ -101,17 +101,27 @@ def instrument_fastapi_app(app: Any) -> None:
     after config load (see ``proxy_startup_event``), and the proxy delegates to it.
     That way server spans and gen-ai spans share one provider and the same trace.
     """
+    if not is_otel_v2_enabled():
+        return
+
+    # Lazy: only the V2-enabled path needs the optional
+    # ``opentelemetry-instrumentation-fastapi`` package. Importing it at module top
+    # would make ``proxy_server``'s unconditional ``import`` of this module crash when
+    # the package is absent, even with the gate off. When V2 IS on, a missing package
+    # is a real misconfiguration -- without the server span the trace has no root and
+    # admin-owned destination traces are orphaned -- so it must be loud, not silent.
     try:
-        if not is_otel_v2_enabled():
-            return
-
-        # Lazy: only the V2-enabled path needs the optional
-        # ``opentelemetry-instrumentation-fastapi`` package, which is not part of the
-        # base ``litellm[proxy]`` install. Importing it at module top would make
-        # ``proxy_server``'s unconditional ``import`` of this module crash when the
-        # package is absent, even with the gate off.
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    except ImportError:
+        verbose_logger.warning(
+            "LITELLM_OTEL_V2 is enabled but 'opentelemetry-instrumentation-fastapi' "
+            "is not installed. The FastAPI server span will not be created, so traces "
+            "exported to admin-owned destinations will be missing their root span "
+            "(orphaned children). Install 'opentelemetry-instrumentation-fastapi'."
+        )
+        return
 
+    try:
         excluded_urls = (
             os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
             if "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS" in os.environ
@@ -127,4 +137,4 @@ def instrument_fastapi_app(app: Any) -> None:
             exclude_spans=["receive", "send"],
         )
     except Exception as e:
-        verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: %s", e)
+        verbose_logger.warning("OTel V2 FastAPI instrumentation failed: %s", e)

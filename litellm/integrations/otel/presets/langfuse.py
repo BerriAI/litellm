@@ -9,16 +9,27 @@ from litellm.integrations.otel.model.config import (
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
-from litellm.types.utils import StandardCallbackDynamicParams
 
 
 def langfuse_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    cfg = _V1Langfuse.get_langfuse_otel_config()
-    kind = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
     base = config_overrides or OpenTelemetryV2Config()
+    mappers = ensure_mappers(base.mapper_names, "langfuse")
+    # ``get_langfuse_otel_config()`` raises without Langfuse keys. Propagate that raise
+    # for a global callback so a misconfigured deployment fails loud, but when an
+    # admin-owned Langfuse destination is the reason for construction it carries its own
+    # per-tenant keys, so degrade to a (global-exporter-less) mapper-only config -- or
+    # the gen-AI span falls to the generic logger and never reaches it.
+    try:
+        cfg = _V1Langfuse.get_langfuse_otel_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base.model_copy(update={"mapper_names": mappers})
+    kind = cfg.exporter if isinstance(cfg.exporter, str) else "otlp_http"
     return base.model_copy(
         update={
             "exporters": [
@@ -30,19 +41,6 @@ def langfuse_preset(
                     owner=ExporterOwner.LANGFUSE_OTEL,
                 ),
             ],
-            "mapper_names": ensure_mappers(base.mapper_names, "langfuse"),
+            "mapper_names": mappers,
         }
     )
-
-
-def langfuse_dynamic_headers(params: StandardCallbackDynamicParams) -> dict[str, str]:
-    """Per-request Langfuse OTLP headers from team/key dynamic params."""
-    public_key = params.get("langfuse_public_key")
-    secret_key = params.get("langfuse_secret_key")
-    if public_key and secret_key:
-        return {
-            "Authorization": _V1Langfuse._get_langfuse_authorization_header(
-                public_key=public_key, secret_key=secret_key
-            )
-        }
-    return {}

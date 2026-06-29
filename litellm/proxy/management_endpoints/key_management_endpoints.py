@@ -1400,6 +1400,14 @@ async def generate_key_fn(
     """
     try:
         from litellm.proxy._types import CommonProxyErrors
+        from litellm.proxy.management_endpoints.common_utils import (
+            _is_user_org_admin_for_team,
+            _is_user_team_admin,
+        )
+        from litellm.proxy.management_endpoints.logging_exporter_validation import (
+            LOGGING_EXPORTERS_KEY,
+            validate_logging_exporter_assignment,
+        )
         from litellm.proxy.proxy_server import (
             prisma_client,
             user_api_key_cache,
@@ -1486,6 +1494,27 @@ async def generate_key_fn(
             data=data,
             route=KeyManagementRoutes.KEY_GENERATE,
         )
+
+        # Team-admin of the key's team or org-admin of that team's org may
+        # write metadata.logging_exporters on team-owned keys. Personal keys
+        # (no team_table) stay proxy-admin only. Skip the role lookup when
+        # the field isn't in the payload to keep /key/generate cheap for the
+        # common case.
+        if isinstance(data.metadata, dict) and LOGGING_EXPORTERS_KEY in data.metadata:
+            validate_logging_exporter_assignment(
+                data.metadata,
+                user_api_key_dict,
+                caller_is_team_admin=(
+                    team_table is not None
+                    and _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_table)
+                ),
+                caller_is_org_admin=(
+                    team_table is not None
+                    and await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_table)
+                ),
+                scope_team_id=getattr(team_table, "team_id", None),
+                scope_org_id=getattr(team_table, "organization_id", None),
+            )
 
         if team_table is not None:
             await _check_team_key_limits(
@@ -1661,6 +1690,34 @@ async def generate_service_account_key_fn(
         data=data,
         route=KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT,
     )
+
+    # Same logging_exporters gate as /key/generate. Without this, a caller
+    # eligible for service-account creation could set metadata.logging_exporters
+    # and route future traces to a destination they aren't allowed to assign
+    # (Veria F3). Skip the lookup unless the field is being written.
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_org_admin_for_team,
+        _is_user_team_admin,
+    )
+    from litellm.proxy.management_endpoints.logging_exporter_validation import (
+        LOGGING_EXPORTERS_KEY,
+        validate_logging_exporter_assignment,
+    )
+
+    if isinstance(data.metadata, dict) and LOGGING_EXPORTERS_KEY in data.metadata:
+        validate_logging_exporter_assignment(
+            data.metadata,
+            user_api_key_dict,
+            caller_is_team_admin=(
+                team_table is not None and _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_table)
+            ),
+            caller_is_org_admin=(
+                team_table is not None
+                and await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_table)
+            ),
+            scope_team_id=getattr(team_table, "team_id", None),
+            scope_org_id=getattr(team_table, "organization_id", None),
+        )
 
     data.user_id = None  # do not allow user_id to be set for service account keys
 
@@ -2318,7 +2375,7 @@ async def _validate_update_key_data(
 
 @router.post("/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
-async def update_key_fn(
+async def update_key_fn(  # noqa: C901
     request: Request,
     data: UpdateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -2395,6 +2452,13 @@ async def update_key_fn(
     }'
     ```
     """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _is_user_org_admin_for_team,
+        _is_user_team_admin,
+    )
+    from litellm.proxy.management_endpoints.logging_exporter_validation import (
+        validate_logging_exporter_assignment,
+    )
     from litellm.proxy.proxy_server import (
         llm_router,
         premium_user,
@@ -2420,6 +2484,43 @@ async def update_key_fn(
             token=data.key,
             prisma_client=prisma_client,
         )
+
+        # logging-exporters validation runs once the key's team is known so
+        # a team-admin or org-admin of that team can attach destinations.
+        # The validator no-ops when the effective value doesn't change; pass
+        # the stored metadata so removal-via-omission gates too (Veria F4).
+        if isinstance(data.metadata, dict):
+            _existing_key_metadata = (
+                existing_key_row.metadata if isinstance(getattr(existing_key_row, "metadata", None), dict) else None
+            )
+            _key_team_id = getattr(existing_key_row, "team_id", None)
+            _key_team = None
+            if _key_team_id is not None:
+                try:
+                    _key_team = await get_team_object(
+                        team_id=_key_team_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        parent_otel_span=user_api_key_dict.parent_otel_span,
+                        check_db_only=True,
+                    )
+                except HTTPException:
+                    _key_team = None
+            validate_logging_exporter_assignment(
+                data.metadata,
+                user_api_key_dict,
+                caller_is_team_admin=(
+                    _key_team is not None
+                    and _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=_key_team)
+                ),
+                caller_is_org_admin=(
+                    _key_team is not None
+                    and await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=_key_team)
+                ),
+                existing_metadata=_existing_key_metadata,
+                scope_team_id=getattr(_key_team, "team_id", None),
+                scope_org_id=getattr(_key_team, "organization_id", None),
+            )
 
         await _validate_update_key_data(
             data=data,
@@ -4272,7 +4373,7 @@ async def _execute_virtual_key_regeneration(
     dependencies=[Depends(user_api_key_auth)],
 )
 @management_endpoint_wrapper
-async def regenerate_key_fn(
+async def regenerate_key_fn(  # noqa: C901
     key: Optional[str] = None,
     data: Optional[RegenerateKeyRequest] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -4460,19 +4561,63 @@ async def regenerate_key_fn(
 
         # Gate access_group_ids on regenerate, same as /key/generate and
         # /key/update. Use the existing key's team since the body may omit it.
-        if data is not None and data.access_group_ids:
-            regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
-            if _key_in_db.team_id is not None:
+        regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
+        if _key_in_db.team_id is not None:
+            try:
                 regenerate_team_table = await get_team_object(
                     team_id=_key_in_db.team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     check_db_only=True,
                 )
+            except HTTPException:
+                regenerate_team_table = None
+        if data is not None and data.access_group_ids:
             TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
                 user_api_key_dict=user_api_key_dict,
                 team_table=regenerate_team_table,
                 access_group_ids=data.access_group_ids,
+            )
+
+        # logging_exporters gate on regenerate matches /key/generate and
+        # /key/update. Without this, a key owner could set
+        # metadata.logging_exporters on /key/{id}/regenerate and route
+        # future traces to a destination they aren't allowed to assign
+        # (Veria F3). The validator no-ops when the effective value
+        # doesn't change; pass stored metadata so removal-via-omission
+        # gates too (Veria F4).
+        if data is not None and isinstance(data.metadata, dict):
+            from litellm.proxy.management_endpoints.common_utils import (
+                _is_user_org_admin_for_team,
+                _is_user_team_admin,
+            )
+            from litellm.proxy.management_endpoints.logging_exporter_validation import (
+                validate_logging_exporter_assignment,
+            )
+
+            _regen_existing_metadata = (
+                _key_in_db.metadata if isinstance(getattr(_key_in_db, "metadata", None), dict) else None
+            )
+            validate_logging_exporter_assignment(
+                data.metadata,
+                user_api_key_dict,
+                caller_is_team_admin=(
+                    regenerate_team_table is not None
+                    and _is_user_team_admin(
+                        user_api_key_dict=user_api_key_dict,
+                        team_obj=regenerate_team_table,
+                    )
+                ),
+                caller_is_org_admin=(
+                    regenerate_team_table is not None
+                    and await _is_user_org_admin_for_team(
+                        user_api_key_dict=user_api_key_dict,
+                        team_obj=regenerate_team_table,
+                    )
+                ),
+                existing_metadata=_regen_existing_metadata,
+                scope_team_id=getattr(regenerate_team_table, "team_id", None),
+                scope_org_id=getattr(regenerate_team_table, "organization_id", None),
             )
 
         verbose_proxy_logger.info(

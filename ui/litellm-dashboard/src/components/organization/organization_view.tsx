@@ -12,6 +12,8 @@ import React, { useMemo, useState } from "react";
 import MemberTable from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import LoggingExportersSelect from "../logging_credentials/LoggingExportersSelect";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
@@ -59,6 +61,25 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const { data: teams } = useTeams();
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+
+  // Destinations whose credential_info.access targets THIS org (or is global).
+  // Rendered alongside the org's own metadata.logging_exporters so the Logging
+  // Exporters card reflects BOTH routing directions, matching the resolver's
+  // union at request time.
+  const { data: orgCredentialsData } = useCredentials();
+  const scopedExportersForOrg = useMemo<string[]>(() => {
+    const orgId = orgData?.organization_id;
+    if (orgId == null) return [];
+    return (orgCredentialsData?.credentials ?? [])
+      .filter((c) => c.credential_info?.credential_type === "logging")
+      .filter((c) => {
+        const access = c.credential_info?.access;
+        if (!access) return false;
+        if (access.global === true) return true;
+        return Array.isArray(access.orgs) && access.orgs.includes(orgId);
+      })
+      .map((c) => c.credential_name);
+  }, [orgCredentialsData?.credentials, orgData?.organization_id]);
 
   const handleMemberAdd = async (values: any) => {
     try {
@@ -134,7 +155,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           max_budget: values.max_budget,
           budget_duration: values.budget_duration,
         },
-        metadata: values.metadata ? JSON.parse(values.metadata) : null,
+        metadata: {
+          ...(values.metadata ? JSON.parse(values.metadata) : {}),
+          ...(values.logging_exporters !== undefined ? { logging_exporters: values.logging_exporters } : {}),
+        },
       };
 
       // Handle object_permission updates
@@ -308,6 +332,32 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     ))}
                   </div>
                 </Card>
+                <Card>
+                  <Text>Logging Exporters</Text>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(() => {
+                      const own = Array.isArray(orgData.metadata?.logging_exporters)
+                        ? (orgData.metadata.logging_exporters as string[])
+                        : [];
+                      const ownSet = new Set(own);
+                      const scopedOnly = scopedExportersForOrg.filter((n) => !ownSet.has(n));
+                      const all = [
+                        ...own.map((n) => ({ n, source: "own" as const })),
+                        ...scopedOnly.map((n) => ({ n, source: "scope" as const })),
+                      ];
+                      return all.length > 0 ? (
+                        all.map((e, i) => (
+                          <Badge key={i} color={e.source === "own" ? "blue" : "indigo"}>
+                            {e.n}
+                            {e.source === "scope" ? " (via scope)" : ""}
+                          </Badge>
+                        ))
+                      ) : (
+                        <Text className="text-gray-400">None</Text>
+                      );
+                    })()}
+                  </div>
+                </Card>
 
                 <ObjectPermissionsView
                   objectPermission={orgData.object_permission}
@@ -366,6 +416,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                       max_budget: orgData.litellm_budget_table.max_budget,
                       budget_duration: orgData.litellm_budget_table.budget_duration,
                       metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
+                      logging_exporters: orgData.metadata?.logging_exporters || [],
                       vector_stores: orgData.object_permission?.vector_stores || [],
                       mcp_servers_and_groups: {
                         servers: orgData.object_permission?.mcp_servers || [],
@@ -437,6 +488,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                       />
                     </Form.Item>
 
+                    <Form.Item
+                      label="Logging Exporters"
+                      name="logging_exporters"
+                      tooltip="Admin-owned trace destinations every team in this org exports to (added to each key's and team's). Manage destinations under Settings -> Logging Credentials."
+                    >
+                      <LoggingExportersSelect />
+                    </Form.Item>
+
                     <Form.Item label="Metadata" name="metadata">
                       <Input.TextArea rows={4} />
                     </Form.Item>
@@ -490,6 +549,32 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                           : "No Limit"}
                       </div>
                       <div>Reset: {orgData.litellm_budget_table.budget_duration || "Never"}</div>
+                    </div>
+                    <div>
+                      <Text className="font-medium">Logging Exporters</Text>
+                      {(() => {
+                        const own = Array.isArray(orgData.metadata?.logging_exporters)
+                          ? (orgData.metadata.logging_exporters as string[])
+                          : [];
+                        const ownSet = new Set(own);
+                        const scopedOnly = scopedExportersForOrg.filter((n) => !ownSet.has(n));
+                        const all = [
+                          ...own.map((n) => ({ n, source: "own" as const })),
+                          ...scopedOnly.map((n) => ({ n, source: "scope" as const })),
+                        ];
+                        return all.length > 0 ? (
+                          <div className="flex flex-wrap gap-2 mt-1">
+                            {all.map((e, i) => (
+                              <Badge key={i} color={e.source === "own" ? "blue" : "indigo"}>
+                                {e.n}
+                                {e.source === "scope" ? " (via scope)" : ""}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-gray-400 mt-1">None</div>
+                        );
+                      })()}
                     </div>
 
                     <ObjectPermissionsView

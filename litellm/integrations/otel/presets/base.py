@@ -18,6 +18,20 @@ class Preset(Protocol):
 
     ``config_overrides`` lets one preset layer onto another's config (or onto
     test-supplied defaults); the factory calls presets with no arguments.
+
+    ``allow_missing_credentials`` distinguishes the two reasons a preset is built.
+    A credential-mandatory backend (weave/langfuse/levo) raises when its global env
+    credentials are absent so a misconfigured global callback fails loud at startup;
+    set this when the only reason for construction is an admin-owned destination,
+    which carries its own per-tenant credentials, so the preset degrades to an
+    exporter-less (mapper-only) config instead of raising. Credential-optional
+    backends (arize/phoenix/agentops/langtrace) already run without a global
+    exporter and ignore it.
     """
 
-    def __call__(self, *, config_overrides: OpenTelemetryV2Config | None = None) -> OpenTelemetryV2Config: ...
+    def __call__(
+        self,
+        *,
+        config_overrides: OpenTelemetryV2Config | None = None,
+        allow_missing_credentials: bool = False,
+    ) -> OpenTelemetryV2Config: ...

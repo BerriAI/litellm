@@ -29,6 +29,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
+import LoggingExportersSelect from "./logging_credentials/LoggingExportersSelect";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
@@ -157,6 +158,17 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
           delete values.allowed_mcp_servers_and_groups;
         }
       }
+
+      if (Array.isArray(values.logging_exporters) && values.logging_exporters.length > 0) {
+        let existingMetadata: Record<string, unknown> = {};
+        if (typeof values.metadata === "string" && values.metadata.trim().length > 0) {
+          existingMetadata = JSON.parse(values.metadata);
+        } else if (values.metadata && typeof values.metadata === "object") {
+          existingMetadata = values.metadata;
+        }
+        values.metadata = { ...existingMetadata, logging_exporters: values.logging_exporters };
+      }
+      delete values.logging_exporters;
 
       await organizationCreateCall(accessToken, values);
       NotificationsManager.success("Organization created successfully");
@@ -511,6 +523,14 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
               accessToken={accessToken || ""}
               placeholder="Select MCP servers and access groups (optional)"
             />
+          </Form.Item>
+
+          <Form.Item
+            label="Logging Exporters"
+            name="logging_exporters"
+            tooltip="Admin-owned trace destinations this org exports to. Resolved server-side and fanned out to every team and key under it. Manage destinations under Settings -> Logging Callbacks."
+          >
+            <LoggingExportersSelect />
           </Form.Item>
 
           <Form.Item label="Metadata" name="metadata">
