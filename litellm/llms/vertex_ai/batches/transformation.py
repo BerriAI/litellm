@@ -48,9 +48,7 @@ class VertexAIBatchTransformation:
         return LiteLLMBatch(
             id=cls._get_batch_id_from_vertex_ai_batch_response(response),
             completion_window="24hrs",
-            created_at=_convert_vertex_datetime_to_openai_datetime(
-                vertex_datetime=response.get("createTime", "")
-            ),
+            created_at=_convert_vertex_datetime_to_openai_datetime(vertex_datetime=response.get("createTime", "")),
             endpoint="",
             input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(response),
             object="batch",
