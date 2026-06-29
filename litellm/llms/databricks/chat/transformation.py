@@ -95,7 +95,7 @@ def _sanitize_empty_content(message_dict: dict[str, Any]) -> None:
             message_dict["content"] = filtered
 
 
-def _split_parallel_tool_calls(messages: List[AllMessageValues]) -> List[AllMessageValues]:
+def _split_parallel_tool_calls(messages: list[AllMessageValues]) -> list[AllMessageValues]:
     """
     Databricks (OpenAI-compatible serving) rejects a ``tool`` message unless the
     message immediately before it carries ``tool_calls``. A single assistant turn
@@ -112,7 +112,7 @@ def _split_parallel_tool_calls(messages: List[AllMessageValues]) -> List[AllMess
     def _expand(
         assistant: ChatCompletionAssistantMessage,
         calls_by_id: dict[Optional[str], ChatCompletionAssistantToolCall],
-        tool_messages: List[ChatCompletionToolMessage],
+        tool_messages: list[ChatCompletionToolMessage],
     ) -> Iterator[AllMessageValues]:
         for position, tool_message in enumerate(tool_messages):
             matched_call = calls_by_id[tool_message["tool_call_id"]]
@@ -134,7 +134,7 @@ def _split_parallel_tool_calls(messages: List[AllMessageValues]) -> List[AllMess
             end = index + 1
             while end < len(messages) and messages[end]["role"] == "tool":
                 end += 1
-            tool_messages = cast(List[ChatCompletionToolMessage], messages[index + 1 : end])
+            tool_messages = cast(list[ChatCompletionToolMessage], messages[index + 1 : end])
             calls_by_id = {call["id"]: call for call in tool_calls}
             result_ids = {tool_message["tool_call_id"] for tool_message in tool_messages}
             if len(tool_messages) == len(tool_calls) and set(calls_by_id) == result_ids:
@@ -441,7 +441,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             new_messages.append(_message)
 
         if "claude" not in model:
-            new_messages = _split_parallel_tool_calls(cast(List[AllMessageValues], new_messages))
+            new_messages = _split_parallel_tool_calls(cast(list[AllMessageValues], new_messages))
 
         if is_async:
             return super()._transform_messages(messages=new_messages, model=model, is_async=cast(Literal[True], True))
