@@ -19,9 +19,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     GPT5_SERIES_ROUTE = "gpt5_series/"
 
     @classmethod
-    def _supports_reasoning_effort_level(
-        cls, model: str, level: str, base_model: Optional[str] = None
-    ) -> bool:
+    def _supports_reasoning_effort_level(cls, model: str, level: str, base_model: Optional[str] = None) -> bool:
         """Override to handle gpt5_series/ prefix used for Azure routing.
 
         The parent class calls ``_supports_factory(model, custom_llm_provider=None)``
@@ -33,9 +31,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             model = "azure/" + model[len(cls.GPT5_SERIES_ROUTE) :]
         elif not model.startswith("azure/"):
             model = "azure/" + model
-        return super()._supports_reasoning_effort_level(
-            model, level, base_model=base_model
-        )
+        return super()._supports_reasoning_effort_level(model, level, base_model=base_model)
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
@@ -103,9 +99,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
         # gpt-5.1/5.2/5.4 support reasoning_effort='none', but other gpt-5 models don't
         # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
-        supports_none = self._supports_reasoning_effort_level(
-            model, "none", base_model=base_model
-        )
+        supports_none = self._supports_reasoning_effort_level(model, "none", base_model=base_model)
 
         if effective_effort == "none" and not supports_none:
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
