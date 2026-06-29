@@ -101,7 +101,7 @@ def test_openai_api_key_fallback_blocked_for_call_supplied_custom_api_base(monke
         api_base_from_call=True,
     )
 
-    assert resolved is None
+    assert resolved == litellm_main._OPENAI_NO_ENV_FALLBACK_API_KEY
 
 
 def test_openai_api_key_fallback_allowed_for_explicit_key_and_openai_base(monkeypatch):
@@ -125,9 +125,40 @@ def test_openai_api_key_fallback_allowed_for_explicit_key_and_openai_base(monkey
         )
         == "sk-global"
     )
+    assert (
+        litellm_main._resolve_openai_api_key_for_api_base(
+            api_key=None,
+            api_base="https://eu.api.openai.com/v1",
+            api_base_from_call=True,
+        )
+        == "sk-global"
+    )
+    assert (
+        litellm_main._resolve_openai_api_key_for_api_base(
+            api_key=None,
+            api_base="https://api.openai.com.attacker.example/v1",
+            api_base_from_call=True,
+        )
+        == litellm_main._OPENAI_NO_ENV_FALLBACK_API_KEY
+    )
 
 
 def test_openai_api_key_fallback_allowed_for_env_configured_api_base(monkeypatch):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    assert (
+        litellm_main._resolve_openai_api_key_for_api_base(
+            api_key=None,
+            api_base="https://internal-proxy.example/v1",
+            api_base_from_call=False,
+        )
+        == "sk-env"
+    )
+
+
+def test_openai_api_key_fallback_allowed_for_deployment_configured_api_base(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.setattr(litellm, "openai_key", None)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
@@ -158,7 +189,32 @@ def test_completion_does_not_forward_global_openai_key_to_custom_api_base(monkey
             api_base="https://attacker.example/v1",
         )
 
-    assert mock_completion.call_args.kwargs["api_key"] is None
+    assert (
+        mock_completion.call_args.kwargs["api_key"]
+        == litellm_main._OPENAI_NO_ENV_FALLBACK_API_KEY
+    )
+
+
+def test_completion_allows_global_openai_key_for_deployment_configured_custom_api_base(
+    monkeypatch,
+):
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+
+    with patch.object(
+        litellm_main.openai_chat_completions,
+        "completion",
+        return_value=litellm.ModelResponse(),
+    ) as mock_completion:
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="https://internal-proxy.example/v1",
+            _api_base_from_deployment=True,
+        )
+
+    assert mock_completion.call_args.kwargs["api_key"] == "sk-env"
 
 
 def test_completion_missing_role(openai_api_response):

@@ -291,12 +291,16 @@ from .types.utils import (
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
+_OPENAI_NO_ENV_FALLBACK_API_KEY = "litellm-no-openai-env-fallback"
 
 
 def _is_openai_api_base(api_base: Optional[str]) -> bool:
     if api_base is None:
         return True
-    return urlparse(api_base).hostname == "api.openai.com"
+    hostname = urlparse(api_base).hostname
+    return hostname == "api.openai.com" or (
+        hostname is not None and hostname.endswith(".api.openai.com")
+    )
 
 
 def _resolve_openai_api_key_for_api_base(
@@ -307,7 +311,7 @@ def _resolve_openai_api_key_for_api_base(
     if api_key is not None:
         return api_key
     if api_base_from_call and not _is_openai_api_base(api_base):
-        return None
+        return _OPENAI_NO_ENV_FALLBACK_API_KEY
     return litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")
 
 
@@ -5143,7 +5147,9 @@ def completion(  # type: ignore
                 **kwargs,
             )
     api_base = kwargs.get("api_base", None)
-    api_base_from_call = api_base is not None or base_url is not None
+    api_base_from_call = (api_base is not None or base_url is not None) and not kwargs.get(
+        "_api_base_from_deployment", False
+    )
     mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
     mock_timeout = cast(Optional[bool], kwargs.get("mock_timeout", None))

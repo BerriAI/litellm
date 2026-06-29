@@ -1942,6 +1942,11 @@ class Router:
                 "caching": self.cache_responses,
                 "client": model_client,
                 **kwargs,
+                "_api_base_from_deployment": (
+                    ("api_base" in litellm_params or "base_url" in litellm_params)
+                    and "api_base" not in kwargs
+                    and "base_url" not in kwargs
+                ),
             }
             response = litellm.completion(**input_kwargs)
             verbose_router_logger.info(
@@ -3035,6 +3040,11 @@ class Router:
                 "caching": self.cache_responses,
                 "client": model_client,
                 **kwargs,
+                "_api_base_from_deployment": (
+                    ("api_base" in litellm_params or "base_url" in litellm_params)
+                    and "api_base" not in kwargs
+                    and "base_url" not in kwargs
+                ),
             }
             input_kwargs.pop("silent_model", None)
             input_kwargs.pop("include_fallback_errors", None)
