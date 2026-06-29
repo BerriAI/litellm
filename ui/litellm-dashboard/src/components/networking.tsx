@@ -27,6 +27,7 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
+import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
@@ -7402,19 +7403,7 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */
-export const registerClaudeCodePlugin = async (
-  accessToken: string,
-  pluginData: {
-    name: string;
-    source: { source: string; repo?: string; url?: string };
-    version?: string;
-    description?: string;
-    author?: { name: string; email?: string };
-    homepage?: string;
-    keywords?: string[];
-    category?: string;
-  },
-) => {
+export const registerClaudeCodePlugin = async (accessToken: string, pluginData: SkillRegisterRequest) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/plugins` : `/claude-code/plugins`;
@@ -7429,8 +7418,13 @@ export const registerClaudeCodePlugin = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      const errorBody = await response.text();
+      let errorMessage: string;
+      try {
+        errorMessage = deriveErrorMessage(JSON.parse(errorBody));
+      } catch {
+        errorMessage = errorBody || `Request failed with status ${response.status}`;
+      }
       handleError(errorMessage);
       throw new Error(errorMessage);
     }

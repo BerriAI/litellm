@@ -4,12 +4,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import AddPluginForm from "./add_plugin_form";
 import { registerClaudeCodePlugin } from "../networking";
+import MessageManager from "@/components/molecules/message_manager";
 
 vi.mock("../networking", () => ({
   registerClaudeCodePlugin: vi.fn().mockResolvedValue({ status: "success" }),
 }));
 
+vi.mock("@/components/molecules/message_manager", () => ({
+  default: { error: vi.fn(), success: vi.fn() },
+}));
+
 const mockRegister = vi.mocked(registerClaudeCodePlugin);
+const mockMessageError = vi.mocked(MessageManager.error);
 
 const DEFAULT_PROPS = {
   visible: true,
@@ -250,6 +256,18 @@ describe("AddPluginForm", () => {
           },
         }),
       );
+    });
+  });
+
+  it("surfaces the backend error message when registration fails", async () => {
+    mockRegister.mockRejectedValueOnce(new Error("Plugin 'claude-code' already exists"));
+    renderWithProviders(<AddPluginForm {...DEFAULT_PROPS} />);
+
+    await typeUrl("https://github.com/anthropics/claude-code");
+    await submit();
+
+    await waitFor(() => {
+      expect(mockMessageError).toHaveBeenCalledWith(expect.stringContaining("Plugin 'claude-code' already exists"));
     });
   });
 });

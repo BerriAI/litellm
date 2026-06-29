@@ -13,7 +13,7 @@ import {
   isValidSubPath,
   SkillSourcePreview,
 } from "./helpers";
-import { PluginAuthor, PluginSource, RegisterPluginRequest } from "./types";
+import { PluginAuthor, PluginSource, SkillRegisterRequest } from "./types";
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -49,7 +49,7 @@ const buildAuthor = (values: AddPluginFormValues): PluginAuthor | undefined => {
   return email ? { name, email } : { name };
 };
 
-const buildRegisterRequest = (values: AddPluginFormValues, source: PluginSource): RegisterPluginRequest => {
+const buildRegisterRequest = (values: AddPluginFormValues, source: PluginSource): SkillRegisterRequest => {
   const author = buildAuthor(values);
   return {
     name: values.name.trim(),
@@ -145,7 +145,8 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
       onClose();
     } catch (error) {
       console.error("Error registering skill:", error);
-      MessageManager.error("Failed to register skill");
+      const reason = error instanceof Error && error.message ? error.message : "Failed to register skill";
+      MessageManager.error(`Failed to register skill: ${reason}`);
     } finally {
       setIsSubmitting(false);
     }
