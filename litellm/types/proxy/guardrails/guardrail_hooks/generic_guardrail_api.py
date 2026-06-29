@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TYPE_CHECKING, TypedDict
+from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import (
     AllMessageValues,

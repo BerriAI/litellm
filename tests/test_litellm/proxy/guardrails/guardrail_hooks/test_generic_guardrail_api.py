@@ -609,7 +609,6 @@ class TestImageSupport:
                 request_data=mock_request_data_input,
                 input_type="request",
             )
-            result_texts = guardrailed_inputs.get("texts", [])
             result_images = guardrailed_inputs.get("images", None)
 
             # Verify API was called with images
@@ -943,7 +942,7 @@ class TestMultimodalSupport:
             guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
             # This should not raise SerializationIterator error
-            result = await guardrail.apply_guardrail(
+            await guardrail.apply_guardrail(
                 inputs={
                     "texts": ["What's in this image?"],
                     "images": ["https://example.com/image.jpg"],
@@ -1006,7 +1005,7 @@ class TestMultimodalSupport:
         with patch.object(
             guardrail.async_handler, "post", return_value=mock_response
         ) as mock_post:
-            result = await guardrail.apply_guardrail(
+            await guardrail.apply_guardrail(
                 inputs={
                     "texts": ["Hello", "World"],
                     "structured_messages": messages_with_iterable,
@@ -1025,7 +1024,6 @@ class TestMultimodalSupport:
 
 def _make_stream_chunk(content: str, finish_reason=None):
     """Build a real ModelResponseStream so the handler's isinstance checks pass."""
-    import litellm
     from litellm.types.utils import Delta, ModelResponseStream
 
     return ModelResponseStream(
@@ -1041,8 +1039,6 @@ def _make_stream_chunk(content: str, finish_reason=None):
 
 
 def _make_assembled_model_response(content: str) -> ModelResponse:
-    import litellm
-
     return ModelResponse(
         id="mock-response",
         model="gpt-4",
