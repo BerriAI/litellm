@@ -574,12 +574,16 @@ def _check_budget_limits_delegation_ceiling(
     delegation_ceiling: Optional[float],
     user_api_key_dict: UserAPIKeyAuth,
     is_ui_session_team_key: bool,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
 ) -> None:
     """
-    Enforce two invariants on `budget_limits`:
+    Enforce three invariants on `budget_limits`:
 
     - Every `budget_limits[*].max_budget` must be a finite number; applies
       to every caller including proxy admin.
+    - A CLI session token caller may not set `budget_limits` on a personal
+      key (one with no `team_id`); mirrors the scalar `max_budget` guard in
+      `_common_key_generation_helper`.
     - Non-admin callers may not set a window above their delegation ceiling.
     """
     if not budget_limits:
@@ -594,6 +598,13 @@ def _check_budget_limits_delegation_ceiling(
         return
     if is_ui_session_team_key:
         return
+    if user_api_key_dict.is_session_token and team_table is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": ("budget_limits cannot be set without specifying team_id when using a CLI session token.")
+            },
+        )
     if delegation_ceiling is None:
         return
     over_ceiling = next((w for w in budget_limits if w.max_budget > delegation_ceiling), None)
@@ -811,6 +822,7 @@ async def _common_key_generation_helper(
         delegation_ceiling=delegation_ceiling,
         user_api_key_dict=user_api_key_dict,
         is_ui_session_team_key=is_ui_session_team_key,
+        team_table=team_table,
     )
     _check_permissions_caller_permission(
         permissions=data.permissions,
