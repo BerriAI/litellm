@@ -15,7 +15,7 @@ to ``True`` since ``websockets`` rejects ``ssl=False``.
 """
 
 import ssl as ssl_module
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -91,5 +91,35 @@ async def test_health_check_keeps_ssl_for_wss():
     """A wss:// URL (from an https:// api_base) must keep its SSL config."""
     store = await _capture_health_check("https://api.openai.com/")
     assert store["url"].startswith("wss://")
+    assert store["ssl"] is not None
+    assert store["ssl"] != "<<not passed>>"
+
+
+@pytest.mark.asyncio
+async def test_health_check_vertex_routes_through_ssl_helper():
+    """The vertex_ai branch must derive its ssl context via _get_realtime_ssl_context too."""
+    store = {}
+    fake_config = MagicMock()
+    fake_config.get_complete_url.return_value = "wss://vertex.example/v1/realtime"
+    fake_config.validate_environment.return_value = {}
+    with patch("websockets.connect", new=_FakeWSConnect(store)), patch.object(
+        realtime_main.vertex_llm_base,
+        "get_vertex_region",
+        return_value="us-central1",
+    ), patch.object(
+        realtime_main.vertex_llm_base,
+        "_ensure_access_token_async",
+        new=AsyncMock(return_value=("token", "project")),
+    ), patch.object(
+        realtime_main, "VertexAIRealtimeConfig", return_value=fake_config
+    ):
+        await _realtime_health_check(
+            model="gemini-realtime",
+            custom_llm_provider="vertex_ai",
+            api_key=None,
+            api_base="https://vertex.example",
+        )
+    assert store["url"] == "wss://vertex.example/v1/realtime"
+    # wss:// -> a real SSL context (not None, not the "<<not passed>>" sentinel)
     assert store["ssl"] is not None
     assert store["ssl"] != "<<not passed>>"

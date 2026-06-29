@@ -35,6 +35,7 @@ jobs:
         tests/test_litellm/interactions
         tests/test_litellm/ocr
         tests/test_litellm/passthrough
+        tests/test_litellm/realtime_api
         tests/test_litellm/sandbox
         tests/test_litellm/vector_stores
         tests/test_litellm/videos
