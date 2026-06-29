@@ -46,6 +46,11 @@ def initialize_guardrail(
             ),
             session=GuardrailSessionConfig(
                 violation_message_template=getattr(litellm_params, "violation_message_template", None),
+                mask_request_content=getattr(litellm_params, "mask_request_content", False),
+                mask_response_content=getattr(litellm_params, "mask_response_content", False),
+                end_session_after_n_fails=getattr(litellm_params, "end_session_after_n_fails", None),
+                on_violation=getattr(litellm_params, "on_violation", None),
+                realtime_violation_message=getattr(litellm_params, "realtime_violation_message", None),
             ),
         ),
     )
