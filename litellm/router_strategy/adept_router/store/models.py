@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Index, Integer, JSON, String, TIMESTAMP, func
+from sqlalchemy import JSON, TIMESTAMP, Column, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()

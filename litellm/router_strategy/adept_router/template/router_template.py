@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 class BaseTemplateRouter(ABC):
     """Abstract base class for template-based prompt routing."""
 
     @abstractmethod
-    def route(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def route(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[dict[str, Any]]:
         """
         Match a prompt to a stored template.
 
@@ -20,7 +20,7 @@ class BaseTemplateRouter(ABC):
         prompt: str,
         response: str,
         model: Optional[str] = None,
-        token_usage: Optional[Dict[str, Any]] = None,
+        token_usage: Optional[dict[str, Any]] = None,
         cost_usd: Optional[float] = None,
         latency_ms: Optional[float] = None,
         system_prompt: Optional[str] = None,

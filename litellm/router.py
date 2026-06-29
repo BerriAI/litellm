@@ -61,9 +61,6 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.request_timeout_resolver import (
-    get_configured_request_timeout,
-)
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
@@ -72,6 +69,9 @@ from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.litellm_core_utils.request_timeout_resolver import (
+    get_configured_request_timeout,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
@@ -173,14 +173,12 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     GenericBudgetConfigType,
     LiteLLMBatch,
-)
-from litellm.types.utils import ModelInfo
-from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import (
+    ModelInfo,
     ModelResponseStream,
     StandardLoggingPayload,
     Usage,
 )
+from litellm.types.utils import ModelInfo as ModelMapInfo
 from litellm.utils import (
     CustomStreamWrapper,
     EmbeddingResponse,
@@ -199,6 +197,12 @@ from .router_utils.pattern_match_deployments import PatternMatchRouter
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+    )
+    from litellm.router_strategy.adaptive_router.adaptive_router import (
+        AdaptiveRouter,
+    )
     from litellm.router_strategy.auto_router.auto_router import (
         AutoRouter,
         PreRoutingHookResponse,
@@ -206,14 +210,8 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
     )
-    from litellm.router_strategy.adaptive_router.adaptive_router import (
-        AdaptiveRouter,
-    )
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
-    )
-    from litellm.responses.streaming_iterator import (
-        BaseResponsesAPIStreamingIterator,
     )
     from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
     from litellm.types.llms.openai import (
@@ -455,7 +453,7 @@ class Router:
             None  # use this to track the users default deployment, when they want to use model = *
         )
         self.default_max_parallel_requests = default_max_parallel_requests
-        self.provider_default_deployment_ids: List[str] = []
+        self.provider_default_deployment_ids: list[str] = []
         self.pattern_router = PatternMatchRouter()
         self.team_pattern_routers: Dict[str, PatternMatchRouter] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
@@ -2825,7 +2823,7 @@ class Router:
         if deployment_id:
             try:
                 exception.failed_deployment_id = deployment_id  # type: ignore[attr-defined]
-            except Exception:
+            except ValueError:
                 pass
 
     def _update_kwargs_with_default_litellm_params(
@@ -4407,11 +4405,10 @@ class Router:
         _aresponses_streaming_iterator so MidStreamFallbackError raised
         during iteration triggers the Router's cross-provider fallback chain.
         """
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
         from litellm.responses.streaming_iterator import (
             BaseResponsesAPIStreamingIterator,
         )
-
-        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 
         # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
         # mutates them. A shallow copy alone is not enough: the primary
@@ -7687,9 +7684,7 @@ class Router:
         lp = deployment.litellm_params
         default_model: Optional[str] = lp.adept_router_default_model
         if default_model is None:
-            raise ValueError(
-                "adept_router_default_model is required for ADEPT router deployments."
-            )
+            raise ValueError("adept_router_default_model is required for ADEPT router deployments.")
 
         if not lp.adept_router_pg_host:
             raise ValueError(
@@ -7705,19 +7700,15 @@ class Router:
         database = lp.adept_router_pg_database or ""
         pg_url = f"postgresql+psycopg2://{quote_plus(user)}:{quote_plus(password)}@{lp.adept_router_pg_host}:{port}/{database}"
 
-        threshold = (
-            lp.adept_router_conversations_threshold or DEFAULT_CONVERSATIONS_THRESHOLD
-        )
+        threshold = lp.adept_router_conversations_threshold or DEFAULT_CONVERSATIONS_THRESHOLD
         tag_prefix = lp.adept_router_tag_prefix or ""
 
         existing = self.adept_routers.get(deployment.model_name)
         if existing is not None:
             params_changed = (
                 getattr(existing, "default_model", None) != default_model
-                or getattr(existing.template_router, "trainer_url", None)
-                != lp.adept_router_trainer_url
-                or getattr(existing.template_router, "conversations_threshold", None)
-                != threshold
+                or getattr(existing.template_router, "trainer_url", None) != lp.adept_router_trainer_url
+                or getattr(existing.template_router, "conversations_threshold", None) != threshold
                 or getattr(existing.template_router, "tag_prefix", None) != tag_prefix
             )
             if not params_changed:
@@ -7727,8 +7718,7 @@ class Router:
                 )
                 return
             verbose_router_logger.info(
-                f"AdeptRouter: '{deployment.model_name}' params changed — rebuilding "
-                "in-memory router."
+                f"AdeptRouter: '{deployment.model_name}' params changed — rebuilding in-memory router."
             )
             # Remove stale callback so the new instance is the only one logging
             # success events. Best-effort — the callback manager is the source of truth.
@@ -7869,9 +7859,7 @@ class Router:
         # this method at `init_adept_router_deployment`) and don't have a standard
         # LLM provider. Skip the get_llm_provider validation that would otherwise
         # reject `adept/<name>` as an unsupported provider.
-        is_adept_router_model = self._is_adept_router_deployment(
-            litellm_params=deployment.litellm_params
-        )
+        is_adept_router_model = self._is_adept_router_deployment(litellm_params=deployment.litellm_params)
 
         if is_prompt_management_model or is_adept_router_model:
             # Skip LLM provider validation — actual routing happens via a
@@ -8729,9 +8717,7 @@ class Router:
                     custom_llm_provider=litellm_params.custom_llm_provider,
                 )
             except litellm.exceptions.BadRequestError as e:
-                verbose_router_logger.error(
-                    "litellm.router.py::get_model_group_info() - {}".format(str(e))
-                )
+                verbose_router_logger.error("litellm.router.py::get_model_group_info() - {}".format(str(e)))
 
             if model_info is None:
                 supported_openai_params = litellm.get_supported_openai_params(

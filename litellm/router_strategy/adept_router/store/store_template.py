@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 class AdeptTemplateStore(ABC):
@@ -25,7 +25,7 @@ class AdeptTemplateStore(ABC):
         prompt: str,
         response: str,
         template_id: Optional[str] = None,
-        additional_information: Optional[Dict[str, Any]] = None,
+        additional_information: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Store a prompt-response pair linked to a template."""
         ...
@@ -38,7 +38,7 @@ class AdeptTemplateStore(ABC):
         template_hash: str,
         target_model: str,
         router_id: str,
-        additional_information: Optional[Dict[str, Any]] = None,
+        additional_information: Optional[dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Store a new template row. Returns the surviving template_id (ours or a concurrent
@@ -47,7 +47,7 @@ class AdeptTemplateStore(ABC):
         ...
 
     @abstractmethod
-    def get_template(self, template_id: str) -> Optional[Dict[str, Any]]:
+    def get_template(self, template_id: str) -> Optional[dict[str, Any]]:
         """Retrieve metadata for a specific template by ID."""
         ...
 

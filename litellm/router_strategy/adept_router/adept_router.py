@@ -11,7 +11,7 @@ while conversations accumulate as training data in Postgres.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -43,7 +43,7 @@ class AdeptRouter(CustomLogger):
         tag_prefix: str = "",
         conversations_threshold: int = DEFAULT_CONVERSATIONS_THRESHOLD,
         trainer_url: Optional[str] = None,
-        seed_config: Optional[List[Dict[str, Any]]] = None,
+        seed_config: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         self.model_name = model_name
         self.default_model = default_model
@@ -59,7 +59,7 @@ class AdeptRouter(CustomLogger):
         if seed_config:
             self._seed_templates(seed_config)
 
-    def _seed_templates(self, seed_config: List[Dict[str, Any]]) -> None:
+    def _seed_templates(self, seed_config: list[dict[str, Any]]) -> None:
         """Pre-populate templates from a seed config list."""
         from uuid import uuid4
 
@@ -90,9 +90,9 @@ class AdeptRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: Dict[str, Any],
-        messages: Optional[List[Dict[str, Any]]] = None,
-        input: Optional[Union[str, List]] = None,
+        request_kwargs: dict[str, Any],
+        messages: Optional[list[dict[str, Any]]] = None,
+        input: Optional[Union[str, list[Any]]] = None,
         specific_deployment: Optional[bool] = False,
     ) -> Optional["PreRoutingHookResponse"]:
         from litellm.types.router import PreRoutingHookResponse
@@ -126,7 +126,7 @@ class AdeptRouter(CustomLogger):
         return PreRoutingHookResponse(model=routed_model, messages=messages)
 
     async def async_log_success_event(
-        self, kwargs: Dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
+        self, kwargs: dict[str, Any], response_obj: Any, start_time: Any, end_time: Any
     ) -> None:
         # Multiple ADEPT-router deployments each register an instance of this class
         # as a global LiteLLM callback. Without a model_group filter, every instance
@@ -195,11 +195,11 @@ class AdeptRouter(CustomLogger):
                 routed_to_slm,
             )
             verbose_router_logger.info("AdeptRouter: stored interaction.")
-        except Exception:
+        except (AttributeError, KeyError, TypeError, ValueError):
             verbose_router_logger.exception("AdeptRouter: failed to log success event")
 
     @staticmethod
-    def _extract_system_prompt_from_messages(messages: List[Dict[str, Any]]) -> Optional[str]:
+    def _extract_system_prompt_from_messages(messages: list[dict[str, Any]]) -> Optional[str]:
         for msg in messages:
             if msg.get("role") == "system":
                 content = msg.get("content")
@@ -207,7 +207,7 @@ class AdeptRouter(CustomLogger):
         return None
 
     @staticmethod
-    def _extract_text_from_messages(messages: List[Dict[str, Any]]) -> str:
+    def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
         for msg in reversed(messages):
             if msg.get("role") == "user":
                 content = msg.get("content")

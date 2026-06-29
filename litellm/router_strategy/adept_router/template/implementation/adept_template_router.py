@@ -1,8 +1,9 @@
 import hashlib
 import re
-import httpx
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
+
+import httpx
 
 from litellm._logging import verbose_router_logger
 from litellm.router_strategy.adept_router.config import DEFAULT_CONVERSATIONS_THRESHOLD
@@ -94,11 +95,11 @@ class AdeptTemplateRouter(BaseTemplateRouter):
         text = self.NUM_RE.sub("{NUM}", text)
         return text
 
-    def _extract_tag_content(self, text: str) -> List[Tuple[str, str]]:
+    def _extract_tag_content(self, text: str) -> list[tuple[str, str]]:
         """Return (tag_name, value) pairs for all XML-tagged spans in text."""
         return [(match.group(1), match.group(2)) for match in self.TAG_CONTENT_RE.finditer(text)]
 
-    def _extract_template(self, prompt: str) -> Tuple[str, List[Tuple[str, str]]]:
+    def _extract_template(self, prompt: str) -> tuple[str, list[tuple[str, str]]]:
         normalized = self._normalize_text(prompt)
         extractions = self._extract_tag_content(normalized)
         skeleton = self.TAG_CONTENT_RE.sub(self.TAG_REPLACEMENT, normalized)
@@ -122,7 +123,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
             payload = masked_template
         return hashlib.sha256(payload.encode()).hexdigest()
 
-    def route(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def route(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[dict[str, Any]]:
         try:
             masked_template, _ = self._extract_template(prompt)
             template_hash = self._hash_template(masked_template, system_prompt)
@@ -145,7 +146,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
                 "target_model": stored.get("target_model"),
                 "metadata": stored.get("additional_information"),
             }
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
             verbose_router_logger.exception(f"Error matching template: {e}")
             return None
 
@@ -154,7 +155,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
         prompt: str,
         response: str,
         model: Optional[str] = None,
-        token_usage: Optional[Dict[str, int]] = None,
+        token_usage: Optional[dict[str, int]] = None,
         cost_usd: Optional[float] = None,
         latency_ms: Optional[float] = None,
         system_prompt: Optional[str] = None,
@@ -181,7 +182,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
                 )
                 template_id = stored_id or str(uuid4())
 
-            additional_info: Dict[str, Any] = {"extractions": extractions}
+            additional_info: dict[str, Any] = {"extractions": extractions}
             if model is not None:
                 additional_info["model"] = model
             if token_usage is not None:
@@ -210,7 +211,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
                 self._trigger_trainer(template_id)
 
             verbose_router_logger.info(f"Stored interaction for template {template_id}")
-        except Exception as e:
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
             verbose_router_logger.exception(f"Error storing interaction: {e}")
 
     def _trigger_trainer(self, template_id: str) -> None:
@@ -230,5 +231,5 @@ class AdeptTemplateRouter(BaseTemplateRouter):
                 timeout=10,
             )
             verbose_router_logger.info(f"Triggered trainer for template {template_id}")
-        except Exception as e:
+        except httpx.HTTPError as e:
             verbose_router_logger.warning(f"Failed to trigger trainer: {e}")
