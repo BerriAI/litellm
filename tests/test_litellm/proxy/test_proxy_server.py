@@ -4334,6 +4334,46 @@ async def test_tag_cache_update_multiple_tags():
 
 
 @pytest.mark.asyncio
+async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
+    """
+    Regression for LIT-3338: the spend-update writeback must honor
+    ``user_api_key_cache_ttl`` (configured as ``default_in_memory_ttl``) instead of
+    a hardcoded 60s, otherwise every priced request resets an active key's cache
+    entry back to 60s and the configured TTL is never observed.
+    """
+    from litellm.caching.caching import DualCache
+
+    original_cache = litellm.proxy.proxy_server.user_api_key_cache
+    cache = DualCache(default_in_memory_ttl=300)
+    setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
+    try:
+        with patch.object(
+            cache,
+            "async_get_cache",
+            new=AsyncMock(return_value={"tag_name": "active-tag", "spend": 1.0}),
+        ):
+            with patch.object(
+                cache, "async_set_cache_pipeline", new=AsyncMock()
+            ) as mock_set_cache:
+                await litellm.proxy.proxy_server.update_cache(
+                    token=None,
+                    user_id=None,
+                    end_user_id=None,
+                    team_id=None,
+                    response_cost=5.0,
+                    parent_otel_span=None,
+                    tags=["active-tag"],
+                )
+
+                await asyncio.sleep(0.1)
+
+                mock_set_cache.assert_awaited_once()
+                assert mock_set_cache.call_args.kwargs["ttl"] == 300
+    finally:
+        setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
+
+
+@pytest.mark.asyncio
 async def test_init_sso_settings_in_db():
     """
     Test that _init_sso_settings_in_db properly loads SSO settings from database,

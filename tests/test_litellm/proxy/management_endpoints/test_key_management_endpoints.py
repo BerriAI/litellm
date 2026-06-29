@@ -5756,6 +5756,51 @@ def test_build_key_filter_conditions_member_only_team_restricts_to_service_accou
     ), f"member-only team must be restricted to user_id=NULL keys, got: {serialized}"
 
 
+def test_build_key_filter_conditions_agent_id_narrows_visibility():
+    """
+    Filtering /key/list by agent_id must AND the agent_id on top of the
+    caller's visibility conditions (it can only narrow results, never widen
+    them). Without this the UI cannot list an agent's keys server-side and
+    falls back to fetching every key and filtering client-side.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    agent_id = "agent-123"
+    where = _build_key_filter_conditions(
+        user_id="some-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+        agent_id=agent_id,
+    )
+
+    # agent_id must be applied as a top-level AND so it intersects (narrows) the
+    # visibility OR-conditions rather than being added as another OR branch.
+    assert where.get("AND"), f"expected top-level AND, got: {where}"
+    assert {"agent_id": agent_id} in where["AND"], f"agent_id not ANDed: {where}"
+
+    # Omitting agent_id must not introduce any agent_id constraint.
+    where_without = _build_key_filter_conditions(
+        user_id="some-user",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+    )
+    assert "agent_id" not in json.dumps(where_without)
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
@@ -5845,13 +5890,12 @@ async def test_generate_key_with_router_settings(monkeypatch):
         generate_key_fn,
     )
 
-    # Test router_settings with sample data
-    # Using valid UpdateRouterConfig fields (retry_policy is not a valid field,
-    # but model_group_retry_policy is, which also tests nested dict serialization)
+    # model_group_retry_policy maps a model group to a RetryPolicy, exercising
+    # nested-model serialization through the key record
     router_settings_data = {
         "routing_strategy": "usage-based",
         "num_retries": 3,
-        "model_group_retry_policy": {"max_retries": 5},
+        "model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}},
     }
 
     request_data = GenerateKeyRequest(
@@ -12610,3 +12654,110 @@ async def test_list_keys_non_admin_cannot_opt_into_substring():
     )
     assert kwargs["use_substring_matching"] is False
     assert kwargs["user_id"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_cli_session_token_delegation_ceiling_blocked_by_team_budget():
+    team = LiteLLM_TeamTableCachedObj(team_id="team-1", max_budget=50.0)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        team_id="team-1",
+        is_session_token=True,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(max_budget=1000.0),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=team,
+        )
+    assert exc_info.value.status_code == 400
+    assert "max_budget" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_cli_session_token_delegation_allowed_within_team_budget():
+    team = LiteLLM_TeamTableCachedObj(team_id="team-1", max_budget=50.0)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        team_id="team-1",
+        is_session_token=True,
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=GenerateKeyRequest(max_budget=25.0),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=team,
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_regular_unlimited_user_delegation_ceiling_not_applied():
+    team = LiteLLM_TeamTableCachedObj(team_id="team-1", max_budget=50.0)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        team_id="team-1",
+        is_session_token=False,
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=GenerateKeyRequest(max_budget=1000.0),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=team,
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_cli_session_token_personal_key_with_budget_blocked():
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        team_id="team-1",
+        is_session_token=True,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(max_budget=1000.0),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,  # no team in request = personal key
+        )
+    assert exc_info.value.status_code == 400
+    assert "team_id" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_cli_session_token_personal_key_without_budget_allowed():
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        team_id="team-1",
+        is_session_token=True,
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=GenerateKeyRequest(max_budget=None),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,  # no team in request = personal key, but no explicit budget
+        )
+    assert result is not None

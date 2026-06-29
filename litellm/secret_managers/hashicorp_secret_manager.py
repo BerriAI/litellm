@@ -51,17 +51,9 @@ class HashicorpSecretManager(BaseSecretManager):
 
         litellm.secret_manager_client = self
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
-        _refresh_interval = os.environ.get(
-            "HCP_VAULT_REFRESH_INTERVAL", SECRET_MANAGER_REFRESH_INTERVAL
-        )
-        _refresh_interval = (
-            int(_refresh_interval)
-            if _refresh_interval
-            else SECRET_MANAGER_REFRESH_INTERVAL
-        )
-        self.cache = InMemoryCache(
-            default_ttl=_refresh_interval
-        )  # store in memory for 1 day
+        _refresh_interval = os.environ.get("HCP_VAULT_REFRESH_INTERVAL", SECRET_MANAGER_REFRESH_INTERVAL)
+        _refresh_interval = int(_refresh_interval) if _refresh_interval else SECRET_MANAGER_REFRESH_INTERVAL
+        self.cache = InMemoryCache(default_ttl=_refresh_interval)  # store in memory for 1 day
 
     def _verify_required_credentials_exist(self) -> None:
         """
@@ -147,9 +139,7 @@ class HashicorpSecretManager(BaseSecretManager):
             )
 
             # Cache the token with its lease duration
-            self.cache.set_cache(
-                key="hcp_vault_approle_token", value=token, ttl=_lease_duration
-            )
+            self.cache.set_cache(key="hcp_vault_approle_token", value=token, ttl=_lease_duration)
             return token
         except Exception as e:
             raise RuntimeError(f"Could not authenticate to Vault via AppRole: {e}")
@@ -204,9 +194,7 @@ class HashicorpSecretManager(BaseSecretManager):
             token = resp.json()["auth"]["client_token"]
             _lease_duration = resp.json()["auth"]["lease_duration"]
             verbose_logger.debug("Successfully obtained Vault token via TLS cert auth.")
-            self.cache.set_cache(
-                key="hcp_vault_token", value=token, ttl=_lease_duration
-            )
+            self.cache.set_cache(key="hcp_vault_token", value=token, ttl=_lease_duration)
             return token
         except Exception as e:
             raise RuntimeError(f"Could not authenticate to Vault via TLS cert: {e}")
@@ -232,12 +220,8 @@ class HashicorpSecretManager(BaseSecretManager):
         - With custom mount: http://127.0.0.1:8200/v1/kv/data/mykey
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
-        resolved_namespace = self._sanitize_path_component(
-            namespace if namespace is not None else self.vault_namespace
-        )
-        resolved_mount = self._sanitize_path_component(
-            mount_name if mount_name is not None else self.vault_mount_name
-        )
+        resolved_namespace = self._sanitize_path_component(namespace if namespace is not None else self.vault_namespace)
+        resolved_mount = self._sanitize_path_component(mount_name if mount_name is not None else self.vault_mount_name)
         if resolved_mount is None:
             resolved_mount = "secret"
         resolved_path_prefix = self._sanitize_path_component(
@@ -261,18 +245,14 @@ class HashicorpSecretManager(BaseSecretManager):
             return None
         return value_str
 
-    def _sanitize_path_component(
-        self, value: Optional[Union[str, int]]
-    ) -> Optional[str]:
+    def _sanitize_path_component(self, value: Optional[Union[str, int]]) -> Optional[str]:
         sanitized_value = self._sanitize_plain_value(value)
         if sanitized_value is None:
             return None
         sanitized_value = sanitized_value.strip("/")
         return sanitized_value or None
 
-    def _extract_secret_manager_settings(
-        self, optional_params: Optional[dict]
-    ) -> Dict[str, Any]:
+    def _extract_secret_manager_settings(self, optional_params: Optional[dict]) -> Dict[str, Any]:
         if not isinstance(optional_params, dict):
             return {}
 
@@ -281,9 +261,7 @@ class HashicorpSecretManager(BaseSecretManager):
         allowed_keys = {"namespace", "mount", "path_prefix", "data"}
         return {k: source[k] for k in allowed_keys if k in source}
 
-    def _build_secret_target(
-        self, secret_name: str, optional_params: Optional[dict]
-    ) -> Dict[str, Any]:
+    def _build_secret_target(self, secret_name: str, optional_params: Optional[dict]) -> Dict[str, Any]:
         settings = self._extract_secret_manager_settings(optional_params)
 
         namespace = settings.get("namespace", self.vault_namespace)
@@ -470,9 +448,7 @@ class HashicorpSecretManager(BaseSecretManager):
 
         try:
             # First verify the old secret exists using _build_secret_target
-            current_target = self._build_secret_target(
-                current_secret_name, optional_params
-            )
+            current_target = self._build_secret_target(current_secret_name, optional_params)
             try:
                 response = await async_client.get(
                     url=current_target["url"],
@@ -482,9 +458,7 @@ class HashicorpSecretManager(BaseSecretManager):
                 # Secret exists, we can proceed
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(
-                        f"Current secret {current_secret_name} not found"
-                    )
+                    verbose_logger.exception(f"Current secret {current_secret_name} not found")
                     return {
                         "status": "error",
                         "message": f"Current secret {current_secret_name} not found",
@@ -497,9 +471,7 @@ class HashicorpSecretManager(BaseSecretManager):
                     "message": f"HTTP error occurred while checking current secret: {e.response.text if hasattr(e, 'response') else str(e)}",
                 }
             except Exception as e:
-                verbose_logger.exception(
-                    f"Error checking current secret existence: {e}"
-                )
+                verbose_logger.exception(f"Error checking current secret existence: {e}")
                 return {
                     "status": "error",
                     "message": f"Error checking current secret: {e}",
@@ -516,10 +488,7 @@ class HashicorpSecretManager(BaseSecretManager):
             )
 
             # Check if async_write_secret returned an error
-            if (
-                isinstance(create_response, dict)
-                and create_response.get("status") == "error"
-            ):
+            if isinstance(create_response, dict) and create_response.get("status") == "error":
                 return create_response
 
             # Verify new secret was created successfully using _build_secret_target
@@ -533,9 +502,7 @@ class HashicorpSecretManager(BaseSecretManager):
                 json_resp = response.json()
                 # Use data_key from target to get the correct value
                 data_key = new_target["data_key"]
-                new_secret_value_from_vault = (
-                    json_resp.get("data", {}).get("data", {}).get(data_key, None)
-                )
+                new_secret_value_from_vault = json_resp.get("data", {}).get("data", {}).get(data_key, None)
                 if new_secret_value_from_vault != new_secret_value:
                     verbose_logger.exception(
                         f"New secret value mismatch. Expected: {new_secret_value}, Got: {new_secret_value_from_vault}"
@@ -546,9 +513,7 @@ class HashicorpSecretManager(BaseSecretManager):
                     }
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 404:
-                    verbose_logger.exception(
-                        f"Failed to verify new secret {new_secret_name}"
-                    )
+                    verbose_logger.exception(f"Failed to verify new secret {new_secret_name}")
                     return {
                         "status": "error",
                         "message": f"Failed to verify new secret {new_secret_name}",
@@ -577,10 +542,7 @@ class HashicorpSecretManager(BaseSecretManager):
                     timeout=timeout,
                 )
                 # Check if async_delete_secret returned an error
-                if (
-                    isinstance(delete_response, dict)
-                    and delete_response.get("status") == "error"
-                ):
+                if isinstance(delete_response, dict) and delete_response.get("status") == "error":
                     # Log the error but don't fail the rotation since new secret was created successfully
                     verbose_logger.warning(
                         f"Failed to delete old secret {current_secret_name} after rotation: {delete_response.get('message')}"
@@ -628,9 +590,7 @@ class HashicorpSecretManager(BaseSecretManager):
 
         try:
             target = self._build_secret_target(secret_name, optional_params)
-            response = await async_client.delete(
-                url=target["url"], headers=self._get_request_headers()
-            )
+            response = await async_client.delete(url=target["url"], headers=self._get_request_headers())
             response.raise_for_status()
 
             # Clear the cache for this secret
@@ -646,9 +606,7 @@ class HashicorpSecretManager(BaseSecretManager):
             verbose_logger.exception(f"Error deleting secret from Hashicorp Vault: {e}")
             return {"status": "error", "message": str(e)}
 
-    def _get_secret_value_from_json_response(
-        self, json_resp: Optional[dict]
-    ) -> Optional[str]:
+    def _get_secret_value_from_json_response(self, json_resp: Optional[dict]) -> Optional[str]:
         """
         Get the secret value from the JSON response
 

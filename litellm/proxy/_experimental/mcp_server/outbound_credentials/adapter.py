@@ -20,6 +20,7 @@ from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
+    AuthorizationCodeConfig,
     CredError,
     NoneConfig,
     ServerSpec,
@@ -33,9 +34,7 @@ if TYPE_CHECKING:
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
-def to_subject(
-    user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]
-) -> Subject:
+def to_subject(user_api_key_auth: Optional[UserAPIKeyAuth], subject_token: Optional[str]) -> Subject:
     """Map v1's authenticated principal onto the resolver's Subject.
 
     tenant_id / subject_id are empty for an unauthenticated caller; the per-user arms must reject
@@ -61,22 +60,19 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     Dispatches on the declared ``auth_type``. The match is exhaustive over ``MCPAuthType`` with
     an ``assert_never`` tail, so a newly added auth mode fails the type gate here until it is
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
-    modes: ``none`` and the static-header family (``api_key`` plus the Authorization schemes),
-    all shared-key; every other mode returns None and stays on v1.
+    modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
+    all shared-key), and ``oauth2`` per-user tokens (``authorization_code``); client_credentials
+    (M2M), delegated/passthrough oauth2, token exchange, and SigV4 return None and stay on v1.
     """
     if server.is_byok:
-        return (
-            None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
-        )
+        return None  # per-user BYOK source not migrated yet -> defer to v1 (any auth_type)
     resource = server.url or server.server_id
     auth_type = server.auth_type
     match auth_type:
         case None | MCPAuth.none:
             if server.is_oauth_passthrough:
                 return None  # passthrough is not migrated yet -> defer to v1
-            return ServerSpec(
-                server_id=server.server_id, resource=resource, config=NoneConfig()
-            )
+            return ServerSpec(server_id=server.server_id, resource=resource, config=NoneConfig())
         case MCPAuth.api_key:
             return _shared_key_spec(server, resource, "X-API-Key", "")
         case MCPAuth.bearer_token:
@@ -86,11 +82,18 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
         case MCPAuth.authorization:
             return _shared_key_spec(server, resource, "Authorization", "")
         case MCPAuth.basic:
-            return _shared_key_spec(
-                server, resource, "Authorization", "Basic", encode=True
-            )
-        case MCPAuth.oauth2 | MCPAuth.oauth2_token_exchange | MCPAuth.aws_sigv4:
-            return None  # OAuth grants and SigV4 are not migrated yet -> defer to v1
+            return _shared_key_spec(server, resource, "Authorization", "Basic", encode=True)
+        case MCPAuth.oauth2:
+            if server.needs_user_oauth_token and not server.delegate_auth_to_upstream:
+                return ServerSpec(
+                    server_id=server.server_id,
+                    resource=resource,
+                    config=AuthorizationCodeConfig(),
+                )
+            # client_credentials (M2M) and delegate/passthrough oauth2 stay on v1
+            return None
+        case MCPAuth.oauth2_token_exchange | MCPAuth.aws_sigv4:
+            return None  # token exchange and SigV4 are not migrated yet -> defer to v1
     assert_never(auth_type)
 
 
@@ -126,7 +129,12 @@ def raise_public(error: CredError) -> NoReturn:
     """Map a resolver CredError onto the proxy's public HTTP contract. The one edge that raises."""
     match error.tag:
         case "unauthorized":
-            raise HTTPException(status_code=401, detail=error.summary)
+            challenge = error.unauthorized
+            raise HTTPException(
+                status_code=401,
+                detail=challenge.body if challenge.body is not None else error.summary,
+                headers=({"WWW-Authenticate": challenge.www_authenticate} if challenge.www_authenticate else None),
+            )
         case "misconfigured":
             raise HTTPException(status_code=500, detail=error.summary)
         case "upstream_unavailable":
@@ -138,3 +146,25 @@ def raise_public(error: CredError) -> NoReturn:
         case "not_implemented":
             raise HTTPException(status_code=501, detail=error.summary)
     assert_never(error.tag)
+
+
+def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
+    """Raise the 401 an ``authorization_code`` server returns at egress when the user has no token.
+
+    Points at the server's RFC 9728 Protected Resource Metadata (``resource_metadata``), which names
+    the upstream authorization server the client must complete OAuth with. The URL is per-server and
+    relative, so it resolves against the caller's own host (correct even behind a reverse proxy)
+    without needing request context. The listing-phase 401 still emits the RFC 8414 ``authorization_uri``
+    form pending the format unification; both target the same server, so the difference is cosmetic.
+    """
+    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
+
+    root = get_server_root_path()
+    prefix = "" if root == "/" else root
+    name = server.alias or server.server_name or server.name or server.server_id
+    resource_metadata = f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata}"'},
+    )

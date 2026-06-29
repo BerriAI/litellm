@@ -80,11 +80,7 @@ def _request_strip_headers() -> frozenset[str]:
     x-litellm-api-key, and any configured custom key header — so a plugin can
     never be handed the caller's live litellm key (confused-deputy escalation).
     """
-    return (
-        _HOP_BY_HOP_STRIP
-        | SpecialHeaders.litellm_credential_header_names()
-        | _configured_key_header_names()
-    )
+    return _HOP_BY_HOP_STRIP | SpecialHeaders.litellm_credential_header_names() | _configured_key_header_names()
 
 
 # Headers to strip from plugin RESPONSES before returning to the browser.
@@ -142,9 +138,7 @@ def _plugin_fernet(plugin_name: str) -> Fernet:
 _CLAIM_TTL_SECONDS = 30  # identity claims expire after 30 s
 
 
-def issue_plugin_session_claim(
-    plugin_name: str, user_id: str | None, user_role: str | None
-) -> str:
+def issue_plugin_session_claim(plugin_name: str, user_id: str | None, user_role: str | None) -> str:
     """Issue a short-lived, audience-scoped identity claim for the plugin.
 
     The claim contains {user_id, user_role, plugin, exp}.  Crucially it
@@ -167,9 +161,7 @@ def verify_plugin_session_claim(plugin_name: str, ciphertext: str) -> dict:
     the claim is expired.  Returns the decoded claim dict on success.
     """
     try:
-        raw = _plugin_fernet(plugin_name).decrypt(
-            ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS
-        )
+        raw = _plugin_fernet(plugin_name).decrypt(ciphertext.encode(), ttl=_CLAIM_TTL_SECONDS)
         claim = json.loads(raw)
     except (InvalidToken, Exception) as exc:
         raise ValueError("Invalid, tampered, or expired plugin session claim") from exc
@@ -192,9 +184,7 @@ def register_plugins_from_config(general_settings: dict[str, object]) -> None:
     """
     raw = general_settings.get("plugins")
     entries: list[object] = raw if isinstance(raw, list) else []
-    new_registry = {
-        p.name: p for p in (PluginConfig.model_validate(entry) for entry in entries)
-    }
+    new_registry = {p.name: p for p in (PluginConfig.model_validate(entry) for entry in entries)}
     _plugin_registry.clear()
     _plugin_registry.update(new_registry)
 
@@ -245,14 +235,10 @@ async def plugin_auth_token(
             detail="LITELLM_SALT_KEY is not configured; plugin iframe auth unavailable.",
         )
     if plugin_name not in _plugin_registry:
-        raise HTTPException(
-            status_code=404, detail=f"Plugin '{plugin_name}' is not registered."
-        )
+        raise HTTPException(status_code=404, detail=f"Plugin '{plugin_name}' is not registered.")
     user_id = getattr(user_api_key_dict, "user_id", None)
     user_role = getattr(user_api_key_dict, "user_role", None)
-    return {
-        "session_claim": issue_plugin_session_claim(plugin_name, user_id, user_role)
-    }
+    return {"session_claim": issue_plugin_session_claim(plugin_name, user_id, user_role)}
 
 
 @router.api_route(
@@ -299,9 +285,7 @@ async def plugin_proxy(
 
     # Strip caller credentials and hop-by-hop headers from forwarded request
     strip = _request_strip_headers()
-    forward_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in strip
-    }
+    forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in strip}
 
     # Inject plugin's own credential as upstream auth (if configured)
     plugin_key = plugin.plugin_key
@@ -318,9 +302,7 @@ async def plugin_proxy(
     if user_role:
         forward_headers["x-litellm-user-role"] = str(user_role)
 
-    handler = get_async_httpx_client(
-        llm_provider=httpxSpecialProvider.PassThroughEndpoint
-    )
+    handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint)
     try:
         req = handler.client.build_request(
             method=request.method,

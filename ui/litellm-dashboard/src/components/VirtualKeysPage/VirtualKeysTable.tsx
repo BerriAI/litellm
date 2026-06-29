@@ -467,10 +467,15 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         enableSorting: true,
         cell: (info) => {
           const maxBudget = info.getValue() as number | null;
-          if (maxBudget === null) {
-            return "Unlimited";
+          if (maxBudget !== null) {
+            return `$${formatNumberWithCommas(maxBudget)}`;
           }
-          return `$${formatNumberWithCommas(maxBudget)}`;
+          const teamId = info.row.original.team_id;
+          const team = teams?.find((t) => t.team_id === teamId);
+          if (team?.max_budget != null) {
+            return `$${formatNumberWithCommas(team.max_budget)} (Team)`;
+          }
+          return "Unlimited";
         },
       },
       {
