@@ -75,24 +75,26 @@ def _resolve_health_check_mode(
 def _resolve_health_check_model_info(model_info: dict, litellm_params: dict) -> dict:
     """Merge model-cost metadata with deployment model_info for health checks.
 
-    Model-specific health-check flags belong in model metadata, but Azure
-    deployment names can include suffixes that do not exist in the model map.
-    Try the deployment model first, then provider/base_model (for example
-    azure/gpt-chat-latest) when a deployment provides base_model metadata.
+    Model-specific health-check flags belong in model metadata. Prefer
+    base_model metadata (for example azure/gpt-chat-latest) over
+    deployment-route metadata (for example azure/gpt-chat-latest-gs). The
+    router can add deployment-route entries to litellm.model_cost, but those
+    inferred entries do not carry model-specific health-check flags.
     Deployment-level model_info overrides model-map metadata.
     """
     metadata: dict = {}
     candidates: list[str] = []
     deployment_model = litellm_params.get("model")
-    if isinstance(deployment_model, str):
-        candidates.append(deployment_model)
 
     base_model = model_info.get("base_model")
     if isinstance(base_model, str):
         candidates.append(base_model)
-        if isinstance(deployment_model, str) and "/" in deployment_model:
+        if "/" not in base_model and isinstance(deployment_model, str) and "/" in deployment_model:
             provider = deployment_model.split("/", 1)[0]
             candidates.append(f"{provider}/{base_model}")
+
+    if isinstance(deployment_model, str):
+        candidates.append(deployment_model)
 
     for candidate in candidates:
         if candidate in litellm.model_cost:

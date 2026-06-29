@@ -538,6 +538,28 @@ def test_azure_gpt_chat_latest_health_check_uses_metadata_max_completion_tokens(
     assert "max_tokens" not in updated
 
 
+def test_base_model_metadata_wins_over_inferred_deployment_route_metadata(
+    monkeypatch,
+):
+    """Router-inferred deployment metadata must not mask base_model metadata."""
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
+    model_cost = get_model_cost_map(url="")
+    model_cost["azure/gpt-chat-latest-gs"] = {
+        "litellm_provider": "azure",
+        "mode": "chat",
+    }
+    monkeypatch.setattr(litellm, "model_cost", model_cost)
+    _invalidate_model_cost_lowercase_map()
+    model_info = {"base_model": "gpt-chat-latest"}
+    litellm_params = {"model": "azure/gpt-chat-latest-gs"}
+
+    updated = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert updated["max_completion_tokens"] == 16
+    assert "max_tokens" not in updated
+
+
 def test_deployment_model_info_overrides_health_check_max_completion_tokens(
     monkeypatch,
 ):
