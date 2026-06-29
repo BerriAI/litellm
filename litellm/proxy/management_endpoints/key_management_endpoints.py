@@ -576,15 +576,20 @@ def _check_budget_limits_delegation_ceiling(
     is_ui_session_team_key: bool,
 ) -> None:
     """
-    Enforce the delegation ceiling on every per-window budget entry.
+    Enforce two invariants on `budget_limits`:
 
-    The single-value `max_budget` check upstream guards the all-time budget;
-    `budget_limits` lets a key carry independent concurrent windows and was
-    bypassing the ceiling entirely, so a non-admin caller could mint a key
-    with a window budget far above their own authority.
+    - Every `budget_limits[*].max_budget` must be a finite number; applies
+      to every caller including proxy admin.
+    - Non-admin callers may not set a window above their delegation ceiling.
     """
     if not budget_limits:
         return
+    non_finite = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
+    if non_finite is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
+        )
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     if is_ui_session_team_key:
