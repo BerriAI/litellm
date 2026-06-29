@@ -5,6 +5,10 @@ import MessageManager from "@/components/molecules/message_manager";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { getAgentInfo, patchAgentCall, getAgentCreateMetadata, AgentCreateInfo } from "../networking";
 import { Agent } from "./types";
+import { KeyResponse } from "../key_team_helpers/key_list";
+import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import KeyInfoView from "../templates/key_info_view";
+import AgentVirtualKeys from "./agent_virtual_keys";
 import AgentFormFields from "./agent_form_fields";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { buildAgentDataFromForm, parseAgentForForm } from "./agent_config";
@@ -22,6 +26,9 @@ interface AgentInfoViewProps {
 
 const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessToken, isAdmin }) => {
   const [agent, setAgent] = useState<Agent | null>(null);
+  const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
+  const { data: keysData, isLoading: keysLoading, refetch: refetchAgentKeys } = useKeys(1, 100, { agentID: agentId });
+  const agentKeys = keysData?.keys ?? [];
   const [isLoading, setIsLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -192,6 +199,22 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
     return date.toLocaleString();
   };
 
+  if (selectedKey) {
+    return (
+      <KeyInfoView
+        keyId={selectedKey.token}
+        keyData={selectedKey}
+        onClose={() => setSelectedKey(null)}
+        onDelete={() => {
+          setSelectedKey(null);
+          refetchAgentKeys();
+        }}
+        teams={null}
+        backButtonText="Back to Agent"
+      />
+    );
+  }
+
   return (
     <div className="p-4">
       <div>
@@ -256,6 +279,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
               <Descriptions.Item label="Created At">{formatDate(agent.created_at)}</Descriptions.Item>
               <Descriptions.Item label="Updated At">{formatDate(agent.updated_at)}</Descriptions.Item>
             </Descriptions>
+
+            <AgentVirtualKeys keys={agentKeys} isLoading={keysLoading} onKeyClick={setSelectedKey} />
 
             {agent.object_permission &&
               (agent.object_permission.mcp_servers?.length ||

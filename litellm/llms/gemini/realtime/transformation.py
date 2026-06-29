@@ -406,17 +406,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         Handle session.update by sending setup to Gemini.
 
         On the FIRST session.update (when session_configuration_request is None),
-        the full setup with all configuration is sent.
-
-        Subsequent session.update messages are forwarded as a follow-up setup
-        with the new fields merged into the original setup. Gemini Live treats
-        a follow-up BidiGenerateContentSetup as a full session replacement
-        rather than a partial merge, so we carry forward the previous setup
-        (tools, generationConfig, inputAudioTranscription, systemInstruction,
-        ...) and overlay the new fields on top. This preserves the old
-        behavior where clients could refine the session via session.update
-        (e.g. add tools after the auto-setup on connect), and also keeps the
-        guardrail-driven turn_detection update working.
+        the full setup with all configuration is sent. Gemini Live accepts setup
+        as the first-and-only client message, so every later session.update is
+        dropped rather than forwarded as a second setup (which Gemini rejects
+        with a 1007, tearing the session down). To carry tools/instructions, send
+        them on the first session.update before any conversation content.
         """
         session_payload = json_message.get("session") or {}
         # Normalize GA-remapped fields (``output_modalities``,
@@ -437,70 +431,27 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             verbose_logger.debug("Gemini Realtime: Sending initial setup with tools to backend")
             return [json.dumps({"setup": self._finalize_gemini_live_setup(model, new_overrides)})]
 
-        if not new_overrides:
-            verbose_logger.debug("Gemini Realtime: Ignoring session.update (no mappable fields)")
-            return []
-
-        try:
-            original_setup = cast(
-                BidiGenerateContentSetup,
-                json.loads(session_configuration_request).get("setup", {}),
+        # Gemini Live accepts exactly one ``setup`` message: the first and only
+        # client message. A second ``setup`` closes the socket with
+        # ``1007 Request contains an invalid argument``, so a session.update
+        # after the initial setup must not be forwarded as a follow-up setup.
+        # Every GA client (pipecat included) sends several session.updates while
+        # configuring the session; forwarding a second one tears the session down
+        # before the first turn, which surfaces to callers as silence after the
+        # first response, reconnect/retry latency churn, and 1011 errors. Drop
+        # it. The Vertex subclass already drops subsequent setups for this exact
+        # reason; the constraint is identical on AI Studio.
+        client_turn_detection = self._extract_turn_detection(session_payload)
+        if isinstance(client_turn_detection, dict) and client_turn_detection.get("create_response") is False:
+            verbose_logger.warning(
+                "Gemini Realtime: Dropping subsequent session.update "
+                "(turn_detection.create_response=False) — Gemini Live rejects a "
+                "second setup message, so audio-transcription guardrails cannot "
+                "suppress the model's auto-response mid-session."
             )
-        except (json.JSONDecodeError, AttributeError):
-            original_setup = {}
-
-        # Deep-merge ``generationConfig`` and ``realtimeInputConfig`` so a
-        # partial session.update (e.g. only ``temperature`` or only
-        # ``modalities``) does not silently drop unrelated sub-keys
-        # (``responseModalities``, ``maxOutputTokens``, ...) from the original
-        # setup.
-        follow_up_setup: BidiGenerateContentSetup = {
-            **original_setup,
-            **new_overrides,
-            "model": f"models/{model}",
-        }
-        original_generation_config = original_setup.get("generationConfig")
-        new_generation_config = new_overrides.get("generationConfig")
-        if isinstance(original_generation_config, dict) and isinstance(new_generation_config, dict):
-            follow_up_setup["generationConfig"] = {
-                **original_generation_config,
-                **new_generation_config,
-            }
-        original_realtime_input_config = original_setup.get("realtimeInputConfig")
-        new_realtime_input_config = new_overrides.get("realtimeInputConfig")
-        if isinstance(original_realtime_input_config, dict) and isinstance(new_realtime_input_config, dict):
-            merged_realtime_input_config = {
-                **original_realtime_input_config,
-                **new_realtime_input_config,
-            }
-            # Deep-merge ``automaticActivityDetection`` so a partial VAD
-            # update (e.g. the guardrail-injected ``disabled: True`` from
-            # ``create_response: False``) does not silently drop unrelated
-            # knobs like ``silenceDurationMs`` / ``prefixPaddingMs`` from
-            # the original setup.
-            original_automatic_activity_detection = original_realtime_input_config.get("automaticActivityDetection")
-            new_automatic_activity_detection = new_realtime_input_config.get("automaticActivityDetection")
-            if isinstance(original_automatic_activity_detection, dict) and isinstance(
-                new_automatic_activity_detection, dict
-            ):
-                merged_realtime_input_config["automaticActivityDetection"] = {
-                    **original_automatic_activity_detection,
-                    **new_automatic_activity_detection,
-                }
-            follow_up_setup["realtimeInputConfig"] = cast(
-                BidiGenerateContentRealtimeInputConfig,
-                merged_realtime_input_config,
-            )
-        finalized_follow_up = self._finalize_gemini_live_setup(model, cast(dict[str, Any], follow_up_setup))
-        # Skip if the follow-up setup is identical to the one already sent.
-        # The final session.update from Pipecat's _create_response (after history
-        # items) matches the pre-history session.update we intentionally sent
-        # before content; sending a duplicate at that point would risk a 1007.
-        if finalized_follow_up == original_setup:
-            verbose_logger.debug("Gemini Realtime: Skipping duplicate follow-up session.update (no changes)")
-            return []
-        verbose_logger.debug("Gemini Realtime: Forwarding session.update as follow-up setup")
-        return [json.dumps({"setup": finalized_follow_up})]
+        else:
+            verbose_logger.debug("Gemini Realtime: Ignoring session.update (setup already sent)")
+        return []
 
     def _handle_conversation_item(self, json_message: dict) -> List[str]:
         """
