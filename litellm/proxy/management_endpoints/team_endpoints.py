@@ -3839,6 +3839,28 @@ async def _get_org_admin_org_ids(
     return org_ids if org_ids else None
 
 
+def _apply_org_admin_membership_union(
+    where_conditions: dict[str, Any],
+    org_admin_org_ids: Optional[list[str]],
+    user_team_ids: list[str],
+) -> None:
+    """Union (teams in the admin's orgs) with (teams the caller is a member of).
+
+    Mutates ``where_conditions`` in place for a self/bare org-admin query so
+    teams in orgs where the caller is only a member stay visible (LIT-3723).
+    An org admin with no memberships still sees their org teams, so this never
+    collapses to an empty result.
+    """
+    union_or: list[dict[str, Any]] = [{"organization_id": {"in": org_admin_org_ids}}]
+    if user_team_ids:
+        union_or.append({"team_id": {"in": user_team_ids}})
+    existing_or = where_conditions.pop("OR", None)  # set above from `search`
+    if existing_or is not None:
+        where_conditions["AND"] = [{"OR": existing_or}, {"OR": union_or}]
+    else:
+        where_conditions["OR"] = union_or
+
+
 async def _build_team_list_where_conditions(
     prisma_client: PrismaClient,
     team_id: Optional[str],
@@ -3917,14 +3939,7 @@ async def _build_team_list_where_conditions(
             # of), so teams in orgs where I'm only a member stay visible
             # (LIT-3723). An org admin with no memberships must still see org
             # teams, so do NOT early-return None here.
-            union_or: List[Dict[str, Any]] = [{"organization_id": {"in": org_admin_org_ids}}]
-            if user_team_ids:
-                union_or.append({"team_id": {"in": user_team_ids}})
-            existing_or = where_conditions.pop("OR", None)  # set above from `search`
-            if existing_or is not None:
-                where_conditions["AND"] = [{"OR": existing_or}, {"OR": union_or}]
-            else:
-                where_conditions["OR"] = union_or
+            _apply_org_admin_membership_union(where_conditions, org_admin_org_ids, user_team_ids)
         else:
             # When user_id is provided, filter by that user's direct team
             # memberships. For org admins the access control gate in
