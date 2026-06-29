@@ -5479,6 +5479,7 @@
         "supports_vision": true
     },
     "azure/gpt-5.2": {
+        "supports_none_reasoning_effort": true,
         "cache_read_input_token_cost": 1.75e-07,
         "input_cost_per_token": 1.75e-06,
         "litellm_provider": "azure",
@@ -5772,6 +5773,7 @@
         "supports_web_search": true
     },
     "azure/gpt-5.4": {
+        "supports_none_reasoning_effort": true,
         "cache_read_input_token_cost": 2.5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 5e-07,
         "cache_read_input_token_cost_priority": 5e-07,
@@ -6709,6 +6711,7 @@
         "supports_minimal_reasoning_effort": false
     },
     "azure/gpt-5.5-2026-04-23": {
+        "supports_none_reasoning_effort": true,
         "cache_read_input_token_cost": 5e-07,
         "cache_read_input_token_cost_above_272k_tokens": 1e-06,
         "cache_read_input_token_cost_priority": 1e-06,
@@ -6903,6 +6906,7 @@
         "supports_web_search": true
     },
     "azure/gpt-5.4-mini": {
+        "supports_none_reasoning_effort": true,
         "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 7.5e-07,
         "litellm_provider": "azure",

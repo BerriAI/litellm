@@ -299,3 +299,27 @@ def test_azure_gpt5_1_does_not_support_logprobs(config: AzureOpenAIGPT5Config):
     supported_params = config.get_supported_openai_params(model="gpt-5.1")
     assert "logprobs" not in supported_params
     assert "top_logprobs" not in supported_params
+
+
+def test_supports_none_reasoning_effort_via_base_model():
+    """GH#31243: capability check should fall back to base_model when
+    the deployment model name is not a registry key."""
+    from unittest.mock import patch
+
+    from litellm.utils import _supports_factory
+
+    with patch(
+        "litellm.utils._get_model_info_helper",
+        side_effect=lambda model, custom_llm_provider: (
+            {"supports_none_reasoning_effort": True}
+            if model == "gpt-5.1" and custom_llm_provider == "azure"
+            else {}
+        ),
+    ):
+        result = _supports_factory(
+            model="azure/gpt-5.1_2025-11-13_global",
+            custom_llm_provider="azure",
+            key="supports_none_reasoning_effort",
+            base_model="azure/gpt-5.1",
+        )
+        assert result is True
