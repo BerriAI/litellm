@@ -6517,7 +6517,15 @@ async def initialize(
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = api_version  # set this for azure - litellm can read this from the env
+        # An explicitly-passed --api_version (any value other than the click
+        # default) still overrides the env. The bare default must not clobber an
+        # operator-set AZURE_API_VERSION: changing it after azure deployments are
+        # registered shifts their hashed deployment ids, so the store_model_in_db
+        # reconciliation then deletes them.
+        if api_version != litellm.AZURE_DEFAULT_API_VERSION:
+            os.environ["AZURE_API_VERSION"] = api_version
+        else:
+            os.environ.setdefault("AZURE_API_VERSION", api_version)
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param

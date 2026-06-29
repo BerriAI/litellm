@@ -8650,3 +8650,51 @@ def test_config_field_info_returns_raw_secrets_for_full_admin(monkeypatch):
         )
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_initialize_does_not_clobber_operator_azure_api_version(monkeypatch):
+    """Regression: initialize() must not overwrite an operator-set AZURE_API_VERSION
+    with the CLI --api_version default (litellm.AZURE_DEFAULT_API_VERSION). Overwriting
+    it after azure deployments are registered shifts their hashed deployment ids, so the
+    store_model_in_db reconciliation then deletes every azure deployment."""
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-04-01-preview")
+    await initialize(
+        config=None,
+        api_version=litellm.AZURE_DEFAULT_API_VERSION,
+        drop_params=False,
+        add_function_to_prompt=False,
+        telemetry=False,
+    )
+    assert os.environ["AZURE_API_VERSION"] == "2025-04-01-preview"
+
+
+@pytest.mark.asyncio
+async def test_initialize_sets_azure_api_version_when_unset(monkeypatch):
+    """When AZURE_API_VERSION is unset, initialize() still populates it from the
+    (CLI-provided) api_version so azure has a version to use."""
+    monkeypatch.delenv("AZURE_API_VERSION", raising=False)
+    await initialize(
+        config=None,
+        api_version="2099-12-01-preview",
+        drop_params=False,
+        add_function_to_prompt=False,
+        telemetry=False,
+    )
+    assert os.environ["AZURE_API_VERSION"] == "2099-12-01-preview"
+
+
+@pytest.mark.asyncio
+async def test_initialize_explicit_api_version_overrides_env(monkeypatch):
+    """An explicitly-passed --api_version (a value other than the click default)
+    still overrides an existing AZURE_API_VERSION, preserving the explicit CLI
+    override path."""
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-04-01-preview")
+    await initialize(
+        config=None,
+        api_version="2099-12-01-preview",
+        drop_params=False,
+        add_function_to_prompt=False,
+        telemetry=False,
+    )
+    assert os.environ["AZURE_API_VERSION"] == "2099-12-01-preview"
