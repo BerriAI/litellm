@@ -611,11 +611,15 @@ async def guardrails_usage_logs(
 
         if action:
             # action is derived from SpendLog JSON metadata, not an index column, so we
-            # cannot push the filter to the DB. Fetch all matching index rows, join with
-            # SpendLogs, filter in Python, then slice to the requested page.
+            # cannot push the filter to the DB. Fetch a bounded window of index rows,
+            # join with SpendLogs, filter in Python, then slice to the requested page.
+            # Cap at 10 000 rows to avoid OOM/full-table scans; deployments with more
+            # matching rows in a date range should add an `action` column to the index.
+            _ACTION_FILTER_ROW_CAP = 10_000
             all_index_rows = await SpendLogGuardrailIndexRepository(prisma_client).table.find_many(
                 where=where,
                 order={"start_time": "desc"},
+                take=_ACTION_FILTER_ROW_CAP,
             )
             if not all_index_rows:
                 return UsageLogsResponse(logs=[], total=0, page=page, page_size=page_size)
