@@ -22,6 +22,7 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: >-
+        tests/test_litellm/batches
         tests/test_litellm/secret_managers
         tests/test_litellm/a2a_protocol
         tests/test_litellm/anthropic_interface
