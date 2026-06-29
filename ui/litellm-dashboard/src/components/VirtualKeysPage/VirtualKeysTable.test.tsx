@@ -3,14 +3,14 @@ import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { Organization } from "../networking";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 
-// Debounce synchronously so an applied filter lands in the useKeys query within the test tick.
+// Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
 vi.mock("@tanstack/react-pacer/debouncer", async () => {
   const React = await vi.importActual<typeof import("react")>("react");
   return {
+    useDebouncedValue: (value: unknown) => [value, { cancel: vi.fn(), flush: vi.fn() }],
     useDebouncedState: (initial: unknown) => {
       const [value, setValue] = React.useState(initial);
       return [value, setValue, { cancel: vi.fn(), flush: vi.fn() }];
@@ -131,24 +131,6 @@ const mockTeam: Team = {
   spend: 0,
 };
 
-const mockOrganization: Organization = {
-  organization_id: "org-1",
-  organization_alias: "Test Organization",
-  budget_id: "budget-1",
-  metadata: {},
-  models: ["gpt-3.5-turbo", "gpt-4"],
-  spend: 100,
-  model_spend: { "gpt-3.5-turbo": 50, "gpt-4": 50 },
-  created_at: "2024-10-01T10:00:00Z",
-  created_by: "user-1",
-  updated_at: "2024-11-01T10:00:00Z",
-  updated_by: "user-1",
-  litellm_budget_table: {},
-  teams: [],
-  users: [],
-  members: [],
-};
-
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
 const mockUseTeams = useTeams as MockedFunction<typeof useTeams>;
 
@@ -168,11 +150,6 @@ const keysResult = (keys: KeyResponse[], data: Partial<KeysResponse> = {}, extra
     ...extra,
   }) as any;
 
-const defaultMockProps = {
-  teams: [mockTeam],
-  organizations: [mockOrganization],
-};
-
 beforeEach(() => {
   vi.clearAllMocks();
 
@@ -185,12 +162,12 @@ beforeEach(() => {
 });
 
 it("should render VirtualKeysTable component", () => {
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
 it("should display key information correctly", async () => {
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -200,7 +177,7 @@ it("should display key information correctly", async () => {
 });
 
 it("should display user email correctly", async () => {
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
@@ -210,7 +187,7 @@ it("should display user email correctly", async () => {
 it("should show loading message only on initial load (isPending)", () => {
   mockUseKeys.mockReturnValue(keysResult([], {}, { data: null, isPending: true, isFetching: true }));
 
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   expect(screen.getByText("🚅 Loading keys...")).toBeInTheDocument();
   expect(screen.queryByText("Test Key Alias")).not.toBeInTheDocument();
@@ -220,7 +197,7 @@ it("should show loading message only on initial load (isPending)", () => {
 it("should show 'No keys found' message when the key list is empty", () => {
   mockUseKeys.mockReturnValue(keysResult([]));
 
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   expect(screen.getByText("No keys found")).toBeInTheDocument();
 });
@@ -230,13 +207,13 @@ it("should handle models with more than 3 entries to trigger expansion UI", () =
     keysResult([{ ...mockKey, models: ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "claude-3", "claude-3-5-sonnet"] }]),
   );
 
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
 });
 
 it("should render table headers correctly", () => {
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   expect(screen.getByText("Key ID")).toBeInTheDocument();
   expect(screen.getByText("Key Alias")).toBeInTheDocument();
@@ -246,7 +223,7 @@ it("should render table headers correctly", () => {
 });
 
 it("should handle column resizing hover events", () => {
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   const headerCell = document.querySelector("[data-header-id]") as HTMLElement;
   expect(headerCell).toBeInTheDocument();
@@ -263,7 +240,7 @@ it("should handle column resizing hover events", () => {
 });
 
 it("should open KeyInfoView when clicking on a key ID button", async () => {
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -294,7 +271,7 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
     ]),
   );
 
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
@@ -312,17 +289,36 @@ it("should display created_by_user email in 'Created By' column when available",
     ]),
   );
 
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("creator@example.com")).toBeInTheDocument();
   });
 });
 
+it("should display created_by_user alias over email when both are available", async () => {
+  mockUseKeys.mockReturnValue(
+    keysResult([
+      {
+        ...mockKey,
+        created_by: "some-uuid-1234",
+        created_by_user: { user_id: "some-uuid-1234", user_email: "creator@example.com", user_alias: "The Creator" },
+      },
+    ]),
+  );
+
+  renderWithProviders(<VirtualKeysTable />);
+
+  await waitFor(() => {
+    expect(screen.getByText("The Creator")).toBeInTheDocument();
+  });
+  expect(screen.queryByText("creator@example.com")).not.toBeInTheDocument();
+});
+
 it("should render table without crashing when models is null", async () => {
   mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, models: null as unknown as string[] }]));
 
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -332,7 +328,7 @@ it("should render table without crashing when models is null", async () => {
 it("should display 'Unknown' for last_active when value is null", async () => {
   mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, last_active: null }]));
 
-  renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+  renderWithProviders(<VirtualKeysTable />);
 
   await waitFor(() => {
     expect(screen.getByText("Unknown")).toBeInTheDocument();
@@ -341,7 +337,7 @@ it("should display 'Unknown' for last_active when value is null", async () => {
 
 describe("server-side filtering – the LIT-4080 regression guard", () => {
   it("threads an active User ID filter into the useKeys query so any refetch keeps it", async () => {
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     fireEvent.click(screen.getByRole("button", { name: "Filters" }));
 
@@ -354,14 +350,14 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
   });
 
   it("does not send filter params to useKeys when no filter is active", () => {
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     const lastCall = mockUseKeys.mock.calls[mockUseKeys.mock.calls.length - 1];
     expect(lastCall[2] ?? {}).toMatchObject({ userID: undefined, teamID: undefined, keyHash: undefined });
   });
 
   it("drops the filter from the useKeys query when Reset Filters is clicked", async () => {
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     fireEvent.click(screen.getByRole("button", { name: "Filters" }));
     const userIdInput = await screen.findByPlaceholderText("Enter User ID...");
@@ -384,7 +380,7 @@ describe("pagination display – total count comes from useKeys", () => {
   it("shows total_count and page count from the useKeys response", async () => {
     mockUseKeys.mockReturnValue(keysResult([mockKey], { total_count: 509, total_pages: 11 }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 50 of 509 results")).toBeInTheDocument();
@@ -395,7 +391,7 @@ describe("pagination display – total count comes from useKeys", () => {
   it("reflects a narrowed total when a filtered fetch returns fewer results", async () => {
     mockUseKeys.mockReturnValue(keysResult([mockKey], { total_count: 1, total_pages: 1 }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
@@ -406,7 +402,7 @@ describe("pagination display – total count comes from useKeys", () => {
 
 describe("refetch button", () => {
   it("should show Fetch button in normal state", () => {
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     const fetchButton = screen.getByTitle("Fetch data");
     expect(fetchButton).toBeInTheDocument();
@@ -417,7 +413,7 @@ describe("refetch button", () => {
   it("should show Fetching state and keep table data visible during refetch", () => {
     mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { isFetching: true }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     expect(screen.getByText("Fetching")).toBeInTheDocument();
     expect(screen.getByTitle("Fetch data")).toBeDisabled();
@@ -429,7 +425,7 @@ describe("refetch button", () => {
     const mockRefetch = vi.fn();
     mockUseKeys.mockReturnValue(keysResult([mockKey], {}, { refetch: mockRefetch }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     fireEvent.click(screen.getByTitle("Fetch data"));
 
@@ -439,7 +435,7 @@ describe("refetch button", () => {
   it("should show Fetch button enabled on error so user can retry", () => {
     mockUseKeys.mockReturnValue(keysResult([], {}, { data: null, isError: true }));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     const fetchButton = screen.getByTitle("Fetch data");
     expect(fetchButton).not.toBeDisabled();
@@ -451,7 +447,7 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
   it("should render Active for a non-blocked key", async () => {
     mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: false, metadata: {} }]));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Active");
@@ -461,7 +457,7 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
   it("should render Blocked when key.blocked is true", async () => {
     mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: true, metadata: {} }]));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     await waitFor(() => {
       expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Blocked");
@@ -472,7 +468,7 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
   it("should mark a SCIM-blocked key with the SCIM tooltip reason", async () => {
     mockUseKeys.mockReturnValue(keysResult([{ ...mockKey, blocked: true, metadata: { scim_blocked: true } }]));
 
-    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+    renderWithProviders(<VirtualKeysTable />);
 
     const tag = await screen.findByTestId(`key-status-${mockKey.token_id}`);
     expect(tag).toHaveTextContent("Blocked");

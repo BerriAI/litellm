@@ -1,9 +1,9 @@
 "use client";
-import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useKeys, KeyListCallOptions } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useQuery } from "@tanstack/react-query";
-import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
 import {
@@ -35,18 +35,7 @@ import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSele
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
-import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
-
-interface VirtualKeysTableProps {
-  teams: Team[] | null;
-  organizations: Organization[] | null;
-  onSortChange?: (sortBy: string, sortOrder: "asc" | "desc") => void;
-  currentSort?: {
-    sortBy: string;
-    sortOrder: "asc" | "desc";
-  };
-}
 
 type KeyFilterState = {
   "Team ID": string;
@@ -64,33 +53,31 @@ const DEFAULT_KEY_FILTERS: KeyFilterState = {
   "Key Hash": "",
 };
 
-export function VirtualKeysTable({ teams, organizations, onSortChange, currentSort }: VirtualKeysTableProps) {
+type KeyListFilterOptions = Pick<
+  KeyListCallOptions,
+  "teamID" | "organizationID" | "selectedKeyAlias" | "userID" | "keyHash"
+>;
+
+const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
+  teamID: filters["Team ID"].trim() || undefined,
+  organizationID: filters["Organization ID"].trim() || undefined,
+  selectedKeyAlias: filters["Key Alias"].trim() || undefined,
+  userID: filters["User ID"].trim() || undefined,
+  keyHash: filters["Key Hash"].trim() || undefined,
+});
+
+export function VirtualKeysTable() {
   const { accessToken } = useAuthorized();
   const { data: fetchedOrganizations } = useOrganizations();
-  const resolvedOrganizations = fetchedOrganizations ?? organizations ?? [];
+  const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
-  const [sorting, setSorting] = React.useState<SortingState>(() => {
-    if (currentSort) {
-      return [
-        {
-          id: currentSort.sortBy,
-          desc: currentSort.sortOrder === "desc",
-        },
-      ];
-    }
-    return [
-      {
-        id: "created_at",
-        desc: true,
-      },
-    ];
-  });
+  const [sorting, setSorting] = React.useState<SortingState>([{ id: "created_at", desc: true }]);
   const [tablePagination, setTablePagination] = React.useState<PaginationState>({
     pageIndex: 0,
     pageSize: 50,
   });
   const [filters, setFilters] = useState<KeyFilterState>(DEFAULT_KEY_FILTERS);
-  const [debouncedFilters, setDebouncedFilters] = useDebouncedState(filters, { wait: 300 });
+  const [debouncedFilters] = useDebouncedValue(filters, { wait: 300 });
 
   const sortBy = sorting.length > 0 ? sorting[0].id : null;
   const sortOrder = sorting.length > 0 ? (sorting[0].desc ? "desc" : "asc") : null;
@@ -102,11 +89,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     isError,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize, {
-    teamID: debouncedFilters["Team ID"]?.trim() || undefined,
-    organizationID: debouncedFilters["Organization ID"]?.trim() || undefined,
-    selectedKeyAlias: debouncedFilters["Key Alias"]?.trim() || undefined,
-    userID: debouncedFilters["User ID"]?.trim() || undefined,
-    keyHash: debouncedFilters["Key Hash"]?.trim() || undefined,
+    ...toKeyListFilters(debouncedFilters),
     sortBy: sortBy || undefined,
     sortOrder: sortOrder || undefined,
     expand: "user",
@@ -121,7 +104,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     enabled: !!accessToken,
     staleTime: 30000,
   });
-  const allTeams = fetchedTeams && fetchedTeams.length > 0 ? fetchedTeams : teams ?? [];
+  const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
   // Defer the transition so the button stays in loading state until the table
   // has rendered with the new data (mirrors the spend-logs pattern)
@@ -133,21 +116,18 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   };
 
   const handleFilterChange = (newFilters: Record<string, string>) => {
-    const nextFilters: KeyFilterState = {
+    setFilters({
       "Team ID": newFilters["Team ID"] || "",
       "Organization ID": newFilters["Organization ID"] || "",
       "Key Alias": newFilters["Key Alias"] || "",
       "User ID": newFilters["User ID"] || "",
       "Key Hash": newFilters["Key Hash"] || "",
-    };
-    setFilters(nextFilters);
-    setDebouncedFilters(nextFilters);
+    });
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   };
 
   const handleFilterReset = () => {
     setFilters(DEFAULT_KEY_FILTERS);
-    setDebouncedFilters(DEFAULT_KEY_FILTERS);
     setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
   };
 
@@ -251,7 +231,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         cell: (info) => {
           const teamId = info.getValue() as string | null;
           if (!teamId) return "-";
-          const team = teams?.find((t) => t.team_id === teamId);
+          const team = allTeams.find((t) => t.team_id === teamId);
           const displayValue = team?.team_alias || teamId;
           const width = info.cell.column.getSize();
           return (
@@ -485,7 +465,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
             return `$${formatNumberWithCommas(maxBudget)}`;
           }
           const teamId = info.row.original.team_id;
-          const team = teams?.find((t) => t.team_id === teamId);
+          const team = allTeams.find((t) => t.team_id === teamId);
           if (team?.max_budget != null) {
             return `$${formatNumberWithCommas(team.max_budget)} (Team)`;
           }
@@ -605,7 +585,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         },
       },
     ],
-    [teams, resolvedOrganizations],
+    [allTeams, resolvedOrganizations],
   );
 
   const filterOptions: FilterOption[] = [
@@ -677,10 +657,6 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
       setSorting(newSorting);
       setTablePagination((prev) => ({ ...prev, pageIndex: 0 }));
-      if (newSorting && newSorting.length > 0) {
-        const sortState = newSorting[0];
-        onSortChange?.(sortState.id, sortState.desc ? "desc" : "asc");
-      }
     },
     onPaginationChange: setTablePagination,
     getCoreRowModel: getCoreRowModel(),
@@ -689,18 +665,6 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     manualPagination: true,
     pageCount: Math.ceil(totalCount / tablePagination.pageSize),
   });
-
-  // Update local sorting state when currentSort prop changes
-  React.useEffect(() => {
-    if (currentSort) {
-      setSorting([
-        {
-          id: currentSort.sortBy,
-          desc: currentSort.sortOrder === "desc",
-        },
-      ]);
-    }
-  }, [currentSort]);
 
   const { pageIndex, pageSize } = table.getState().pagination;
   const start = pageIndex * pageSize + 1;
