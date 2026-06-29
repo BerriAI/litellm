@@ -718,6 +718,40 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
 
+# Bedrock Converse routes Claude Opus 4.7/4.8 through an Anthropic-compatible
+# validator that maps toolSpec to the native tool shape and rejects the extra
+# ``strict`` key (``tools.N.custom.strict: Extra inputs are not permitted``).
+# Sonnet 4.5/4.6 and Opus ≤4.6 accept ``toolSpec.strict``. See #31582.
+_BEDROCK_CONVERSE_STRICT_REJECTED_OPUS_PATTERNS = (
+    "claude-opus-4-7",
+    "claude_opus_4_7",
+    "claude-opus-4.7",
+    "claude_opus_4.7",
+    "claude-opus-4-8",
+    "claude_opus_4_8",
+    "claude-opus-4.8",
+    "claude_opus_4.8",
+)
+
+
+def bedrock_converse_supports_strict_tools(model: str) -> bool:
+    """
+    Whether ``toolSpec.strict`` can be forwarded to Bedrock Converse for ``model``.
+
+    Returns ``True`` only for Anthropic models that are NOT in the
+    Opus 4.7/4.8 family — those route through a stricter validator on the
+    Bedrock side that rejects the ``strict`` key on ``toolSpec`` even though
+    Anthropic's native API accepts it as a top-level tool field.
+    """
+    base = get_bedrock_base_model(model)
+    if not base.startswith("anthropic"):
+        return False
+    base_lower = base.lower()
+    return not any(
+        p in base_lower for p in _BEDROCK_CONVERSE_STRICT_REJECTED_OPUS_PATTERNS
+    )
+
+
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
     """
     Normalize Anthropic ``output_config.effort`` values for Bedrock Opus ids.
