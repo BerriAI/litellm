@@ -1,3 +1,4 @@
+import { t } from "@/i18n";
 import { FilterIcon } from "@heroicons/react/outline";
 import { Button, Input, Select } from "antd";
 import debounce from "lodash/debounce";
@@ -36,7 +37,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
   onApplyFilters,
   onResetFilters,
   initialValues = {},
-  buttonLabel = "Filters",
+  buttonLabel = t("common.filters"),
 }) => {
   const [showFilters, setShowFilters] = useState<boolean>(false);
   const [tempValues, setTempValues] = useState<FilterValues>(initialValues);
@@ -139,7 +140,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
         >
           {buttonLabel}
         </Button>
-        <Button onClick={resetFilters}>Reset Filters</Button>
+        <Button onClick={resetFilters}>{t("common.reset_filters")}</Button>
       </div>
 
       {showFilters && (

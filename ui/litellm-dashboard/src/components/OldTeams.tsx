@@ -78,6 +78,7 @@ import { updateExistingKeys } from "@/utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { Member, teamCreateCall } from "./networking";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
+import { t } from "@/i18n";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -668,7 +669,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const teamColumns: ColumnsType<Team> = useMemo(
     () => [
       {
-        title: "Team ID",
+        title: t("teams.team_id"),
         dataIndex: "team_id",
         key: "team_id",
         width: 170,
@@ -972,8 +973,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
             resourceInformationTitle="Team Information"
             resourceInformation={[
-              { label: "Team ID", value: teamToDelete?.team_id, code: true },
-              { label: "Team Name", value: teamToDelete?.team_alias },
+              { label: t("teams.team_id"), value: teamToDelete?.team_id, code: true },
+              { label: t("teams.team_name"), value: teamToDelete?.team_alias },
               {
                 label: "Keys",
                 value: teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0,
@@ -1072,7 +1073,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
             <>
               <Form.Item
-                label="Team Name"
+                label={t("teams.team_name")}
                 name="team_alias"
                 rules={[
                   {
@@ -1237,7 +1238,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                 </AccordionHeader>
                 <AccordionBody>
                   <Form.Item
-                    label="Team ID"
+                    label={t("teams.team_id")}
                     name="team_id"
                     help="ID of the team you want to create. If not provided, it will be generated automatically."
                   >

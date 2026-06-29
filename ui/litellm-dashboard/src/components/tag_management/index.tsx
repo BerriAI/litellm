@@ -8,6 +8,7 @@ import { Tag } from "./types";
 import TagTable from "./TagTable";
 import NotificationsManager from "../molecules/notifications_manager";
 import CreateTagModal from "./components/CreateTagModal";
+import { t } from "@/i18n";
 
 interface ModelInfo {
   model_name: string;
@@ -131,7 +132,7 @@ const TagManagement: React.FC<TagProps> = ({ accessToken, userID, userRole }) =>
       ) : (
         <div className="gap-2 p-8 h-[75vh] w-full mt-2">
           <div className="flex justify-between mt-2 w-full items-center mb-4">
-            <h1>Tag Management</h1>
+            <h1>{t("models.title")}</h1>
             <div className="flex items-center space-x-2">
               {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
               <Icon

@@ -1,3 +1,7 @@
+"use client";
+
+import { t } from "@/i18n";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -78,27 +82,28 @@ interface MenuGroup {
 }
 
 // Menu groups organized by category - defined outside component for export
-const menuGroups: MenuGroup[] = [
+function getMenuGroups(t: (key: string) => string): MenuGroup[] {
+  const menuGroups: MenuGroup[] = [
   {
-    groupLabel: "AI GATEWAY",
+    groupLabel: t("nav.section_ai_gateway"),
     items: [
       {
         key: "api-keys",
         page: "api-keys",
-        label: "Virtual Keys",
+        label: t("nav.virtual_keys"),
         icon: <KeyOutlined />,
       },
       {
         key: "llm-playground",
         page: "llm-playground",
-        label: "Playground",
+        label: t("nav.playground"),
         icon: <PlayCircleOutlined />,
         roles: rolesWithWriteAccess,
       },
       {
         key: "models",
         page: "models",
-        label: "Models + Endpoints",
+        label: t("nav.models_endpoints"),
         icon: <BlockOutlined />,
         // Admin Viewer can view models read-only (write actions are
         // hidden inside the page); Playground above stays write-only.
@@ -107,13 +112,13 @@ const menuGroups: MenuGroup[] = [
       {
         key: "agentic",
         page: "agentic",
-        label: "Agentic",
+        label: t("nav.agentic"),
         icon: <RobotOutlined />,
         children: [
           {
             key: "agents",
             page: "agents",
-            label: "Agents",
+            label: t("nav.agents"),
             icon: <RobotOutlined />,
             // Admin Viewer can view agents read-only (write actions are
             // hidden inside the page); Playground above stays write-only.
@@ -122,13 +127,13 @@ const menuGroups: MenuGroup[] = [
           {
             key: "workflows",
             page: "workflows",
-            label: "Workflow Runs",
+            label: t("nav.workflow_runs"),
             icon: <ApartmentOutlined />,
           },
           {
             key: "memory",
             page: "memory",
-            label: "Memory",
+            label: t("nav.memory"),
             icon: <BookOutlined />,
           },
         ],
@@ -136,51 +141,51 @@ const menuGroups: MenuGroup[] = [
       {
         key: "mcp-servers",
         page: "mcp-servers",
-        label: "MCP Servers",
+        label: t("nav.mcp_servers"),
         icon: <ToolOutlined />,
       },
       {
         key: "skills",
         page: "skills",
-        label: "Skills",
+        label: t("nav.skills"),
         icon: <ApiOutlined />,
         roles: all_admin_roles,
       },
       {
         key: "guardrails",
         page: "guardrails",
-        label: "Guardrails",
+        label: t("nav.guardrails"),
         icon: <SafetyOutlined />,
       },
       {
         key: "policies",
         page: "policies",
-        label: <span className="flex items-center gap-4">Policies</span>,
+        label: t("nav.policies"),
         icon: <AuditOutlined />,
         roles: all_admin_roles,
       },
       {
         key: "tools",
         page: "tools",
-        label: "Tools",
+        label: t("nav.tools"),
         icon: <ToolOutlined />,
         children: [
           {
             key: "search-tools",
             page: "search-tools",
-            label: "Search Tools",
+            label: t("nav.search_tools"),
             icon: <SearchOutlined />,
           },
           {
             key: "vector-stores",
             page: "vector-stores",
-            label: "Vector Stores",
+            label: t("nav.vector_stores"),
             icon: <DatabaseOutlined />,
           },
           {
             key: "tool-policies",
             page: "tool-policies",
-            label: "Tool Policies",
+            label: t("nav.tool_policies"),
             icon: <SafetyOutlined />,
           },
         ],
@@ -188,37 +193,37 @@ const menuGroups: MenuGroup[] = [
     ],
   },
   {
-    groupLabel: "OBSERVABILITY",
+    groupLabel: t("nav.section_observability"),
     items: [
       {
         key: "new_usage",
         page: "new_usage",
         icon: <BarChartOutlined />,
         roles: [...all_admin_roles, ...internalUserRoles],
-        label: "Usage",
+        label: t("nav.usage"),
       },
       {
         key: "logs",
         page: "logs",
-        label: "Logs",
+        label: t("logs.title"),
         icon: <LineChartOutlined />,
       },
       {
         key: "guardrails-monitor",
         page: "guardrails-monitor",
-        label: "Guardrails Monitor",
+        label: t("nav.guardrails_monitor"),
         icon: <SafetyOutlined />,
         roles: [...all_admin_roles, ...internalUserRoles],
       },
     ],
   },
   {
-    groupLabel: "ACCESS CONTROL",
+    groupLabel: t("nav.section_access_control"),
     items: [
       {
         key: "teams",
         page: "teams",
-        label: "Teams",
+        label: t("nav.teams"),
         icon: <TeamOutlined />,
       },
       {
@@ -235,94 +240,94 @@ const menuGroups: MenuGroup[] = [
       {
         key: "users",
         page: "users",
-        label: "Internal Users",
+        label: t("nav.internal_users"),
         icon: <UserOutlined />,
         roles: all_admin_roles,
       },
       {
         key: "organizations",
         page: "organizations",
-        label: "Organizations",
+        label: t("nav.organizations"),
         icon: <BankOutlined />,
         roles: all_admin_roles,
       },
       {
         key: "access-groups",
         page: "access-groups",
-        label: "Access Groups",
+        label: t("nav.access_groups"),
         icon: <BlockOutlined />,
         roles: all_admin_roles,
       },
       {
         key: "budgets",
         page: "budgets",
-        label: "Budgets",
+        label: t("nav.budgets"),
         icon: <CreditCardOutlined />,
         roles: all_admin_roles,
       },
     ],
   },
   {
-    groupLabel: "DEVELOPER TOOLS",
+    groupLabel: t("nav.section_developer_tools"),
     items: [
       {
         key: "api_ref",
         page: "api_ref",
-        label: "API Reference",
+        label: t("nav.api_reference"),
         icon: <ApiOutlined />,
       },
       {
         key: "model-hub-table",
         page: "model-hub-table",
-        label: "AI Hub",
+        label: t("nav.ai_hub"),
         icon: <AppstoreOutlined />,
       },
 
       {
         key: "learning-resources",
         page: "learning-resources",
-        label: "Learning Resources",
+        label: t("nav.learning_resources"),
         icon: <BookOutlined />,
         external_url: "https://models.litellm.ai/cookbook",
       },
       {
         key: "experimental",
         page: "experimental",
-        label: "Experimental",
+        label: t("nav.experimental"),
         icon: <ExperimentOutlined />,
         children: [
           {
             key: "caching",
             page: "caching",
-            label: "Caching",
+            label: t("nav.caching"),
             icon: <DatabaseOutlined />,
             roles: all_admin_roles,
           },
           {
             key: "prompts",
             page: "prompts",
-            label: "Prompts",
+            label: t("nav.prompts"),
             icon: <FileTextOutlined />,
             roles: all_admin_roles,
           },
           {
             key: "transform-request",
             page: "transform-request",
-            label: "API Playground",
+            label: t("nav.playground"),
             icon: <ApiOutlined />,
             roles: [...all_admin_roles, ...internalUserRoles],
           },
           {
             key: "tag-management",
             page: "tag-management",
-            label: "Tag Management",
+            label: t("nav.tag_management"),
             icon: <TagsOutlined />,
             roles: all_admin_roles,
           },
           {
             key: "4",
             page: "usage",
-            label: "Old Usage",
+            label: t("nav.old_usage"),
             icon: <BarChartOutlined />,
           },
         ],
@@ -330,7 +335,7 @@ const menuGroups: MenuGroup[] = [
     ],
   },
   {
-    groupLabel: "SETTINGS",
+    groupLabel: t("nav.section_settings"),
     roles: all_admin_roles,
     items: [
       {
@@ -338,7 +343,7 @@ const menuGroups: MenuGroup[] = [
         page: "settings",
         label: (
           <span className="flex items-center gap-2">
-            Settings <NewBadge />
+            {t("nav.settings")} <NewBadge />
           </span>
         ),
         icon: <SettingOutlined />,
@@ -347,14 +352,14 @@ const menuGroups: MenuGroup[] = [
           {
             key: "router-settings",
             page: "router-settings",
-            label: "Router Settings",
+            label: t("nav.router_settings"),
             icon: <SettingOutlined />,
             roles: all_admin_roles,
           },
           {
             key: "logging-and-alerts",
             page: "logging-and-alerts",
-            label: "Logging & Alerts",
+            label: t("nav.logging_alerts"),
             icon: <SettingOutlined />,
             roles: all_admin_roles,
           },
@@ -375,14 +380,14 @@ const menuGroups: MenuGroup[] = [
           {
             key: "cost-tracking",
             page: "cost-tracking",
-            label: "Cost Tracking",
+            label: t("nav.cost_tracking"),
             icon: <BarChartOutlined />,
             roles: all_admin_roles,
           },
           {
             key: "ui-theme",
             page: "ui-theme",
-            label: "UI Theme",
+            label: t("nav.ui_theme"),
             icon: <BgColorsOutlined />,
             roles: all_admin_roles,
           },
@@ -390,7 +395,9 @@ const menuGroups: MenuGroup[] = [
       },
     ],
   },
-];
+  ];
+  return menuGroups;
+}
 
 const Sidebar: React.FC<SidebarProps> = ({
   setPage,
@@ -403,7 +410,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
+  const { t: contextT } = useLanguage();
   const { userId, accessToken, userRole } = useAuthorized();
+  const reactiveMenuGroups = useMemo(() => getMenuGroups(contextT), [contextT]);
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
 
@@ -537,7 +546,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   const buildMenuItems = (): MenuProps["items"] => {
     const items: MenuProps["items"] = [];
 
-    menuGroups.forEach((group) => {
+    reactiveMenuGroups.forEach((group) => {
       // Check if group has role restriction
       if (group.roles && !group.roles.includes(userRole)) {
         return;
@@ -598,7 +607,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
   // Find selected menu key
   const findMenuItemKey = (page: string): string => {
-    for (const group of menuGroups) {
+    for (const group of reactiveMenuGroups) {
       for (const item of group.items) {
         if (item.page === page) return item.key;
         if (item.children) {
@@ -667,4 +676,4 @@ const Sidebar: React.FC<SidebarProps> = ({
 export default Sidebar;
 
 // Also export menuGroups for advanced use cases
-export { menuGroups };
+export const menuGroups = getMenuGroups(t);

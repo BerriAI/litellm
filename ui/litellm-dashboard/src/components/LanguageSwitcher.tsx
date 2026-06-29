@@ -25,13 +25,3 @@ export function LanguageSwitcher() {
     </Button>
   );
 }
-
-/**
- * Wraps children in LanguageProvider.
- * This should be placed above ConfigProvider in the component tree.
- */
-export function LanguageProviderWrapper({ children }: { children: React.ReactNode }) {
-  return <LanguageProvider>{children}</LanguageProvider>;
-}
-
-export { LanguageProvider };

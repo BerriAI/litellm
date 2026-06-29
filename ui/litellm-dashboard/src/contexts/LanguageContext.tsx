@@ -30,25 +30,23 @@ const antdLocales: Record<Locale, any> = {
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
 
-  // Hydrate from localStorage on mount
   useEffect(() => {
     try {
       const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
       if (stored === "zh" || stored === "en") {
         setLocaleState(stored);
       }
-    } catch {
-      // localStorage not available
-    }
+    } catch {}
   }, []);
 
+  // Sync <html lang> with locale (screen-reader detection)
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
   const setLocale = useCallback((l: Locale) => {
+    try { localStorage.setItem(LOCALE_STORAGE_KEY, l); } catch {}
     setLocaleState(l);
-    try {
-      localStorage.setItem(LOCALE_STORAGE_KEY, l);
-    } catch {
-      // ignore
-    }
   }, []);
 
   const t = useCallback((key: string) => translate(key, locale), [locale]);

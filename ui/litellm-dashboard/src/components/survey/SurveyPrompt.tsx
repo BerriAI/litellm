@@ -1,4 +1,5 @@
 import React from "react";
+import { t } from "@/i18n";
 import { MessageSquare } from "lucide-react";
 import { NudgePrompt } from "./NudgePrompt";
 
@@ -14,7 +15,7 @@ export function SurveyPrompt({ onOpen, onDismiss, isVisible }: SurveyPromptProps
       onOpen={onOpen}
       onDismiss={onDismiss}
       isVisible={isVisible}
-      title="Quick feedback"
+      title={t("common.quick_feedback")}
       description="Help us improve LiteLLM! Share your experience in 5 quick questions."
       buttonText="Share feedback"
       icon={MessageSquare}

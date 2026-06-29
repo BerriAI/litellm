@@ -1,6 +1,7 @@
 import { DeleteOutlined } from "@ant-design/icons";
 import { Button, Select, Table, Typography } from "antd";
 import React from "react";
+import { t } from "@/i18n";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -21,12 +22,12 @@ interface KeywordTableProps {
 const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, onRemove }) => {
   const columns = [
     {
-      title: "Keyword",
+      title: t("keys.key"),
       dataIndex: "keyword",
       key: "keyword",
     },
     {
-      title: "Action",
+      title: t("common.actions"),
       dataIndex: "action",
       key: "action",
       width: 150,
@@ -43,7 +44,7 @@ const KeywordTable: React.FC<KeywordTableProps> = ({ keywords, onActionChange, o
       ),
     },
     {
-      title: "Description",
+      title: t("models.base_model"),
       dataIndex: "description",
       key: "description",
       render: (desc: string) => desc || "-",

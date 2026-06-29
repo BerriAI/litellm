@@ -8,6 +8,7 @@ import { uiAuditLogsCall } from "../networking";
 import { AuditLogEntry } from "./columns";
 import { AuditLogDrawer } from "./AuditLogDrawer/AuditLogDrawer";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
+import { t } from "@/i18n";
 
 const { Search } = Input;
 
@@ -90,7 +91,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
 
   const columns: ColumnsType<AuditLogEntry> = [
     {
-      title: "Timestamp",
+      title: t("logs.timestamp"),
       dataIndex: "updated_at",
       key: "updated_at",
       width: 200,
@@ -101,7 +102,7 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       ),
     },
     {
-      title: "Action",
+      title: t("common.actions"),
       dataIndex: "action",
       key: "action",
       width: 100,
@@ -112,27 +113,27 @@ export default function AuditLogs({ userID, userRole, token, accessToken, isActi
       ),
     },
     {
-      title: "Table",
+      title: t("common.models"),
       dataIndex: "table_name",
       key: "table_name",
       width: 130,
       render: (val: string) => TABLE_NAME_DISPLAY[val] ?? val,
     },
     {
-      title: "Object ID",
+      title: t("users.user_id"),
       dataIndex: "object_id",
       key: "object_id",
       render: (val: string) => <span className="font-mono text-xs">{val}</span>,
     },
     {
-      title: "Changed By",
+      title: t("common.created_by"),
       dataIndex: "changed_by",
       key: "changed_by",
       width: 200,
       render: (val: string) => <DefaultProxyAdminTag userId={val} />,
     },
     {
-      title: "API Key (Hash)",
+      title: t("keys.key"),
       dataIndex: "changed_by_api_key",
       key: "changed_by_api_key",
       width: 140,

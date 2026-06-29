@@ -5,6 +5,7 @@ import { Flex, Table, Tabs, Tag, Tooltip, Typography, Button } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { BranchesOutlined, DeleteOutlined, EditOutlined, CodeOutlined } from "@ant-design/icons";
 import type { RoutingGroup } from "./types";
+import { t } from "@/i18n";
 
 const { Text, Paragraph } = Typography;
 
@@ -135,7 +136,7 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({ groups, loading
 
   const columns: ColumnsType<RoutingGroup> = [
     {
-      title: "GROUP NAME",
+      title: t("teams.team_name"),
       dataIndex: "group_name",
       key: "group_name",
       render: (name: string) => (
@@ -145,7 +146,7 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({ groups, loading
       ),
     },
     {
-      title: "MODELS",
+      title: t("common.models"),
       dataIndex: "models",
       key: "models",
       render: (models: string[]) => (
@@ -157,7 +158,7 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({ groups, loading
       ),
     },
     {
-      title: "STRATEGY",
+      title: t("common.status"),
       dataIndex: "routing_strategy",
       key: "routing_strategy",
       render: (strategy: string) => (
@@ -168,7 +169,7 @@ const RoutingGroupsTable: React.FC<RoutingGroupsTableProps> = ({ groups, loading
       ),
     },
     {
-      title: "ACTIONS",
+      title: t("common.actions"),
       key: "actions",
       width: 120,
       align: "right",

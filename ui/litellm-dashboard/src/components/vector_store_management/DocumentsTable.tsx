@@ -3,6 +3,7 @@ import { Table, Badge, Tooltip } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { EyeOutlined, CopyOutlined, DeleteOutlined } from "@ant-design/icons";
 import { DocumentUpload } from "./types";
+import { t } from "@/i18n";
 
 interface DocumentsTableProps {
   documents: DocumentUpload[];
@@ -36,7 +37,7 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
 
   const columns = [
     {
-      title: "Name",
+      title: t("keys.key_name"),
       dataIndex: "name",
       key: "name",
       render: (name: string, record: DocumentUpload) => (
@@ -47,14 +48,14 @@ const DocumentsTable: React.FC<DocumentsTableProps> = ({ documents, onRemove }) 
       ),
     },
     {
-      title: "Status",
+      title: t("common.status"),
       dataIndex: "status",
       key: "status",
       width: 150,
       render: (status: DocumentUpload["status"]) => getStatusBadge(status),
     },
     {
-      title: "Actions",
+      title: t("common.actions"),
       key: "actions",
       width: 120,
       render: (_: any, record: DocumentUpload) => (

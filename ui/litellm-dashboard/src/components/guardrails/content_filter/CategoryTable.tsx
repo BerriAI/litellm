@@ -1,6 +1,7 @@
 import React from "react";
 import { Typography, Select, Table, Tag, Button } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
+import { t } from "@/i18n";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -30,7 +31,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
 }) => {
   const columns = [
     {
-      title: "Category",
+      title: t("common.models"),
       dataIndex: "display_name",
       key: "display_name",
       render: (displayName: string, record: ContentCategory) => (
@@ -47,7 +48,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       ),
     },
     {
-      title: "Severity Threshold",
+      title: t("common.status"),
       dataIndex: "severity_threshold",
       key: "severity_threshold",
       width: 180,
@@ -75,7 +76,7 @@ const CategoryTable: React.FC<CategoryTableProps> = ({
       },
     },
     {
-      title: "Action",
+      title: t("common.actions"),
       dataIndex: "action",
       key: "action",
       width: 150,

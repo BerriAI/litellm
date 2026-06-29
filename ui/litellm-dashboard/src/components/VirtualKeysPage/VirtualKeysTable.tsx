@@ -36,6 +36,7 @@ import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
+import { t } from "@/i18n";
 
 interface VirtualKeysTableProps {
   teams: Team[] | null;
@@ -156,7 +157,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "token",
         accessorKey: "token",
-        header: "Key ID",
+        header: t("keys.key_id"),
         size: 100,
         enableSorting: true,
         cell: (info) => {
@@ -180,7 +181,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "key_alias",
         accessorKey: "key_alias",
-        header: "Key Alias",
+        header: t("keys.key_alias"),
         size: 150,
         enableSorting: true,
         cell: (info) => {
@@ -195,7 +196,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       },
       {
         id: "status",
-        header: "Status",
+        header: t("common.status"),
         size: 100,
         enableSorting: false,
         cell: ({ row }) => {
@@ -223,7 +224,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "key_name",
         accessorKey: "key_name",
-        header: "Secret Key",
+        header: t("keys.secret_key"),
         size: 120,
         enableSorting: false,
         cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
@@ -231,7 +232,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "team_alias",
         accessorKey: "team_id",
-        header: "Team",
+        header: t("common.team"),
         size: 120,
         enableSorting: false,
         cell: (info) => {
@@ -250,7 +251,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "organization_alias",
         accessorKey: "org_id",
-        header: "Organization",
+        header: t("keys.organization"),
         size: 140,
         enableSorting: false,
         cell: (info) => {
@@ -271,7 +272,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         accessorKey: "user",
         header: () => (
           <span className="flex items-center gap-1">
-            User
+            {t("keys.user")}
             <Popover content="Displays the first available value: User Alias, User Email, or User ID." trigger="hover">
               <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
             </Popover>
@@ -334,7 +335,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "created_at",
         accessorKey: "created_at",
-        header: "Created At",
+        header: t("keys.created_at"),
         size: 120,
         enableSorting: true,
         cell: (info) => {
@@ -345,7 +346,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "created_by",
         accessorKey: "created_by",
-        header: "Created By",
+        header: t("common.created_by"),
         size: 160,
         enableSorting: false,
         cell: (info) => {
@@ -405,7 +406,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "updated_at",
         accessorKey: "updated_at",
-        header: "Updated At",
+        header: t("common.updated_at"),
         size: 120,
         enableSorting: true,
         cell: (info) => {
@@ -418,7 +419,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         accessorKey: "last_active",
         header: () => (
           <span className="flex items-center gap-1">
-            Last Active
+            {t("keys.last_active")}
             <Popover
               content="This is a new field and is not backfilled. Only new key usage will update this value."
               trigger="hover"
@@ -443,7 +444,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "expires",
         accessorKey: "expires",
-        header: "Expires",
+        header: t("keys.expires_at"),
         size: 120,
         enableSorting: false,
         cell: (info) => {
@@ -454,7 +455,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "spend",
         accessorKey: "spend",
-        header: "Spend (USD)",
+        header: t("common.spend"),
         size: 100,
         enableSorting: true,
         cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
@@ -462,7 +463,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "max_budget",
         accessorKey: "max_budget",
-        header: "Budget (USD)",
+        header: t("keys.max_budget"),
         size: 110,
         enableSorting: true,
         cell: (info) => {
@@ -476,7 +477,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "budget_reset_at",
         accessorKey: "budget_reset_at",
-        header: "Budget Reset",
+        header: t("keys.budget_duration"),
         size: 130,
         enableSorting: false,
         cell: (info) => {
@@ -487,7 +488,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       {
         id: "models",
         accessorKey: "models",
-        header: "Models",
+        header: t("common.models"),
         size: 200,
         enableSorting: false,
         cell: (info) => {
@@ -572,7 +573,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
       },
       {
         id: "rate_limits",
-        header: "Rate Limits",
+        header: t("keys.max_parallel_requests"),
         size: 140,
         enableSorting: false,
         cell: ({ row }) => {
@@ -736,9 +737,9 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                 icon={<SyncOutlined spin={isButtonLoading} />}
                 onClick={handleRefresh}
                 disabled={isButtonLoading}
-                title="Fetch data"
+                title={t("keys.fetch_data")}
               >
-                {isButtonLoading ? "Fetching" : "Fetch"}
+                {isButtonLoading ? t("keys.fetching") : t("keys.fetch")}
               </AntButton>
             </div>
 
@@ -885,7 +886,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
                           <div className="text-center text-gray-500">
-                            <p>No keys found</p>
+                            <p>{t("keys.no_keys_found")}</p>
                           </div>
                         </TableCell>
                       </TableRow>

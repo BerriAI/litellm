@@ -4,6 +4,7 @@ import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React from "react";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
+import { t } from "@/i18n";
 
 const { Text } = Typography;
 
@@ -34,13 +35,13 @@ export default function MemberTable({
 }: MemberTableProps) {
   const baseColumns: ColumnsType<Member> = [
     {
-      title: "User Email",
+      title: t("users.user_email"),
       dataIndex: "user_email",
       key: "user_email",
       render: (email: string | null) => <Text>{email || "-"}</Text>,
     },
     {
-      title: "User ID",
+      title: t("users.user_id"),
       dataIndex: "user_id",
       key: "user_id",
       render: (userId: string | null) =>
@@ -72,7 +73,7 @@ export default function MemberTable({
     },
     ...extraColumns,
     {
-      title: "Actions",
+      title: t("common.actions"),
       key: "actions",
       fixed: "right" as const,
       width: 120,

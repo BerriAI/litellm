@@ -28,6 +28,7 @@ import NotificationsManager from "../../../components/molecules/notifications_ma
 import PassThroughSettings from "../../../components/pass_through_settings";
 import TeamInfoView from "../../../components/team/TeamInfo";
 import useAuthorized from "../hooks/useAuthorized";
+import { t } from "@/i18n";
 
 interface ModelDashboardProps {
   token: string | null;

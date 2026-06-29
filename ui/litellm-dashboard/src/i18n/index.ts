@@ -10,15 +10,28 @@ import en from "./locales/en.json";
 import zh from "./locales/zh.json";
 
 export type Locale = "en" | "zh";
-export type TranslationMap = Record<string, Record<string, string>>;
+/** Supports arbitrarily nested JSON, not just flat two-level maps */
+export type TranslationMap = Record<string, any>;
 
 const translations: Record<Locale, TranslationMap> = { en, zh };
 
 /**
  * Resolve a dotted key like "nav.dashboard" against the current locale.
  */
-export function t(key: string, locale: Locale = "en"): string {
-  const map = translations[locale] || translations.en;
+export function t(key: string, locale?: Locale): string {
+  let resolvedLocale: Locale;
+  if (locale) {
+    resolvedLocale = locale;
+  } else {
+    try {
+      const stored = localStorage.getItem(LOCALE_STORAGE_KEY);
+      resolvedLocale = (stored === "zh" || stored === "en") ? stored as Locale : DEFAULT_LOCALE;
+    } catch {
+      resolvedLocale = DEFAULT_LOCALE;
+    }
+  }
+
+  const map = translations[resolvedLocale] || translations.en;
   const parts = key.split(".");
   let current: any = map;
   for (const part of parts) {
@@ -35,20 +48,14 @@ export function t(key: string, locale: Locale = "en"): string {
   }
   if (typeof fallback === "string") return fallback;
 
-  // Ultimate fallback: return the key itself
   return key;
 }
 
-/** All supported locales (used by the switcher) */
 export const SUPPORTED_LOCALES: { value: Locale; label: string }[] = [
   { value: "en", label: "English" },
   { value: "zh", label: "中文" },
 ];
 
-/** LocalStorage key */
 export const LOCALE_STORAGE_KEY = "litellm_locale";
-
-/** Default locale */
-export const DEFAULT_LOCALE: Locale = "en";
-
+export const DEFAULT_LOCALE: Locale = "zh";
 export { translations };
