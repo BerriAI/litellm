@@ -126,3 +126,5 @@ crash.*.log
 
 # pytest coverage data
 .coverage
+proxy_config.yaml.bak.*
+snapshots/
