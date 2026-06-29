@@ -1133,20 +1133,6 @@
       "count": 1
     }
   },
-  "src/components/key_team_helpers/filter_logic.tsx": {
-    "react-hooks/purity": {
-      "count": 1
-    },
-    "react-hooks/refs": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    },
-    "react-hooks/use-memo": {
-      "count": 1
-    }
-  },
   "src/components/key_team_helpers/key_list.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1

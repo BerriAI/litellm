@@ -4,8 +4,7 @@ import ApiKeysDashboard from "@/app/(dashboard)/api-keys/ApiKeysDashboard";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { Organization, proxyBaseUrl } from "@/components/networking";
-import { fetchOrganizations } from "@/components/organizations";
+import { proxyBaseUrl } from "@/components/networking";
 import UserDashboard from "@/components/user_dashboard";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -25,7 +24,6 @@ function CreateKeyPageContent() {
 
   const [teams, setTeams] = useState<Team[] | null>(null);
   const [keys, setKeys] = useState<null | any[]>([]);
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
 
   const router = useRouter();
   const searchParams = useSearchParams()!;
@@ -112,9 +110,6 @@ function CreateKeyPageContent() {
         .then((response) => setTeams(response.teams ?? []))
         .catch(console.error);
     }
-    if (accessToken) {
-      fetchOrganizations(accessToken, setOrganizations);
-    }
   }, [accessToken, userID, userRole]);
 
   if (authLoading || redirectToLogin || isLegacyRedirect) {
@@ -135,7 +130,6 @@ function CreateKeyPageContent() {
           setUserEmail={setUserEmail}
           setTeams={setTeams}
           setKeys={setKeys}
-          organizations={organizations}
           addKey={addKey}
           createClicked={createClicked}
         />

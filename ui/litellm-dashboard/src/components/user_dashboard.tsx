@@ -45,7 +45,6 @@ interface UserDashboardProps {
   setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   setKeys: (keys: KeyResponse[]) => void;
   premiumUser: boolean;
-  organizations: Organization[] | null;
   addKey: (data: any) => void;
   createClicked: boolean;
   autoOpenCreate?: boolean;
@@ -69,7 +68,6 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   setTeams,
   setKeys,
   premiumUser,
-  organizations,
   addKey,
   createClicked,
   autoOpenCreate,
@@ -338,7 +336,7 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
               prefillData={prefillData}
             />
           )}
-          <VirtualKeysTable teams={teams} organizations={organizations} />
+          <VirtualKeysTable />
         </Col>
       </Grid>
     </div>
