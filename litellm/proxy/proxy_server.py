@@ -436,6 +436,12 @@ from litellm.proxy.plugin_routes import (
     router as plugin_router,
     register_plugins_from_config,
 )
+from litellm.proxy.enterprise_billing.billing_metrics import (
+    build_billing_metrics_recorder,
+)
+from litellm.proxy.middleware.billable_request_metrics_middleware import (
+    BillableRequestMetricsMiddleware,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -1805,6 +1811,14 @@ app.add_middleware(
 app.add_middleware(PrometheusAuthMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(
+    BillableRequestMetricsMiddleware,
+    recorder=build_billing_metrics_recorder(
+        premium=premium_user,
+        license_data=premium_user_data,
+        litellm_version=version,
+    ),
+)
 
 
 def mount_swagger_ui():
