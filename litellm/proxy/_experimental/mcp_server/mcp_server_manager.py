@@ -1992,16 +1992,25 @@ class MCPServerManager:
                 match await provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
                     case Ok(auth):
                         resolved_auth = auth
-                        # Do not override an Authorization already supplied via extra_headers
-                        # (a guardrail hook such as the JWT signer, static_headers, or a
-                        # forwarded caller header): v1 applies those last, so they win. NoOpAuth
-                        # has no header_name and so never skips.
+                        # NoOpAuth has no header_name and so never conflicts.
                         header_name = getattr(resolved_auth, "header_name", None)
-                        if (
+                        conflicts = bool(
                             header_name
                             and extra_headers
                             and any(key.lower() == header_name.lower() for key in extra_headers)
-                        ):
+                        )
+                        if conflicts and isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig)):
+                            # The resolver owns the per-user credential here (token_exchange's
+                            # exchanged token, authorization_code's stored token). It is
+                            # authoritative: a guardrail such as MCPJWTSigner, static_headers, or any
+                            # other injected Authorization must NOT shadow it (otherwise the upstream
+                            # gets e.g. the signer's JWT instead of the exchanged token and rejects
+                            # it). Drop the conflicting header so the resolved token reaches upstream.
+                            extra_headers = _without_authorization(extra_headers)
+                        elif conflicts:
+                            # Other modes: an Authorization already supplied via extra_headers (a
+                            # forwarded caller header or static_headers) is intentional and wins; v1
+                            # applies those last.
                             resolved_auth = None
                     case Error(err):
                         if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):

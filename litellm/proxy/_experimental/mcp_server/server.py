@@ -2693,12 +2693,18 @@ if MCP_AVAILABLE:
 
             # Forward named client headers to OpenAPI tool upstream requests.
             # MCPServer.extra_headers lists header names to copy from raw_headers.
-            # OAuth2 M2M: never take Authorization from the caller (matches
-            # _prepare_mcp_server_headers for managed MCP).
+            # The strip decision is centralized in _should_strip_caller_authorization so this
+            # OpenAPI/local path agrees with the managed paths: M2M and the resolver-owned modes
+            # (token_exchange's raw subject token, authorization_code's stored token) must never
+            # have the caller's Authorization forwarded verbatim upstream.
             forwarded_headers: Optional[Dict[str, str]] = None
             if mcp_server and mcp_server.extra_headers and raw_headers:
                 normalized_raw = {str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)}
-                skip_caller_authorization = bool(mcp_server.has_client_credentials)
+                skip_caller_authorization = _should_strip_caller_authorization(
+                    mcp_server=mcp_server,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
                 for header_name in mcp_server.extra_headers:
                     if not isinstance(header_name, str):
                         continue

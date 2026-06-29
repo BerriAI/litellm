@@ -783,6 +783,33 @@ class TestMCPServerManager:
         assert client is not None
 
     @pytest.mark.asyncio
+    async def test_injected_authorization_does_not_shadow_obo_minted_token(self):
+        """A guardrail/static Authorization (e.g. MCPJWTSigner) must NOT shadow the exchanged OBO
+        token. The resolver-owned credential is authoritative: the conflicting header is dropped and
+        the minted token is what reaches the upstream, not the injected JWT."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-shadow")
+
+        client = await manager._create_mcp_client(
+            server,
+            extra_headers={"Authorization": "Bearer signer-jwt"},  # simulate the JWT signer
+            subject_token="subj-jwt",
+        )
+
+        # minted token wins (resolved_auth kept), signer's header dropped from extra_headers
+        assert client._resolved_auth is not None
+        assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
+
+    @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
     ):
