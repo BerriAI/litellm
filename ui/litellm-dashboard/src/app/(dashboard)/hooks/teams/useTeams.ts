@@ -111,7 +111,9 @@ const fetchAllTeamsPaged = async (accessToken: string): Promise<Team[]> => {
 export const useAllTeams = (): UseQueryResult<Team[]> => {
   const { accessToken } = useAuthorized();
   return useQuery<Team[]>({
-    queryKey: teamKeys.list({ filters: { scope: "all", pageSize: ALL_TEAMS_PAGE_SIZE } }),
+    queryKey: teamKeys.list({
+      filters: { scope: "all", pageSize: ALL_TEAMS_PAGE_SIZE, accessToken: accessToken ?? "" },
+    }),
     queryFn: async () => await fetchAllTeamsPaged(accessToken!),
     enabled: Boolean(accessToken),
     staleTime: 30000,

@@ -873,4 +873,26 @@ describe("useAllTeams", () => {
     expect(result.current.isFetched).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("scopes the cache per access token so a switch of identity refetches", async () => {
+    fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
+
+    const { result, rerender } = renderHook(() => useAllTeams(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "a-different-users-token",
+      userId: "other-user-id",
+      userRole: "Admin",
+      token: "a-different-users-token",
+      userEmail: "other@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+    rerender();
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
 });
