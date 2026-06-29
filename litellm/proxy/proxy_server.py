@@ -3985,7 +3985,10 @@ class ProxyConfig:
 
             if not strict_config_validation:
                 import os
-                strict_config_validation = os.getenv("LITELLM_STRICT_CONFIG_VALIDATION", "False").lower() in ["true", "1", "yes"]
+
+                strict_config_validation = os.getenv(
+                    "LITELLM_STRICT_CONFIG_VALIDATION", "False"
+                ).lower() in ["true", "1", "yes"]
 
             valid_root_keys = {
                 "model_list",
@@ -4012,7 +4015,7 @@ class ProxyConfig:
                 "credential_list",
                 "include",
             }
-            
+
             common_typos = {
                 "general_setting": "general_settings",
                 "model_detail": "model_list",
@@ -4027,17 +4030,20 @@ class ProxyConfig:
                     if not suggestion:
                         try:
                             import difflib
-                            matches = difflib.get_close_matches(key, valid_root_keys, n=1, cutoff=0.7)
+
+                            matches = difflib.get_close_matches(
+                                key, valid_root_keys, n=1, cutoff=0.7
+                            )
                             if matches:
                                 suggestion = matches[0]
                         except ImportError:
                             pass
-                    
+
                     if suggestion:
                         warning_msg = f"Configuration Error: Invalid root-level key '{key}'. Did you mean '{suggestion}'? Please correct your config.yaml."
                     else:
                         warning_msg = f"Configuration Error: Unrecognized root-level key '{key}' in config.yaml."
-                    
+
                     if strict_config_validation:
                         raise ValueError(warning_msg)
                     else:
