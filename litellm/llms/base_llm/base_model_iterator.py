@@ -111,7 +111,7 @@ class BaseModelResponseIterator:
     def _handle_string_chunk(self, str_line: str) -> Union[GenericStreamingChunk, ModelResponseStream]:
         # chunk is a str at this point
         stripped_json_chunk = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
-        if "[DONE]" in str_line:
+        if str_line.strip() in ("data: [DONE]", "[DONE]", "data:  [DONE]"):
             return GenericStreamingChunk(
                 text="",
                 is_finished=True,
