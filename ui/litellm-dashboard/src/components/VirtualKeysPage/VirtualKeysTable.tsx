@@ -760,7 +760,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                   disabled={isLoading || !table.getCanPreviousPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Previous
+                  {t("common.previous")}
                 </button>
               )}
 
@@ -772,7 +772,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                   disabled={isLoading || !table.getCanNextPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Next
+                  {t("common.next")}
                 </button>
               )}
             </div>
