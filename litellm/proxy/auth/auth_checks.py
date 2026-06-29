@@ -661,12 +661,8 @@ async def common_checks(
             )
 
         # 4. If user is in budget
-        ## 4.1 check personal budget, if personal key
-        if (
-            (team_object is None or team_object.team_id is None)
-            and user_object is not None
-            and user_object.max_budget is not None
-        ):
+        ## 4.1 check user budget
+        if user_object is not None and user_object.max_budget is not None:
             user_budget = user_object.max_budget
             from litellm.proxy.proxy_server import get_current_spend
 
