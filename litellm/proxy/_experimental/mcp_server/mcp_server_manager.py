@@ -13,7 +13,8 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import anyio
@@ -550,6 +551,11 @@ class MCPServerManager:
         ]
         """
 
+        # Per-server outbound tool-call concurrency limiters, lazily created from
+        # each server's max_concurrent_requests. Keyed by server_id so the cap
+        # survives the registry atomic-swap on config reload; a missing key means
+        # the server has no configured limit.
+        self._server_call_semaphores: Dict[str, asyncio.Semaphore] = {}
         self.tool_name_to_mcp_server_name_mapping: Dict[str, str] = {}
         """
         {
@@ -789,6 +795,7 @@ class MCPServerManager:
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
+                max_concurrent_requests=server_config.get("max_concurrent_requests", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -1160,6 +1167,7 @@ class MCPServerManager:
             subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
             or "urn:ietf:params:oauth:token-type:access_token",
             timeout=getattr(mcp_server, "timeout", None),
+            max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
         return new_server
@@ -3140,6 +3148,25 @@ class MCPServerManager:
             )
         )
 
+    def _get_call_semaphore(self, mcp_server: MCPServer) -> Optional[asyncio.Semaphore]:
+        limit = mcp_server.max_concurrent_requests
+        if limit is None or limit <= 0:
+            return None
+        semaphore = self._server_call_semaphores.get(mcp_server.server_id)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(limit)
+            self._server_call_semaphores[mcp_server.server_id] = semaphore
+        return semaphore
+
+    @asynccontextmanager
+    async def _limit_outbound_concurrency(self, mcp_server: MCPServer) -> AsyncIterator[None]:
+        semaphore = self._get_call_semaphore(mcp_server)
+        if semaphore is None:
+            yield
+            return
+        async with semaphore:
+            yield
+
     async def _call_regular_mcp_tool(
         self,
         mcp_server: MCPServer,
@@ -3299,7 +3326,8 @@ class MCPServerManager:
         )
 
         async def _call_tool_via_client(client, params):
-            return await client.call_tool(params, host_progress_callback=host_progress_callback)
+            async with self._limit_outbound_concurrency(mcp_server):
+                return await client.call_tool(params, host_progress_callback=host_progress_callback)
 
         tasks.append(asyncio.create_task(_call_tool_via_client(client, call_tool_params)))
 
@@ -3521,7 +3549,12 @@ class MCPServerManager:
                     "transport to enable hook header injection.",
                     server_name,
                 )
-            tasks.append(asyncio.create_task(self._call_openapi_tool_handler(mcp_server, name, arguments)))
+
+            async def _call_openapi_via_handler():
+                async with self._limit_outbound_concurrency(mcp_server):
+                    return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+
+            tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
             return await self._call_regular_mcp_tool(
                 mcp_server=mcp_server,
@@ -4078,6 +4111,7 @@ class MCPServerManager:
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
+            max_concurrent_requests=server.max_concurrent_requests,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -4185,6 +4219,7 @@ class MCPServerManager:
             source_url=server.source_url,
             instructions=server.instructions,
             timeout=server.timeout,
+            max_concurrent_requests=server.max_concurrent_requests,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:
