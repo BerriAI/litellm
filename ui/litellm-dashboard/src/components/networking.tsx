@@ -298,7 +298,10 @@ export const handleError = async (errorData: string | any) => {
       clearTokenCookies();
       const browserLocation = getWindowLocation();
       if (browserLocation) {
-        window.location.href = browserLocation.pathname;
+        const pathname = browserLocation.pathname;
+        if (pathname.startsWith("/") && !pathname.startsWith("//")) {
+          window.location.href = pathname;
+        }
       }
     }
     lastErrorTime = currentTime;

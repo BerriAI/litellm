@@ -107,6 +107,8 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [topAgentsLimit, setTopAgentsLimit] = useState<number>(5);
 
+  const safeHref = /^https?:\/\//.test(window.location.href) ? window.location.href : "/";
+
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
 
@@ -417,7 +419,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                 Currently fetching spend data: fetched {progress.currentPage} / {progress.totalPages} pages. Charts will
                 update periodically as data loads. Moving off of this page will stop and reset this. To continue using
                 the UI in the meantime,{" "}
-                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                <a href={safeHref} target="_blank" rel="noopener noreferrer">
                   open a new tab <ExportOutlined />
                 </a>
                 .
@@ -453,7 +455,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                 Currently fetching agent data: fetched {agentProgress.currentPage} / {agentProgress.totalPages} pages.
                 Charts will update periodically as data loads. Moving off of this page will stop and reset this. To
                 continue using the UI in the meantime,{" "}
-                <a href={window.location.href} target="_blank" rel="noopener noreferrer">
+                <a href={safeHref} target="_blank" rel="noopener noreferrer">
                   open a new tab <ExportOutlined />
                 </a>
                 .

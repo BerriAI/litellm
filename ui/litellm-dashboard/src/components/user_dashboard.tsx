@@ -263,7 +263,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
 
     console.log("proxyBaseUrl:", baseUrl);
 
-    const url = baseUrl ? `${baseUrl}/sso/key/generate` : `/sso/key/generate`;
+    const safeBase = baseUrl && /^https?:\/\//.test(baseUrl) ? baseUrl : "";
+    const url = safeBase ? `${safeBase}/sso/key/generate` : `/sso/key/generate`;
 
     console.log("Full URL:", url);
     window.location.href = url;

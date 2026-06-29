@@ -7,7 +7,9 @@ export const useBaseUrl = () => {
   useEffect(() => {
     if (typeof window !== "undefined") {
       const { protocol, host } = window.location;
-      setBaseUrl(`${protocol}//${host}`);
+      if (protocol === "http:" || protocol === "https:") {
+        setBaseUrl(`${protocol}//${host}`);
+      }
     }
   }, []); // Removed router dependency
 
