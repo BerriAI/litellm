@@ -2429,19 +2429,6 @@ def _is_explicitly_disabled_factory(model: str, custom_llm_provider: Optional[st
                 bare_entry = litellm.model_cost.get(bare_model_key) or {}
                 if bare_entry.get(key) is False:
                     return True
-        # GH#31243: when model is a custom deployment name (e.g.
-        # azure/gpt-5.1_2025-11-13_global) that is not a registry key,
-        # try the configured base_model as a fallback.
-        if base_model is not None and base_model != model:
-            try:
-                _m, _p, _, _ = litellm.get_llm_provider(
-                    model=base_model, custom_llm_provider=custom_llm_provider
-                )
-                _info = _get_model_info_helper(model=_m, custom_llm_provider=_p)
-                if _info.get(key, False) is True:
-                    return True
-            except Exception:
-                pass
 
         return False
     except Exception as e:
