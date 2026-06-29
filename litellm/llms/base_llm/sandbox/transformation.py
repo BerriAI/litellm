@@ -48,9 +48,7 @@ class BaseSandboxConfig:
     """Provider-agnostic sandbox operations."""
 
     def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
-        raise NotImplementedError(
-            "validate_environment must be implemented by provider"
-        )
+        raise NotImplementedError("validate_environment must be implemented by provider")
 
     async def acreate_sandbox(
         self,
@@ -89,8 +87,7 @@ class BaseSandboxConfig:
             total += len(line.encode("utf-8"))
             if total > SANDBOX_MAX_OUTPUT_BYTES:
                 raise ValueError(
-                    f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting "
-                    "to avoid unbounded memory use."
+                    f"Sandbox output exceeded {SANDBOX_MAX_OUTPUT_BYTES} bytes; aborting to avoid unbounded memory use."
                 )
             lines.append(line)
         return lines
