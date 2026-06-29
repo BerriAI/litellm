@@ -1914,8 +1914,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     def _check_finish_reason(
         chat_completion_message: Optional[ChatCompletionResponseMessage],
         finish_reason: Optional[str],
-    ) -> OpenAIChatCompletionFinishReason:
+        is_streaming: bool = False,
+    ) -> Optional[OpenAIChatCompletionFinishReason]:
         from litellm.litellm_core_utils.core_helpers import map_finish_reason
+
+        if is_streaming and not finish_reason:
+            return None
 
         if chat_completion_message and chat_completion_message.get("function_call"):
             return "function_call"
@@ -2005,7 +2009,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # create a streaming choice object
         choice = StreamingChoices(
             finish_reason=VertexGeminiConfig._check_finish_reason(
-                chat_completion_message, candidate.get("finishReason")
+                chat_completion_message, candidate.get("finishReason"), is_streaming=True
             ),
             index=candidate.get("index", idx),
             delta=Delta(
@@ -3167,7 +3171,9 @@ class ModelResponseIterator:
                     if self.has_seen_tool_calls:
                         mapped_finish_reason = "tool_calls"
                     else:
-                        mapped_finish_reason = VertexGeminiConfig._check_finish_reason(None, finish_reason_str)
+                        mapped_finish_reason = VertexGeminiConfig._check_finish_reason(
+                            None, finish_reason_str, is_streaming=True
+                        )
                 choice = StreamingChoices(
                     finish_reason=mapped_finish_reason,
                     index=candidate.get("index", 0),
