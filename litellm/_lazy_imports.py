@@ -17,39 +17,39 @@ until they're actually needed.
 
 import importlib
 import sys
-from typing import Any, Optional, cast, Callable
+from typing import Any, Callable, Optional, cast
 
 # Import all the data structures that define what can be lazy-loaded
 # These are just lists of names and maps of where to find them
 from ._lazy_imports_registry import (
-    # Name tuples
-    COST_CALCULATOR_NAMES,
-    LITELLM_LOGGING_NAMES,
-    UTILS_NAMES,
-    TOKEN_COUNTER_NAMES,
-    LLM_CLIENT_CACHE_NAMES,
-    BEDROCK_TYPES_NAMES,
-    TYPES_UTILS_NAMES,
-    CACHING_NAMES,
-    HTTP_HANDLER_NAMES,
-    DOTPROMPT_NAMES,
-    LLM_CONFIG_NAMES,
-    TYPES_NAMES,
-    LLM_PROVIDER_LOGIC_NAMES,
-    UTILS_MODULE_NAMES,
-    # Import maps
-    _UTILS_IMPORT_MAP,
-    _COST_CALCULATOR_IMPORT_MAP,
-    _TYPES_UTILS_IMPORT_MAP,
-    _TOKEN_COUNTER_IMPORT_MAP,
     _BEDROCK_TYPES_IMPORT_MAP,
     _CACHING_IMPORT_MAP,
-    _LITELLM_LOGGING_IMPORT_MAP,
+    _COST_CALCULATOR_IMPORT_MAP,
     _DOTPROMPT_IMPORT_MAP,
-    _TYPES_IMPORT_MAP,
+    _LITELLM_LOGGING_IMPORT_MAP,
     _LLM_CONFIGS_IMPORT_MAP,
     _LLM_PROVIDER_LOGIC_IMPORT_MAP,
+    _TOKEN_COUNTER_IMPORT_MAP,
+    _TYPES_IMPORT_MAP,
+    _TYPES_UTILS_IMPORT_MAP,
+    # Import maps
+    _UTILS_IMPORT_MAP,
     _UTILS_MODULE_IMPORT_MAP,
+    BEDROCK_TYPES_NAMES,
+    CACHING_NAMES,
+    # Name tuples
+    COST_CALCULATOR_NAMES,
+    DOTPROMPT_NAMES,
+    HTTP_HANDLER_NAMES,
+    LITELLM_LOGGING_NAMES,
+    LLM_CLIENT_CACHE_NAMES,
+    LLM_CONFIG_NAMES,
+    LLM_PROVIDER_LOGIC_NAMES,
+    TOKEN_COUNTER_NAMES,
+    TYPES_NAMES,
+    TYPES_UTILS_NAMES,
+    UTILS_MODULE_NAMES,
+    UTILS_NAMES,
 )
 
 

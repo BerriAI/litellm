@@ -71,6 +71,61 @@ def _content_digest(value: object) -> str | None:
     return _sha256_hex(raw)
 
 
+_SENSITIVE_KEYS = frozenset({"user_api_key", "Authorization", "authorization", "token", "api_key"})
+_PROXY_IDENTITY_KEYS = frozenset(
+    {
+        "user_api_key_user_id",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+        "user_api_key_alias",
+        "user_id",
+        "team_id",
+        "org_id",
+    }
+)
+
+
+def _merge_proxy_metadata(kwargs: dict[str, Any], metadata: dict[str, Any]) -> None:
+    try:
+        lp_meta: Any = (kwargs.get("litellm_params") or {}).get("metadata") or {}
+        for k, v in lp_meta.items():
+            if k not in _SENSITIVE_KEYS and k in _PROXY_IDENTITY_KEYS:
+                metadata.setdefault(k, v)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _extract_usage(
+    response_obj: object,
+) -> tuple[int | None, int | None, int | None, str | None, str | None]:
+    prompt_tokens = completion_tokens = total_tokens = finish_reason = provider_request_id = None
+    try:
+        if hasattr(response_obj, "usage") and response_obj.usage:
+            prompt_tokens = response_obj.usage.prompt_tokens
+            completion_tokens = response_obj.usage.completion_tokens
+            total_tokens = response_obj.usage.total_tokens
+        if hasattr(response_obj, "choices") and response_obj.choices:
+            finish_reason = response_obj.choices[0].finish_reason
+        if hasattr(response_obj, "_hidden_params"):
+            provider_request_id = response_obj._hidden_params.get("x-request-id") or response_obj._hidden_params.get(
+                "cf-ray"
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    return prompt_tokens, completion_tokens, total_tokens, finish_reason, provider_request_id
+
+
+def _extract_call_id(kwargs: dict[str, Any]) -> str:
+    call_id: str | None = None
+    try:
+        slp: Any = kwargs.get("standard_logging_object")
+        if slp and isinstance(slp, dict):
+            call_id = slp.get("id") or slp.get("litellm_call_id")
+    except Exception:  # noqa: BLE001
+        pass
+    return call_id or kwargs.get("litellm_call_id") or kwargs.get("id", str(int(time.time() * 1e6)))
+
+
 def _extract_loggable(
     kwargs: dict[str, Any],
     response_obj: object,
@@ -86,45 +141,9 @@ def _extract_loggable(
     """
     model: str = kwargs.get("model", "")
     messages: Any = kwargs.get("messages")
-
-    # Root metadata (user-supplied tags, etc.)
     metadata: Any = dict(kwargs.get("metadata") or kwargs.get("litellm_metadata") or {})
+    _merge_proxy_metadata(kwargs, metadata)
 
-    # Merge proxy identity fields from litellm_params.metadata.  Sensitive
-    # header/key values are filtered so raw auth tokens never reach the log.
-    _SENSITIVE_KEYS = frozenset(
-        {
-            "user_api_key",
-            "Authorization",
-            "authorization",
-            "token",
-            "api_key",
-        }
-    )
-    _PROXY_IDENTITY_KEYS = frozenset(
-        {
-            "user_api_key_user_id",
-            "user_api_key_team_id",
-            "user_api_key_org_id",
-            "user_api_key_alias",
-            "user_id",
-            "team_id",
-            "org_id",
-        }
-    )
-    try:
-        lp_meta: Any = (kwargs.get("litellm_params") or {}).get("metadata") or {}
-        for k, v in lp_meta.items():
-            if k in _SENSITIVE_KEYS:
-                continue
-            # Always include explicit proxy identity keys; skip other
-            # litellm_params.metadata keys to avoid unexpected bleed.
-            if k in _PROXY_IDENTITY_KEYS:
-                metadata.setdefault(k, v)
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Timing
     latency_ms: int | None = None
     try:
         if start_time is not None and end_time is not None:
@@ -132,50 +151,18 @@ def _extract_loggable(
     except Exception:  # noqa: BLE001
         pass
 
-    # Usage
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    total_tokens: int | None = None
-    finish_reason: str | None = None
-    provider_request_id: str | None = None
-    try:
-        if hasattr(response_obj, "usage") and response_obj.usage:
-            prompt_tokens = response_obj.usage.prompt_tokens
-            completion_tokens = response_obj.usage.completion_tokens
-            total_tokens = response_obj.usage.total_tokens
-        if hasattr(response_obj, "choices") and response_obj.choices:
-            finish_reason = response_obj.choices[0].finish_reason
-        if hasattr(response_obj, "_hidden_params"):
-            provider_request_id = response_obj._hidden_params.get("x-request-id") or response_obj._hidden_params.get(
-                "cf-ray"
-            )
-    except Exception:  # noqa: BLE001
-        pass
-
-    # Content digests (not content itself)
+    prompt_tokens, completion_tokens, total_tokens, finish_reason, provider_request_id = _extract_usage(response_obj)
     messages_digest: str | None = _content_digest(messages)
 
     response_content_digest: str | None = None
     try:
         if hasattr(response_obj, "choices") and response_obj.choices:
-            content = response_obj.choices[0].message.content
-            response_content_digest = _content_digest(content)
+            response_content_digest = _content_digest(response_obj.choices[0].message.content)
     except Exception:  # noqa: BLE001
         pass
-
-    # Standard logging payload may carry call_id / litellm_call_id
-    call_id: str | None = None
-    try:
-        slp: Any = kwargs.get("standard_logging_object")
-        if slp and isinstance(slp, dict):
-            call_id = slp.get("id") or slp.get("litellm_call_id")
-    except Exception:  # noqa: BLE001
-        pass
-    if not call_id:
-        call_id = kwargs.get("litellm_call_id") or kwargs.get("id", str(int(time.time() * 1e6)))
 
     return {
-        "call_id": call_id,
+        "call_id": _extract_call_id(kwargs),
         "model": model,
         "status": status,
         "latency_ms": latency_ms,
