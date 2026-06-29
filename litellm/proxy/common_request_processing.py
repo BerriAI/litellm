@@ -2465,6 +2465,22 @@ class ProxyBaseLLMRequestProcessing:
                 return
         elif not isinstance(first_chunk, str) and not hasattr(first_chunk, "choices"):
             return
+        # Remove pure no-content chunks (choices=[] and no usage payload) that can
+        # cause stream_chunk_builder to IndexError on chunks[-1]["choices"][0].
+        # Usage-bearing empty-choices chunks (OpenAI stream_options include_usage)
+        # are intentionally kept so real token counts are not replaced by estimates.
+        def _is_discardable_chunk(c: Any) -> bool:
+            if isinstance(c, dict):
+                return c.get("choices") == [] and not c.get("usage")
+            return (
+                hasattr(c, "choices")
+                and getattr(c, "choices", None) == []
+                and not getattr(c, "usage", None)
+            )
+
+        chunks = [c for c in chunks if not _is_discardable_chunk(c)]
+        if not chunks:
+            return
         # Optimization, not a correctness guard: dispatch_success_handlers is the
         # authoritative de-dup via has_dispatched_final_stream_success. This just
         # skips the stream_chunk_builder assembly when completion already logged.
