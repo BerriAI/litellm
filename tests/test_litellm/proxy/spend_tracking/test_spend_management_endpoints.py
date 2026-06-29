@@ -1051,7 +1051,10 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
         return [
-            {**{k: v for k, v in row.items() if k != "_ttft_ms"}, "total_count": len(base_logs)}
+            {
+                **{k: v for k, v in row.items() if k != "_ttft_ms"},
+                "total_count": len(base_logs),
+            }
             for row in sorted_logs[skip : skip + page_size]
         ]
 
@@ -2929,6 +2932,15 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
             {"session_id": session_id, "_count": {"session_id": 2}},
         ]
     )
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {
+                "session_id": session_id,
+                "mcp_tool_call_count": 1,
+                "mcp_tool_call_spend": 10.0,
+            }
+        ]
+    )
 
     result = await _build_ui_spend_logs_response(
         prisma_client=mock_prisma,
@@ -2946,6 +2958,10 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     # Rows with the shared session_id should have session_total_count=2
     assert rows[0]["session_total_count"] == 2
     assert rows[1]["session_total_count"] == 2
+    assert rows[0]["mcp_tool_call_count"] == 1
+    assert rows[0]["mcp_tool_call_spend"] == 10.0
+    assert rows[1]["mcp_tool_call_count"] == 1
+    assert rows[1]["mcp_tool_call_spend"] == 10.0
 
     # Row without a session_id defaults to 1
     assert rows[2]["session_total_count"] == 1
@@ -4104,7 +4120,9 @@ async def test_cold_storage_handler_returns_none_when_no_logger_configured(monke
 
 
 @pytest.mark.asyncio
-async def test_cold_storage_handler_resolves_configured_logger_from_registry(monkeypatch):
+async def test_cold_storage_handler_resolves_configured_logger_from_registry(
+    monkeypatch,
+):
     from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 
     logger = _FakeColdStorageLogger({"messages": "from-registry"})

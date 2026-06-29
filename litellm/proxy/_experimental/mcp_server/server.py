@@ -2526,6 +2526,22 @@ if MCP_AVAILABLE:
 
         return response
 
+    async def _fire_mcp_success_logging(
+        logging_obj: LiteLLMLoggingObj,
+        result: Any,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        logging_obj.post_call(original_response=result)
+        await logging_obj.async_post_mcp_tool_call_hook(
+            kwargs=logging_obj.model_call_details,
+            response_obj=result,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        logging_obj.call_type = CallTypes.call_mcp_tool.value
+        await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
+
     @client
     async def call_mcp_tool(
         name: str,
@@ -2597,16 +2613,7 @@ if MCP_AVAILABLE:
             raise
 
         if litellm_logging_obj:
-            litellm_logging_obj.post_call(original_response=response)
-            end_time = datetime.now()
-            await litellm_logging_obj.async_post_mcp_tool_call_hook(
-                kwargs=litellm_logging_obj.model_call_details,
-                response_obj=response,
-                start_time=start_time,
-                end_time=end_time,
-            )
-            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
-            await litellm_logging_obj.async_success_handler(result=response, start_time=start_time, end_time=end_time)
+            await _fire_mcp_success_logging(litellm_logging_obj, response, start_time, datetime.now())
         return response
 
     async def mcp_get_prompt(

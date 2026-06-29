@@ -26,6 +26,7 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingMCPToolCall,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.utils import Rules, function_setup
 
 if TYPE_CHECKING:
@@ -672,17 +673,17 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
                 if litellm_trace_id:
                     logging_request_data["litellm_trace_id"] = litellm_trace_id
-                user_identifier = None
                 if user_api_key_auth is not None:
-                    user_api_key = getattr(user_api_key_auth, "api_key", None)
-                    if user_api_key:
-                        logging_request_data["metadata"]["user_api_key"] = user_api_key
-
+                    LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+                        data=logging_request_data,
+                        user_api_key_dict=user_api_key_auth,
+                        _metadata_variable_name="metadata",
+                    )
                     user_identifier = getattr(user_api_key_auth, "end_user_id", None) or getattr(
                         user_api_key_auth, "user_id", None
                     )
-                if user_identifier:
-                    logging_request_data["user"] = user_identifier
+                    if user_identifier:
+                        logging_request_data["user"] = user_identifier
 
                 litellm_logging_obj: Optional[LiteLLMLoggingObj] = None
                 try:

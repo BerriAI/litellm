@@ -77,6 +77,7 @@ if MCP_AVAILABLE:
         ListMCPToolsRestAPIResponseObject,
         MCPInfo,
         MCPServer,
+        _fire_mcp_success_logging,
         _tool_name_matches,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
@@ -796,11 +797,12 @@ if MCP_AVAILABLE:
                 user_oauth_extra_headers = await _get_user_oauth_extra_headers(target_server, user_api_key_dict)
 
             # Call execute_mcp_tool directly (permission checks already done)
+            _tool_start_time = datetime.now()
             result = await execute_mcp_tool(
                 name=tool_name,
                 arguments=tool_arguments,
                 allowed_mcp_servers=allowed_mcp_servers,
-                start_time=datetime.now(),
+                start_time=_tool_start_time,
                 user_api_key_auth=data.get("user_api_key_auth"),
                 mcp_auth_header=data.get("mcp_auth_header"),
                 mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
@@ -809,6 +811,8 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 requested_server_id=canonical_server_id,
             )
+            if logging_obj is not None:
+                await _fire_mcp_success_logging(logging_obj, result, _tool_start_time, datetime.now())
             return result
         except MCPMissingUserEnvVarsError as e:
             verbose_logger.info(
