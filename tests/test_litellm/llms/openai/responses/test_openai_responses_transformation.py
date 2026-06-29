@@ -1174,6 +1174,58 @@ def test_get_supported_openai_params():
     assert "stream" in params
 
 
+class TestGpt5TemperatureGate:
+    """The temperature gate resolves reasoning effort from either the nested
+    reasoning.effort or the shorthand reasoning_effort, so flexible temperature
+    is only honored at effort 'none'/unset regardless of which form is sent."""
+
+    MODEL = "gpt-5-temperature-gate-fixture"
+
+    @pytest.fixture
+    def supports_none_model(self, monkeypatch):
+        # A unique gpt-5 name keeps get_model_info's lru_cache from leaking; the
+        # autouse isolate_litellm_state fixture restores model_cost afterwards.
+        monkeypatch.setitem(
+            litellm.model_cost,
+            self.MODEL,
+            {
+                "litellm_provider": "openai",
+                "mode": "responses",
+                "supports_none_reasoning_effort": True,
+            },
+        )
+        litellm.get_model_info.cache_clear()
+        return self.MODEL
+
+    def test_shorthand_reasoning_effort_high_rejects_flexible_temperature(
+        self, supports_none_model
+    ):
+        config = OpenAIResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError):
+            config.map_openai_params(
+                response_api_optional_params={
+                    "temperature": 0,
+                    "reasoning_effort": "high",
+                },
+                model=supports_none_model,
+                drop_params=False,
+            )
+
+    def test_shorthand_reasoning_effort_none_allows_flexible_temperature(
+        self, supports_none_model
+    ):
+        config = OpenAIResponsesAPIConfig()
+        out = config.map_openai_params(
+            response_api_optional_params={
+                "temperature": 0,
+                "reasoning_effort": "none",
+            },
+            model=supports_none_model,
+            drop_params=False,
+        )
+        assert out["temperature"] == 0
+
+
 class TestPhaseParameter:
     """Tests for the `phase` parameter on assistant output items (gpt-5.3-codex)."""
 
