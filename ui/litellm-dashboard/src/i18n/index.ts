@@ -11,7 +11,7 @@ import zh from "./locales/zh.json";
 
 export type Locale = "en" | "zh";
 /** Supports arbitrarily nested JSON, not just flat two-level maps */
-export type TranslationMap = Record<string, any>;
+export type TranslationMap = Record<string, string | Record<string, string>>;
 
 const translations: Record<Locale, TranslationMap> = { en, zh };
 
