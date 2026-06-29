@@ -1027,6 +1027,58 @@ def test_bedrock_tools_pt_strict_parameter():
     assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
 
 
+def test_bedrock_tools_pt_strict_dropped_for_opus_47_48():
+    """Regression for #31582.
+
+    Bedrock Converse routes Claude Opus 4.7/4.8 through an Anthropic-compatible
+    validator that rejects ``toolSpec.strict`` (``tools.N.custom.strict: Extra
+    inputs are not permitted``), even though Anthropic's native API accepts
+    ``strict`` as a top-level tool field for these models. Sonnet 4.5/4.6 and
+    Opus <=4.6 accept ``toolSpec.strict`` and keep the prior behavior.
+    """
+    tools_with_strict = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "strict": True,
+                "description": "Get the weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                        "unit": {"type": "string", "enum": ["celsius"]},
+                    },
+                    "required": ["city", "unit"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+
+    # Opus 4.7 / 4.8 on Bedrock Converse: strict must be dropped.
+    for model_id in (
+        "bedrock/us.anthropic.claude-opus-4-7",
+        "bedrock/us.anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-4-7-v1:0",
+        "anthropic.claude_opus_4_8-v1:0",
+    ):
+        result = _bedrock_tools_pt(tools_with_strict, model=model_id)
+        assert "strict" not in result[0]["toolSpec"], (
+            f"strict leaked into toolSpec for {model_id}: {result[0]['toolSpec']}"
+        )
+
+    # Sonnet 4.5 / Opus 4.6 keep the existing behavior (strict forwarded).
+    for model_id in (
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "bedrock/us.anthropic.claude-opus-4-6",
+    ):
+        result = _bedrock_tools_pt(tools_with_strict, model=model_id)
+        assert result[0]["toolSpec"]["strict"] is True, (
+            f"strict missing for {model_id}: {result[0]['toolSpec']}"
+        )
+
+
 def test_bedrock_image_processor_content_type_fallback_url_extension():
     """
     Test that _post_call_image_processing falls back to URL extension
