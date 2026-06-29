@@ -94,7 +94,7 @@ class MilvusRAGIngestion(BaseRAGIngestion):
         self.api_base = self.api_base.rstrip("/")
 
         config_api_key = self.vector_store_config.get("api_key")
-        self.api_key = config_api_key if config_api_base else config_api_key or get_secret_str("MILVUS_API_KEY")
+        self.api_key = config_api_key or get_secret_str("MILVUS_API_KEY")
         self.vector_field = self.vector_store_config.get("vector_field", MILVUS_DEFAULT_VECTOR_FIELD)
         self.text_field = self.vector_store_config.get("text_field", MILVUS_DEFAULT_TEXT_FIELD)
         self.metric_type = self.vector_store_config.get("metric_type", MILVUS_DEFAULT_METRIC_TYPE)

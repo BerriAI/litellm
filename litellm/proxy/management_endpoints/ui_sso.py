@@ -2228,7 +2228,7 @@ async def _enforce_free_sso_user_limit(
     if premium_user:
         return
     FREE_SSO_USER_LIMIT = 5
-    total_users = await prisma_client.db.litellm_usertable.count()
+    total_users = await UserRepository(prisma_client).table.count()
     threshold = FREE_SSO_USER_LIMIT if block_at_limit else FREE_SSO_USER_LIMIT + 1
     if total_users is not None and total_users >= threshold:
         raise ProxyException(

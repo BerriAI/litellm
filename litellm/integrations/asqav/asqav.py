@@ -141,7 +141,9 @@ def _extract_loggable(
     """
     model: str = kwargs.get("model", "")
     messages: Any = kwargs.get("messages")
-    metadata: Any = dict(kwargs.get("metadata") or kwargs.get("litellm_metadata") or {})
+    raw_metadata: Any = dict(kwargs.get("metadata") or kwargs.get("litellm_metadata") or {})
+    # Drop sensitive keys from top-level metadata before writing to the audit log
+    metadata: dict[str, Any] = {k: v for k, v in raw_metadata.items() if k not in _SENSITIVE_KEYS}
     _merge_proxy_metadata(kwargs, metadata)
 
     latency_ms: int | None = None

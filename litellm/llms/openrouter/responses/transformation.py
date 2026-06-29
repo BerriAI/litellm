@@ -81,7 +81,7 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        response_api_optional_request_params["store"] = False
+        response_api_optional_request_params.setdefault("store", False)
         return super().transform_responses_api_request(
             model=model,
             input=input,

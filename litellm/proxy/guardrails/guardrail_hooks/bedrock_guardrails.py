@@ -273,6 +273,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         cleaned = {
             key: value for key, value in checks.items() if key in _BEDROCK_CHECKS_KNOWN_KEYS and value is not None
         }
+        if not cleaned and checks:
+            raise ValueError(
+                f"BedrockGuardrail: 'checks' block contained only unrecognized or empty keys {sorted(checks.keys())}. "
+                f"Known keys: {sorted(_BEDROCK_CHECKS_KNOWN_KEYS)}. "
+                "Fix the guardrail config or remove the 'checks' block to use ApplyGuardrail mode."
+            )
         return cleaned or None
 
     def _create_bedrock_input_content_request(self, messages: Optional[List[AllMessageValues]]) -> BedrockRequest:
