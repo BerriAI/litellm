@@ -158,6 +158,22 @@ def test_token_exchange_omits_audience_when_unset():
     assert spec.config.audience is None
 
 
+def test_token_exchange_empty_subject_token_type_normalizes_to_default():
+    # Parity with v1: a falsy subject_token_type must not be sent verbatim to the IdP.
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+            subject_token_type="",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+
 @pytest.mark.parametrize(
     "server",
     [

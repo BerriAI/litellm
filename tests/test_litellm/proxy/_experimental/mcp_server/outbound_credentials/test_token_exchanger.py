@@ -307,13 +307,29 @@ async def test_audience_and_scope_omitted_when_unset():
 
 
 @pytest.mark.asyncio
-async def test_string_expires_in_is_honored():
+@pytest.mark.parametrize("expires_in", ["120", 120.0, "120.0"], ids=["str", "float", "str_float"])
+async def test_numeric_expires_in_is_honored(expires_in):
+    # A JSON int/float/numeric-string expires_in must drive the TTL, not fall back to the default.
     clock = _Clock(1000.0)
-    # "120" parsed as int -> ttl max(120-60, 10) = 60 -> cached until 1060.
-    post = _RecordingPost({"access_token": "x", "expires_in": "120"})
-    exchanger = Rfc8693TokenExchanger(post, clock=clock)
+    post = _RecordingPost({"access_token": "x", "expires_in": expires_in})
+    exchanger = Rfc8693TokenExchanger(post, clock=clock)  # ttl = max(120-60, 10) = 60 -> until 1060
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     clock.now = 1061.0
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_short_lived_token_is_not_cached_past_its_expiry():
+    # expires_in (5s) below the buffer/min floor must NOT be served stale: cache only until expiry.
+    clock = _Clock(1000.0)
+    post = _RecordingPost({"access_token": "x", "expires_in": 5})
+    exchanger = Rfc8693TokenExchanger(post, clock=clock)
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    clock.now = 1004.0  # within the 5s lifetime -> still cached
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    assert len(post.calls) == 1
+    clock.now = 1006.0  # past expiry -> re-exchange, not a stale bearer
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     assert len(post.calls) == 2
 

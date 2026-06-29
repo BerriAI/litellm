@@ -210,6 +210,10 @@ def _should_strip_caller_authorization(
       ``Authorization`` is the upstream OAuth token and must be
       forwarded, so we keep it.
     """
+    if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        # OBO: the inbound Authorization is the subject token. It is exchanged at the IdP and only the
+        # exchanged token is sent upstream, so the raw caller bearer must never be forwarded.
+        return True
     if mcp_server.has_client_credentials:
         return True
     if mcp_server.auth_type == MCPAuth.oauth2 and to_server_spec(mcp_server) is not None:

@@ -105,11 +105,11 @@ def _cache_key(subject_token: str, config: TokenExchangeConfig) -> str:
 def _parse_expires_in(raw: object) -> int | None:
     if isinstance(raw, bool):
         return None
-    if isinstance(raw, int):
-        return raw
+    if isinstance(raw, (int, float)):
+        return int(raw)
     if isinstance(raw, str):
         try:
-            return int(raw)
+            return int(float(raw))
         except ValueError:
             return None
     return None
@@ -235,5 +235,7 @@ class Rfc8693TokenExchanger:
     def _ttl_seconds(self, token: OAuthToken) -> float:
         if token.expires_at is None:
             return self._default_ttl_seconds
-        lifetime = token.expires_at - self._clock()
-        return max(lifetime - self._expiry_buffer_seconds, self._min_ttl_seconds)
+        lifetime = max(0.0, token.expires_at - self._clock())
+        # Floor at min_ttl, but never cache past the token's own expiry: a token whose remaining
+        # lifetime is below the buffer (or even below min_ttl) must not be served stale upstream.
+        return min(max(lifetime - self._expiry_buffer_seconds, self._min_ttl_seconds), lifetime)

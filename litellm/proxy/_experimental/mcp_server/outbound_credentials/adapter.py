@@ -116,7 +116,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpe
         server_id=server.server_id,
         resource=resource,
         config=TokenExchangeConfig(
-            subject_token_type=server.subject_token_type,
+            subject_token_type=server.subject_token_type or "urn:ietf:params:oauth:token-type:access_token",
             token_exchange_endpoint=endpoint,
             audience=server.audience,
             client_id=server.client_id,
