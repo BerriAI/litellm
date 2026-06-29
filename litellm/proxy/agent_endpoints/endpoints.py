@@ -11,7 +11,7 @@ Follows the A2A Spec.
 import asyncio
 import os
 import uuid
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -20,10 +20,14 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.a2a.agent_card import merge_agent_card
+from litellm.proxy.a2a.agent_card import (
+    SUPPORTED_A2A_PROTOCOL_VERSIONS,
+    merge_agent_card,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.utils import get_custom_url
 from litellm.types.agents import (
     AgentConfig,
     AgentKeySummary,
@@ -40,19 +44,33 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
 
 
 def _proxy_base_url(http_request: Request) -> str:
-    """Return the proxy's base URL as seen by the caller, without trailing slash."""
-    return str(http_request.base_url).rstrip("/")
+    """Return the proxy's public base URL, preferring PROXY_BASE_URL when set."""
+    return get_custom_url(str(http_request.base_url), route=None)
+
+
+def _validate_protocol_version(upstream_card: Mapping[str, Any] | None) -> None:
+    """Reject an agent card pinning an unsupported A2A protocol version."""
+    version = upstream_card.get("protocolVersion") if upstream_card else None
+    if version is not None and version not in SUPPORTED_A2A_PROTOCOL_VERSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported protocolVersion '{version}'. "
+                f"Supported versions: {', '.join(SUPPORTED_A2A_PROTOCOL_VERSIONS)}."
+            ),
+        )
 
 
 def _build_merged_agent_card(
-    upstream_card: Optional[Mapping[str, Any]],
+    upstream_card: Mapping[str, Any] | None,
     *,
     agent_id: str,
     http_request: Request,
-    agent_name: Optional[str] = None,
+    agent_name: str | None = None,
 ) -> Dict[str, Any]:
     """Apply the LiteLLM-fronting merge to ``upstream_card`` for ``agent_id``."""
     proxy_base = _proxy_base_url(http_request)
+    _validate_protocol_version(upstream_card)
     # Prefer a card-supplied ``name`` (the discovery UI exposes an editable
     # "Name (shown to API clients)" field that flows into
     # ``agent_card_params.name``) over the internal ``agent_name`` identifier.
@@ -382,7 +400,7 @@ async def create_agent(
         # schemes, default skills) the agent doesn't actually expose.
         upstream_card = request.get("agent_card_params")
         agent_to_create: AgentConfig = request
-        new_agent_id: Optional[str] = None
+        new_agent_id: str | None = None
         if upstream_card is not None:
             # Pre-generate the agent_id so the merged card can reference it
             # in ``supportedInterfaces`` before the DB row exists.
@@ -988,14 +1006,14 @@ async def make_agents_public(
     response_model=SpendAnalyticsPaginatedResponse,
 )
 async def get_agent_daily_activity(
-    agent_ids: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    model: Optional[str] = None,
-    api_key: Optional[str] = None,
+    agent_ids: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    model: str | None = None,
+    api_key: str | None = None,
     page: int = 1,
     page_size: int = 10,
-    exclude_agent_ids: Optional[str] = None,
+    exclude_agent_ids: str | None = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1012,7 +1030,7 @@ async def get_agent_daily_activity(
         )
 
     agent_ids_list = agent_ids.split(",") if agent_ids else None
-    exclude_agent_ids_list: Optional[List[str]] = None
+    exclude_agent_ids_list: List[str] | None = None
     if exclude_agent_ids:
         exclude_agent_ids_list = exclude_agent_ids.split(",") if exclude_agent_ids else None
 
