@@ -13,7 +13,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from prometheus_client import REGISTRY
 
-from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus import (
+    PrometheusLogger,
+    _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT,
+    _get_budget_metrics_per_request_timeout,
+)
 
 TIMEOUT_ENV = "PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT"
 
@@ -112,6 +116,31 @@ async def test_invalid_timeout_env_falls_back_to_default(prometheus_logger, monk
 
     assert prometheus_logger._set_api_key_budget_metrics_after_api_request.await_count == 1
     assert prometheus_logger._set_org_budget_metrics_after_api_request.await_count == 1
+
+
+@pytest.mark.parametrize("value", ["not-a-number", "0", "-1", "nan", "inf", "-inf"])
+def test_unusable_timeout_env_falls_back_to_default(value, monkeypatch):
+    """Values that parse but disable or unbound the timeout (0, negative, nan,
+    inf) must fall back to the default instead of being used; otherwise they
+    either skip every emission or recreate the unbounded-wait failure mode."""
+    monkeypatch.setenv(TIMEOUT_ENV, value)
+
+    assert _get_budget_metrics_per_request_timeout() == _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+
+
+@pytest.mark.parametrize("value,expected", [("0.05", 0.05), ("5.0", 5.0), ("30", 30.0)])
+def test_valid_timeout_env_is_used(value, expected, monkeypatch):
+    """A finite positive value is parsed and returned unchanged."""
+    monkeypatch.setenv(TIMEOUT_ENV, value)
+
+    assert _get_budget_metrics_per_request_timeout() == expected
+
+
+def test_missing_timeout_env_uses_default(monkeypatch):
+    """With the env unset the default is returned."""
+    monkeypatch.delenv(TIMEOUT_ENV, raising=False)
+
+    assert _get_budget_metrics_per_request_timeout() == _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
 
 
 @pytest.mark.asyncio

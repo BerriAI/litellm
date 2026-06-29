@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import sys
 from datetime import datetime, timedelta
@@ -73,14 +74,17 @@ def _get_budget_metrics_per_request_timeout() -> float:
     if raw is None:
         return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
     try:
-        return float(raw)
+        parsed = float(raw)
     except ValueError:
+        parsed = None
+    if parsed is None or not math.isfinite(parsed) or parsed <= 0:
         verbose_logger.debug(
             "[Non-Blocking] Prometheus: invalid PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT=%r; using default %ss.",
             raw,
             _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT,
         )
         return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+    return parsed
 
 
 class PrometheusLogger(CustomLogger):
