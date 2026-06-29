@@ -790,3 +790,93 @@ class TestAgenticStreamingIteratorErrorHandling:
 
         call_kwargs = mock_handler._call_agentic_completion_hooks.call_args
         assert call_kwargs.kwargs["stream"] is True
+
+
+class TestCompletionStartTimeStamping:
+    """completion_start_time must be stamped on the first yielded chunk (issue #31385)."""
+
+    def _make_logging_obj(self, *, already_set: bool = False):
+        mock = MagicMock()
+        mock.completion_start_time = MagicMock() if already_set else None
+        mock.model_call_details = {}
+        return mock
+
+    def _make_iterator(self, chunks, logging_obj):
+        mock_handler = MagicMock()
+        mock_handler._call_agentic_completion_hooks = AsyncMock(return_value=None)
+        return AgenticAnthropicStreamingIterator(
+            completion_stream=MockAsyncStream(chunks),
+            http_handler=mock_handler,
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "hi"}],
+            anthropic_messages_provider_config=MagicMock(),
+            anthropic_messages_optional_request_params={},
+            logging_obj=logging_obj,
+            custom_llm_provider="anthropic",
+            kwargs={},
+        )
+
+    @pytest.mark.asyncio
+    async def test_stamps_completion_start_time_on_first_chunk(self):
+        """logging_obj.completion_start_time must be a datetime after the first chunk."""
+        from datetime import datetime
+
+        logging_obj = self._make_logging_obj()
+        chunks = _build_simple_text_stream()
+        iterator = self._make_iterator(chunks, logging_obj)
+
+        # Consume first chunk only
+        first = await iterator.__anext__()
+
+        assert first is not None
+        assert isinstance(
+            logging_obj.completion_start_time, datetime
+        ), "completion_start_time should be set to a datetime on first chunk"
+
+    @pytest.mark.asyncio
+    async def test_stamps_completion_start_time_in_model_call_details(self):
+        """model_call_details['completion_start_time'] must be populated after first chunk."""
+        from datetime import datetime
+
+        logging_obj = self._make_logging_obj()
+        chunks = _build_simple_text_stream()
+        iterator = self._make_iterator(chunks, logging_obj)
+
+        await iterator.__anext__()
+
+        assert "completion_start_time" in logging_obj.model_call_details
+        assert isinstance(
+            logging_obj.model_call_details["completion_start_time"], datetime
+        )
+
+    @pytest.mark.asyncio
+    async def test_stamps_only_once_across_all_chunks(self):
+        """completion_start_time must not be overwritten on subsequent chunks."""
+        logging_obj = self._make_logging_obj()
+        chunks = _build_simple_text_stream()
+        iterator = self._make_iterator(chunks, logging_obj)
+
+        await iterator.__anext__()
+        first_stamp = logging_obj.completion_start_time
+
+        # Drain remaining chunks
+        async for _ in iterator:
+            pass
+
+        assert logging_obj.completion_start_time is first_stamp, (
+            "completion_start_time must be set exactly once"
+        )
+
+    @pytest.mark.asyncio
+    async def test_does_not_overwrite_existing_completion_start_time(self):
+        """If completion_start_time is already set, the iterator must leave it unchanged."""
+        logging_obj = self._make_logging_obj(already_set=True)
+        original = logging_obj.completion_start_time
+        chunks = _build_simple_text_stream()
+        iterator = self._make_iterator(chunks, logging_obj)
+
+        await iterator.__anext__()
+
+        assert logging_obj.completion_start_time is original, (
+            "iterator must not overwrite a pre-existing completion_start_time"
+        )
