@@ -501,6 +501,26 @@ class CheckBatchCost:
                         f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
                     )
 
+            elif response.status in ("failed", "expired", "cancelled"):
+                try:
+                    update_data = {
+                        "status": response.status,
+                        "file_object": response.model_dump_json(),
+                    }
+                    if self._has_batch_processed_column:
+                        update_data["batch_processed"] = True
+                    await self.prisma_client.db.litellm_managedobjecttable.update(
+                        where={"id": job.id},
+                        data=update_data,
+                    )
+                    verbose_proxy_logger.info(
+                        f"CheckBatchCost: marked job {job.id} as {response.status} in DB"
+                    )
+                except Exception as db_err:
+                    verbose_proxy_logger.error(
+                        f"CheckBatchCost: failed to mark job {job.id} as {response.status} in DB: {db_err}"
+                    )
+
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:
             prom_logger.record_check_batch_cost_run(
