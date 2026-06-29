@@ -71,6 +71,9 @@ def _looks_like_masked_credential_value(
     if not isinstance(submitted_value, str) or "*" not in submitted_value:
         return False
 
+    if set(submitted_value) == {"*"}:
+        return True
+
     return _is_masked_credential_value(
         key=key,
         submitted_value=submitted_value,
