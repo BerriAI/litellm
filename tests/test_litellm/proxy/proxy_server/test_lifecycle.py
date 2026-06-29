@@ -220,7 +220,7 @@ def test_save_worker_config_invalid_no_kwargs_yields_empty(monkeypatch):
 def test_initialize_signature_is_async_with_expected_params():
     sig = inspect.signature(initialize)
     # Hard-coded so a signature change (param added/removed) trips the gate.
-    expected_param_count = 17
+    expected_param_count = 18
     observed = {
         "is_async": inspect.iscoroutinefunction(initialize),
         "param_count": len(sig.parameters),
