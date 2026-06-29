@@ -6410,7 +6410,7 @@ async def initialize(
     alias=None,
     api_base=None,
     api_version=None,
-    api_version_explicit=False,
+    api_version_explicit: bool = False,
     debug=False,
     detailed_debug=False,
     temperature=None,

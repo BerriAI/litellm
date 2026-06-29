@@ -938,8 +938,7 @@ def run_server(
         # click default. initialize() uses this to decide if it may override an
         # operator-set AZURE_API_VERSION env var.
         api_version_explicit = (
-            click.get_current_context().get_parameter_source("api_version")
-            != click.core.ParameterSource.DEFAULT
+            click.get_current_context().get_parameter_source("api_version") != click.core.ParameterSource.DEFAULT
         )
         save_worker_config(
             model=model,
