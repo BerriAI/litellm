@@ -14,6 +14,8 @@ that each land in a follow-up PR with their seam. Pure v2: no imports from v1.
 
 from __future__ import annotations
 
+import hashlib
+
 import httpx
 from typing_extensions import assert_never
 
@@ -31,6 +33,11 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
+    ExchangedToken,
+    ExchangedTokenCache,
+    TokenEndpointClient,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
     AuthorizationCodeConfig,
@@ -39,6 +46,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Byok,
     ClientCredentialsConfig,
     CredError,
+    IdJagConfig,
     NoneConfig,
     PassthroughConfig,
     ServerSpec,
@@ -46,6 +54,10 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     Subject,
     TokenExchangeConfig,
 )
+
+_TOKEN_EXCHANGE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
+_JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+_ID_JAG_REQUESTED_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:id-jag"
 
 
 class _NullOAuthTokenStore:
@@ -63,8 +75,15 @@ class UpstreamCredentialProvider:
     `authorization_code` reads the user's token from the injected `OAuthTokenStore`.
     """
 
-    def __init__(self, oauth_token_store: OAuthTokenStore | None = None) -> None:
+    def __init__(
+        self,
+        oauth_token_store: OAuthTokenStore | None = None,
+        token_endpoint: TokenEndpointClient | None = None,
+        exchanged_tokens: ExchangedTokenCache | None = None,
+    ) -> None:
         self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
+        self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
+        self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
 
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
@@ -78,6 +97,8 @@ class UpstreamCredentialProvider:
                 return _not_implemented(AuthSpecKind.client_credentials)
             case TokenExchangeConfig():
                 return _not_implemented(AuthSpecKind.token_exchange)
+            case IdJagConfig() as config:
+                return await self._id_jag(subject, server, config)
             case AuthorizationCodeConfig():
                 return await self._authorization_code(subject, server)
             case AwsSigV4Config():
@@ -103,6 +124,53 @@ class UpstreamCredentialProvider:
                 # Per-user key pulled from the credential store; lands with that seam.
                 return Error(CredError.of_not_implemented("api_key BYOK source not implemented yet"))
         assert_never(config.key_source)
+
+    async def _id_jag(self, subject: Subject, server: ServerSpec, config: IdJagConfig) -> Result[httpx.Auth, CredError]:
+        if subject.inbound_token is None:
+            return Error(
+                CredError.of_precondition_required(
+                    "ID-JAG requires a caller identity token; it asserts the calling "
+                    "user's identity upstream and cannot use a static credential."
+                )
+            )
+        token = subject.inbound_token.get_secret_value()
+        cache_key = hashlib.sha256(f"{token}:{server.server_id}".encode()).hexdigest()
+
+        async def _exchange() -> Result[ExchangedToken, CredError]:
+            leg1_params = {
+                "grant_type": _TOKEN_EXCHANGE_GRANT_TYPE,
+                "requested_token_type": _ID_JAG_REQUESTED_TOKEN_TYPE,
+                "subject_token": token,
+                "subject_token_type": config.subject_token_type,
+                **({"audience": config.audience} if config.audience else {}),
+                **({"resource": config.resource} if config.resource else {}),
+                **({"scope": " ".join(config.scopes)} if config.scopes else {}),
+            }
+            match await self._token_endpoint.fetch(
+                config.org_token_endpoint,
+                config.client_id,
+                leg1_params,
+                config.client_auth,
+            ):
+                case Error(err):
+                    return Error(err)
+                case Ok(id_jag):
+                    leg2_params = {
+                        "grant_type": _JWT_BEARER_GRANT_TYPE,
+                        "assertion": id_jag.access_token,
+                    }
+                    return await self._token_endpoint.fetch(
+                        config.resource_token_endpoint,
+                        config.client_id,
+                        leg2_params,
+                        config.client_auth,
+                    )
+
+        match await self._exchanged_tokens.get_or_compute(cache_key, _exchange):
+            case Ok(access_token):
+                return Ok(StaticHeaderAuth(f"Bearer {access_token}"))
+            case Error(err):
+                return Error(err)
 
     async def _authorization_code(self, subject: Subject, server: ServerSpec) -> Result[StaticHeaderAuth, CredError]:
         token = await self._authz_token(subject, server)

@@ -16,11 +16,15 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     AwsSigV4Config,
     Byok,
     ClientCredentialsConfig,
+    ClientSecretAuth,
+    CredError,
     Error,
+    IdJagConfig,
     NoneConfig,
     NoOpAuth,
     Ok,
     PassthroughConfig,
+    Result,
     ServerSpec,
     SharedKey,
     StaticHeaderAuth,
@@ -32,8 +36,38 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
     OAuthToken,
     TokenStoreUnavailable,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
+    ExchangedToken,
+)
 
 _SUBJECT = Subject(tenant_id="", subject_id="")
+
+
+def _id_jag_config() -> IdJagConfig:
+    return IdJagConfig(
+        org_token_endpoint="https://idp.example.com/token",
+        resource_token_endpoint="https://mcp-as.example.com/token",
+        client_id="litellm",
+        client_auth=ClientSecretAuth(client_secret=SecretStr("s")),
+        audience="api://mcp",
+        scopes=("mcp.read",),
+    )
+
+
+class _FakeTokenEndpoint:
+    """Records each fetch and returns the next canned Result, leg by leg."""
+
+    def __init__(self, results: list[Result[ExchangedToken, CredError]]) -> None:
+        self._results = list(results)
+        self.calls: list[tuple[str, str, dict[str, str]]] = []
+
+    async def fetch(self, endpoint, client_id, grant_params, client_auth):
+        self.calls.append((endpoint, client_id, dict(grant_params)))
+        return self._results.pop(0)
+
+
+def _with_inbound(token: str) -> Subject:
+    return Subject(tenant_id="", subject_id="alice", inbound_token=SecretStr(token))
 
 
 def _spec(config):
@@ -208,3 +242,84 @@ async def test_unbuilt_arms_fail_closed_with_not_implemented(label, config):
     )
     assert isinstance(result, Error)
     assert result.error.tag == "not_implemented"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_runs_both_legs_and_returns_the_leg2_bearer():
+    endpoint = _FakeTokenEndpoint(
+        [
+            Ok(ExchangedToken(access_token="the-id-jag", expires_in=300)),
+            Ok(ExchangedToken(access_token="final-access", expires_in=3600)),
+        ]
+    )
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    result = await provider.resolve_credentials(
+        _with_inbound("user-id-token"), _spec(_id_jag_config())
+    )
+
+    assert isinstance(result, Ok)
+    assert _emitted(result.ok)["Authorization"] == "Bearer final-access"
+
+    leg1_endpoint, _, leg1_params = endpoint.calls[0]
+    assert leg1_endpoint == "https://idp.example.com/token"
+    assert (
+        leg1_params["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    )
+    assert (
+        leg1_params["requested_token_type"] == "urn:ietf:params:oauth:token-type:id-jag"
+    )
+    assert leg1_params["subject_token"] == "user-id-token"
+
+    leg2_endpoint, _, leg2_params = endpoint.calls[1]
+    assert leg2_endpoint == "https://mcp-as.example.com/token"
+    assert leg2_params["grant_type"] == "urn:ietf:params:oauth:grant-type:jwt-bearer"
+    # The leg-1 token is forwarded verbatim as the leg-2 assertion.
+    assert leg2_params["assertion"] == "the-id-jag"
+
+
+@pytest.mark.asyncio
+async def test_id_jag_without_inbound_token_is_precondition_required_no_http():
+    endpoint = _FakeTokenEndpoint([])
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    result = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(_id_jag_config())
+    )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "precondition_required"
+    assert endpoint.calls == []
+
+
+@pytest.mark.asyncio
+async def test_id_jag_propagates_a_leg1_error_without_calling_leg2():
+    endpoint = _FakeTokenEndpoint(
+        [Error(CredError.of_upstream_unavailable("leg1 down"))]
+    )
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    result = await provider.resolve_credentials(
+        _with_inbound("user-id-token"), _spec(_id_jag_config())
+    )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+    assert "leg1 down" in result.error.summary
+    assert len(endpoint.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_id_jag_propagates_a_leg2_error():
+    endpoint = _FakeTokenEndpoint(
+        [
+            Ok(ExchangedToken(access_token="the-id-jag", expires_in=300)),
+            Error(CredError.of_upstream_unavailable("leg2 forbidden")),
+        ]
+    )
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    result = await provider.resolve_credentials(
+        _with_inbound("user-id-token"), _spec(_id_jag_config())
+    )
+
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+    assert "leg2 forbidden" in result.error.summary
+    assert len(endpoint.calls) == 2

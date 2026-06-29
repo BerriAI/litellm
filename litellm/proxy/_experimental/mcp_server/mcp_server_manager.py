@@ -786,6 +786,12 @@ class MCPServerManager:
                     "subject_token_type",
                     "urn:ietf:params:oauth:token-type:access_token",
                 ),
+                # ID-JAG fields
+                id_jag_resource_token_endpoint=server_config.get("id_jag_resource_token_endpoint", None),
+                id_jag_resource=server_config.get("id_jag_resource", None),
+                client_private_key=server_config.get("client_private_key", None),
+                client_private_key_id=server_config.get("client_private_key_id", None),
+                client_assertion_signing_alg=server_config.get("client_assertion_signing_alg", "RS256"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
@@ -1159,6 +1165,21 @@ class MCPServerManager:
             audience=(credentials_dict.get("audience") if credentials_dict else None),
             subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
             or "urn:ietf:params:oauth:token-type:access_token",
+            # ID-JAG fields — read from credentials JSON blob
+            id_jag_resource_token_endpoint=(
+                credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
+            ),
+            id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
+            client_private_key=self._decrypt_credential_field(
+                credentials_dict.get("client_private_key") if credentials_dict else None,
+                "client_private_key",
+                credentials_are_encrypted,
+            ),
+            client_private_key_id=(credentials_dict.get("client_private_key_id") if credentials_dict else None),
+            client_assertion_signing_alg=(
+                credentials_dict.get("client_assertion_signing_alg") if credentials_dict else None
+            )
+            or "RS256",
             timeout=getattr(mcp_server, "timeout", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
@@ -3200,10 +3221,13 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # Extract subject token for OAuth2 Token Exchange (OBO) flow
+        # Extract subject token for OAuth2 Token Exchange (OBO) and ID-JAG flows
         subject_token: Optional[str] = None
         extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        if mcp_server.auth_type in (
+            MCPAuth.oauth2_token_exchange,
+            MCPAuth.oauth2_id_jag,
+        ):
             subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
         elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:

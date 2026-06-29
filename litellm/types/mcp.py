@@ -38,6 +38,7 @@ class MCPAuth(str, enum.Enum):
     aws_sigv4 = "aws_sigv4"
     token = "token"
     oauth2_token_exchange = "oauth2_token_exchange"
+    oauth2_id_jag = "oauth2_id_jag"
 
 
 # MCP Literals
@@ -54,6 +55,7 @@ MCPAuthType = Optional[
         MCPAuth.aws_sigv4,
         MCPAuth.token,
         MCPAuth.oauth2_token_exchange,
+        MCPAuth.oauth2_id_jag,
     ]
 ]
 
@@ -130,6 +132,31 @@ class MCPCredentials(TypedDict, total=False):
     """
     Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
     Default: urn:ietf:params:oauth:token-type:access_token
+    """
+
+    id_jag_resource_token_endpoint: Optional[str]
+    """
+    Resource authorization server JWT-bearer (RFC 7523) endpoint for ID-JAG leg 2
+    """
+
+    id_jag_resource: Optional[str]
+    """
+    Optional RFC 8707 resource indicator sent on ID-JAG leg 1
+    """
+
+    client_private_key: Optional[str]
+    """
+    PEM private key used to sign the private-key-JWT client_assertion (RFC 7523)
+    """
+
+    client_private_key_id: Optional[str]
+    """
+    Key id (kid) advertised in the client_assertion JWT header
+    """
+
+    client_assertion_signing_alg: Optional[str]
+    """
+    Signing algorithm for the client_assertion JWT. Default: RS256
     """
 
 

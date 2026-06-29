@@ -60,6 +60,15 @@ class MCPServer(BaseModel):
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    # ID-JAG fields (draft-ietf-oauth-identity-assertion-authz-grant).
+    # Leg 1 reuses token_exchange_endpoint (IdP org-AS), audience (resource-AS
+    # identifier), scopes, subject_token_type, client_id/client_secret. Leg 2
+    # posts the ID-JAG assertion to id_jag_resource_token_endpoint.
+    id_jag_resource_token_endpoint: Optional[str] = None
+    id_jag_resource: Optional[str] = None
+    client_private_key: Optional[str] = None
+    client_private_key_id: Optional[str] = None
+    client_assertion_signing_alg: str = "RS256"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
