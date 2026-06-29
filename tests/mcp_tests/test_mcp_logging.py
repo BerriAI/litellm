@@ -446,3 +446,251 @@ async def test_mcp_tool_call_hook():
                 logged_standard_logging_payload is not None
             ), "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
+
+
+# ---------------------------------------------------------------------------
+# Tests for #28929: standard_logging_object on /mcp/ JSON-RPC protocol-level
+# rejections (unknown method / malformed params). These exercise the additive
+# send-wrapper + helper added to handle_streamable_http_mcp's dispatch path.
+# ---------------------------------------------------------------------------
+import json
+from datetime import datetime
+
+from litellm.proxy._experimental.mcp_server.server import (
+    _jsonrpc_rejection_reason,
+    _log_mcp_protocol_rejection,
+    _wrap_send_for_protocol_error_logging,
+)
+from litellm.types.utils import CallTypes
+
+
+def _jsonrpc_error_body(code, message="boom", _id=1):
+    return json.dumps(
+        {"jsonrpc": "2.0", "id": _id, "error": {"code": code, "message": message}}
+    ).encode("utf-8")
+
+
+def _jsonrpc_result_body(_id=1):
+    return json.dumps({"jsonrpc": "2.0", "id": _id, "result": {"ok": True}}).encode(
+        "utf-8"
+    )
+
+
+def test_mcp_jsonrpc_rejection_reason_mapping():
+    assert _jsonrpc_rejection_reason(-32601) == "unknown_method"
+    assert _jsonrpc_rejection_reason(-32602) == "malformed_params"
+    assert _jsonrpc_rejection_reason(-32700) == "parse_error"
+    assert _jsonrpc_rejection_reason(-32600) == "invalid_request"
+    # Unknown / None codes degrade to a generic, low-cardinality reason.
+    assert _jsonrpc_rejection_reason(12345) == "protocol_error"
+    assert _jsonrpc_rejection_reason(None) == "protocol_error"
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_rejection_emits_failure_record():
+    """A JSON-RPC error response (no result) must produce exactly one
+    post_call_failure_hook call carrying a standard-logging-shaped request_data
+    with status-bearing failure semantics, call_type=call_mcp_tool, and the
+    parsed rejection metadata (#28929)."""
+    user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
+
+    sent_messages = []
+
+    async def fake_send(message):
+        sent_messages.append(message)
+
+    captured = {}
+
+    class _FakeProxyLogging:
+        async def post_call_failure_hook(self, **kwargs):
+            captured.update(kwargs)
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj", _FakeProxyLogging()
+    ):
+        wrapped = _wrap_send_for_protocol_error_logging(
+            fake_send,
+            request_method="tools/call",
+            params={"name": "totally_made_up", "arguments": {}},
+            request_id=7,
+            user_api_key_auth=user_auth,
+            raw_headers={},
+            start_time=datetime.now(),
+        )
+        body = _jsonrpc_error_body(-32602, "Invalid request parameters", _id=7)
+        await wrapped({"type": "http.response.start", "status": 200, "headers": []})
+        await wrapped({"type": "http.response.body", "body": body})
+
+    # Response forwarded byte-for-byte and unchanged.
+    assert any(
+        m.get("type") == "http.response.body" and m.get("body") == body
+        for m in sent_messages
+    ), "original response bytes must be forwarded unchanged"
+
+    # Exactly one failure record produced with the expected shape.
+    assert captured, "post_call_failure_hook should have been called"
+    request_data = captured["request_data"]
+    assert request_data["call_type"] == CallTypes.call_mcp_tool.value
+    assert captured["route"] == "/mcp/protocol_error"
+    spend_meta = request_data["metadata"]["spend_logs_metadata"]
+    assert spend_meta["mcp_operation"] == "tools/call"
+    assert spend_meta["rejection_reason"] == "malformed_params"
+    assert spend_meta["jsonrpc_error_code"] == -32602
+    assert spend_meta["mcp_tool_name"] == "totally_made_up"
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_unknown_method_reason():
+    """An unknown-method (-32601) rejection is logged with the right reason."""
+    user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
+
+    async def fake_send(message):
+        pass
+
+    captured = {}
+
+    class _FakeProxyLogging:
+        async def post_call_failure_hook(self, **kwargs):
+            captured.update(kwargs)
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj", _FakeProxyLogging()
+    ):
+        wrapped = _wrap_send_for_protocol_error_logging(
+            fake_send,
+            request_method="tools/totally_made_up",
+            params={},
+            request_id=1,
+            user_api_key_auth=user_auth,
+            raw_headers={},
+            start_time=datetime.now(),
+        )
+        await wrapped(
+            {
+                "type": "http.response.body",
+                "body": _jsonrpc_error_body(-32601, "Method not found"),
+            }
+        )
+
+    assert captured, "unknown method should be logged"
+    spend_meta = captured["request_data"]["metadata"]["spend_logs_metadata"]
+    assert spend_meta["rejection_reason"] == "unknown_method"
+    # No tool name parsable from empty params -> key omitted.
+    assert "mcp_tool_name" not in spend_meta
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_success_path_not_logged():
+    """A JSON-RPC success response (has result) must NOT emit a failure
+    record, and the response must still be forwarded unchanged."""
+    user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
+
+    sent_messages = []
+
+    async def fake_send(message):
+        sent_messages.append(message)
+
+    call_count = {"n": 0}
+
+    class _FakeProxyLogging:
+        async def post_call_failure_hook(self, **kwargs):
+            call_count["n"] += 1
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj", _FakeProxyLogging()
+    ):
+        wrapped = _wrap_send_for_protocol_error_logging(
+            fake_send,
+            request_method="tools/call",
+            params={"name": "add", "arguments": {}},
+            request_id=1,
+            user_api_key_auth=user_auth,
+            raw_headers={},
+            start_time=datetime.now(),
+        )
+        body = _jsonrpc_result_body(_id=1)
+        await wrapped({"type": "http.response.body", "body": body})
+
+    assert call_count["n"] == 0, "success path must not be logged as a failure"
+    assert any(m.get("body") == body for m in sent_messages)
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_wrapper_noop_when_not_a_request():
+    """When the POST carries no JSON-RPC method (request_method is None) the
+    wrapper returns the original send untouched (no logging seam at all)."""
+
+    async def fake_send(message):
+        pass
+
+    returned = _wrap_send_for_protocol_error_logging(
+        fake_send,
+        request_method=None,
+        params={},
+        request_id=None,
+        user_api_key_auth=UserAPIKeyAuth(api_key="test", user_id="u1"),
+        raw_headers={},
+        start_time=datetime.now(),
+    )
+    assert returned is fake_send, "non-request POSTs must not be wrapped"
+
+
+@pytest.mark.asyncio
+async def test_mcp_protocol_logging_failure_does_not_break_response():
+    """If the logging callback raises, the wrapper must swallow it and still
+    forward the client response (observability must never drop a response)."""
+    user_auth = UserAPIKeyAuth(api_key="test", user_id="u1")
+
+    sent_messages = []
+
+    async def fake_send(message):
+        sent_messages.append(message)
+
+    class _ExplodingProxyLogging:
+        async def post_call_failure_hook(self, **kwargs):
+            raise RuntimeError("logging backend down")
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj", _ExplodingProxyLogging()
+    ):
+        wrapped = _wrap_send_for_protocol_error_logging(
+            fake_send,
+            request_method="tools/call",
+            params={"name": "add"},
+            request_id=1,
+            user_api_key_auth=user_auth,
+            raw_headers={},
+            start_time=datetime.now(),
+        )
+        body = _jsonrpc_error_body(-32602)
+        # Must not raise.
+        await wrapped({"type": "http.response.body", "body": body})
+
+    assert any(m.get("body") == body for m in sent_messages), (
+        "response must be forwarded even when logging raises"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_log_protocol_rejection_no_auth_is_noop():
+    """The helper is a no-op (no exception) when there is no user auth."""
+
+    class _FakeProxyLogging:
+        def __init__(self):
+            self.called = False
+
+        async def post_call_failure_hook(self, **kwargs):
+            self.called = True
+
+    fake = _FakeProxyLogging()
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", fake):
+        await _log_mcp_protocol_rejection(
+            request_method="tools/call",
+            params={"name": "x"},
+            jsonrpc_error={"code": -32602, "message": "bad"},
+            request_id=1,
+            user_api_key_auth=None,
+            raw_headers={},
+            start_time=datetime.now(),
+        )
+    assert fake.called is False
