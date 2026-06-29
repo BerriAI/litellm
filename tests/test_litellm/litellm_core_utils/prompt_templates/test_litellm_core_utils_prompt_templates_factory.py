@@ -2597,7 +2597,21 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     assert text_block["cache_control"]["type"] == "ephemeral"
 
 
-def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
+def _stub_bedrock_ttl_predicate(monkeypatch, extended_ttl_models):
+    """Replace ``_get_model_info`` so the predicate flag depends on the model name only.
+
+    Avoids relying on the live ``model_prices_and_context_window.json`` lookup,
+    which fetches from a remote URL in CI and only contains the flag in this PR.
+    """
+    import litellm.llms.bedrock.common_utils as bedrock_common_utils
+
+    def fake(model, custom_llm_provider=None):
+        return {"bedrock_supports_extended_cache_ttl": model in extended_ttl_models}
+
+    monkeypatch.setattr(bedrock_common_utils, "_get_model_info", fake)
+
+
+def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5(monkeypatch):
     """
     Tools with cache_control ttl should preserve the ttl in the cachePoint
     block for Claude 4.5+ models on Bedrock, matching the behavior of system
@@ -2613,6 +2627,10 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
         add_cache_point_tool_block,
     )
 
+    _stub_bedrock_ttl_predicate(
+        monkeypatch, {"us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+    )
+
     tool_with_1h = {
         "type": "function",
         "function": {"name": "get_weather", "parameters": {"type": "object"}},
@@ -2621,7 +2639,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
 
     # Claude 4.5 model: ttl should be preserved
     result = add_cache_point_tool_block(
-        tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     assert result is not None
     assert result["cachePoint"]["type"] == "default"
@@ -2632,7 +2650,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
         "cache_control": {"type": "ephemeral", "ttl": "5m"},
     }
     result_5m = add_cache_point_tool_block(
-        tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     assert result_5m is not None
     assert result_5m["cachePoint"]["ttl"] == "5m"
@@ -2660,19 +2678,23 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
     # cache_control without ttl: returns default cachePoint (unchanged behavior)
     tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
     result_no_ttl = add_cache_point_tool_block(
-        tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     assert result_no_ttl is not None
     assert result_no_ttl["cachePoint"]["type"] == "default"
     assert "ttl" not in result_no_ttl["cachePoint"]
 
 
-def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
+def test_bedrock_tools_pt_passes_ttl_for_claude_4_5(monkeypatch):
     """
     End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
     for Claude 4.5+ models when tools have cache_control with ttl.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    _stub_bedrock_ttl_predicate(
+        monkeypatch, {"us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+    )
 
     tools = [
         {
@@ -2691,7 +2713,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
 
     # Claude 4.5: cachePoint should have ttl
     result = _bedrock_tools_pt(
-        tools, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        tools, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
     cache_blocks = [b for b in result if "cachePoint" in b]
     assert len(cache_blocks) == 1

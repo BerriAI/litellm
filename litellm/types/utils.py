@@ -152,6 +152,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
+    bedrock_supports_extended_cache_ttl: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):

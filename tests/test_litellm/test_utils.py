@@ -858,6 +858,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],
                 },
+                "bedrock_supports_extended_cache_ttl": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
