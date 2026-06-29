@@ -78,10 +78,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         if api_base:
             api_base = api_base.rstrip("/")
         else:
-            api_base = (
-                get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
-                or "https://ai-gateway.vercel.sh/v1"
-            )
+            api_base = get_secret_str("VERCEL_AI_GATEWAY_API_BASE") or "https://ai-gateway.vercel.sh/v1"
 
         return f"{api_base}/embeddings"
 
@@ -163,9 +160,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Any
-    ) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
         """
         Get the error class for Vercel AI Gateway errors.
         """

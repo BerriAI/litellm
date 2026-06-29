@@ -51,9 +51,7 @@ class OCRHandler(BaseTranslation):
         """
         document = data.get("document")
         if document is None or not isinstance(document, dict):
-            verbose_proxy_logger.debug(
-                "OCR guardrail: No valid document found in request data"
-            )
+            verbose_proxy_logger.debug("OCR guardrail: No valid document found in request data")
             return data
 
         # Extract the document URL for guardrail checking
@@ -135,9 +133,7 @@ class OCRHandler(BaseTranslation):
 
         # Add user metadata if available
         if user_api_key_dict is not None:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 # Preserve original behavior: inject metadata into inputs for
                 # third-party guardrail providers that read it from there

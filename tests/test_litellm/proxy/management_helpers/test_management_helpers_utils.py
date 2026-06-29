@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from litellm._uuid import uuid
 from unittest.mock import AsyncMock, MagicMock
 
@@ -284,6 +285,81 @@ async def test_add_new_member_clones_default_team_budget_id():
 
 
 @pytest.mark.asyncio
+async def test_add_new_member_budget_duration_only_clones_default_max_budget():
+    """When only a budget_duration is given and the team has a default member
+    budget, the member must clone the default (keeping its max_budget) and just
+    override the reset window. Creating a fresh duration-only row instead would
+    silently drop the team default's cap, leaving the member uncapped."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="dur-clone-user", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "dur-clone-user",
+        "user_email": None,
+        "teams": ["team-dc"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+    mock_default_budget_row = MagicMock()
+    mock_default_budget_row.model_dump.return_value = {
+        "budget_id": "default-dc",
+        "max_budget": 100.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 1000,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=mock_default_budget_row
+    )
+    mock_cloned_budget_row = MagicMock()
+    mock_cloned_budget_row.budget_id = "cloned-dc"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_cloned_budget_row
+    )
+    mock_team_membership_response = MagicMock()
+    mock_team_membership_response.model_dump.return_value = {
+        "team_id": "team-dc",
+        "user_id": "dur-clone-user",
+        "budget_id": "cloned-dc",
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+        return_value=mock_team_membership_response
+    )
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-dc",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id="default-dc",
+        budget_duration="7d",
+    )
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    cloned_create_data = (
+        mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs["data"]
+    )
+    assert cloned_create_data["max_budget"] == 100.0  # kept from the team default
+    assert cloned_create_data["budget_duration"] == "7d"  # overridden by the caller
+    assert cloned_create_data["budget_reset_at"] > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
 async def test_add_new_member_no_budget_when_no_default_and_no_max_budget():
     """
     Test that add_new_member links no budget to the team membership when
@@ -432,6 +508,130 @@ async def test_add_new_member_creates_new_budget_when_max_budget_provided():
     assert team_membership_call_args is not None
     create_data = team_membership_call_args.kwargs["data"]
     assert create_data["budget_id"] == test_new_budget_id
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_persists_budget_duration():
+    """Regression for the member_add half of the recurring-member-budget gap:
+    a budget_duration passed to add_new_member must be written to the new
+    member budget along with a future budget_reset_at, so the per-member budget
+    recurs instead of acting as a lifetime cap."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="user-dur", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "user-dur",
+        "user_email": None,
+        "teams": ["team-dur"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget-dur"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_budget_response
+    )
+    mock_team_membership_response = MagicMock()
+    mock_team_membership_response.model_dump.return_value = {
+        "team_id": "team-dur",
+        "user_id": "user-dur",
+        "budget_id": "budget-dur",
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+        return_value=mock_team_membership_response
+    )
+
+    await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=10.0,
+        prisma_client=mock_prisma_client,
+        team_id="team-dur",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id=None,
+        allowed_models=["gpt-4o-mini"],
+        budget_duration="30d",
+    )
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    budget_data = mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs[
+        "data"
+    ]
+    assert budget_data["max_budget"] == 10.0
+    assert budget_data["allowed_models"] == ["gpt-4o-mini"]
+    assert budget_data["budget_duration"] == "30d"
+    reset_at = budget_data["budget_reset_at"]
+    assert isinstance(reset_at, datetime)
+    assert reset_at.tzinfo is not None
+    assert reset_at > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_add_new_member_persists_budget_duration_without_max_budget():
+    """budget_duration alone must still create a member budget; otherwise an
+    explicit recurring window passed without a cap would be silently dropped."""
+    from litellm.proxy._types import LitellmUserRoles
+
+    new_member = Member(user_id="user-dur2", role="user")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="admin_user", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_response = MagicMock()
+    mock_user_response.model_dump.return_value = {
+        "user_id": "user-dur2",
+        "user_email": None,
+        "teams": ["team-dur2"],
+        "user_role": "internal_user",
+    }
+    mock_prisma_client.db.litellm_usertable.upsert = AsyncMock(
+        return_value=mock_user_response
+    )
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget-dur2"
+    mock_prisma_client.db.litellm_budgettable.create = AsyncMock(
+        return_value=mock_budget_response
+    )
+    mock_team_membership_response = MagicMock()
+    mock_team_membership_response.model_dump.return_value = {
+        "team_id": "team-dur2",
+        "user_id": "user-dur2",
+        "budget_id": "budget-dur2",
+        "litellm_budget_table": None,
+    }
+    mock_prisma_client.db.litellm_teammembership.create = AsyncMock(
+        return_value=mock_team_membership_response
+    )
+
+    _, result_team_membership = await add_new_member(
+        new_member=new_member,
+        max_budget_in_team=None,
+        prisma_client=mock_prisma_client,
+        team_id="team-dur2",
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name="test_admin",
+        default_team_budget_id=None,
+        budget_duration="7d",
+    )
+
+    mock_prisma_client.db.litellm_budgettable.create.assert_called_once()
+    budget_data = mock_prisma_client.db.litellm_budgettable.create.call_args.kwargs[
+        "data"
+    ]
+    assert budget_data["budget_duration"] == "7d"
+    assert budget_data["budget_reset_at"] > datetime.now(timezone.utc)
+    assert result_team_membership is not None
+    assert result_team_membership.budget_id == "budget-dur2"
 
 
 @pytest.mark.asyncio

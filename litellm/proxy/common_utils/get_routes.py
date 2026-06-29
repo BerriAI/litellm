@@ -23,9 +23,7 @@ class GetRoutes:
             "path": getattr(route, "path", None),
             "methods": getattr(route, "methods", None),
             "name": getattr(route, "name", None),
-            "endpoint": (
-                endpoint_route.__name__ if getattr(route, "endpoint", None) else None
-            ),
+            "endpoint": (endpoint_route.__name__ if getattr(route, "endpoint", None) else None),
         }
         routes.append(route_info)
         return routes
@@ -43,9 +41,7 @@ class GetRoutes:
         if sub_app and hasattr(sub_app, "routes"):
             for sub_route in sub_app.routes:
                 # Get endpoint - either from endpoint attribute or app attribute
-                endpoint_func = getattr(sub_route, "endpoint", None) or getattr(
-                    sub_route, "app", None
-                )
+                endpoint_func = getattr(sub_route, "endpoint", None) or getattr(sub_route, "app", None)
 
                 if endpoint_func is not None:
                     sub_route_path = getattr(sub_route, "path", "")
@@ -69,14 +65,10 @@ class GetRoutes:
         try:
             if hasattr(endpoint_function, "__name__"):
                 return getattr(endpoint_function, "__name__")
-            elif hasattr(endpoint_function, "__class__") and hasattr(
-                endpoint_function.__class__, "__name__"
-            ):
+            elif hasattr(endpoint_function, "__class__") and hasattr(endpoint_function.__class__, "__name__"):
                 return getattr(endpoint_function.__class__, "__name__")
             else:
                 return None
         except Exception:
-            verbose_logger.exception(
-                f"Error getting endpoint name for route: {endpoint_function}"
-            )
+            verbose_logger.exception(f"Error getting endpoint name for route: {endpoint_function}")
             return None

@@ -140,9 +140,7 @@ async def image_generation(
 
         ### ALERTING ###
         asyncio.create_task(
-            proxy_logging_obj.update_request_status(
-                litellm_call_id=data.get("litellm_call_id", ""), status="success"
-            )
+            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
         )
 
         ### CALL HOOKS ### - modify outgoing data (guardrails, otel, etc.)
@@ -189,9 +187,7 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         verbose_proxy_logger.error(
-            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(
-                str(e)
-            )
+            "litellm.proxy.proxy_server.image_generation(): Exception occured - {}".format(str(e))
         )
         verbose_proxy_logger.debug(traceback.format_exc())
         if isinstance(e, HTTPException):
@@ -252,13 +248,9 @@ async def image_edit_api(
     ```
     """
     if image is not None and image_array is not None:
-        raise HTTPException(
-            status_code=422, detail="Cannot specify both 'image' and 'image[]'"
-        )
+        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
     if mask is not None and mask_array is not None:
-        raise HTTPException(
-            status_code=422, detail="Cannot specify both 'mask' and 'mask[]'"
-        )
+        raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
     if image is None and image_array is not None:
         image = image_array
     if mask is None and mask_array is not None:

@@ -69,17 +69,13 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
             optional_params["tool_choice_option"] = _tool_choice
         elif _tool_choice is not None:
             optional_params["tool_choice"] = _tool_choice
-        return super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        return super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")  # type: ignore
-        dynamic_api_key = (
-            api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""
-        )  # vllm does not require an api key
+        dynamic_api_key = api_key or get_secret_str("HOSTED_VLLM_API_KEY") or ""  # vllm does not require an api key
         return api_base, dynamic_api_key
 
     def get_complete_url(
@@ -95,29 +91,19 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         if model.startswith("deployment/"):
             deployment_id = "/".join(model.split("/")[1:])
             endpoint = (
-                WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value
-                if stream
-                else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
+                WatsonXAIEndpoint.DEPLOYMENT_CHAT_STREAM.value if stream else WatsonXAIEndpoint.DEPLOYMENT_CHAT.value
             )
             endpoint = endpoint.format(deployment_id=deployment_id)
         else:
-            endpoint = (
-                WatsonXAIEndpoint.CHAT_STREAM.value
-                if stream
-                else WatsonXAIEndpoint.CHAT.value
-            )
+            endpoint = WatsonXAIEndpoint.CHAT_STREAM.value if stream else WatsonXAIEndpoint.CHAT.value
         url = url.rstrip("/") + endpoint
 
         ## add api version
-        url = self._add_api_version_to_url(
-            url=url, api_version=optional_params.pop("api_version", None)
-        )
+        url = self._add_api_version_to_url(url=url, api_version=optional_params.pop("api_version", None))
         return url
 
     @staticmethod
-    def _apply_prompt_template_core(
-        model: str, messages: List[Dict[str, str]], hf_template_fn
-    ) -> Optional[str]:
+    def _apply_prompt_template_core(model: str, messages: List[Dict[str, str]], hf_template_fn) -> Optional[str]:
         """Core logic for applying prompt templates"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             custom_prompt,
@@ -169,9 +155,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         return None
 
     @staticmethod
-    async def aapply_prompt_template(
-        model: str, messages: List[Dict[str, str]]
-    ) -> Optional[str]:
+    async def aapply_prompt_template(model: str, messages: List[Dict[str, str]]) -> Optional[str]:
         """Apply prompt template (async version)"""
         import litellm
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -208,9 +192,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
                 # Log the exception for debugging but don't raise it
                 # The caller will fall back to default prompt factory
                 try:
-                    verbose_logger.debug(
-                        f"Failed to apply HuggingFace template for model {hf_model}: {e}"
-                    )
+                    verbose_logger.debug(f"Failed to apply HuggingFace template for model {hf_model}: {e}")
                 except Exception:
                     # If logging fails, silently continue - don't break the flow
                     pass
@@ -237,9 +219,7 @@ class IBMWatsonXChatConfig(IBMWatsonXMixin, OpenAIGPTConfig):
         return None
 
     @staticmethod
-    def apply_prompt_template(
-        model: str, messages: List[Dict[str, str]]
-    ) -> Optional[str]:
+    def apply_prompt_template(model: str, messages: List[Dict[str, str]]) -> Optional[str]:
         """Apply prompt template (sync version)"""
         from litellm.litellm_core_utils.prompt_templates.factory import (
             hf_chat_template,

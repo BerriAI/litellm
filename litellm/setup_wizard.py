@@ -184,11 +184,7 @@ def _styled_input(prompt: str) -> str:
 def _yaml_escape(value: str) -> str:
     """Escape a string for safe embedding in a double-quoted YAML scalar."""
     return (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
+        value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
     )
 
 
@@ -242,9 +238,7 @@ class SetupWizard:
 
         config_path = Path(os.getcwd()) / "litellm_config.yaml"
         try:
-            config_path.write_text(
-                SetupWizard._build_config(providers, env_vars, master_key)
-            )
+            config_path.write_text(SetupWizard._build_config(providers, env_vars, master_key))
         except OSError as exc:
             print(f"\n  {bold(_CROSS + ' Could not write config:')} {exc}")
             print("  Try running from a directory you have write access to.\n")
@@ -283,9 +277,7 @@ class SetupWizard:
     @staticmethod
     def _read_key() -> str:
         """Read one keypress from /dev/tty in raw mode."""
-        assert (
-            termios is not None and tty is not None
-        )  # only called when _HAS_RAW_TERMINAL
+        assert termios is not None and tty is not None  # only called when _HAS_RAW_TERMINAL
         with open("/dev/tty", "rb") as tty_fh:
             fd = tty_fh.fileno()
             old = termios.tcgetattr(fd)
@@ -366,11 +358,7 @@ class SetupWizard:
         """Number-based fallback when raw terminal input is unavailable."""
         print()
         print(f"  {bold('Add your first model')}")
-        print(
-            grey(
-                "  Enter numbers separated by commas (e.g. 1,2). Press Enter to confirm."
-            )
-        )
+        print(grey("  Enter numbers separated by commas (e.g. 1,2). Press Enter to confirm."))
         print()
         for i, p in enumerate(PROVIDERS, 1):
             print(f"  {grey(str(i) + '.')} {bold(p['name'])}  {grey(p['description'])}")
@@ -382,11 +370,7 @@ class SetupWizard:
                 print(grey("  Please select at least one provider."))
                 continue
             try:
-                nums = [
-                    int(x.strip())
-                    for x in raw.replace(" ", ",").split(",")
-                    if x.strip()
-                ]
+                nums = [int(x.strip()) for x in raw.replace(" ", ",").split(",") if x.strip()]
                 valid = sorted({n for n in nums if 1 <= n <= len(PROVIDERS)})
                 if not valid:
                     print(grey(f"  Enter numbers between 1 and {len(PROVIDERS)}."))
@@ -405,44 +389,30 @@ class SetupWizard:
         print()
         print(f"  {bold('Enter your API keys')}")
         print(grey("  Keys are stored only in the generated config file."))
-        print(
-            grey(
-                "  Tip: add litellm_config.yaml to .gitignore to avoid committing secrets."
-            )
-        )
+        print(grey("  Tip: add litellm_config.yaml to .gitignore to avoid committing secrets."))
         print()
 
         for p in providers:
             if p["env_key"] is None:
-                print(
-                    f"  {green(p['name'])}: {grey('no key needed (uses local Ollama)')}"
-                )
+                print(f"  {green(p['name'])}: {grey('no key needed (uses local Ollama)')}")
                 continue
 
             key = SetupWizard._prompt_key(p)
             if not key:
                 continue
 
-            for extra_key, extra_hint in zip(
-                p.get("extra_keys", []), p.get("extra_hints", [])
-            ):
+            for extra_key, extra_hint in zip(p.get("extra_keys", []), p.get("extra_hints", [])):
                 val = _styled_input(f"  {blue('❯')} {extra_key} {grey(extra_hint)}: ")
                 if val:
                     env_vars[extra_key] = val
 
             if p.get("needs_api_base"):
-                api_base = _styled_input(
-                    f"  {blue('❯')} Azure endpoint URL {grey(p.get('api_base_hint', ''))}: "
-                )
+                api_base = _styled_input(f"  {blue('❯')} Azure endpoint URL {grey(p.get('api_base_hint', ''))}: ")
                 if api_base:
                     env_vars[f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"] = api_base
-                deployment = _styled_input(
-                    f"  {blue('❯')} Azure deployment name {grey('(e.g. my-gpt4o)')}: "
-                )
+                deployment = _styled_input(f"  {blue('❯')} Azure deployment name {grey('(e.g. my-gpt4o)')}: ")
                 if deployment:
-                    env_vars[f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}"] = (
-                        deployment
-                    )
+                    env_vars[f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}"] = deployment
 
             # Store the key returned by validation — may be a re-entered replacement
             env_vars[p["env_key"]] = SetupWizard._validate_and_report(p, key)
@@ -454,9 +424,7 @@ class SetupWizard:
         """Prompt for a provider's API key, with skip option. Returns the key or ''."""
         hint = grey(provider.get("key_hint", ""))
         while True:
-            key = _styled_input(
-                f"  {blue('❯')} {bold(provider['name'])} API key {hint}: "
-            )
+            key = _styled_input(f"  {blue('❯')} {bold(provider['name'])} API key {hint}: ")
             if key:
                 return key
             print(grey("  Key is required. Leave blank to skip this provider."))
@@ -480,22 +448,15 @@ class SetupWizard:
             )
             valid = check_valid_key(model=test_model, api_key=api_key)
             if valid:
-                print(
-                    f"  {green(_CHECK)} {bold(provider['name'])} connected successfully"
-                )
+                print(f"  {green(_CHECK)} {bold(provider['name'])} connected successfully")
                 return api_key
 
             print(f"  {_CROSS} {bold(provider['name'])} {grey('— invalid API key')}")
-            if (
-                _styled_input(f"  {blue('❯')} Re-enter key? {grey('(y/N)')}: ").lower()
-                != "y"
-            ):
+            if _styled_input(f"  {blue('❯')} Re-enter key? {grey('(y/N)')}: ").lower() != "y":
                 return api_key
 
             hint = grey(provider.get("key_hint", ""))
-            new_key = _styled_input(
-                f"  {blue('❯')} {bold(provider['name'])} API key {hint}: "
-            )
+            new_key = _styled_input(f"  {blue('❯')} {bold(provider['name'])} API key {hint}: ")
             if not new_key:
                 return api_key
             api_key = new_key
@@ -539,9 +500,7 @@ class SetupWizard:
                 continue
 
             if p["id"] == "azure":
-                deployment = env_copy.pop(
-                    f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}", ""
-                )
+                deployment = env_copy.pop(f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}", "")
                 if not deployment:
                     continue  # skip Azure entirely if no deployment name was provided
                 models = [f"azure/{deployment}"]
@@ -560,15 +519,11 @@ class SetupWizard:
                 if p["env_key"] and p["env_key"] in env_copy:
                     lines.append(f"      api_key: os.environ/{p['env_key']}")
                 if p.get("api_base"):
-                    lines.append(
-                        f'      api_base: "{_yaml_escape(str(p["api_base"]))}"'
-                    )
+                    lines.append(f'      api_base: "{_yaml_escape(str(p["api_base"]))}"')
                 elif p.get("needs_api_base"):
                     azure_base_key = f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"
                     if azure_base_key in env_copy:
-                        lines.append(
-                            f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"'
-                        )
+                        lines.append(f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"')
                 if p.get("api_version"):
                     lines.append(f"      api_version: {p['api_version']}")
 
@@ -611,18 +566,12 @@ class SetupWizard:
 
     @staticmethod
     def _offer_start(config_path: Path, port: int, master_key: str) -> None:
-        start = _styled_input(
-            f"  {blue('❯')} Start the proxy now? {grey('(Y/n)')}: "
-        ).lower()
+        start = _styled_input(f"  {blue('❯')} Start the proxy now? {grey('(Y/n)')}: ").lower()
         if start not in ("", "y", "yes"):
             print()
-            print(
-                f"  Run {bold(f'litellm --config {config_path}')} whenever you're ready."
-            )
+            print(f"  Run {bold(f'litellm --config {config_path}')} whenever you're ready.")
             print()
-            print(
-                grey(f"  Quick test once running:  curl http://localhost:{port}/health")
-            )
+            print(grey(f"  Quick test once running:  curl http://localhost:{port}/health"))
             print()
             return
 

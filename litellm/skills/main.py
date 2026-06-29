@@ -50,9 +50,7 @@ def _get_skill_request_metadata(
         return extra_body["metadata"]
 
     metadata = kwargs.get("metadata")
-    if isinstance(metadata, dict) and isinstance(
-        metadata.get("requester_metadata"), dict
-    ):
+    if isinstance(metadata, dict) and isinstance(metadata.get("requester_metadata"), dict):
         return metadata["requester_metadata"]
     return None
 
@@ -208,9 +206,7 @@ def create_skill(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         request_body = skills_api_provider_config.transform_create_skill_request(
@@ -223,9 +219,7 @@ def create_skill(
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
-        url = skills_api_provider_config.get_complete_url(
-            api_base=api_base, endpoint="skills"
-        )
+        url = skills_api_provider_config.get_complete_url(api_base=api_base, endpoint="skills")
 
         # Pre-call logging
         litellm_logging_obj.update_from_kwargs(
@@ -403,9 +397,7 @@ def list_skills(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         url, query_params = skills_api_provider_config.transform_list_skills_request(
@@ -566,9 +558,7 @@ def get_skill(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Get API base
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -734,9 +724,7 @@ def delete_skill(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = skills_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = skills_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Get API base
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo

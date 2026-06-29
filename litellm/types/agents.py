@@ -205,6 +205,12 @@ class PatchAgentRequest(TypedDict, total=False):
 # Request/Response models for CRUD endpoints
 
 
+class AgentKeySummary(BaseModel):
+    token: str
+    key_alias: Optional[str] = None
+    key_name: Optional[str] = None
+
+
 class AgentResponse(BaseModel):
     agent_id: str
     agent_name: str
@@ -218,6 +224,7 @@ class AgentResponse(BaseModel):
     session_rpm_limit: Optional[int] = None
     static_headers: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
+    keys: Optional[List[AgentKeySummary]] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
@@ -354,9 +361,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
             LiteLLMSendMessageResponse with _hidden_params support
         """
         response_dict = response.model_dump(mode="json", exclude_none=True)
-        response_dict = _normalize_a2a_jsonrpc_response(
-            response_dict, request_id=request_id
-        )
+        response_dict = _normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
         return cls(**response_dict)
 
     @classmethod
@@ -375,6 +380,4 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
         Returns:
             LiteLLMSendMessageResponse with _hidden_params support
         """
-        return cls(
-            **_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id)
-        )
+        return cls(**_normalize_a2a_jsonrpc_response(response_dict, request_id=request_id))

@@ -130,10 +130,7 @@ def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail)
             _ENTERPRISE_SecretDetection,
         )
     except ImportError:
-        raise Exception(
-            "Trying to use Secret Detection"
-            + CommonProxyErrors.missing_enterprise_package.value
-        )
+        raise Exception("Trying to use Secret Detection" + CommonProxyErrors.missing_enterprise_package.value)
 
     _secret_detection_object = _ENTERPRISE_SecretDetection(
         detect_secrets_config=litellm_params.detect_secrets_config,
@@ -204,12 +201,9 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         raise ValueError("PANW Prisma AIRS: profile_name is required")
 
     _panw_callback = PanwPrismaAirsHandler(
-        guardrail_name=guardrail.get(
-            "guardrail_name", "panw_prisma_airs"
-        ),  # Use .get() with default
+        guardrail_name=guardrail.get("guardrail_name", "panw_prisma_airs"),  # Use .get() with default
         api_key=litellm_params.api_key,
-        api_base=litellm_params.api_base
-        or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
+        api_base=litellm_params.api_base or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",
         profile_name=litellm_params.profile_name,
         default_on=litellm_params.default_on,
         mask_on_block=getattr(litellm_params, "mask_on_block", False),

@@ -29,9 +29,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             "streaming_end_of_stream_only": _get_config_value(
                 litellm_params, optional_params, "streaming_end_of_stream_only"
             ),
-            "streaming_sampling_rate": _get_config_value(
-                litellm_params, optional_params, "streaming_sampling_rate"
-            ),
+            "streaming_sampling_rate": _get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
         },
     )
 

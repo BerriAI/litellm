@@ -26,10 +26,17 @@ class CohereRerankHandler(BaseTranslation):
 
     The handler specifically processes:
     - The 'query' parameter (string)
+    - The 'instruction' parameter (string), when present
 
     Note: Documents are not processed by guardrails as they are the corpus
     being searched, not user input.
     """
+
+    # User-controlled free-text fields that reach the model and must be
+    # scanned. 'instruction' is folded into the prompt by instruction-aware
+    # rerankers (e.g. hosted vLLM / Qwen3-Reranker), so it is as sensitive as
+    # 'query'; omitting it would let a caller smuggle content past guardrails.
+    _SCANNED_FIELDS = ("query", "instruction")
 
     async def process_input_messages(
         self,
@@ -38,42 +45,48 @@ class CohereRerankHandler(BaseTranslation):
         litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
-        Process input query by applying guardrails.
+        Process input text fields ('query' and 'instruction') by applying
+        guardrails and writing the sanitized values back.
 
         Args:
-            data: Request data dictionary containing 'query'
+            data: Request data dictionary containing 'query' and optionally
+                'instruction'
             guardrail_to_apply: The guardrail instance to apply
 
         Returns:
-            Modified data with guardrails applied to query only
+            Modified data with guardrails applied to query/instruction only
         """
-        # Process query only
-        query = data.get("query")
-        if query is not None and isinstance(query, str):
-            inputs = GenericGuardrailAPIInputs(texts=[query])
-            # Include model information if available
-            model = data.get("model")
-            if model:
-                inputs["model"] = model
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
-                request_data=data,
-                input_type="request",
-                logging_obj=litellm_logging_obj,
-            )
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
-            data["query"] = guardrailed_texts[0] if guardrailed_texts else query
+        # Collect every scannable text field in a stable order so the
+        # guardrailed results can be written back to the right key by index.
+        fields_to_scan = [(key, data[key]) for key in self._SCANNED_FIELDS if isinstance(data.get(key), str)]
+        if not fields_to_scan:
+            verbose_proxy_logger.debug("Rerank: No query/instruction to process or not strings")
+            return data
 
-            verbose_proxy_logger.debug(
-                "Rerank: Applied guardrail to query. "
-                "Original length: %d, New length: %d",
-                len(query),
-                len(data["query"]),
-            )
-        else:
-            verbose_proxy_logger.debug(
-                "Rerank: No query to process or query is not a string"
-            )
+        inputs = GenericGuardrailAPIInputs(texts=[value for _, value in fields_to_scan])
+        # Include model information if available
+        model = data.get("model")
+        if model:
+            inputs["model"] = model
+        guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+            inputs=inputs,
+            request_data=data,
+            input_type="request",
+            logging_obj=litellm_logging_obj,
+        )
+        guardrailed_texts = guardrailed_inputs.get("texts", [])
+
+        for idx, (key, original) in enumerate(fields_to_scan):
+            # Defensive: only write back when the guardrail returned a value for
+            # this index; otherwise keep the original (never forward unscanned).
+            if idx < len(guardrailed_texts):
+                data[key] = guardrailed_texts[idx]
+                verbose_proxy_logger.debug(
+                    "Rerank: Applied guardrail to %s. Original length: %d, New length: %d",
+                    key,
+                    len(original),
+                    len(data[key]),
+                )
 
         return data
 
@@ -102,7 +115,6 @@ class CohereRerankHandler(BaseTranslation):
             Unmodified response (rankings don't need text guardrails)
         """
         verbose_proxy_logger.debug(
-            "Rerank: Output processing not applicable "
-            "(output contains relevance scores, not text)"
+            "Rerank: Output processing not applicable (output contains relevance scores, not text)"
         )
         return response

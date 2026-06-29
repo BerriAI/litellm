@@ -8,6 +8,7 @@ import litellm
 from litellm.exceptions import BadRequestError
 
 from .grid_spec import (
+    BUDGET_MODE_MAX_TOKENS,
     OMIT,
     ROUTES,
     CellExpectation,
@@ -28,7 +29,7 @@ def _required_env_missing(model: ModelEntry) -> Optional[str]:
 
 
 def _max_tokens_for(model: ModelEntry) -> int:
-    return 200 if model.mode == "adaptive" else 8192
+    return 200 if model.mode == "adaptive" else BUDGET_MODE_MAX_TOKENS
 
 
 def _build_completion_kwargs(model: ModelEntry, effort: str) -> Dict[str, Any]:

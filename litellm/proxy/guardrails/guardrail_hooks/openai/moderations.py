@@ -58,9 +58,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         guardrail_name: str,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        model: Optional[
-            Literal["omni-moderation-latest", "text-moderation-latest"]
-        ] = None,
+        model: Optional[Literal["omni-moderation-latest", "text-moderation-latest"]] = None,
         streaming_end_of_stream_only: Optional[bool] = None,
         streaming_sampling_rate: Optional[int] = None,
         **kwargs,
@@ -80,27 +78,19 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             **kwargs,
         )
 
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
         # Store configuration
         self.api_key = api_key or self._get_api_key()
         self.api_base = api_base or "https://api.openai.com/v1"
-        self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = (
-            model or "omni-moderation-latest"
-        )
+        self.model: Literal["omni-moderation-latest", "text-moderation-latest"] = model or "omni-moderation-latest"
 
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
         # via getattr(guardrail_to_apply, "streaming_*", default).
         self.streaming_end_of_stream_only: bool = (
-            False
-            if streaming_end_of_stream_only is None
-            else streaming_end_of_stream_only
+            False if streaming_end_of_stream_only is None else streaming_end_of_stream_only
         )
-        self.streaming_sampling_rate: int = (
-            5 if streaming_sampling_rate is None else streaming_sampling_rate
-        )
+        self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
 
         if not self.api_key:
             raise ValueError(
@@ -142,9 +132,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             json=request_body,
         )
 
-        verbose_proxy_logger.debug(
-            "OpenAI Moderation guard response: %s", response.json()
-        )
+        verbose_proxy_logger.debug("OpenAI Moderation guard response: %s", response.json())
 
         if response.status_code != 200:
             raise HTTPException(
@@ -159,9 +147,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
 
         return OpenAIModerationResponse(**response.json())
 
-    def _check_moderation_result(
-        self, moderation_response: "OpenAIModerationResponse"
-    ) -> None:
+    def _check_moderation_result(self, moderation_response: "OpenAIModerationResponse") -> None:
         """
         Check if the moderation response indicates harmful content and raise exception if needed.
         """
@@ -235,9 +221,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 text_to_moderate = "\n".join(texts)
 
         if not text_to_moderate:
-            verbose_proxy_logger.debug(
-                "OpenAI Moderation: No text content to moderate in inputs"
-            )
+            verbose_proxy_logger.debug("OpenAI Moderation: No text content to moderate in inputs")
             return inputs
 
         # Make moderation request
@@ -309,9 +293,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         instead of the stringified exception.
         """
         guardrail_status: GuardrailStatus = (
-            "guardrail_intervened"
-            if self._is_guardrail_intervention(e)
-            else "guardrail_failed_to_respond"
+            "guardrail_intervened" if self._is_guardrail_intervention(e) else "guardrail_failed_to_respond"
         )
 
         if isinstance(request_data, dict):
@@ -321,9 +303,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
             metadata = {}
 
         # Use the stashed moderation response if available, fall back to exception
-        guardrail_response: Union[dict, Exception, str] = metadata.pop(
-            "_openai_moderation_response", e
-        )
+        guardrail_response: Union[dict, Exception, str] = metadata.pop("_openai_moderation_response", e)
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response=guardrail_response,

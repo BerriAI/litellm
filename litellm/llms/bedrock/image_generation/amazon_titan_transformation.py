@@ -90,9 +90,7 @@ class AmazonTitanImageGenerationConfig:
                 image_generation_config["height"] = int(height)
             elif k == "n" and v is not None:
                 image_generation_config["numberOfImages"] = v
-            elif (
-                k == "quality" and v is not None
-            ):  # 'auto', 'hd', 'standard', 'high', 'medium', 'low'
+            elif k == "quality" and v is not None:  # 'auto', 'hd', 'standard', 'high', 'medium', 'low'
                 if v in ("hd", "premium", "high"):
                     image_generation_config["quality"] = "premium"
                 elif v in ("standard", "medium", "low"):
@@ -116,9 +114,7 @@ class AmazonTitanImageGenerationConfig:
         if negative_text:
             text_to_image_params["negativeText"] = negative_text
         task_type = optional_params.pop("taskType", "TEXT_IMAGE")
-        user_specified_image_generation_config = optional_params.pop(
-            "imageGenerationConfig", {}
-        )
+        user_specified_image_generation_config = optional_params.pop("imageGenerationConfig", {})
         image_generation_config = {
             **image_generation_config,
             **user_specified_image_generation_config,
@@ -126,9 +122,7 @@ class AmazonTitanImageGenerationConfig:
         return AmazonTitanImageGenerationRequestBody(
             taskType=task_type,
             textToImageParams=AmazonTitanTextToImageParams(**text_to_image_params),  # type: ignore
-            imageGenerationConfig=AmazonNovaCanvasImageGenerationConfig(
-                **image_generation_config
-            ),
+            imageGenerationConfig=AmazonNovaCanvasImageGenerationConfig(**image_generation_config),
         )
 
     @classmethod

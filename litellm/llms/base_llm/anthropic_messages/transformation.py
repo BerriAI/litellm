@@ -117,9 +117,7 @@ class BaseAnthropicMessagesConfig(ABC):
     ) -> "BaseLLMException":
         from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-        return BaseLLMException(
-            message=error_message, status_code=status_code, headers=headers
-        )
+        return BaseLLMException(message=error_message, status_code=status_code, headers=headers)
 
     @property
     def max_retry_on_anthropic_messages_http_error(self) -> int:
@@ -130,9 +128,7 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return 2
 
-    def should_retry_anthropic_messages_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict
-    ) -> bool:
+    def should_retry_anthropic_messages_on_http_error(self, e: httpx.HTTPStatusError, litellm_params: dict) -> bool:
         """
         When True, async_anthropic_messages_handler will transform the request body
         and issue one more attempt (bounded by max_retry_on_anthropic_messages_http_error).
@@ -141,14 +137,9 @@ class BaseAnthropicMessagesConfig(ABC):
             is_anthropic_invalid_thinking_signature_error,
         )
 
-        return (
-            e.response.status_code == 400
-            and is_anthropic_invalid_thinking_signature_error(e.response.text)
-        )
+        return e.response.status_code == 400 and is_anthropic_invalid_thinking_signature_error(e.response.text)
 
-    def transform_anthropic_messages_request_on_http_error(
-        self, e: httpx.HTTPStatusError, request_data: dict
-    ) -> dict:
+    def transform_anthropic_messages_request_on_http_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
         """
         Mutates request_data in place when retrying after a recoverable HTTP error.
         """
@@ -157,9 +148,6 @@ class BaseAnthropicMessagesConfig(ABC):
             strip_thinking_blocks_from_anthropic_messages_request_dict,
         )
 
-        if (
-            e.response.status_code == 400
-            and is_anthropic_invalid_thinking_signature_error(e.response.text)
-        ):
+        if e.response.status_code == 400 and is_anthropic_invalid_thinking_signature_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)
         return request_data

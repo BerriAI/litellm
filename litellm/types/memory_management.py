@@ -23,9 +23,7 @@ class LiteLLM_MemoryRow(BaseModel):
 
 class MemoryCreateRequest(BaseModel):
     key: str = Field(..., description="Memory key (acts as the namespace in the URL).")
-    value: str = Field(
-        ..., description="Memory content. Typically markdown/text for LLM context."
-    )
+    value: str = Field(..., description="Memory content. Typically markdown/text for LLM context.")
     metadata: Optional[Any] = Field(
         default=None,
         description="Optional JSON metadata (tags, structured fields).",

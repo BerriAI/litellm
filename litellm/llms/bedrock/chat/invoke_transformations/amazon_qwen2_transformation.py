@@ -57,9 +57,7 @@ class AmazonQwen2Config(AmazonQwen3Config):
                 response_data = raw_response
 
             # Extract the generated text - Qwen2 uses "text" field, but also support "generation" for compatibility
-            generated_text = response_data.get("generation", "") or response_data.get(
-                "text", ""
-            )
+            generated_text = response_data.get("generation", "") or response_data.get("text", "")
 
             # Clean up the response (remove assistant start token if present)
             if generated_text.startswith("<|im_start|>assistant\n"):

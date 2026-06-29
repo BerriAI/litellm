@@ -16,9 +16,7 @@ class LassoGuardrailConfigModelOptionalParams(BaseModel):
     )
 
 
-class LassoGuardrailConfigModel(
-    GuardrailConfigModel[LassoGuardrailConfigModelOptionalParams]
-):
+class LassoGuardrailConfigModel(GuardrailConfigModel[LassoGuardrailConfigModelOptionalParams]):
     api_key: Optional[str] = Field(
         default=None,
         description="The API key for the Lasso guardrail. If not provided, the `LASSO_API_KEY` environment variable is checked.",

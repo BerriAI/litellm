@@ -158,6 +158,68 @@ def test_deepseek_cris():
     assert bedrock_route == "converse"
 
 
+def test_application_inference_profile_arn_routes_to_converse():
+    """
+    Regression for #18258: a bare application-inference-profile ARN passed as
+    `bedrock/arn:...` must route to converse. The ARN ends in an opaque id with
+    no provider substring, so the invoke path cannot build a provider-native
+    body and raises "Unknown provider=None". Converse needs no provider, so it
+    is the correct route.
+    """
+    route = BedrockModelInfo.get_bedrock_route(
+        model="bedrock/arn:aws:bedrock:us-west-2:123412341234:application-inference-profile/a1b2c3"
+    )
+    assert route == "converse"
+
+
+def test_explicit_invoke_prefix_wins_over_application_inference_profile_arn():
+    """
+    An explicit invoke/ prefix is respected even for an application-inference-profile
+    ARN; only the bare `bedrock/arn:...` form is auto-routed to converse. The
+    explicit invoke path remains a dead end for these ARNs (no provider can be
+    derived, so completion raises "Unknown provider=None") by design: a caller
+    that explicitly asks for invoke gets invoke. The auto-route only rescues the
+    documented bare form.
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model = "bedrock/invoke/arn:aws:bedrock:us-west-2:123412341234:application-inference-profile/a1b2c3"
+    assert BedrockModelInfo.get_bedrock_route(model) == "invoke"
+    assert BaseAWSLLM.get_bedrock_invoke_provider(model) is None
+
+
+def test_system_defined_inference_profile_arn_still_routes_to_converse():
+    """
+    A system-defined cross-region inference-profile ARN embeds a known model, so
+    get_base_model resolves it and it already routes to converse. Guards that the
+    application-inference-profile fix does not change this working case.
+    """
+    route = BedrockModelInfo.get_bedrock_route(
+        model="bedrock/arn:aws:bedrock:us-east-1:123:inference-profile/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+    )
+    assert route == "converse"
+
+
+def test_other_opaque_arn_types_still_route_to_invoke():
+    """
+    Only application-inference-profile ARNs are auto-routed to converse. Other
+    opaque ARNs (provisioned-model, imported-model, custom-model-deployment)
+    also yield no invoke provider, but they are frequently invoke-only with
+    provider-specific body formats, so routing them to converse could break
+    them. Guards the deliberate scope against an over-broad "any opaque ARN ->
+    converse" generalization.
+    """
+    for arn_segment in (
+        "provisioned-model/abcdefgh1234",
+        "imported-model/abcdefgh1234",
+        "custom-model-deployment/abcdefgh1234",
+    ):
+        route = BedrockModelInfo.get_bedrock_route(
+            model=f"bedrock/arn:aws:bedrock:us-east-1:123412341234:{arn_segment}"
+        )
+        assert route == "invoke", f"{arn_segment} should stay on invoke route"
+
+
 def test_govcloud_cross_region_inference_prefix():
     """
     Test that GovCloud models with cross-region inference prefix (us-gov.) are parsed correctly

@@ -187,14 +187,10 @@ class GuardrailSpanData:
     error: SpanError | None = None
 
     # Guardrail statuses that mean the guardrail did not pass the request through.
-    _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset(
-        {"guardrail_intervened", "guardrail_failed_to_respond"}
-    )
+    _ERROR_STATUSES: ClassVar[frozenset[str]] = frozenset({"guardrail_intervened", "guardrail_failed_to_respond"})
 
     @classmethod
-    def from_logging_entry(
-        cls, entry: "StandardLoggingGuardrailInformation"
-    ) -> "GuardrailSpanData":
+    def from_logging_entry(cls, entry: "StandardLoggingGuardrailInformation") -> "GuardrailSpanData":
         """Build from one ``standard_logging_guardrail_information`` entry.
 
         Reads the canonical, provider-agnostic ``StandardLoggingGuardrailInformation``
@@ -279,9 +275,7 @@ class ToolDefinition:
 
     name: str
     description: str | None = None
-    parameters_json: str | None = (
-        None  # JSON-serialized schema (str so it's an AttrValue)
-    )
+    parameters_json: str | None = None  # JSON-serialized schema (str so it's an AttrValue)
 
 
 @dataclass(frozen=True)
@@ -322,9 +316,7 @@ class LLMCallSpanData:
         # Normalize ``response`` to a dict once so the content/id reads below are a
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response = payload.get("response")
-        response = cast(
-            Mapping[str, object], raw_response if isinstance(raw_response, dict) else {}
-        )
+        response = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
         choices_out = _dicts(response.get("choices"))
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
@@ -347,9 +339,7 @@ class LLMCallSpanData:
             finish_reasons=finish_reasons,
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
-            cost=LLMCost.from_breakdown(
-                cast("Mapping[str, object] | None", payload.get("cost_breakdown"))
-            ),
+            cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
             is_streaming=as_bool(payload.get("stream")),
@@ -396,14 +386,10 @@ class MCPToolCallSpanData:
             server_name=as_str(meta.get("mcp_server_name")),
             session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
-                _json_or_none(meta.get("arguments"))
-                if capture_content and meta.get("arguments") is not None
-                else None
+                _json_or_none(meta.get("arguments")) if capture_content and meta.get("arguments") is not None else None
             ),
             result_json=(
-                _json_or_none(meta.get("result"))
-                if capture_content and meta.get("result") is not None
-                else None
+                _json_or_none(meta.get("result")) if capture_content and meta.get("result") is not None else None
             ),
             error=_parse_error(payload),
             response_cost=as_float(payload.get("response_cost")),
@@ -426,9 +412,7 @@ def is_mcp_tool_call(payload: Mapping[str, object]) -> bool:
     """Whether a closed request's payload is an MCP tool call rather than an LLM
     call — true when the MCP gateway stamped its tool-call metadata, or the call
     type says so on a path that hasn't populated the metadata yet."""
-    return bool(_mcp_tool_call_metadata(payload)) or (
-        payload.get("call_type") == "call_mcp_tool"
-    )
+    return bool(_mcp_tool_call_metadata(payload)) or (payload.get("call_type") == "call_mcp_tool")
 
 
 # --- service event_metadata sanitization ------------------------------------ #
@@ -448,9 +432,7 @@ _SENSITIVE_METADATA_SUBSTRINGS: tuple[str, ...] = (
 # Keys that carry raw call-site internals — live objects, full kwargs/args. The
 # operation name is already the span's ``call_type``, so ``function_name`` is
 # redundant.
-_DROP_METADATA_KEYS: frozenset = frozenset(
-    {"function_kwargs", "function_args", "function_name"}
-)
+_DROP_METADATA_KEYS: frozenset = frozenset({"function_kwargs", "function_args", "function_name"})
 _MAX_METADATA_VALUE_LEN = 1024
 _MAX_METADATA_ITEMS = 32
 

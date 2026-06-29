@@ -3,6 +3,11 @@
 import pytest
 
 import litellm
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -152,7 +157,7 @@ def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort
     ],
 )
 def test_bedrock_invoke_messages_clamps_effort_to_ceiling(
-    model, effort, expected_effort
+    local_model_cost_map, model, effort, expected_effort
 ):
     """Bedrock Invoke /v1/messages degrades effort to the model's ceiling.
 
@@ -174,7 +179,7 @@ def test_bedrock_invoke_messages_clamps_effort_to_ceiling(
     assert result["thinking"]["type"] == "adaptive"
 
 
-def test_bedrock_invoke_messages_rejects_xhigh_without_ceiling():
+def test_bedrock_invoke_messages_rejects_xhigh_without_ceiling(local_model_cost_map):
     """Sonnet 4.6 on Bedrock has no effort ceiling, so xhigh is still rejected."""
     config = AmazonAnthropicClaudeMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": "xhigh"}
@@ -199,7 +204,9 @@ def test_bedrock_invoke_messages_rejects_xhigh_without_ceiling():
         "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
     ],
 )
-def test_reasoning_effort_max_accepted_on_sonnet_46_messages(model):
+def test_reasoning_effort_max_accepted_on_sonnet_46_messages(
+    local_model_cost_map, model
+):
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": "max"}
 
@@ -269,11 +276,13 @@ def test_reasoning_effort_in_supported_params():
         "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
         "vertex_ai/claude-sonnet-4-6",
         "claude-opus-4-6",
-        "bedrock/invoke/us.anthropic.claude-opus-4-6",
+        "bedrock/invoke/us.anthropic.claude-opus-4-6-v1:0",
         "vertex_ai/claude-opus-4-6",
     ],
 )
-def test_legacy_thinking_high_budget_clamps_to_high_when_xhigh_unsupported(model):
+def test_legacy_thinking_high_budget_clamps_to_high_when_xhigh_unsupported(
+    local_model_cost_map, model
+):
     """Claude Code sends ``thinking.budget_tokens=31999``; Sonnet 4.6 and Opus 4.6
     have no ``xhigh`` tier, so the translator must emit ``high`` rather than the
     provider-invalid ``xhigh`` (regression for issue #29282)."""
@@ -352,13 +361,13 @@ def test_legacy_thinking_translates_to_adaptive_for_opus_48(
 @pytest.mark.parametrize(
     "budget_tokens,expected_effort",
     [
-        (31999, "high"),
-        (24000, "high"),
-        (10000, "high"),
-        (9999, "medium"),
-        (5000, "medium"),
-        (4999, "low"),
-        (1024, "low"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET * 2, "high"),
+        (DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET, "high"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET, "high"),
+        (DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET - 1, "medium"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET, "medium"),
+        (DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET - 1, "low"),
+        (1, "low"),
     ],
 )
 def test_legacy_thinking_budget_buckets_on_sonnet_46(budget_tokens, expected_effort):

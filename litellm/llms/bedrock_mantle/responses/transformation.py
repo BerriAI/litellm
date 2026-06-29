@@ -40,9 +40,7 @@ _BASE_SUFFIXES_TO_STRIP = (
 )
 
 # Per Bedrock Mantle Responses API validation errors.
-_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset(
-    {"function", "mcp", "custom", "namespace", "tool_search"}
-)
+_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES = frozenset({"function", "mcp", "custom", "namespace", "tool_search"})
 
 
 class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPIConfig):
@@ -65,11 +63,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         litellm_params: dict,
     ) -> str:
         region = self._resolve_region({**litellm_params, "api_base": api_base})
-        base = (
-            api_base
-            or get_secret_str("BEDROCK_MANTLE_API_BASE")
-            or f"https://bedrock-mantle.{region}.api.aws"
-        )
+        base = api_base or get_secret_str("BEDROCK_MANTLE_API_BASE") or f"https://bedrock-mantle.{region}.api.aws"
         base = base.rstrip("/")
         for suffix in _BASE_SUFFIXES_TO_STRIP:
             if base.endswith(suffix):
@@ -83,9 +77,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         path = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
         return f"{base}{path}"
 
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         bearer = self._resolve_bearer_token(litellm_params.api_key)
         if bearer:
@@ -117,8 +109,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
 
         if dropped_types:
             verbose_logger.warning(
-                "Bedrock Mantle Responses API: dropping unsupported tool type(s) "
-                "%s (supported: %s).",
+                "Bedrock Mantle Responses API: dropping unsupported tool type(s) %s (supported: %s).",
                 sorted(set(dropped_types)),
                 sorted(_BEDROCK_MANTLE_SUPPORTED_RESPONSE_TOOL_TYPES),
             )
