@@ -2044,6 +2044,48 @@ async def cli_sso_callback(
         raise HTTPException(status_code=500, detail=f"Failed to process CLI SSO: {str(e)}")
 
 
+async def _resolve_cli_session_budget(
+    user_id: str,
+    team_id: Optional[str],
+    user_api_key_cache: Any,
+) -> Optional[float]:
+    """Return max_budget to embed in the CLI JWT, or None to let user/team limits apply.
+
+    Falls back to litellm.max_ui_session_budget only when both the user and the
+    selected team have no configured budget.  If any lookup fails we assume a
+    budget may exist and skip the cap so we never over-restrict.
+    """
+    from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+    from litellm.proxy.proxy_server import prisma_client
+
+    try:
+        db_user = await get_user_object(
+            user_id=user_id,
+            prisma_client=prisma_client,
+            user_id_upsert=False,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if db_user is not None and db_user.max_budget is not None:
+            return None  # user has a budget; don't override
+    except Exception:
+        return None  # assume budget exists if lookup fails
+
+    if team_id:
+        try:
+            db_team = await get_team_object(
+                team_id=team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if db_team is not None and db_team.max_budget is not None:
+                return None  # team has a budget
+            return litellm.max_ui_session_budget
+        except Exception:
+            return None  # team lookup failed: don't apply fallback cap
+
+    return None
+
+
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
 async def cli_poll_key(
     key_id: str,
@@ -2133,36 +2175,11 @@ async def cli_poll_key(
                 models=session_data.get("models", []),
             )
 
-            # Resolve effective session budget cap:
-            # - If user has their own budget, let it apply (no cap override)
-            # - If neither user nor team has a budget, cap at max_ui_session_budget
-            from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
-            from litellm.proxy.proxy_server import prisma_client
-
-            resolved_max_budget: Optional[float] = None
-            try:
-                db_user = await get_user_object(
-                    user_id=user_id,
-                    prisma_client=prisma_client,
-                    user_id_upsert=False,
-                    user_api_key_cache=user_api_key_cache,
-                )
-                user_has_budget = db_user is not None and db_user.max_budget is not None
-            except Exception:
-                user_has_budget = True  # assume budget exists if lookup fails
-
-            if not user_has_budget and team_id:
-                try:
-                    db_team = await get_team_object(
-                        team_id=team_id,
-                        prisma_client=prisma_client,
-                        user_api_key_cache=user_api_key_cache,
-                    )
-                    team_has_budget = db_team is not None and db_team.max_budget is not None
-                    if not team_has_budget:
-                        resolved_max_budget = litellm.max_ui_session_budget
-                except Exception:
-                    pass  # team lookup failed: don't apply fallback cap
+            resolved_max_budget = await _resolve_cli_session_budget(
+                user_id=user_id,
+                team_id=team_id,
+                user_api_key_cache=user_api_key_cache,
+            )
 
             # Generate CLI JWT on-demand (expiration configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS)
             # Pass selected team_id to ensure JWT has correct team
