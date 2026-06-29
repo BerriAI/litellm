@@ -18,6 +18,13 @@ before the LLM call even starts), so a guardrail is a sibling of the LLM call,
 not a child of it. The emitter parents every span to the ambient OTel context
 (the active server span), which matches this.
 
+MCP spans (``MCP_TOOL_CALL``, ``MCP_LIST_TOOLS``) are intentionally NOT in this
+tree. Per the OTel GenAI MCP semconv, MCP and the HTTP transport are independent
+contexts, so an MCP span parents to the trace context the client propagated in
+``params._meta`` (or starts its own root when none is propagated) and records the
+``PROXY_REQUEST`` transport span as a span *link*, never a parent. The registry
+encodes this as ``parent=None, links=PROXY_REQUEST``.
+
 Not every service call becomes a span — :func:`span_role_for_service` decides:
 
 - ``DB_CALL`` (CLIENT) — outbound datastores (redis, postgres,
@@ -76,15 +83,24 @@ class SpanSpec:
     role: SpanRole
     kind: LiteLLMSpanKind
     parent: SpanRole | None
+    links: SpanRole | None = None
 
 
 SPAN_REGISTRY: dict[SpanRole, SpanSpec] = {
     SpanRole.PROXY_REQUEST: SpanSpec(SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None),
     SpanRole.LLM_CALL: SpanSpec(SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
-    # The proxy is an MCP client to the upstream server it dispatches the tool
-    # call to, so this is a CLIENT span, sibling of the LLM call under the request.
-    SpanRole.MCP_TOOL_CALL: SpanSpec(SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
-    SpanRole.MCP_LIST_TOOLS: SpanSpec(SpanRole.MCP_LIST_TOOLS, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    # MCP and the HTTP transport are independent contexts (OTel GenAI MCP semconv),
+    # so an MCP span does not nest under the transport span. The proxy is an MCP
+    # client to the upstream server, so it's a CLIENT span; it parents to the trace
+    # context the client propagated in ``params._meta`` (or starts its own root when
+    # none is propagated) and records the PROXY_REQUEST transport span as a span
+    # *link*, never a parent — hence ``parent=None, links=PROXY_REQUEST``.
+    SpanRole.MCP_TOOL_CALL: SpanSpec(
+        SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=None, links=SpanRole.PROXY_REQUEST
+    ),
+    SpanRole.MCP_LIST_TOOLS: SpanSpec(
+        SpanRole.MCP_LIST_TOOLS, LiteLLMSpanKind.CLIENT, parent=None, links=SpanRole.PROXY_REQUEST
+    ),
     SpanRole.GUARDRAIL: SpanSpec(SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
     SpanRole.DB_CALL: SpanSpec(SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
     SpanRole.SERVICE: SpanSpec(SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
@@ -188,7 +204,8 @@ def service_span_name(data: "ServiceSpanData") -> str:
 
 
 def root_roles() -> list[SpanRole]:
-    """Roles that start a new trace (no in-process parent)."""
+    """Roles with no in-process parent. They start a new trace unless they adopt a
+    remote parent (e.g. an MCP span joining the client's propagated context)."""
     return [role for role, spec in SPAN_REGISTRY.items() if spec.parent is None]
 
 
@@ -205,6 +222,8 @@ def validate_registry(
             raise ValueError(f"SPAN_REGISTRY[{role}] has mismatched role {spec.role}")
         if spec.parent is not None and spec.parent not in reg:
             raise ValueError(f"span role {role} declares unknown parent {spec.parent}")
+        if spec.links is not None and spec.links not in reg:
+            raise ValueError(f"span role {role} declares unknown link target {spec.links}")
     missing = [role for role in SpanRole if role not in reg]
     if missing:
         raise ValueError(f"SPAN_REGISTRY is missing roles: {missing}")
