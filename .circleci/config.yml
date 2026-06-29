@@ -1493,6 +1493,28 @@ jobs:
           command: |
             uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
 
+  installing_litellm_on_python_3_14:
+    docker:
+      - image: cimg/python:3.14.3@sha256:939ae32371318d5d11cd09527e5c098bc52d9402c30b3763297a3718ff94176b
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: medium
+
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.14
+      - run:
+          name: Run tests
+          command: |
+            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+
   installing_litellm_on_python_v2_migration_resolver:
     docker:
       - *python312_image
@@ -3087,6 +3109,8 @@ workflows:
       - installing_litellm_on_python:
           filters: *main_branches
       - installing_litellm_on_python_3_13:
+          filters: *main_branches
+      - installing_litellm_on_python_3_14:
           filters: *main_branches
       - installing_litellm_on_python_v2_migration_resolver:
           filters: *main_branches
