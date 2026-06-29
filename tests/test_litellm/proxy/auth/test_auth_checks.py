@@ -409,13 +409,7 @@ async def test_can_key_call_resolved_model_teamless_all_team_models_denied():
 
 @pytest.mark.asyncio
 async def test_team_model_aliases_cannot_bypass_key_models():
-    """team_model_aliases must not let a key reach models outside its own allowlist.
-
-    Regression guard: when `_check_model_access_helper` short-circuited on any
-    model name present as a key in `team_model_aliases` (regardless of target),
-    a key restricted to one prefixed model could call sibling models simply
-    because the team had a short-name alias for them.
-    """
+    """A team alias whose target is not in `key.models` must be denied."""
     from litellm.proxy.auth.auth_checks import can_key_call_model
 
     valid_token = UserAPIKeyAuth(
