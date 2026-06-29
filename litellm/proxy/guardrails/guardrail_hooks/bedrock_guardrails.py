@@ -82,9 +82,7 @@ _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH = "/guardrail-checks/invoke"
 # more text blocks is split across multiple messages so ALL content is scanned --
 # never truncated (truncation would let a user hide content past the limit).
 _BEDROCK_CHECKS_MAX_CONTENT_BLOCKS = 10
-_BEDROCK_CHECKS_KNOWN_KEYS = frozenset(
-    {"contentFilter", "promptAttack", "sensitiveInformation"}
-)
+_BEDROCK_CHECKS_KNOWN_KEYS = frozenset({"contentFilter", "promptAttack", "sensitiveInformation"})
 # InvokeGuardrailChecks only accepts roles user/assistant/system. Map every other
 # OpenAI role onto one of these so NO message content is skipped (skipping would let
 # a user hide prohibited text in e.g. a tool/function message that the model still
@@ -237,8 +235,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # InvokeGuardrailChecks is detect-only: it never returns rewritten content,
         # so masking has no effect in checks mode.
         if self.checks is not None and (
-            getattr(self, "mask_request_content", False)
-            or getattr(self, "mask_response_content", False)
+            getattr(self, "mask_request_content", False) or getattr(self, "mask_response_content", False)
         ):
             verbose_proxy_logger.warning(
                 "Bedrock Guardrail: mask_request_content/mask_response_content have no "
@@ -274,15 +271,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 sorted(_BEDROCK_CHECKS_KNOWN_KEYS),
             )
         cleaned = {
-            key: value
-            for key, value in checks.items()
-            if key in _BEDROCK_CHECKS_KNOWN_KEYS and value is not None
+            key: value for key, value in checks.items() if key in _BEDROCK_CHECKS_KNOWN_KEYS and value is not None
         }
         return cleaned or None
 
-    def _create_bedrock_input_content_request(
-        self, messages: Optional[List[AllMessageValues]]
-    ) -> BedrockRequest:
+    def _create_bedrock_input_content_request(self, messages: Optional[List[AllMessageValues]]) -> BedrockRequest:
         """
         Create a bedrock request for the input content - the LLM request.
         """
@@ -685,10 +678,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # request_path for the resource-less InvokeGuardrailChecks endpoint (where
         # guardrailIdentifier/guardrailVersion are None and must not be interpolated).
         if request_path is None:
-            request_path = (
-                f"/guardrail/{self.guardrailIdentifier}"
-                f"/version/{self.guardrailVersion}/apply"
-            )
+            request_path = f"/guardrail/{self.guardrailIdentifier}/version/{self.guardrailVersion}/apply"
         proxy_endpoint_url = f"{proxy_endpoint_url}{request_path}"
         encoded_data = json.dumps(data).encode("utf-8")
 
@@ -904,20 +894,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         guardrail_status="guardrail_failed_to_respond",
                         start_time=start_time.timestamp(),
                         end_time=datetime.now(timezone.utc).timestamp(),
-                        duration=(
-                            datetime.now(timezone.utc) - start_time
-                        ).total_seconds(),
+                        duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
                         event_type=event_type,
                     )
-                    raise HTTPException(
-                        status_code=status_code, detail=detail_message
-                    ) from e
+                    raise HTTPException(status_code=status_code, detail=detail_message) from e
                 except HTTPException:
                     raise
             # Endpoint down, timeout, or other HTTP/network errors
-            verbose_proxy_logger.error(
-                "Bedrock AI: failed to make guardrail request: %s", str(e)
-            )
+            verbose_proxy_logger.error("Bedrock AI: failed to make guardrail request: %s", str(e))
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": str(e)},
@@ -933,9 +917,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     ###########  InvokeGuardrailChecks (resource-less, detect-only) ############
 
     @staticmethod
-    def _chunk_texts_into_checks_messages(
-        role: str, texts: list[str]
-    ) -> list[BedrockChecksMessage]:
+    def _chunk_texts_into_checks_messages(role: str, texts: list[str]) -> list[BedrockChecksMessage]:
         """Group ``texts`` into role-tagged messages of <= the API content-block cap.
 
         A source message with more text blocks than the per-message limit is split
@@ -973,9 +955,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Reuse the ApplyGuardrail output extractor (single source of truth for
             # pulling assistant text out of a ModelResponse), then re-tag as an
             # assistant turn for the role-based InvokeGuardrailChecks payload.
-            output_request = self._create_bedrock_output_content_request(
-                response=response
-            )
+            output_request = self._create_bedrock_output_content_request(response=response)
             output_texts: list[str] = []
             for item in output_request.get("content") or []:
                 text = (item.get("text") or {}).get("text")
@@ -1028,14 +1008,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             api_key=api_key,
             request_path=_BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH,
         )
-        verbose_proxy_logger.debug(
-            "Bedrock InvokeGuardrailChecks request url: %s", prepared_request.url
-        )
+        verbose_proxy_logger.debug("Bedrock InvokeGuardrailChecks request url: %s", prepared_request.url)
 
         event_type = logging_event_type or (
-            GuardrailEventHooks.pre_call
-            if source == "INPUT"
-            else GuardrailEventHooks.post_call
+            GuardrailEventHooks.pre_call if source == "INPUT" else GuardrailEventHooks.post_call
         )
 
         httpx_response = await self._sign_and_post(
@@ -1046,9 +1022,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code != 200:
-            status_code, detail_message = self._parse_bedrock_guardrail_error_response(
-                httpx_response
-            )
+            status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)
             verbose_proxy_logger.error(
                 "Bedrock InvokeGuardrailChecks: error response. Status %s: %s",
                 httpx_response.status_code,
@@ -1066,18 +1040,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
             raise HTTPException(status_code=status_code, detail=detail_message)
 
-        json_response: BedrockGuardrailChecksResponse = cast(
-            BedrockGuardrailChecksResponse, httpx_response.json()
-        )
+        json_response: BedrockGuardrailChecksResponse = cast(BedrockGuardrailChecksResponse, httpx_response.json())
         violations = self._collect_invoke_checks_violations(json_response)
 
         # Log a copy with PII location offsets stripped: offsets + the (separately
         # logged) request messages would otherwise reconstruct the detected PII span.
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
-            guardrail_json_response=self._sanitize_invoke_checks_response_for_logging(
-                json_response
-            ),
+            guardrail_json_response=self._sanitize_invoke_checks_response_for_logging(json_response),
             request_data=request_data or {},
             guardrail_status=self._get_invoke_checks_status(bool(violations)),
             start_time=start_time.timestamp(),
@@ -1167,9 +1137,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ]
         if categories:
             tracing_detail["violation_categories"] = categories
-        tracing_detail["guardrail_action"] = (
-            "GUARDRAIL_INTERVENED" if violations else "NONE"
-        )
+        tracing_detail["guardrail_action"] = "GUARDRAIL_INTERVENED" if violations else "NONE"
         return tracing_detail
 
     def _get_block_exception_for_checks(

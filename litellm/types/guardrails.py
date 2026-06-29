@@ -126,6 +126,7 @@ class SupportedGuardrailIntegrations(Enum):
     VIGIL_GUARD = "vigil_guard"
     REPELLOAI = "repelloai"
     BIAS_HALLUCINATION_ESTIMATOR = "bias_hallucination_estimator"
+    HEADROOM = "headroom"
 
 
 class Role(Enum):
@@ -387,12 +388,8 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
     mock_redacted_text: Optional[dict] = Field(default=None, description="Mock redacted text for testing")
 
 
-BedrockChecksContentFilterCategory = Literal[
-    "VIOLENCE", "HATE", "SEXUAL", "MISCONDUCT", "INSULTS"
-]
-BedrockChecksPromptAttackCategory = Literal[
-    "JAILBREAK", "PROMPT_INJECTION", "PROMPT_LEAKAGE"
-]
+BedrockChecksContentFilterCategory = Literal["VIOLENCE", "HATE", "SEXUAL", "MISCONDUCT", "INSULTS"]
+BedrockChecksPromptAttackCategory = Literal["JAILBREAK", "PROMPT_INJECTION", "PROMPT_LEAKAGE"]
 BedrockChecksSensitiveInformationEntity = Literal[
     "ADDRESS",
     "AGE",
@@ -464,14 +461,9 @@ class BedrockChecksConfigModel(BaseModel):
 
     @model_validator(mode="after")
     def _require_at_least_one_check(self) -> "BedrockChecksConfigModel":
-        if (
-            self.contentFilter is None
-            and self.promptAttack is None
-            and self.sensitiveInformation is None
-        ):
+        if self.contentFilter is None and self.promptAttack is None and self.sensitiveInformation is None:
             raise ValueError(
-                "Bedrock 'checks' must enable at least one of: contentFilter, "
-                "promptAttack, sensitiveInformation."
+                "Bedrock 'checks' must enable at least one of: contentFilter, promptAttack, sensitiveInformation."
             )
         return self
 
@@ -498,12 +490,8 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_web_identity_token: Optional[str] = Field(
         default=None, description="Web identity token for AWS role assumption"
     )
-    aws_sts_endpoint: Optional[str] = Field(
-        default=None, description="AWS STS endpoint URL"
-    )
-    aws_bedrock_runtime_endpoint: Optional[str] = Field(
-        default=None, description="AWS Bedrock runtime endpoint URL"
-    )
+    aws_sts_endpoint: Optional[str] = Field(default=None, description="AWS STS endpoint URL")
+    aws_bedrock_runtime_endpoint: Optional[str] = Field(default=None, description="AWS Bedrock runtime endpoint URL")
     checks: BedrockChecksConfigModel | None = Field(
         default=None,
         description="Inline safeguards for the resource-less InvokeGuardrailChecks API "

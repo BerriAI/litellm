@@ -2746,9 +2746,7 @@ class PrometheusLogger(CustomLogger):
         Set the deployment state.
         """
         _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_deployment_state"
-            ),
+            supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_deployment_state"),
             enum_values=enum_values,
         )
         self.litellm_deployment_state.labels(**_labels).set(state)
@@ -2819,12 +2817,8 @@ class PrometheusLogger(CustomLogger):
         increment metric when litellm.Router / load balancing logic places a deployment in cool down
         """
         _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name="litellm_deployment_cooled_down"
-            ),
-            enum_values=dataclasses.replace(
-                enum_values, exception_status=exception_status
-            ),
+            supported_enum_labels=self.get_labels_for_metric(metric_name="litellm_deployment_cooled_down"),
+            enum_values=dataclasses.replace(enum_values, exception_status=exception_status),
         )
         self.litellm_deployment_cooled_down.labels(**_labels).inc()
 

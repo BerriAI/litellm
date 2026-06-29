@@ -118,11 +118,7 @@ class PerplexitySearchConfig(BaseSearchConfig):
         """
         request_data: PerplexitySearchRequest = {"query": query}
 
-        forwarded = {
-            key: value
-            for key, value in optional_params.items()
-            if value is not None and key != "query"
-        }
+        forwarded = {key: value for key, value in optional_params.items() if value is not None and key != "query"}
 
         return dict(request_data, **forwarded)
 

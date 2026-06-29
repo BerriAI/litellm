@@ -42,9 +42,7 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
     return TokenBreakdown(text_tokens, cached_tokens, completion_tokens, reasoning_tokens)
 
 
-def _resolve_tier_cost_per_token(
-    tier: dict, cost_key: str, fallback_cost_key: str | None
-) -> float:
+def _resolve_tier_cost_per_token(tier: dict, cost_key: str, fallback_cost_key: str | None) -> float:
     """Resolve a tier's per-token cost.
 
     An explicit 0.0 is a real price (e.g. a free-cache-read tier) and must not
@@ -118,9 +116,7 @@ def _calculate_tiered_cost(
 
         if tier_end > tier_start:
             tokens_in_tier = tier_end - tier_start
-            cost_per_token = _resolve_tier_cost_per_token(
-                tier, cost_key, fallback_cost_key
-            )
+            cost_per_token = _resolve_tier_cost_per_token(tier, cost_key, fallback_cost_key)
             total_cost += tokens_in_tier * cost_per_token
             tokens_processed = tier_end
 
@@ -129,9 +125,7 @@ def _calculate_tiered_cost(
     if tokens_processed < tokens and sorted_tiers:
         last_tier = sorted_tiers[-1]
         remaining_tokens = tokens - tokens_processed
-        cost_per_token = _resolve_tier_cost_per_token(
-            last_tier, cost_key, fallback_cost_key
-        )
+        cost_per_token = _resolve_tier_cost_per_token(last_tier, cost_key, fallback_cost_key)
         total_cost += remaining_tokens * cost_per_token
 
     return total_cost

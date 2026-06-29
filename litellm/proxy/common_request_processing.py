@@ -2454,11 +2454,7 @@ class ProxyBaseLLMRequestProcessing:
         """
         logging_obj = request_data.get("litellm_logging_obj")
         response_chunks = getattr(response, "chunks", None)
-        chunks = (
-            response_chunks
-            if isinstance(response_chunks, list) and response_chunks
-            else streamed_chunks
-        )
+        chunks = response_chunks if isinstance(response_chunks, list) and response_chunks else streamed_chunks
         if logging_obj is None or not chunks:
             return
         first_chunk = chunks[0]
@@ -2481,9 +2477,7 @@ class ProxyBaseLLMRequestProcessing:
                 logging_obj=logging_obj,
             )
         except Exception:  # noqa: BLE001
-            verbose_proxy_logger.exception(
-                "Failed to assemble partial streaming usage on client disconnect"
-            )
+            verbose_proxy_logger.exception("Failed to assemble partial streaming usage on client disconnect")
             return
         if partial_response is None:
             return
@@ -2510,9 +2504,7 @@ class ProxyBaseLLMRequestProcessing:
                     prefer_async_handlers=True,
                 )
         except Exception:  # noqa: BLE001
-            verbose_proxy_logger.exception(
-                "Failed to record partial streaming usage on client disconnect"
-            )
+            verbose_proxy_logger.exception("Failed to record partial streaming usage on client disconnect")
 
     @staticmethod
     async def async_streaming_data_generator(

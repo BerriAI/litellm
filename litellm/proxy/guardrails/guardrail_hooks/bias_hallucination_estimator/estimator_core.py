@@ -35,9 +35,7 @@ class BiasDetector:
         )
 
     @staticmethod
-    def _match_patterns(
-        text: str, patterns: tuple[PatternRule, ...]
-    ) -> tuple[tuple[str, str, float], ...]:
+    def _match_patterns(text: str, patterns: tuple[PatternRule, ...]) -> tuple[tuple[str, str, float], ...]:
         return tuple(
             (rule.name, clip_example(match.group(0)), rule.score)
             for rule in patterns
@@ -59,9 +57,7 @@ class HallucinationDetector:
         sentences = split_sentences(text)
         unsourced_claims = self._find_unsourced_statistics(sentences)
         missing_citations = self._find_rule_matches(text, CITATION_GAP_PATTERNS)
-        fabricated_specificity = self._find_rule_matches(
-            text, FABRICATED_SPECIFICITY_PATTERNS
-        )
+        fabricated_specificity = self._find_rule_matches(text, FABRICATED_SPECIFICITY_PATTERNS)
         patterns_found = self._patterns_found(
             has_unsourced_claims=bool(unsourced_claims),
             has_missing_citations=bool(missing_citations),
@@ -73,9 +69,7 @@ class HallucinationDetector:
             fabricated_specificity=fabricated_specificity,
         )
         examples = unique_preserve_order(
-            tuple(unsourced_claims)
-            + tuple(missing_citations)
-            + tuple(fabricated_specificity)
+            tuple(unsourced_claims) + tuple(missing_citations) + tuple(fabricated_specificity)
         )
 
         return HallucinationAnalysis(
@@ -99,13 +93,9 @@ class HallucinationDetector:
         )
 
     @staticmethod
-    def _find_rule_matches(
-        text: str, rules: tuple[PatternRule, ...]
-    ) -> tuple[str, ...]:
+    def _find_rule_matches(text: str, rules: tuple[PatternRule, ...]) -> tuple[str, ...]:
         return unique_preserve_order(
-            clip_example(match.group(0))
-            for rule in rules
-            for match in rule.pattern.finditer(text)
+            clip_example(match.group(0)) for rule in rules for match in rule.pattern.finditer(text)
         )
 
     @staticmethod

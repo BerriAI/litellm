@@ -101,9 +101,7 @@ def _trend_from_comparison(current_fail: float, previous_fail: float) -> str:
     return "stable"
 
 
-def _aggregate_daily_metrics(
-    metrics: list[Any], id_attr: str
-) -> Dict[str, Dict[str, Any]]:
+def _aggregate_daily_metrics(metrics: list[Any], id_attr: str) -> Dict[str, Dict[str, Any]]:
     agg: Dict[str, Dict[str, Any]] = {}
     for m in metrics:
         gid = getattr(m, id_attr)
@@ -172,8 +170,7 @@ def _get_config_loaded_guardrails() -> list[Any]:
     return [
         guardrail
         for guardrail in IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
-        if IN_MEMORY_GUARDRAIL_HANDLER.get_source(guardrail.get("guardrail_id") or "")
-        == "config"
+        if IN_MEMORY_GUARDRAIL_HANDLER.get_source(guardrail.get("guardrail_id") or "") == "config"
     ]
 
 
@@ -324,9 +321,7 @@ async def guardrails_usage_overview(
 
     try:
         # Guardrails from DB
-        guardrails = _merge_config_loaded_guardrails(
-            await GuardrailsRepository(prisma_client).table.find_many()
-        )
+        guardrails = _merge_config_loaded_guardrails(await GuardrailsRepository(prisma_client).table.find_many())
 
         # Daily metrics in range
         metrics = await DailyGuardrailMetricsRepository(prisma_client).table.find_many(
@@ -478,9 +473,7 @@ def _build_usage_logs_where(
     return where
 
 
-def _usage_log_entry_from_row(
-    r: object, sl: object, action_filter: str | None
-) -> Optional[UsageLogEntry]:
+def _usage_log_entry_from_row(r: object, sl: object, action_filter: str | None) -> Optional[UsageLogEntry]:
     meta = sl.metadata
     if isinstance(meta, str):
         try:
@@ -611,11 +604,7 @@ async def guardrails_usage_logs(
             ) or _find_config_loaded_guardrail(guardrail_id)
             if guardrail:
                 logical_name = _get_guardrail_dict_field(guardrail, "guardrail_name")
-                if (
-                    logical_name
-                    and isinstance(logical_name, str)
-                    and logical_name not in effective_guardrail_ids
-                ):
+                if logical_name and isinstance(logical_name, str) and logical_name not in effective_guardrail_ids:
                     effective_guardrail_ids.append(logical_name)
 
         where = _build_usage_logs_where(effective_guardrail_ids or None, policy_id, start_date, end_date)

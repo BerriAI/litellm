@@ -1489,15 +1489,11 @@ class LiteLLMAnthropicMessagesAdapter:
 
         ## base case - final chunk w/ finish reason, or a usage-only chunk
         ## (choices=[]) that carries trailing usage. See #30761.
-        has_finish_reason = (
-            bool(response.choices) and response.choices[0].finish_reason is not None
-        )
+        has_finish_reason = bool(response.choices) and response.choices[0].finish_reason is not None
         has_usage_only_chunk = not response.choices and litellm_usage_chunk is not None
         if has_finish_reason or has_usage_only_chunk:
             stop_reason = (
-                self._translate_openai_finish_reason_to_anthropic(
-                    response.choices[0].finish_reason
-                )
+                self._translate_openai_finish_reason_to_anthropic(response.choices[0].finish_reason)
                 if response.choices
                 else None
             )

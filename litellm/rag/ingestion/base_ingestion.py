@@ -102,9 +102,7 @@ class BaseRAGIngestion(ABC):
         return self.vector_store_config.get("custom_llm_provider", "openai")
 
     @classmethod
-    def normalize_authorized_vector_store_id(
-        cls, vector_store_opts: dict[str, object]
-    ) -> None:
+    def normalize_authorized_vector_store_id(cls, vector_store_opts: dict[str, object]) -> None:
         """
         Rewrite the vector_store config so `vector_store_id` matches the actual
         write target before the proxy authorizes it.

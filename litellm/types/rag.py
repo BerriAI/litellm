@@ -203,9 +203,7 @@ class MilvusVectorStoreOptions(TypedDict, total=False):
     vector_field: Optional[str]  # Embedding field name (default: "vector")
     text_field: Optional[str]  # Chunk text field name (default: "text")
     metric_type: Optional[str]  # Distance metric (default: "COSINE")
-    auto_create_collection: Optional[
-        bool
-    ]  # Create collection if missing (default: True)
+    auto_create_collection: Optional[bool]  # Create collection if missing (default: True)
 
 
 # Union type for vector store options

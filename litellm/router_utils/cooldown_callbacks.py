@@ -55,12 +55,7 @@ async def router_cooldown_event_callback(
     except Exception:
         pass
 
-    _api_base = (
-        litellm.get_api_base(
-            model=litellm_model_name, optional_params=temp_litellm_params
-        )
-        or ""
-    )
+    _api_base = litellm.get_api_base(model=litellm_model_name, optional_params=temp_litellm_params) or ""
 
     # get the prometheus logger from in memory loggers
     prometheusLogger: Optional[PrometheusLogger] = _get_prometheus_logger_from_callbacks()

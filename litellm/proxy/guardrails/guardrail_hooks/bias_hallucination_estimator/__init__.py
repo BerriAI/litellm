@@ -29,17 +29,13 @@ def initialize_guardrail(
         config=GuardrailConfig(
             thresholds=RiskThresholds(
                 bias_threshold=getattr(litellm_params, "bias_threshold", 0.5),
-                hallucination_threshold=getattr(
-                    litellm_params, "hallucination_threshold", 0.5
-                ),
+                hallucination_threshold=getattr(litellm_params, "hallucination_threshold", 0.5),
                 flag_threshold=getattr(litellm_params, "risk_flag_threshold", 0.25),
                 block_threshold=getattr(litellm_params, "risk_block_threshold", 0.5),
             ),
             weights=RiskWeights(
                 bias_weight=getattr(litellm_params, "bias_weight", 0.4),
-                hallucination_weight=getattr(
-                    litellm_params, "hallucination_weight", 0.6
-                ),
+                hallucination_weight=getattr(litellm_params, "hallucination_weight", 0.6),
             ),
             behavior=GuardrailBehaviorConfig(
                 block_on_high_risk=getattr(litellm_params, "block_on_high_risk", True),
@@ -49,15 +45,11 @@ def initialize_guardrail(
                 violation_message=getattr(litellm_params, "violation_message", None),
             ),
             session=GuardrailSessionConfig(
-                violation_message_template=getattr(
-                    litellm_params, "violation_message_template", None
-                ),
+                violation_message_template=getattr(litellm_params, "violation_message_template", None),
             ),
         ),
     )
-    logging_callback_manager.add_litellm_callback(
-        callback
-    )  # pyright: ignore[reportUnknownMemberType]
+    logging_callback_manager.add_litellm_callback(callback)  # pyright: ignore[reportUnknownMemberType]
     return callback
 
 

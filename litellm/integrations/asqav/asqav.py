@@ -146,9 +146,9 @@ def _extract_loggable(
         if hasattr(response_obj, "choices") and response_obj.choices:
             finish_reason = response_obj.choices[0].finish_reason
         if hasattr(response_obj, "_hidden_params"):
-            provider_request_id = response_obj._hidden_params.get(
-                "x-request-id"
-            ) or response_obj._hidden_params.get("cf-ray")
+            provider_request_id = response_obj._hidden_params.get("x-request-id") or response_obj._hidden_params.get(
+                "cf-ray"
+            )
     except Exception:  # noqa: BLE001
         pass
 
@@ -172,9 +172,7 @@ def _extract_loggable(
     except Exception:  # noqa: BLE001
         pass
     if not call_id:
-        call_id = kwargs.get("litellm_call_id") or kwargs.get(
-            "id", str(int(time.time() * 1e6))
-        )
+        call_id = kwargs.get("litellm_call_id") or kwargs.get("id", str(int(time.time() * 1e6)))
 
     return {
         "call_id": call_id,
@@ -220,13 +218,9 @@ class AsqavLogger(CustomLogger):
     ) -> None:
         super().__init__()
 
-        self._log_path: str = log_path or os.environ.get(
-            "ASQAV_LOG_PATH", _DEFAULT_LOG_PATH
-        )
+        self._log_path: str = log_path or os.environ.get("ASQAV_LOG_PATH", _DEFAULT_LOG_PATH)
         self._redact_content: bool = (
-            os.environ.get("ASQAV_REDACT_CONTENT", "true").lower() != "false"
-            if log_path is None
-            else redact_content
+            os.environ.get("ASQAV_REDACT_CONTENT", "true").lower() != "false" if log_path is None else redact_content
         )
 
         self._lock: threading.Lock = threading.Lock()
@@ -238,10 +232,7 @@ class AsqavLogger(CustomLogger):
         self._load_chain_tail()
 
     def __repr__(self) -> str:
-        return (
-            f"AsqavLogger(log_path={self._log_path!r},"
-            f" redact_content={self._redact_content})"
-        )
+        return f"AsqavLogger(log_path={self._log_path!r}, redact_content={self._redact_content})"
 
     # ------------------------------------------------------------------
     # Chain state persistence
@@ -265,9 +256,7 @@ class AsqavLogger(CustomLogger):
             self._prev_hash = last_record.get("record_hash", _GENESIS_HASH)
             self._call_count = last_record.get("seq", -1) + 1
         except Exception:  # noqa: BLE001
-            verbose_logger.debug(
-                f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}"
-            )
+            verbose_logger.debug(f"[AsqavLogger] Could not load chain tail: {traceback.format_exc()}")
 
     # ------------------------------------------------------------------
     # Core record append
@@ -287,18 +276,14 @@ class AsqavLogger(CustomLogger):
         """
         start_time, end_time = timing
         try:
-            loggable = _extract_loggable(
-                kwargs, response_obj, start_time, end_time, status
-            )
+            loggable = _extract_loggable(kwargs, response_obj, start_time, end_time, status)
 
             if not self._redact_content:
                 # Store content in the clear when the operator explicitly opts in.
                 loggable["messages"] = kwargs.get("messages")
                 try:
                     if hasattr(response_obj, "choices") and response_obj.choices:
-                        loggable["response_content"] = response_obj.choices[
-                            0
-                        ].message.content
+                        loggable["response_content"] = response_obj.choices[0].message.content
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -327,9 +312,7 @@ class AsqavLogger(CustomLogger):
                 self._call_count += 1
 
         except Exception:  # noqa: BLE001
-            verbose_logger.debug(
-                f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}"
-            )
+            verbose_logger.debug(f"[AsqavLogger] Unhandled error in _build_and_append: {traceback.format_exc()}")
 
     def _write_record(self, record: dict[str, Any]) -> bool:
         """Append one record to the log file. Returns False if the write failed."""
@@ -360,9 +343,7 @@ class AsqavLogger(CustomLogger):
                 raise
             return True
         except Exception:  # noqa: BLE001
-            verbose_logger.warning(
-                f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}"
-            )
+            verbose_logger.warning(f"[AsqavLogger] Failed to write audit record: {traceback.format_exc()}")
             return False
 
     # ------------------------------------------------------------------
@@ -449,18 +430,14 @@ class AsqavLogger(CustomLogger):
                     if computed_hash != stored_hash:
                         return (
                             False,
-                            f"line {lineno}: hash mismatch"
-                            f" (stored={stored_hash[:12]},"
-                            f" computed={computed_hash[:12]})",
+                            f"line {lineno}: hash mismatch (stored={stored_hash[:12]}, computed={computed_hash[:12]})",
                         )
 
                     rec_prev = record.get("prev_hash", _GENESIS_HASH)
                     if rec_prev != prev_hash:
                         return (
                             False,
-                            f"line {lineno}: prev_hash chain break"
-                            f" (expected={prev_hash[:12]},"
-                            f" got={rec_prev[:12]})",
+                            f"line {lineno}: prev_hash chain break (expected={prev_hash[:12]}, got={rec_prev[:12]})",
                         )
 
                     prev_hash = stored_hash
