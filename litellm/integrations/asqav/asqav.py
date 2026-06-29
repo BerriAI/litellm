@@ -72,6 +72,15 @@ def _content_digest(value: object) -> str | None:
 
 
 _SENSITIVE_KEYS = frozenset({"user_api_key", "Authorization", "authorization", "token", "api_key"})
+
+
+def _redact_sensitive(obj: Any, depth: int = 0) -> Any:
+    """Recursively drop sensitive keys from dicts; cap depth to avoid unbounded traversal."""
+    if depth > 5 or not isinstance(obj, dict):
+        return obj
+    return {k: _redact_sensitive(v, depth + 1) for k, v in obj.items() if k not in _SENSITIVE_KEYS}
+
+
 _PROXY_IDENTITY_KEYS = frozenset(
     {
         "user_api_key_user_id",
@@ -142,8 +151,8 @@ def _extract_loggable(
     model: str = kwargs.get("model", "")
     messages: Any = kwargs.get("messages")
     raw_metadata: Any = dict(kwargs.get("metadata") or kwargs.get("litellm_metadata") or {})
-    # Drop sensitive keys from top-level metadata before writing to the audit log
-    metadata: dict[str, Any] = {k: v for k, v in raw_metadata.items() if k not in _SENSITIVE_KEYS}
+    # Recursively drop sensitive keys before writing to the audit log
+    metadata: dict[str, Any] = _redact_sensitive(raw_metadata)
     _merge_proxy_metadata(kwargs, metadata)
 
     latency_ms: int | None = None
@@ -175,7 +184,7 @@ def _extract_loggable(
         "provider_request_id": provider_request_id,
         "messages_digest": messages_digest,
         "response_content_digest": response_content_digest,
-        "metadata": {k: v for k, v in (metadata or {}).items() if isinstance(k, str)},
+        "metadata": _redact_sensitive({k: v for k, v in (metadata or {}).items() if isinstance(k, str)}),
     }
 
 
