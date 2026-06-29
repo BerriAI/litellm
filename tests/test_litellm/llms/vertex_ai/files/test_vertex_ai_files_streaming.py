@@ -103,8 +103,8 @@ class TestStreamingOutputParity:
         )
 
         # A batch upload must be a streaming-media config carrying a streaming
-        # body, so the handler can stage it to a temp file; a buffered bytes/str
-        # return would defeat the OOM fix.
+        # body, so the handler can stream it to GCS; a buffered bytes/str return
+        # would defeat the OOM fix.
         assert isinstance(out, dict) and "streaming_media_upload" in out
         assert isinstance(_upload_stream(out), BaseFileUploadStream)
         assert _join_upload_body(out).decode("utf-8") == _reference_vertex_jsonl_string(cfg, raw.decode("utf-8"))
@@ -548,11 +548,13 @@ class TestStreamingMediaUpload:
         assert state["methods"] == ["POST"]
         assert "uploadType=media" in state["urls"][0]
 
-        # The body GCS received is exactly the transformed batch payload, sent
-        # with a real Content-Length (so httpx does not switch to chunked TE).
+        # The body is streamed with chunked transfer-encoding and no
+        # Content-Length, which is what proves it is neither buffered in memory
+        # nor staged to a temp file (the disk-exhaustion guard) before sending.
         headers = state["headers"][0]
-        assert int(headers["content-length"]) == len(expected)
-        assert "transfer-encoding" not in headers
+        assert headers.get("transfer-encoding") == "chunked"
+        assert "content-length" not in headers
+        # httpx reassembles the chunked body; GCS receives exactly the transform.
         assert bytes(state["received"]) == expected
         assert response.object == "file"
 
@@ -572,21 +574,13 @@ class TestStreamingMediaUpload:
         assert forwarded is not None
         assert forwarded.get("read") == 137.0 and forwarded.get("write") == 137.0
 
-    async def test_staged_tempfile_is_closed_deterministically(self, monkeypatch):
-        # The staged temp file must be closed on exit (TemporaryFile unlinks on
-        # close), not left for the GC to reclaim, so a large upload cannot leak
-        # disk. Spy on the factory and assert every staged file is closed once the
-        # upload returns.
-        import litellm.llms.custom_httpx.llm_http_handler as handler_module
-
+    async def test_upload_does_not_stage_to_disk(self, monkeypatch):
+        # Disk-exhaustion guard: the transformed body must stream to GCS, never be
+        # written to a temp file first. If any tempfile is created during the
+        # upload, an attacker could fill the proxy's temp volume with large
+        # concurrent uploads.
         created = []
         real_tempfile = tempfile.TemporaryFile
-
-        def _tracked(*args, **kwargs):
-            fh = real_tempfile(*args, **kwargs)
-            created.append(fh)
-            return fh
-
-        monkeypatch.setattr(handler_module.tempfile, "TemporaryFile", _tracked)
+        monkeypatch.setattr(tempfile, "TemporaryFile", lambda *a, **k: (created.append(1), real_tempfile(*a, **k))[1])
         await self._run(_make_openai_jsonl_bytes(50))
-        assert created and all(fh.closed for fh in created)
+        assert created == []
