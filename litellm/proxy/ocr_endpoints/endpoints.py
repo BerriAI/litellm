@@ -64,12 +64,8 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
     # request.form() may return either a FastAPI or Starlette UploadFile
     # depending on middleware; check both via isinstance (FastAPI's UploadFile
     # is a subclass of Starlette's) and fall back to duck-type check.
-    if uploaded_file is None or (
-        not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")
-    ):
-        raise ValueError(
-            "Multipart OCR request must include a 'file' field with the document to process"
-        )
+    if uploaded_file is None or (not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")):
+        raise ValueError("Multipart OCR request must include a 'file' field with the document to process")
 
     uploaded_file = cast(UploadFile, uploaded_file)
 
@@ -144,8 +140,7 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
         # Check if form data is available.
         if getattr(request, "_form", None) is not None:
             verbose_proxy_logger.debug(
-                "OCR request body is empty but form data is available from middleware — "
-                "processing as multipart form."
+                "OCR request body is empty but form data is available from middleware — processing as multipart form."
             )
             return await _parse_multipart_form(request)
 

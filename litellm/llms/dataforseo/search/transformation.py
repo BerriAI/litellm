@@ -26,9 +26,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
     API endpoint: https://api.dataforseo.com/v3/serp/google/organic/live/advanced
     """
 
-    DATAFORSEO_API_BASE = (
-        "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
-    )
+    DATAFORSEO_API_BASE = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
 
     @staticmethod
     def ui_friendly_name() -> str:
@@ -103,11 +101,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
 
         DataForSEO uses POST requests, so no query parameters in URL.
         """
-        return (
-            api_base
-            or get_secret_str("DATAFORSEO_API_BASE")
-            or self.DATAFORSEO_API_BASE
-        )
+        return api_base or get_secret_str("DATAFORSEO_API_BASE") or self.DATAFORSEO_API_BASE
 
     def transform_search_request(
         self,
@@ -152,10 +146,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
             # For simplicity, we'll use location_name which accepts country names
             task["location_name"] = optional_params["country"]
 
-        if (
-            "search_domain_filter" in optional_params
-            and optional_params["search_domain_filter"]
-        ):
+        if "search_domain_filter" in optional_params and optional_params["search_domain_filter"]:
             # DataForSEO uses 'domain' parameter to filter by domain
             task["domain"] = optional_params["search_domain_filter"]
 
@@ -169,10 +160,7 @@ class DataForSEOSearchConfig(BaseSearchConfig):
 
         # Pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in task
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in task:
                 task[param] = value
 
         # DataForSEO API expects an array of tasks

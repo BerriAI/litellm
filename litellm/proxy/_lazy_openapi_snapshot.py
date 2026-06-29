@@ -76,9 +76,7 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
             for suffix in methods:
                 suffix_token = f"_{suffix}"
                 if operation_id.endswith(suffix_token):
-                    operation["operationId"] = (
-                        operation_id[: -len(suffix_token)] + f"_{method}"
-                    )
+                    operation["operationId"] = operation_id[: -len(suffix_token)] + f"_{method}"
                     break
 
 
@@ -102,11 +100,7 @@ def generate_snapshot() -> Dict[str, Dict]:
     fragments: Dict[str, Dict] = {}
     used_operation_ids: Set[str] = set()
     for feat in LAZY_FEATURES:
-        feat_routes = [
-            r
-            for r in app.routes
-            if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)
-        ]
+        feat_routes = [r for r in app.routes if any(getattr(r, "path", "").startswith(p) for p in feat.path_prefixes)]
         if not feat_routes:
             continue
         _stabilize_multi_method_route_ids(feat_routes)
@@ -121,9 +115,7 @@ def generate_snapshot() -> Dict[str, Dict]:
                     if isinstance(operation_id, str):
                         for suffix in HTTP_METHOD_SUFFIXES:
                             if operation_id.endswith(f"_{suffix}"):
-                                op["operationId"] = (
-                                    operation_id[: -len(suffix)] + method
-                                )
+                                op["operationId"] = operation_id[: -len(suffix)] + method
                                 break
                     op["tags"] = [feat.name]
         full = ensure_unique_openapi_operation_ids(full, used_operation_ids)

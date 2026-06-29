@@ -128,9 +128,7 @@ class BasePassthroughLoggingHandler(ABC):
                 )
                 if user:
                     kwargs.setdefault("litellm_params", {})
-                    kwargs["litellm_params"].update(
-                        {"proxy_server_request": {"body": {"user": user}}}
-                    )
+                    kwargs["litellm_params"].update({"proxy_server_request": {"body": {"user": user}}})
 
             # Make standard logging object for Anthropic
             standard_logging_object = get_standard_logging_object_payload(
@@ -155,9 +153,7 @@ class BasePassthroughLoggingHandler(ABC):
             logging_obj.model_call_details["model"] = model
             return kwargs
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "Error creating LLM passthrough response logging payload: %s", e
-            )
+            verbose_proxy_logger.exception("Error creating LLM passthrough response logging payload: %s", e)
             return kwargs
 
     @abstractmethod

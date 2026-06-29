@@ -13,12 +13,12 @@ import {
 } from "@tremor/react";
 import { Modal, Alert, Tooltip, Skeleton, Switch } from "antd";
 import { CheckCircleOutlined } from "@ant-design/icons";
-import { getAgentsList, deleteAgentCall, keyListCall } from "./networking";
+import { getAgentsList, deleteAgentCall } from "./networking";
 import AddAgentForm from "./agents/add_agent_form";
 import { isAdminRole } from "@/utils/roles";
 import AgentInfoView from "./agents/agent_info";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Agent, AgentKeyInfo } from "./agents/types";
+import { Agent } from "./agents/types";
 import { Team } from "./key_team_helpers/key_list";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
@@ -35,7 +35,6 @@ interface AgentsResponse {
 
 const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams }) => {
   const [agentsList, setAgentsList] = useState<Agent[]>([]);
-  const [keyInfoMap, setKeyInfoMap] = useState<Record<string, AgentKeyInfo>>({});
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -61,40 +60,9 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     }
   };
 
-  const fetchKeysForAgents = async () => {
-    if (!accessToken) return;
-    try {
-      const { keys = [] } = await keyListCall(accessToken, null, null, null, null, null, 1, 500);
-      const map: Record<string, AgentKeyInfo> = {};
-      for (const key of keys) {
-        const agentId = (key as { agent_id?: string }).agent_id;
-        if (agentId && !map[agentId]) {
-          map[agentId] = {
-            has_key: true,
-            key_alias: (key as { key_alias?: string }).key_alias,
-            token_prefix: (key as { token?: string }).token
-              ? `${(key as { token: string }).token.slice(0, 8)}…`
-              : undefined,
-          };
-        }
-      }
-      setKeyInfoMap(map);
-    } catch (error) {
-      console.error("Error fetching keys for agents:", error);
-    }
-  };
-
   useEffect(() => {
     fetchAgents();
   }, [accessToken]);
-
-  useEffect(() => {
-    if (accessToken && agentsList.length > 0) {
-      fetchKeysForAgents();
-    } else if (agentsList.length === 0) {
-      setKeyInfoMap({});
-    }
-  }, [accessToken, agentsList.length]);
 
   const handleHealthCheckToggle = (checked: boolean) => {
     setHealthCheckEnabled(checked);
@@ -248,7 +216,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                         <Text>{agent.created_at ? new Date(agent.created_at).toLocaleDateString() : "N/A"}</Text>
                       </TableCell>
                       <TableCell>
-                        {keyInfoMap[agent.agent_id]?.has_key ? (
+                        {(agent.keys?.length ?? 0) > 0 ? (
                           <Badge color="green">Active</Badge>
                         ) : (
                           <Badge color="yellow">Needs Setup</Badge>
