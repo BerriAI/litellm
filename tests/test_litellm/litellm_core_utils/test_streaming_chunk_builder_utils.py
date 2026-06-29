@@ -12,12 +12,14 @@ from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Delta,
     Function,
     ModelResponseStream,
     PromptTokensDetails,
+    PromptTokensDetailsWrapper,
     ServerToolUse,
     StreamingChoices,
     Usage,
@@ -361,6 +363,94 @@ def test_cache_read_input_tokens_retained_genericstreamingchunk():
     )
 
     assert usage.prompt_tokens_details.cached_tokens == 543
+
+def test_cache_creation_token_details_carried_forward_from_earlier_stream_chunk():
+    """
+    Anthropic may emit cache_creation_token_details on message_start usage, then omit
+    it from the final usage chunk. Ensure stream usage aggregation preserves it.
+    """
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-anthropic-cache-details",
+        created=1745513206,
+        model="claude-sonnet-4-20250514",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="", role=None),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=2957,
+            total_tokens=2957,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,
+                text_tokens=12,
+                cache_creation_tokens=2945,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=2945,
+                    ephemeral_1h_input_tokens=0,
+                ),
+            ),
+            cache_creation_input_tokens=2945,
+            cache_read_input_tokens=0,
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-anthropic-cache-details",
+        created=1745513207,
+        model="claude-sonnet-4-20250514",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role=None),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=35,
+            prompt_tokens=2957,
+            total_tokens=2992,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,
+                text_tokens=12,
+                cache_creation_tokens=2945,
+            ),
+            cache_creation_input_tokens=2945,
+            cache_read_input_tokens=0,
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks,
+        model="claude-sonnet-4-20250514",
+        completion_output="",
+    )
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cache_creation_token_details is not None
+    assert (
+        usage.prompt_tokens_details.cache_creation_token_details.ephemeral_5m_input_tokens
+        == 2945
+    )
+    assert (
+        usage.prompt_tokens_details.cache_creation_token_details.ephemeral_1h_input_tokens
+        == 0
+    )
+
 
 def test_stream_chunk_builder_litellm_usage_chunks():
     """
