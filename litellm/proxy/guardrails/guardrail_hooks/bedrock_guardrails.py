@@ -265,8 +265,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         unknown_keys = set(checks.keys()) - _BEDROCK_CHECKS_KNOWN_KEYS
         if unknown_keys:
             verbose_proxy_logger.warning(
-                "BedrockGuardrail: unrecognized check key(s) %s will be ignored. "
-                "Known keys: %s. Guardrail will fall back to ApplyGuardrail mode.",
+                "BedrockGuardrail: unrecognized check key(s) %s will be ignored; "
+                "recognized keys will still be used for InvokeGuardrailChecks. "
+                "Known keys: %s.",
                 sorted(unknown_keys),
                 sorted(_BEDROCK_CHECKS_KNOWN_KEYS),
             )
