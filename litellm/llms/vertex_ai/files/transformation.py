@@ -18,7 +18,6 @@ from typing import (
 )
 
 import httpx
-import orjson
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
 
@@ -253,7 +252,7 @@ def _iter_openai_jsonl_entries(
     openai_file_content: FileTypes,
 ) -> Iterator[Dict[str, Any]]:
     for line in _iter_openai_jsonl_lines(openai_file_content):
-        yield orjson.loads(line)
+        yield json.loads(line)
 
 
 class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
@@ -278,7 +277,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
             wrapped = _openai_batch_jsonl_entry_to_vertex_wrapped_request(entry, self._map_openai_to_vertex_params)
             prefix = b"" if first else b"\n"
             first = False
-            yield prefix + orjson.dumps(wrapped)
+            yield prefix + json.dumps(wrapped).encode("utf-8")
 
     def iter_bytes(self) -> Iterator[bytes]:
         return self._iter_vertex_jsonl_chunks()

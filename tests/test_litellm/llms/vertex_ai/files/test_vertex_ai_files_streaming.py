@@ -25,7 +25,6 @@ import time
 import tracemalloc
 
 import httpx
-import orjson
 import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -82,13 +81,10 @@ def _make_openai_jsonl_bytes(n_rows: int, padding: int = 400) -> bytes:
 
 def _reference_vertex_jsonl_string(cfg: VertexAIFilesConfig, content: str) -> str:
     """Row-by-row reference output built eagerly from the live single-entry
-    transform, so the streaming path can be checked against it for parity.
-    Serializes with orjson to match the streaming path's serializer."""
+    transform, so the streaming path can be checked against it for parity."""
     entries = [json.loads(line) for line in content.splitlines() if line.strip()]
     return "\n".join(
-        orjson.dumps(
-            _openai_batch_jsonl_entry_to_vertex_wrapped_request(entry, cfg._map_openai_to_vertex_params)
-        ).decode("utf-8")
+        json.dumps(_openai_batch_jsonl_entry_to_vertex_wrapped_request(entry, cfg._map_openai_to_vertex_params))
         for entry in entries
     )
 
@@ -418,12 +414,15 @@ def _logging_obj() -> Logging:
 def _gcs_media_mock(status: int = 200):
     """A fake GCS simple-media endpoint: one request carries the whole object;
     capture the body and headers and return the object resource."""
-    state = {"received": bytearray(), "methods": [], "urls": [], "headers": []}
+    state = {"received": bytearray(), "methods": [], "urls": [], "headers": [], "timeouts": []}
 
     async def handler(request: httpx.Request) -> httpx.Response:
         state["methods"].append(request.method)
         state["urls"].append(str(request.url))
         state["headers"].append(dict(request.headers))
+        # httpx records the resolved per-request timeout here, so the test can
+        # assert the caller's timeout was forwarded rather than the client default.
+        state["timeouts"].append(request.extensions.get("timeout"))
         state["received"].extend(await request.aread())
         return httpx.Response(status, json=_GCS_OBJECT_JSON)
 
@@ -509,7 +508,7 @@ class TestStreamingMediaUpload:
     buffers the payload in memory, drops bytes, omits Content-Length (which would
     flip httpx to chunked transfer-encoding), or makes more than one request."""
 
-    async def _run(self, raw: bytes, status: int = 200):
+    async def _run(self, raw: bytes, status: int = 200, timeout=None):
         cfg = VertexAIFilesConfig()
         request: CreateFileRequest = {
             "file": ("batch.jsonl", raw, "application/jsonl"),
@@ -536,7 +535,7 @@ class TestStreamingMediaUpload:
             api_base=api_base,
             logging_obj=_logging_obj(),
             client=_async_handler_with(mock),
-            timeout=None,
+            timeout=timeout,
         )
         return expected, state, response
 
@@ -561,6 +560,17 @@ class TestStreamingMediaUpload:
         raw = _make_openai_jsonl_bytes(80)
         with pytest.raises(Exception):
             await self._run(raw, status=403)
+
+    async def test_request_timeout_is_forwarded(self):
+        # The caller's per-request timeout must reach the GCS upload; every other
+        # upload branch forwards it. httpx records the resolved timeout in
+        # request.extensions["timeout"]; a dropped timeout would show the client
+        # default instead of the value passed here.
+        raw = _make_openai_jsonl_bytes(20)
+        _, state, _ = await self._run(raw, timeout=httpx.Timeout(137.0))
+        forwarded = state["timeouts"][0]
+        assert forwarded is not None
+        assert forwarded.get("read") == 137.0 and forwarded.get("write") == 137.0
 
     async def test_staged_tempfile_is_closed_deterministically(self, monkeypatch):
         # The staged temp file must be closed on exit (TemporaryFile unlinks on

@@ -49,8 +49,8 @@ from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
 from litellm.llms.base_llm.files.transformation import (
-    BaseFileUploadStream,
     BaseFilesConfig,
+    BaseFileUploadStream,
 )
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
@@ -3310,6 +3310,7 @@ class BaseLLMHTTPHandler:
                     base_headers=headers,
                     body_stream=cast(BaseFileUploadStream, media_cfg["body_stream"]),
                     content_type=media_cfg.get("content_type") or "application/octet-stream",
+                    timeout=timeout,
                 )
             except Exception as e:
                 verbose_logger.exception(f"Error creating file: {e}")
@@ -3471,6 +3472,7 @@ class BaseLLMHTTPHandler:
                     base_headers=headers,
                     body_stream=cast(BaseFileUploadStream, media_cfg["body_stream"]),
                     content_type=media_cfg.get("content_type") or "application/octet-stream",
+                    timeout=timeout,
                 )
             except Exception as e:
                 verbose_logger.exception(f"Error creating file: {e}")
@@ -3543,15 +3545,18 @@ class BaseLLMHTTPHandler:
         base_headers: Dict[str, str],
         body_stream: BaseFileUploadStream,
         content_type: str,
+        timeout: Optional[Union[float, httpx.Timeout]],
     ) -> httpx.Response:
         tmp, size = self._stage_stream_to_tempfile(body_stream)
         try:
             headers = {**base_headers, "Content-Type": content_type, "Content-Length": str(size)}
-            resp = client.client.post(
-                url,
-                headers=headers,
-                content=iter(lambda: tmp.read(self._MEDIA_UPLOAD_BLOCK_SIZE), b""),
-            )
+            kwargs: Dict[str, Any] = {
+                "headers": headers,
+                "content": iter(lambda: tmp.read(self._MEDIA_UPLOAD_BLOCK_SIZE), b""),
+            }
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            resp = client.client.post(url, **kwargs)
             self._check_media_upload_response(resp)
             return resp
         finally:
@@ -3565,6 +3570,7 @@ class BaseLLMHTTPHandler:
         base_headers: Dict[str, str],
         body_stream: BaseFileUploadStream,
         content_type: str,
+        timeout: Optional[Union[float, httpx.Timeout]],
     ) -> httpx.Response:
         """Stage the body to a temp file off the event loop, then upload it in a
         single media request with a known Content-Length. One continuous transfer
@@ -3581,7 +3587,10 @@ class BaseLLMHTTPHandler:
                         break
                     yield block
 
-            resp = await client.client.post(url, headers=headers, content=_abody())
+            kwargs: Dict[str, Any] = {"headers": headers, "content": _abody()}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            resp = await client.client.post(url, **kwargs)
             await resp.aread()
             self._check_media_upload_response(resp)
             return resp
