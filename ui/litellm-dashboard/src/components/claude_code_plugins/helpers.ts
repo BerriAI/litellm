@@ -4,15 +4,169 @@
 
 import { PluginSource, MarketplacePluginEntry } from "./types";
 
+export interface SkillSourcePreview {
+  parsed: PluginSource;
+  label: string;
+  suggestedName: string;
+}
+
+export const SUBDIR_PATH_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$/;
+
+export const normalizeSubPath = (subPath: string): string => subPath.trim().replace(/\/+$/, "");
+
+export const isValidSubPath = (subPath: string): boolean => {
+  const normalized = normalizeSubPath(subPath);
+  return normalized !== "" && SUBDIR_PATH_REGEX.test(normalized);
+};
+
+const GITHUB_HOST = "github.com";
+
+const SKILL_FILE_EXTENSION_REGEX = /\.(md|markdown|txt|json|ya?ml|toml)$/i;
+
+const stripScheme = (raw: string): { scheme: string; rest: string } => {
+  const match = raw.match(/^(https?):\/\//i);
+  const scheme = match ? match[1].toLowerCase() : "https";
+  const rest = raw
+    .replace(/^https?:\/\//i, "")
+    .replace(/[?#].*$/, "")
+    .replace(/\/+$/, "");
+  return { scheme, rest };
+};
+
+const splitHost = (rest: string): { host: string; remainder: string } => {
+  const slashIndex = rest.indexOf("/");
+  if (slashIndex === -1) {
+    return { host: rest, remainder: "" };
+  }
+  return { host: rest.slice(0, slashIndex), remainder: rest.slice(slashIndex + 1) };
+};
+
+const normalizeHost = (host: string): string => host.toLowerCase().replace(/^www\./, "");
+
+const lastSegment = (path: string): string => {
+  const segments = path.split("/").filter((seg) => seg !== "");
+  return segments[segments.length - 1] ?? "";
+};
+
+const toKebabCase = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const parseGitHubSource = (remainder: string, subPath?: string): SkillSourcePreview | null => {
+  const parts = remainder.split("/").filter((seg) => seg !== "");
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const org = parts[0];
+  const repoBase = parts[1].replace(/\.git$/, "");
+  const repoFull = `${org}/${repoBase}`;
+  const repoUrl = `https://github.com/${repoFull}`;
+  const repoPreview: SkillSourcePreview = {
+    parsed: { source: "github", repo: repoFull },
+    label: `GitHub repo — ${repoFull}`,
+    suggestedName: toKebabCase(repoBase),
+  };
+
+  const isTreeOrBlob = parts.length >= 4 && (parts[2] === "tree" || parts[2] === "blob");
+  if (isTreeOrBlob) {
+    const pathParts = parts.slice(4);
+    const last = lastSegment(pathParts.join("/"));
+    const effective = SKILL_FILE_EXTENSION_REGEX.test(last) ? pathParts.slice(0, -1) : pathParts;
+    if (effective.length === 0) {
+      return repoPreview;
+    }
+    const path = normalizeSubPath(effective.join("/"));
+    if (!SUBDIR_PATH_REGEX.test(path)) {
+      return null;
+    }
+    return {
+      parsed: { source: "git-subdir", url: repoUrl, path },
+      label: `GitHub subdir — ${repoFull} @ ${path}`,
+      suggestedName: toKebabCase(lastSegment(path)),
+    };
+  }
+
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const normalized = normalizeSubPath(subPath ?? "");
+  if (normalized !== "") {
+    if (!SUBDIR_PATH_REGEX.test(normalized)) {
+      return null;
+    }
+    return {
+      parsed: { source: "git-subdir", url: repoUrl, path: normalized },
+      label: `GitHub subdir — ${repoFull} @ ${normalized}`,
+      suggestedName: toKebabCase(lastSegment(normalized)),
+    };
+  }
+
+  return repoPreview;
+};
+
+const parseRawGitSource = (scheme: string, rest: string, subPath?: string): SkillSourcePreview | null => {
+  const { host, remainder } = splitHost(rest);
+  if (!host.includes(".")) {
+    return null;
+  }
+  if (remainder.split("/").filter((seg) => seg !== "").length < 2) {
+    return null;
+  }
+
+  const url = `${scheme}://${rest}`;
+
+  const normalized = normalizeSubPath(subPath ?? "");
+  if (normalized !== "") {
+    if (!SUBDIR_PATH_REGEX.test(normalized)) {
+      return null;
+    }
+    return {
+      parsed: { source: "git-subdir", url, path: normalized },
+      label: `Git subdir — ${url} @ ${normalized}`,
+      suggestedName: toKebabCase(lastSegment(normalized)),
+    };
+  }
+
+  return {
+    parsed: { source: "url", url },
+    label: `Git repo — ${url}`,
+    suggestedName: toKebabCase(lastSegment(rest).replace(/\.git$/, "")),
+  };
+};
+
+/**
+ * Parse any git-accessible repository URL into a registerable skill source.
+ * GitHub URLs keep their `github`/`git-subdir` shorthand; every other host is
+ * treated as a raw repo URL, with an optional subfolder turning it into git-subdir.
+ */
+export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
+  const { scheme, rest } = stripScheme(rawUrl.trim());
+  if (rest === "") {
+    return null;
+  }
+  const { host, remainder } = splitHost(rest);
+  if (normalizeHost(host) === GITHUB_HOST) {
+    return parseGitHubSource(remainder, subPath);
+  }
+  return parseRawGitSource(scheme, rest, subPath);
+};
+
 /**
  * Generate install command for Claude Code CLI
  * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
  */
 export const formatInstallCommand = (plugin: { name: string; source: PluginSource }): string => {
-  if (plugin.source.source === "github" && plugin.source.repo) {
-    return `/plugin marketplace add ${plugin.source.repo}`;
-  } else if (plugin.source.source === "url" && plugin.source.url) {
-    return `/plugin marketplace add ${plugin.source.url}`;
+  const { source } = plugin;
+  if (source.source === "github" && source.repo) {
+    return `/plugin marketplace add ${source.repo}`;
+  }
+  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
+    return `/plugin marketplace add ${source.url}`;
   }
   // Fallback to plugin name
   return `/plugin marketplace add ${plugin.name}`;
@@ -55,7 +209,11 @@ export const validatePluginName = (name: string): boolean => {
 export const getSourceDisplayText = (source: PluginSource): string => {
   if (source.source === "github" && source.repo) {
     return `GitHub: ${source.repo}`;
-  } else if (source.source === "url" && source.url) {
+  }
+  if (source.source === "git-subdir" && source.url && source.path) {
+    return `${source.url} @ ${source.path}`;
+  }
+  if (source.source === "url" && source.url) {
     return source.url;
   }
   return "Unknown source";
@@ -67,7 +225,8 @@ export const getSourceDisplayText = (source: PluginSource): string => {
 export const getSourceLink = (source: PluginSource): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
-  } else if (source.source === "url" && source.url) {
+  }
+  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
     return source.url;
   }
   return null;

@@ -104,20 +104,3 @@ export interface CategoryTab {
   label: string;
   count: number;
 }
-
-export interface PluginFormData {
-  name: string;
-  sourceType: "github" | "url" | "git-subdir";
-  repo: string;
-  url: string;
-  path: string;
-  version: string;
-  description: string;
-  authorName: string;
-  authorEmail: string;
-  homepage: string;
-  category: string;
-  keywords: string; // Comma-separated string, will be split into array
-  domain: string;
-  namespace: string;
-}
