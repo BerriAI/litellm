@@ -2319,6 +2319,28 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
+def _is_unsignable_thinking_block(
+    block: Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock, Dict[str, Any]],
+) -> bool:
+    """A `thinking` block that Anthropic cannot accept on input.
+
+    Anthropic verifies the thinking signature cryptographically, so a block whose
+    signature is null, empty, or missing (e.g. from an open-source reasoning model)
+    is rejected with a 400 and must be dropped rather than blanked or repaired.
+    `redacted_thinking` blocks carry no signature and are always kept.
+    """
+    if not isinstance(block, dict) or block.get("type") != "thinking":
+        return False
+    signature = block.get("signature")
+    return not (isinstance(signature, str) and len(signature) > 0)
+
+
+def _drop_unsignable_thinking_blocks(
+    thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
+) -> List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
+    return [block for block in thinking_blocks if not _is_unsignable_thinking_block(block)]
+
+
 def anthropic_messages_pt(
     messages: List[AllMessageValues],
     model: str,
@@ -2507,7 +2529,12 @@ def anthropic_messages_pt(
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)  # type: ignore
 
-            thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+            _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+            thinking_blocks = (
+                _drop_unsignable_thinking_blocks(_raw_thinking_blocks)
+                if _raw_thinking_blocks is not None
+                else None
+            )
 
             # Check if tool_calls contain server tool calls (web search, etc.)
             # If so, we need to interleave thinking blocks with tool call groups
@@ -2671,7 +2698,9 @@ def anthropic_messages_pt(
                         thinking_block = cast(str, m.get("thinking", ""))
                         text_block = cast(str, m.get("text", ""))
                         if (
-                            m.get("type", "") == "thinking" and len(thinking_block) > 0
+                            m.get("type", "") == "thinking"
+                            and len(thinking_block) > 0
+                            and not _is_unsignable_thinking_block(m)
                         ):  # don't pass empty text blocks. anthropic api raises errors.
                             anthropic_message: Union[
                                 ChatCompletionThinkingBlock,
