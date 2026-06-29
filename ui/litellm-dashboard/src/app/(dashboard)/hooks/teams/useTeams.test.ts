@@ -819,7 +819,7 @@ describe("useAllTeams", () => {
 
   const pageResponse = (teams: Team[], page: number, totalPages: number) => ({
     ok: true,
-    json: async () => ({ teams, total: 125, page, page_size: 100, total_pages: totalPages }),
+    json: async () => ({ teams, page, page_size: 100, total_pages: totalPages }),
   });
 
   const requestedPage = (url: string) => new URLSearchParams(url.split("?")[1]).get("page");
@@ -844,7 +844,7 @@ describe("useAllTeams", () => {
     expect(firstUrl).toContain("page_size=100");
   });
 
-  it("makes a single request when there is only one page", async () => {
+  it("issues exactly one request for a single-page result", async () => {
     fetchMock.mockResolvedValue(pageResponse(mockTeams, 1, 1));
 
     const { result } = renderHook(() => useAllTeams(), { wrapper });
