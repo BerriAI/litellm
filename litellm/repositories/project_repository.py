@@ -19,9 +19,7 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
     def model_class(self) -> Type[LiteLLM_ProjectTable]:
         return LiteLLM_ProjectTable
 
-    async def find_by_id(
-        self, project_id: str, id_field: str = "project_id"
-    ) -> Optional[LiteLLM_ProjectTable]:
+    async def find_by_id(self, project_id: str, id_field: str = "project_id") -> Optional[LiteLLM_ProjectTable]:
         return await super().find_by_id(project_id, id_field)
 
     async def find_by_alias(self, project_alias: str) -> Optional[LiteLLM_ProjectTable]:
@@ -122,8 +120,6 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         """Delete a project."""
         return await self.delete(project_id, id_field="project_id")
 
-    async def update_spend(
-        self, project_id: str, spend: float
-    ) -> Optional[LiteLLM_ProjectTable]:
+    async def update_spend(self, project_id: str, spend: float) -> Optional[LiteLLM_ProjectTable]:
         """Update project spend."""
         return await self.update(project_id, {"spend": spend}, id_field="project_id")

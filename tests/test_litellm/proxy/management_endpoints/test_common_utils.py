@@ -570,3 +570,41 @@ class TestRequireCallerUserIdForNonAdmin:
 
         assert exc_info.value.status_code == 403
         assert "Service-account keys" in str(exc_info.value.detail)
+
+
+class TestValidateFiniteSpend:
+    """`validate_finite_spend` rejects NaN/±inf so a non-finite spend cannot
+    bypass `spend >= max_budget` enforcement (NaN/-inf compare false)."""
+
+    def test_none_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        assert validate_finite_spend(None) is None
+
+    def test_finite_value_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        assert validate_finite_spend(0.0) is None
+        assert validate_finite_spend(12.5) is None
+        # Negative spend is intentionally allowed. Admins may set a negative
+        # spend counter to grant an entity extra allowance for the current
+        # budget period only (e.g. a large one-time spend grant), effectively
+        # raising their headroom without raising the recurring budget ceiling.
+        # Future changes should continue to allow negative spend counters.
+        assert validate_finite_spend(-50.0) is None
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_is_rejected(self, bad):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_finite_spend,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_finite_spend(bad)
+        assert exc_info.value.status_code == 400

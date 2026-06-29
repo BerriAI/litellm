@@ -25,9 +25,10 @@ general_settings:
   database_url: os.environ/DATABASE_URL
   control_plane_url: os.environ/CONTROL_PLANE_URL
   alerts: ["email"]
+
   proxy_budget_rescheduler_min_time: 15
   proxy_budget_rescheduler_max_time: 20
-
+  
 # fallbacks: [{"gpt-4": ["anthropic.claude-3-5-sonnet-20240620-v1:0"]}] #Configure fallbacks for context window exeeded errors (In this example, we will fall back to Claude Sonnet if over 8000 tokens, which is gpt-4's limit)
   # default_fallbacks: ["anthropic.claude-3-haiku-20240307-v1:0"] #Configure fallbacks for any error for every model (the above fallback configurations override this one)
 # environment_variables:
@@ -132,14 +133,52 @@ model_list:
       model: gemini/gemini-2-embedding
       api_key: os.environ/GEMINI_API_KEY
 
-  # realtime models
   - model_name: openai-realtime
     litellm_params:
-      model: openai/realtime-2
+      model: openai/gpt-realtime
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: realtime
 
+  - model_name: azure-realtime
+    litellm_params:
+      model: azure/gpt-realtime-2
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2025-08-28"
+      realtime_protocol: GA # Possible values: "GA"/ "v1", "beta"
+    model_info:
+      mode: realtime
+
+  - model_name: gemini-realtime
+    litellm_params:
+      model: gemini/gemini-3.1-flash-live-preview
+      api_key: os.environ/GEMINI_API_KEY
+    model_info:
+      mode: realtime
+
+  - model_name: vertex-realtime
+    litellm_params:
+      model: vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+    model_info:
+      mode: realtime
+
+  - model_name: bedrock-realtime
+    litellm_params:
+      model: bedrock/amazon.nova-sonic-v1:0
+      aws_region_name: us-east-1
+    model_info:
+      mode: realtime
+
+  - model_name: xai-realtime
+    litellm_params:
+      model: xai/grok-voice-latest
+      api_key: os.environ/XAI_API_KEY
+    model_info:
+      mode: realtime
   - model_name: rust-ocr-mistral
     litellm_params:
       model: mistral/mistral-ocr-latest

@@ -411,6 +411,15 @@ export default function KeyInfoView({
     });
   };
 
+  const parentTeam = currentKeyData.team_id ? teamsData?.find((team) => team.team_id === currentKeyData.team_id) : null;
+
+  const budgetDisplay =
+    currentKeyData.max_budget !== null
+      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
+      : parentTeam?.max_budget != null
+        ? `$${formatNumberWithCommas(parentTeam.max_budget, 2)} (Team: ${parentTeam.team_alias || parentTeam.team_id}${parentTeam.budget_duration ? ` / ${parentTeam.budget_duration}` : ""})`
+        : "Unlimited";
+
   return (
     <div className="w-full h-full overflow-y-auto p-4">
       <KeyInfoHeader
@@ -520,12 +529,7 @@ export default function KeyInfoView({
                 <Text>Spend</Text>
                 <div className="mt-2">
                   <Title>${formatNumberWithCommas(currentKeyData.spend, 4)}</Title>
-                  <Text>
-                    of{" "}
-                    {currentKeyData.max_budget !== null
-                      ? `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`
-                      : "Unlimited"}
-                  </Text>
+                  <Text>of {budgetDisplay}</Text>
                 </div>
               </Card>
 

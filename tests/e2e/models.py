@@ -125,6 +125,34 @@ class EmbedResponse(BaseModel):
     model: str | None = None
 
 
+# ---------- ocr ----------
+
+
+class OcrDocument(BaseModel):
+    """A document for /v1/ocr in Mistral OCR format: a document_url for PDFs/docs
+    or an image_url for images. exclude_none on serialize drops the unset one."""
+
+    type: str
+    document_url: str | None = None
+    image_url: str | None = None
+
+
+class OcrBody(BaseModel):
+    model: str
+    document: OcrDocument
+
+
+class OcrPage(BaseModel):
+    index: int
+    markdown: str
+
+
+class OcrResponse(BaseModel):
+    object: str | None = None
+    model: str | None = None
+    pages: list[OcrPage] = []
+
+
 # ---------- spend logs ----------
 
 
@@ -197,6 +225,7 @@ class CustomPricing(BaseModel):
     overrides, and /model/info echoes the rates the proxy resolved."""
 
     model_config = ConfigDict(extra="ignore")
+    mode: str | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
     cache_read_input_token_cost: float | None = None
