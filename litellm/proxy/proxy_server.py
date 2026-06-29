@@ -470,6 +470,7 @@ from litellm.proxy.response_api_endpoints.endpoints import router as response_ro
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -2264,111 +2265,133 @@ async def increment_spend_counters(
             budget_reservation["finalized"] = True
         return
 
-    if token is not None:
-        # token arrives pre-hashed from metadata["user_api_key"] (auth flow
+    cost: float = response_cost
+
+    async def _key_scope(key_token: str) -> None:
+        # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
         # hashes raw "sk-..." keys before they reach the callback). The
         # startswith("sk-") check is a safety net matching update_cache —
         # if a raw key somehow arrives, hash it; otherwise use as-is to
         # avoid double-hashing (budget checks read valid_token.token which
         # is single-hashed).
-        hashed_token = hash_token(token=token) if isinstance(token, str) and token.startswith("sk-") else token
+        hashed_token = (
+            hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
+        )
         key_counter_key = f"spend:key:{hashed_token}"
         if key_counter_key not in reserved_counter_keys:
             await _init_and_increment_spend_counter(
                 counter_key=key_counter_key,
                 source_cache_key=hashed_token,
-                increment=response_cost,
+                increment=cost,
             )
 
-        # Increment per-window budget counters for multi-budget keys
         key_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
-        if key_obj is not None:
-            key_budget_limits = getattr(key_obj, "budget_limits", None) or (
-                key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
-            )
-            if isinstance(key_budget_limits, str):
-                key_budget_limits = json.loads(key_budget_limits)
-            if isinstance(key_budget_limits, list):
-                for window in key_budget_limits:
-                    duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-                    key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
-                    if key_window_counter not in reserved_counter_keys:
-                        from litellm.proxy.spend_tracking.budget_reservation import (
-                            get_budget_window_start,
-                        )
+        if key_obj is None:
+            return
+        key_budget_limits = getattr(key_obj, "budget_limits", None) or (
+            key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
+        )
+        if isinstance(key_budget_limits, str):
+            key_budget_limits = json.loads(key_budget_limits)
+        if not isinstance(key_budget_limits, list):
+            return
+        for window in key_budget_limits:
+            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
+            if key_window_counter not in reserved_counter_keys:
+                await _init_and_increment_window_spend_counter(
+                    counter_key=key_window_counter,
+                    entity_type="Key",
+                    entity_id=hashed_token,
+                    window_start=get_budget_window_start(window),
+                    increment=cost,
+                )
 
-                        await _init_and_increment_window_spend_counter(
-                            counter_key=key_window_counter,
-                            entity_type="Key",
-                            entity_id=hashed_token,
-                            window_start=get_budget_window_start(window),
-                            increment=response_cost,
-                        )
-
-    if team_id is not None:
-        team_counter_key = f"spend:team:{team_id}"
+    async def _team_scope(scope_team_id: str) -> None:
+        team_counter_key = f"spend:team:{scope_team_id}"
         if team_counter_key not in reserved_counter_keys:
             await _init_and_increment_spend_counter(
                 counter_key=team_counter_key,
-                source_cache_key=f"team_id:{team_id}",
-                increment=response_cost,
+                source_cache_key=f"team_id:{scope_team_id}",
+                increment=cost,
             )
 
-        # Increment per-window budget counters for multi-budget teams
-        team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{team_id}")
-        if team_obj is not None:
-            team_budget_limits = getattr(team_obj, "budget_limits", None) or (
-                team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
+        team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
+        if team_obj is None:
+            return
+        team_budget_limits = getattr(team_obj, "budget_limits", None) or (
+            team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
+        )
+        if isinstance(team_budget_limits, str):
+            team_budget_limits = json.loads(team_budget_limits)
+        if not isinstance(team_budget_limits, list):
+            return
+        for window in team_budget_limits:
+            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+            team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
+            if team_window_counter not in reserved_counter_keys:
+                await _init_and_increment_window_spend_counter(
+                    counter_key=team_window_counter,
+                    entity_type="Team",
+                    entity_id=scope_team_id,
+                    window_start=get_budget_window_start(window),
+                    increment=cost,
+                )
+
+    async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
+        team_member_counter_key = f"spend:team_member:{scope_user_id}:{scope_team_id}"
+        if team_member_counter_key in reserved_counter_keys:
+            return
+        await _init_and_increment_spend_counter(
+            counter_key=team_member_counter_key,
+            source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
+            increment=cost,
+        )
+
+    async def _user_scope(scope_user_id: str) -> None:
+        user_counter_key = f"spend:user:{scope_user_id}"
+        if user_counter_key in reserved_counter_keys:
+            return
+        await _init_and_increment_spend_counter(
+            counter_key=user_counter_key,
+            source_cache_key=scope_user_id,
+            increment=cost,
+        )
+
+    scope_coros = tuple(
+        coro
+        for coro in (
+            _key_scope(token) if token is not None else None,
+            _team_scope(team_id) if team_id is not None else None,
+            _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
+            _user_scope(user_id) if user_id is not None else None,
+            _increment_end_user_and_tag_spend_counters(
+                end_user_id=end_user_id,
+                tags=tags,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
             )
-            if isinstance(team_budget_limits, str):
-                team_budget_limits = json.loads(team_budget_limits)
-            if isinstance(team_budget_limits, list):
-                for window in team_budget_limits:
-                    duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-                    team_window_counter = f"spend:team:{team_id}:window:{duration}"
-                    if team_window_counter not in reserved_counter_keys:
-                        from litellm.proxy.spend_tracking.budget_reservation import (
-                            get_budget_window_start,
-                        )
-
-                        await _init_and_increment_window_spend_counter(
-                            counter_key=team_window_counter,
-                            entity_type="Team",
-                            entity_id=team_id,
-                            window_start=get_budget_window_start(window),
-                            increment=response_cost,
-                        )
-
-    if user_id is not None and team_id is not None:
-        team_member_counter_key = f"spend:team_member:{user_id}:{team_id}"
-        if team_member_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=team_member_counter_key,
-                source_cache_key=f"team_membership:{user_id}:{team_id}",
-                increment=response_cost,
+            if end_user_id is not None or tags is not None
+            else None,
+            _increment_org_spend_counter(
+                org_id=org_id,
+                response_cost=cost,
+                reserved_counter_keys=reserved_counter_keys,
             )
-
-    if user_id is not None:
-        user_counter_key = f"spend:user:{user_id}"
-        if user_counter_key not in reserved_counter_keys:
-            await _init_and_increment_spend_counter(
-                counter_key=user_counter_key,
-                source_cache_key=user_id,
-                increment=response_cost,
-            )
-
-    await _increment_end_user_and_tag_spend_counters(
-        end_user_id=end_user_id,
-        tags=tags,
-        response_cost=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
+            if org_id is not None
+            else None,
+        )
+        if coro is not None
     )
 
-    await _increment_org_spend_counter(
-        org_id=org_id,
-        response_cost=response_cost,
-        reserved_counter_keys=reserved_counter_keys,
-    )
+    # return_exceptions so a failing scope does not leave its siblings running
+    # as orphaned tasks that race the caller's reservation-counter invalidation;
+    # all scopes settle, then the first error propagates as before.
+    scope_results = await asyncio.gather(*scope_coros, return_exceptions=True)
+    scope_errors = [r for r in scope_results if isinstance(r, BaseException)]
+    if scope_errors:
+        raise scope_errors[0]
+
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
 
