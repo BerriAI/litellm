@@ -51,6 +51,9 @@ def initialize_guardrail(
                 end_session_after_n_fails=getattr(litellm_params, "end_session_after_n_fails", None),
                 on_violation=getattr(litellm_params, "on_violation", None),
                 realtime_violation_message=getattr(litellm_params, "realtime_violation_message", None),
+                on_sensitive_data=getattr(litellm_params, "on_sensitive_data", None),
+                sensitive_data_route_to_model=getattr(litellm_params, "sensitive_data_route_to_model", None),
+                sticky_session_routing=getattr(litellm_params, "sticky_session_routing", True),
             ),
         ),
     )
