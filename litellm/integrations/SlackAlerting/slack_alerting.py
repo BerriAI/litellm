@@ -1164,6 +1164,8 @@ Model Info:
                     key_token=key_token,
                     base_url=base_url,
                     email_support_contact=email_support_contact,
+                    email_footer="Best, <br /> The LiteLLM team <br />",
+                    brand_name="LiteLLM",
                 )
             elif webhook_event.event == "internal_user_created":
                 # GET TEAM NAME
@@ -1179,6 +1181,8 @@ Model Info:
                     team_name=team_name,
                     base_url=base_url,
                     email_support_contact=email_support_contact,
+                    email_footer="Best, <br /> The LiteLLM team <br />",
+                    brand_name="LiteLLM",
                 )
             else:
                 verbose_proxy_logger.error(

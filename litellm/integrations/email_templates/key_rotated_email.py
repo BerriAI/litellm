@@ -156,7 +156,7 @@ KEY_ROTATED_EMAIL_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <img src="{email_logo_url}" alt="LiteLLM Logo" style="height: 32px; width: auto;">
+            <img src="{email_logo_url}" alt="{brand_name} Logo" style="height: 32px; width: auto;">
         </div>
         <div class="content">
             <div class="greeting">
@@ -164,7 +164,7 @@ KEY_ROTATED_EMAIL_TEMPLATE = """
             </div>
             
             <div class="message">
-                <p><strong>Your LiteLLM API key has been rotated</strong> as part of our ongoing commitment to security best practices.</p>
+                <p><strong>Your {brand_name} API key has been rotated</strong> as part of our ongoing commitment to security best practices.</p>
                 <p style="margin-top: 16px;">Your previous API key has been deactivated and will no longer work. Please update your applications with the new key below.</p>
             </div>
             

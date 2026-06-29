@@ -156,7 +156,7 @@ KEY_CREATED_EMAIL_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <img src="{email_logo_url}" alt="LiteLLM Logo" style="height: 32px; width: auto;">
+            <img src="{email_logo_url}" alt="{brand_name} Logo" style="height: 32px; width: auto;">
         </div>
         <div class="content">
             <div class="greeting">
@@ -164,7 +164,7 @@ KEY_CREATED_EMAIL_TEMPLATE = """
             </div>
             
             <div class="message">
-                <p>Great news! Your LiteLLM API key is ready to use.</p>
+                <p>Great news! Your {brand_name} API key is ready to use.</p>
             </div>
             
             <div class="budget-info">

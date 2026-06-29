@@ -1,7 +1,9 @@
 """
 This is the litellm SMTP email integration
 """
+
 import asyncio
+import os
 from typing import List
 
 from litellm._logging import verbose_logger
@@ -34,15 +36,15 @@ class SMTPEmailLogger(BaseEmailLogger):
     ):
         from litellm.proxy.utils import send_email as send_smtp_email
 
-        verbose_logger.debug(
-            f"Sending email from {from_email} to {to_email} with subject {subject}"
-        )
+        verbose_logger.debug(f"Sending email from {from_email} to {to_email} with subject {subject}")
+        cc = os.getenv("EMAIL_CC", None)
         for receiver_email in to_email:
             asyncio.create_task(
                 send_smtp_email(
                     receiver_email=receiver_email,
                     subject=subject,
                     html=html_body,
+                    cc=cc,
                 )
             )
         return
