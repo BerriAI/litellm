@@ -547,6 +547,79 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+def _check_permissions_caller_permission(
+    permissions: Optional[dict],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set the `permissions` dict on a key.
+
+    The field grants ambient capabilities (e.g. `get_spend_routes` exposes
+    `/global/spend/*`), so it must follow the same admin gate as
+    `allowed_routes`. Without this gate a non-admin can self-grant capabilities
+    they do not hold, including read access to global spend.
+    """
+    if not permissions:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can set `permissions` on a key."},
+    )
+
+
+def _check_budget_limits_delegation_ceiling(
+    budget_limits: Optional[List[BudgetLimitEntry]],
+    delegation_ceiling: Optional[float],
+    user_api_key_dict: UserAPIKeyAuth,
+    is_ui_session_team_key: bool,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    """
+    Enforce three invariants on `budget_limits`:
+
+    - Every `budget_limits[*].max_budget` must be a finite number; applies
+      to every caller including proxy admin.
+    - A CLI session token caller may not set `budget_limits` on a personal
+      key (one with no `team_id`); mirrors the scalar `max_budget` guard in
+      `_common_key_generation_helper`.
+    - Non-admin callers may not set a window above their delegation ceiling.
+    """
+    if not budget_limits:
+        return
+    non_finite = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
+    if non_finite is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
+        )
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if is_ui_session_team_key:
+        return
+    if user_api_key_dict.is_session_token and team_table is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": ("budget_limits cannot be set without specifying team_id when using a CLI session token.")
+            },
+        )
+    if delegation_ceiling is None:
+        return
+    over_ceiling = next((w for w in budget_limits if w.max_budget > delegation_ceiling), None)
+    if over_ceiling is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"budget_limits entry max_budget ({over_ceiling.max_budget}) "
+                    f"cannot exceed the caller's own max_budget ({delegation_ceiling})."
+                )
+            },
+        )
+
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -743,6 +816,18 @@ async def _common_key_generation_helper(
                 )
             },
         )
+
+    _check_budget_limits_delegation_ceiling(
+        budget_limits=data.budget_limits,
+        delegation_ceiling=delegation_ceiling,
+        user_api_key_dict=user_api_key_dict,
+        is_ui_session_team_key=is_ui_session_team_key,
+        team_table=team_table,
+    )
+    _check_permissions_caller_permission(
+        permissions=data.permissions,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
