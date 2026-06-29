@@ -2398,12 +2398,8 @@ def test_code_execution_tool_results_extraction():
     assert editor_result["tool_use_id"] == "srvtoolu_01DEF"
     assert editor_result["content"]["is_file_update"] is False
 
-    # Verify text content is properly concatenated
-    assert (
-        "I'll calculate that for you."
-        in transformed_response.choices[0].message.content
-    )
-    assert "Done!" in transformed_response.choices[0].message.content
+    # Tool calls should null content per OpenAI contract
+    assert transformed_response.choices[0].message.content is None
 
 
 def test_code_execution_tool_results_in_hidden_params():
@@ -2519,6 +2515,53 @@ def test_tool_search_tool_result_not_in_tool_results():
     # Verify tool_search_tool_result is NOT in tool_results
     provider_fields = transformed_response.choices[0].message.provider_specific_fields
     assert provider_fields.get("tool_results") is None
+
+
+def test_tool_call_preamble_sets_content_none():
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+
+    mock_anthropic_response = {
+        "id": "msg_01XYZ",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {"type": "text", "text": "Let me call a tool."},
+            {
+                "type": "tool_use",
+                "id": "toolu_01ABC",
+                "name": "get_weather",
+                "input": {"city": "Toronto"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 12, "output_tokens": 7},
+    }
+
+    mock_raw_response = MagicMock(spec=httpx.Response)
+    mock_raw_response.json.return_value = mock_anthropic_response
+    mock_raw_response.status_code = 200
+    mock_raw_response.headers = {}
+
+    model_response = ModelResponse()
+
+    transformed_response = config.transform_parsed_response(
+        completion_response=mock_anthropic_response,
+        raw_response=mock_raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+    message = transformed_response.choices[0].message
+    assert message.tool_calls is not None
+    assert len(message.tool_calls) == 1
+    assert message.content is None
 
 
 def test_web_search_tool_result_backwards_compatibility():

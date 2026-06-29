@@ -1927,9 +1927,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_calls,
         )
 
+        message_content: Optional[str] = text_content or None
+        if tool_calls:
+            # OpenAI chat completions require content to be null when tool_calls exist.
+            message_content = None
         _message = litellm.Message(
             tool_calls=tool_calls,
-            content=text_content or None,
+            content=message_content,
             provider_specific_fields=provider_specific_fields,
             thinking_blocks=thinking_blocks,
             reasoning_content=reasoning_content,
