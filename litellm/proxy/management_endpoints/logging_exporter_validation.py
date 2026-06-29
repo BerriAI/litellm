@@ -63,6 +63,12 @@ def validate_credential_access(credential_info: Optional[dict]) -> None:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": f"access.{field} must be a list of strings"},
             )
+    unknown = set(access) - {"global", "teams", "orgs"}
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": f"access contains unknown field(s): {sorted(unknown)}"},
+        )
 
 
 def _logging_credentials_by_name() -> dict[str, dict]:

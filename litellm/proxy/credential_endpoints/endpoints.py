@@ -521,7 +521,15 @@ async def _authorize_credential_patch(
     except ValidationError as ve:
         raise HTTPException(status_code=400, detail={"error": _summarize_validation_error(ve)})
     assert existing is not None  # narrowed by existing_is_logging_gated
-    existing_info_typed = CredentialInfo.model_validate(existing.credential_info)
+    try:
+        existing_info_typed = CredentialInfo.model_validate(existing.credential_info)
+    except ValidationError:
+        # Stored info the strict access model can't parse (e.g. a legacy access key)
+        # can't be run through the field-level decider. Fail closed: only the proxy
+        # admin may patch such a row, instead of 500-ing every caller.
+        if not is_admin:
+            raise HTTPException(status_code=403, detail={"error": OPAQUE_DENY_REASON})
+        return
     decision = decide_credential_patch(
         is_proxy_admin=is_admin,
         caller_team_admin_ids=team_admin_ids,

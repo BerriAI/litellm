@@ -762,3 +762,46 @@ async def test_get_credentials_returns_all_for_proxy_admin(monkeypatch):
     )
     names = sorted(c["credential_name"] for c in response["credentials"])
     assert names == ["openai", "poc-langfuse"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_patch_malformed_stored_access_does_not_500(
+    _patch_team_admin_lookup,
+):
+    """A stored logging destination whose ``access`` carries a key the strict model
+    forbids (e.g. legacy data, or data written before the write gate rejected unknown
+    keys) must not 500 every PATCH. Fail closed: a non-admin gets 403, the proxy admin
+    is still allowed through. Pre-fix the unguarded ``CredentialInfo.model_validate``
+    on the stored row raised an uncaught ``ValidationError`` for all callers."""
+    malformed = CredentialItem(
+        credential_name="legacy-dest",
+        credential_values={"langfuse_host": "h"},
+        credential_info={
+            "credential_type": "logging",
+            "access": {"global": True, "legacy_field": "x"},
+        },
+    )
+    patch = UpdateCredentialItem(credential_info={"access": {"teams": ["team-T"]}})
+    _patch_team_admin_lookup["ids"] = frozenset({"team-T"})
+
+    with pytest.raises(HTTPException) as exc:
+        await endpoints._authorize_credential_patch(
+            credential_name="legacy-dest",
+            patch=patch,
+            existing=malformed,
+            user_api_key_dict=_team_admin_of(["team-T"]),
+            prisma_client=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert exc.value.detail == {"error": OPAQUE_DENY_REASON}
+
+    assert (
+        await endpoints._authorize_credential_patch(
+            credential_name="legacy-dest",
+            patch=patch,
+            existing=malformed,
+            user_api_key_dict=_admin(),
+            prisma_client=MagicMock(),
+        )
+        is None
+    )
