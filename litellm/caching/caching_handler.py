@@ -194,12 +194,22 @@ class LLMCachingHandler:
                     verbose_logger.debug("Cache Hit!")
                     cache_hit = True
                     end_time = datetime.datetime.now()
-                    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                        model=model,
-                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                        api_base=kwargs.get("api_base", None),
-                        api_key=kwargs.get("api_key", None),
-                    )
+                    # Search call types carry a search-tool name in `model` (e.g.
+                    # "tavily-search"), not an LLM model name, so get_llm_provider()
+                    # would raise "LLM Provider NOT provided". Skip provider
+                    # resolution for them and keep the search-tool name as-is.
+                    if original_function.__name__ in (
+                        CallTypes.asearch.value,
+                        CallTypes.search.value,
+                    ):
+                        custom_llm_provider = kwargs.get("custom_llm_provider", None)
+                    else:
+                        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+                            model=model,
+                            custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                            api_base=kwargs.get("api_base", None),
+                            api_key=kwargs.get("api_key", None),
+                        )
                     cache_duration_ms = (cache_check_end_time - cache_check_start_time) * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
@@ -319,20 +329,28 @@ class LLMCachingHandler:
                     # LOG SUCCESS
                     cache_hit = True
                     end_time = datetime.datetime.now()
-                    (
-                        model,
-                        custom_llm_provider,
-                        dynamic_api_key,
-                        api_base,
-                    ) = litellm.get_llm_provider(
-                        model=model or "",
-                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                        api_base=kwargs.get("api_base", None),
-                        api_key=kwargs.get("api_key", None),
-                    )
+                    # Search call types carry a search-tool name in `model` (e.g.
+                    # "tavily-search"), not an LLM model name, so get_llm_provider()
+                    # would raise "LLM Provider NOT provided". Skip provider
+                    # resolution for them.
+                    if call_type in (CallTypes.asearch.value, CallTypes.search.value):
+                        logged_model = model
+                    else:
+                        (
+                            model,
+                            custom_llm_provider,
+                            dynamic_api_key,
+                            api_base,
+                        ) = litellm.get_llm_provider(
+                            model=model or "",
+                            custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                            api_base=kwargs.get("api_base", None),
+                            api_key=kwargs.get("api_key", None),
+                        )
+                        logged_model = f"{custom_llm_provider}/{model}"
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
-                        model=f"{custom_llm_provider}/{model}",
+                        model=logged_model,
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=False,
@@ -872,6 +890,12 @@ class LLMCachingHandler:
                     )
                 else:
                     cached_result = response_obj
+        elif (call_type == CallTypes.asearch.value or call_type == CallTypes.search.value) and isinstance(
+            cached_result, dict
+        ):
+            from litellm.llms.base_llm.search.transformation import SearchResponse
+
+            cached_result = SearchResponse(**cached_result)
 
         if (
             hasattr(cached_result, "_hidden_params")
