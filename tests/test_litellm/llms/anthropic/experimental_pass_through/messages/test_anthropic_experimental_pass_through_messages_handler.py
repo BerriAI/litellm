@@ -270,9 +270,9 @@ def test_openai_model_with_thinking_converts_to_reasoning():
             "reasoning" in call_kwargs
         ), "reasoning should be passed to litellm.responses"
 
-        # budget_tokens=1024 -> effort="minimal" (< 2000 threshold)
+        # budget_tokens=1024 -> effort="low" (at the LOW budget threshold)
         # reasoning_auto_summary is False by default, so no summary key
-        expected_reasoning = {"effort": "minimal"}
+        expected_reasoning = {"effort": "low"}
         assert call_kwargs["reasoning"] == expected_reasoning, (
             f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
             f"got {call_kwargs.get('reasoning')}"
@@ -316,7 +316,7 @@ class TestThinkingParameterTransformation:
         )
 
         # reasoning_auto_summary is False by default, so no summary key
-        assert result == {"reasoning_effort": "minimal"}
+        assert result == {"reasoning_effort": "low"}
         assert "thinking" not in result
         assert "summary" not in str(result["reasoning_effort"])
 
@@ -336,7 +336,7 @@ class TestThinkingParameterTransformation:
                 model="openai/gpt-5.2",
             )
             assert result == {
-                "reasoning_effort": {"effort": "medium", "summary": "detailed"}
+                "reasoning_effort": {"effort": "high", "summary": "detailed"}
             }
         finally:
             litellm.reasoning_auto_summary = original
@@ -549,7 +549,7 @@ class TestThinkingSummaryPreservation:
         result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
             thinking
         )
-        assert result == {"effort": "medium", "summary": "concise"}
+        assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
         """translate_thinking_to_reasoning should not include summary by default (opt-in)."""
@@ -567,7 +567,7 @@ class TestThinkingSummaryPreservation:
                     thinking
                 )
             )
-            assert result == {"effort": "medium"}
+            assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:
             litellm.reasoning_auto_summary = original
@@ -584,7 +584,7 @@ class TestThinkingSummaryPreservation:
             model="openai/gpt-5.2",
         )
         assert result == {
-            "reasoning_effort": {"effort": "medium", "summary": "concise"}
+            "reasoning_effort": {"effort": "high", "summary": "concise"}
         }
 
 

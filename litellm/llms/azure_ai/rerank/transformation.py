@@ -41,9 +41,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         # Allow callers to pass either full v1/v2 rerank endpoints:
         # - https://<resource>.services.ai.azure.com/v1/rerank
         # - https://<resource>.services.ai.azure.com/providers/cohere/v2/rerank
-        if normalized_path.endswith("/v1/rerank") or normalized_path.endswith(
-            "/v2/rerank"
-        ):
+        if normalized_path.endswith("/v1/rerank") or normalized_path.endswith("/v2/rerank"):
             return str(original_url.copy_with(path=normalized_path or "/"))
 
         # If callers pass just the version path (e.g. ".../v2" or ".../providers/cohere/v2"), append "/rerank"
@@ -71,9 +69,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
             api_key = get_secret_str("AZURE_AI_API_KEY") or litellm.azure_key
 
         if api_key is None:
-            raise ValueError(
-                "Azure AI API key is required. Please set 'AZURE_AI_API_KEY' or 'litellm.azure_key'"
-            )
+            raise ValueError("Azure AI API key is required. Please set 'AZURE_AI_API_KEY' or 'litellm.azure_key'")
 
         default_headers = {
             "Authorization": f"Bearer {api_key}",
@@ -109,9 +105,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        base_model = self._get_base_model(
-            rerank_response._hidden_params.get("llm_provider-azureml-model-group")
-        )
+        base_model = self._get_base_model(rerank_response._hidden_params.get("llm_provider-azureml-model-group"))
         rerank_response._hidden_params["model"] = base_model
         return rerank_response
 

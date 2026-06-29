@@ -75,9 +75,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
             default_api_base=self.PARALLEL_AI_API_BASE,
         )
         if not api_key:
-            raise ValueError(
-                "PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable."
-            )
+            raise ValueError("PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable.")
         headers["x-api-key"] = api_key
         headers["Content-Type"] = "application/json"
         return headers
@@ -89,11 +87,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         data: Optional[Union[Dict, List[Dict]]] = None,
         **kwargs,
     ) -> str:
-        api_base = (
-            api_base
-            or get_secret_str("PARALLEL_AI_API_BASE")
-            or self.PARALLEL_AI_API_BASE
-        )
+        api_base = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
 
         api_base = api_base.rstrip("/")
         if not api_base.endswith("/v1/search"):
@@ -155,9 +149,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
             advanced_settings["location"] = params.pop("country")
 
         if "max_chars_per_result" in params:
-            advanced_settings["excerpt_settings"] = {
-                "max_chars_per_result": params.pop("max_chars_per_result")
-            }
+            advanced_settings["excerpt_settings"] = {"max_chars_per_result": params.pop("max_chars_per_result")}
 
         source_policy: _ParallelAISourcePolicy = {}
 
