@@ -64,6 +64,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     raise_public,
+    raise_token_exchange_challenge,
     raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
@@ -2015,10 +2016,13 @@ class MCPServerManager:
                     case Error(err):
                         if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
                             # authorization_code's missing per-user token -> the per-server
-                            # browser-OAuth challenge, built here where the full MCPServer is in
-                            # hand. token_exchange and other modes carry their own 401 (e.g. OBO
-                            # needs a caller token, not a browser flow), so they go via raise_public.
+                            # browser-OAuth challenge, built here where the full MCPServer is in hand.
                             raise_user_oauth_challenge(server)
+                        if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
+                            # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728
+                            # challenge pointing at the IdP the client must SSO with to obtain one,
+                            # rather than an opaque 401. No gateway-side browser flow.
+                            raise_token_exchange_challenge(server)
                         raise_public(err)
                 return MCPClient(
                     server_url=server_url,

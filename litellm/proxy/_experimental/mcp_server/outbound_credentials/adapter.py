@@ -198,3 +198,32 @@ def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
         detail="Unauthorized",
         headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata}"'},
     )
+
+
+def raise_token_exchange_challenge(server: MCPServer) -> NoReturn:
+    """Raise the RFC 9728 / RFC 6750 challenge an OBO (``token_exchange``) server returns when the
+    caller's subject token is missing or the IdP rejected it.
+
+    Points at the server's Protected Resource Metadata (``resource_metadata``), whose
+    ``authorization_servers`` names the IdP the client must SSO with to obtain a subject token;
+    ``error="invalid_token"`` tells a spec-compliant MCP client to discover that AS and retry with a
+    fresh bearer. Mirrors ``raise_user_oauth_challenge`` but for the exchange flow: there is no
+    gateway-side browser OAuth — the client re-authenticates directly with the IdP, and LiteLLM then
+    exchanges the resulting token.
+    """
+    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
+
+    root = get_server_root_path()
+    prefix = "" if root == "/" else root
+    name = server.alias or server.server_name or server.name or server.server_id
+    resource_metadata = f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    www_authenticate = (
+        f'Bearer resource_metadata="{resource_metadata}", '
+        'error="invalid_token", '
+        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    )
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": www_authenticate},
+    )

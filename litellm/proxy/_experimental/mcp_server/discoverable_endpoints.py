@@ -1288,7 +1288,21 @@ async def _build_oauth_protected_resource_response(
             detail=(f"Upstream oauth-protected-resource metadata unavailable for MCP server {mcp_server.name!r}"),
         )
 
-    _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
+    # OBO (token_exchange): the client SSOs with the IdP to obtain a subject token, which LiteLLM
+    # then exchanges. Point discovery at the JWT-auth issuer(s) LiteLLM trusts (the same IdP that
+    # issues and validates the subject), not at the gateway.
+    if mcp_server is not None and mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+        issuers = _jwt_auth_issuers()
+        if issuers:
+            return {
+                "authorization_servers": issuers,
+                "resource": resource_url,
+                "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+            }
+        # No JWT-auth issuer configured -> fall through to the gateway default so discovery still
+        # returns metadata; it just can't name the IdP.
+    else:
+        _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
 
     return {
         "authorization_servers": [
@@ -1297,6 +1311,31 @@ async def _build_oauth_protected_resource_response(
         "resource": resource_url,
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
     }
+
+
+def _jwt_auth_issuers() -> list:
+    """The OAuth issuer identifier(s) LiteLLM's JWT auth trusts, for the OBO PRM authorization_servers.
+
+    In token_exchange the IdP that issues the subject JWT is the same one LiteLLM validates it
+    against, so OBO discovery points clients at the JWT-auth issuer to obtain a subject token.
+    Sourced from ``JWT_ISSUER`` and any configured ``litellm_jwtauth.issuers``.
+    """
+    import os  # noqa: PLC0415
+
+    from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
+
+    issuers: list = []
+    env_issuer = os.getenv("JWT_ISSUER")
+    if env_issuer:
+        issuers.append(env_issuer)
+
+    jwtauth = general_settings.get("litellm_jwtauth") if isinstance(general_settings, dict) else None
+    raw_issuers = jwtauth.get("issuers") if isinstance(jwtauth, dict) else getattr(jwtauth, "issuers", None)
+    for cfg in raw_issuers or []:
+        issuer = cfg.get("issuer") if isinstance(cfg, dict) else getattr(cfg, "issuer", None)
+        if issuer and issuer not in issuers:
+            issuers.append(issuer)
+    return issuers
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}

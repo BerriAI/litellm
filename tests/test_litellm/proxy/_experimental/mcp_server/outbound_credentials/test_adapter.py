@@ -282,3 +282,19 @@ def test_raise_user_oauth_challenge_name_fallback(kwargs, expected_name):
     with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
         raise_user_oauth_challenge(_server(**kwargs))
     assert f'/mcp/{expected_name}"' in exc_info.value.headers["WWW-Authenticate"]
+
+
+def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"))
+    exc = exc_info.value
+    www = exc.headers["WWW-Authenticate"]
+    assert exc.status_code == 401
+    # RFC 9728 resource_metadata so the client can discover the IdP, plus RFC 6750 invalid_token.
+    assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
+    assert 'error="invalid_token"' in www
+    assert "error_description=" in www

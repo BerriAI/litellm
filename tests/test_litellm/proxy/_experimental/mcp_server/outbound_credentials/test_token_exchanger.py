@@ -112,6 +112,30 @@ async def test_client_secret_post_keeps_creds_in_body_with_no_auth_header():
 
 
 @pytest.mark.asyncio
+async def test_exchange_maps_idp_rejection_to_unauthorized():
+    """An IdP 4xx (surfaced as SubjectTokenRejected by the post adapter) is non-retryable: it maps
+    to ``unauthorized`` (the 401 OBO challenge), not the retryable ``upstream_unavailable`` (503)."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+        SubjectTokenRejected,
+    )
+
+    async def _rejecting_post(url, form):
+        raise SubjectTokenRejected("IdP rejected the token exchange (HTTP 400)")
+
+    result = await Rfc8693TokenExchanger(_rejecting_post, clock=_Clock()).exchange("bad-jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_exchange_maps_transport_failure_to_upstream_unavailable():
+    """A post returning None (5xx / network / timeout / malformed body) stays retryable: 503."""
+    result = await Rfc8693TokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_exchange_caches_per_caller_token():
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
     exchanger = Rfc8693TokenExchanger(post, clock=_Clock())

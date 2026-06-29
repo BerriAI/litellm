@@ -70,6 +70,15 @@ _NON_ACCESS_ISSUED_TOKEN_TYPES = frozenset(
 ExchangeHttpPost = Callable[[str, "dict[str, str]", "dict[str, str]"], Awaitable["dict[str, object] | None"]]
 
 
+class SubjectTokenRejected(Exception):
+    """The IdP refused to exchange the subject token (an RFC 8693 4xx, e.g. ``invalid_grant``).
+
+    Distinct from a transport / IdP-availability failure, which the post adapter maps to ``None`` ->
+    ``upstream_unavailable`` -> 503 (retryable). A rejected subject is the caller's problem, not the
+    gateway's, so the arm surfaces it as a non-retryable 401 (the OBO challenge) instead.
+    """
+
+
 class TokenExchanger(Protocol):
     """Exchanges a caller token for an upstream-bound one, per the server's token_exchange config."""
 
@@ -209,7 +218,12 @@ class Rfc8693TokenExchanger:
         async def reread() -> OAuthToken | None:
             return await self._cache.get(cache_key, server_id)
 
-        token = await self._coordinator.run(cache_key, server_id, refresh=run_exchange, reread=reread)
+        try:
+            token = await self._coordinator.run(cache_key, server_id, refresh=run_exchange, reread=reread)
+        except SubjectTokenRejected as rejected:
+            # The IdP rejected the subject token (4xx). This is non-retryable: the caller must
+            # re-authenticate with the IdP, so it surfaces as a 401 (the OBO challenge), not a 503.
+            return Error(CredError.of_unauthorized(str(rejected) or "subject token rejected by the IdP"))
         if token is None:
             return Error(CredError.of_upstream_unavailable("token exchange did not return a usable access token"))
         return Ok(token)
