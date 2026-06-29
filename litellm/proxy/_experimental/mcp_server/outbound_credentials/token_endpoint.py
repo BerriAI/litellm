@@ -33,7 +33,6 @@ from litellm.constants import (
     MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client  # pyright: ignore[reportUnknownVariableType]
-from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Error,
     Ok,
@@ -45,6 +44,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     PrivateKeyJwtAuth,
 )
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 CLIENT_ASSERTION_LIFETIME_SECONDS = 60
