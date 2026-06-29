@@ -1543,8 +1543,22 @@ class PrometheusLogger(CustomLogger):
 
         remaining_requests = metadata.get(remaining_requests_variable_name)
         if remaining_requests is None:
+            remaining_requests = (
+                self._get_model_per_key_remaining_value_from_additional_headers(
+                    kwargs=kwargs,
+                    rate_limit_type="requests",
+                )
+            )
+        if remaining_requests is None:
             remaining_requests = sys.maxsize
         remaining_tokens = metadata.get(remaining_tokens_variable_name)
+        if remaining_tokens is None:
+            remaining_tokens = (
+                self._get_model_per_key_remaining_value_from_additional_headers(
+                    kwargs=kwargs,
+                    rate_limit_type="tokens",
+                )
+            )
         if remaining_tokens is None:
             remaining_tokens = sys.maxsize
 
@@ -1573,6 +1587,28 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
         self.litellm_remaining_api_key_tokens_for_model.labels(**tokens_labels).set(remaining_tokens)
+
+    @staticmethod
+    def _get_model_per_key_remaining_value_from_additional_headers(
+        kwargs: dict,
+        rate_limit_type: Literal["requests", "tokens"],
+    ) -> Optional[Any]:
+        standard_logging_payload = kwargs.get("standard_logging_object") or {}
+        hidden_params = standard_logging_payload.get("hidden_params") or {}
+        additional_headers = hidden_params.get("additional_headers") or {}
+        if not isinstance(additional_headers, dict):
+            return None
+
+        header_name = f"x-ratelimit-model_per_key-remaining-{rate_limit_type}"
+        if header_name in additional_headers:
+            return additional_headers[header_name]
+
+        normalized_header_name = header_name.lower()
+        for key, value in additional_headers.items():
+            if str(key).lower() == normalized_header_name:
+                return value
+
+        return None
 
     def _set_latency_metrics(
         self,
