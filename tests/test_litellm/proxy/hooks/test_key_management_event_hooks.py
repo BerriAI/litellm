@@ -4,15 +4,34 @@ Tests for KeyManagementEventHooks.
 Validates that email and secret manager operations are independent and non-blocking.
 """
 
+import asyncio
 import os
 import sys
+from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
+from litellm.proxy._types import (
+    LiteLLM_VerificationToken,
+    UpdateKeyRequest,
+    UserAPIKeyAuth,
+    hash_token,
+)
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
+
+
+async def _flush_created_audit_log_task():
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+
+def _proxy_server_module() -> ModuleType:
+    proxy_server_module = ModuleType("litellm.proxy.proxy_server")
+    proxy_server_module.litellm_proxy_admin_name = "proxy-admin"
+    return proxy_server_module
 
 
 class TestKeyManagementEventHooksIndependentOperations:
@@ -72,9 +91,7 @@ class TestKeyManagementEventHooksIndependentOperations:
                 return_value=True,
             ),
             patch("litellm.store_audit_logs", False),
-            patch(
-                "litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"
-            ),
+            patch("litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"),
         ):
             # Should not raise even though email fails
             await KeyManagementEventHooks.async_key_generated_hook(
@@ -140,9 +157,7 @@ class TestKeyManagementEventHooksIndependentOperations:
                 return_value=True,
             ),
             patch("litellm.store_audit_logs", False),
-            patch(
-                "litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"
-            ),
+            patch("litellm.proxy.hooks.key_management_event_hooks.verbose_proxy_logger"),
         ):
             # Should not raise even though secret manager fails
             await KeyManagementEventHooks.async_key_generated_hook(
@@ -155,24 +170,93 @@ class TestKeyManagementEventHooksIndependentOperations:
         assert email_called["called"] is True
 
 
+class TestKeyManagementAuditLogObjectIds:
+    @pytest.mark.asyncio
+    async def test_key_update_audit_log_uses_stored_token_id_for_object_id(self):
+        raw_key = "sk-audit-log-object-id-update"
+        token_id = hash_token(token=raw_key)
+        data = UpdateKeyRequest(key=raw_key, max_budget=10)
+        existing_key_row = LiteLLM_VerificationToken(token=token_id)
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-admin-audit-log-key",
+            user_id="admin-user",
+        )
+
+        with (
+            patch.dict(
+                sys.modules,
+                {"litellm.proxy.proxy_server": _proxy_server_module()},
+            ),
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response={"status": "success"},
+                user_api_key_dict=user_api_key_dict,
+            )
+            await _flush_created_audit_log_task()
+
+        mock_create_audit_log.assert_awaited_once()
+        audit_log = mock_create_audit_log.await_args.kwargs["request_data"]
+        assert audit_log.object_id == token_id
+        assert audit_log.object_id != raw_key
+
+    @pytest.mark.asyncio
+    async def test_key_update_audit_log_hashes_raw_key_object_id_fallback(self):
+        raw_key = "sk-audit-log-object-id-fallback"
+        data = UpdateKeyRequest(key=raw_key, max_budget=10)
+        existing_key_row = LiteLLM_VerificationToken(token=None)
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-admin-audit-log-key",
+            user_id="admin-user",
+        )
+
+        with (
+            patch.dict(
+                sys.modules,
+                {"litellm.proxy.proxy_server": _proxy_server_module()},
+            ),
+            patch("litellm.store_audit_logs", True),
+            patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new_callable=AsyncMock,
+            ) as mock_create_audit_log,
+        ):
+            await KeyManagementEventHooks.async_key_updated_hook(
+                data=data,
+                existing_key_row=existing_key_row,
+                response={"status": "success"},
+                user_api_key_dict=user_api_key_dict,
+            )
+            await _flush_created_audit_log_task()
+
+        mock_create_audit_log.assert_awaited_once()
+        audit_log = mock_create_audit_log.await_args.kwargs["request_data"]
+        assert audit_log.object_id == hash_token(token=raw_key)
+        assert audit_log.object_id != raw_key
+
+
 class TestRotateVirtualKeyInSecretManager:
     """Tests for _rotate_virtual_key_in_secret_manager with team_id support."""
 
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_with_team_id(self):
         """Test that team_id is passed to async_rotate_secret."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
-        from litellm.secret_managers.base_secret_manager import BaseSecretManager
         import litellm
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
-        mock_secret_manager.async_rotate_secret = AsyncMock(
-            return_value={"status": "success"}
-        )
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -237,18 +321,16 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_without_team_id(self):
         """Test that None team_id is handled correctly."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
-        from litellm.secret_managers.base_secret_manager import BaseSecretManager
         import litellm
+        from litellm.secret_managers.base_secret_manager import BaseSecretManager
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup - Create a mock that inherits from BaseSecretManager
         mock_secret_manager = MagicMock(spec=BaseSecretManager)
-        mock_secret_manager.async_rotate_secret = AsyncMock(
-            return_value={"status": "success"}
-        )
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -301,22 +383,20 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_in_key_rotated_hook(self):
         """Test that async_key_rotated_hook passes team_id to _rotate_virtual_key_in_secret_manager."""
+        import litellm
         from litellm.proxy._types import (
-            LiteLLM_VerificationToken,
             GenerateKeyResponse,
+            LiteLLM_VerificationToken,
             RegenerateKeyRequest,
         )
         from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
             KeyManagementSettings,
+            KeyManagementSystem,
         )
-        import litellm
 
         # Setup
         mock_secret_manager = MagicMock()
-        mock_secret_manager.async_rotate_secret = AsyncMock(
-            return_value={"status": "success"}
-        )
+        mock_secret_manager.async_rotate_secret = AsyncMock(return_value={"status": "success"})
 
         litellm.secret_manager_client = mock_secret_manager
         litellm._key_management_system = KeyManagementSystem.HASHICORP_VAULT
@@ -381,11 +461,11 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_store_virtual_keys_disabled(self):
         """Test that rotation is skipped when store_virtual_keys is False."""
-        from litellm.types.secret_managers.main import (
-            KeyManagementSystem,
-            KeyManagementSettings,
-        )
         import litellm
+        from litellm.types.secret_managers.main import (
+            KeyManagementSettings,
+            KeyManagementSystem,
+        )
 
         # Setup
         mock_secret_manager = MagicMock()
@@ -411,8 +491,8 @@ class TestRotateVirtualKeyInSecretManager:
     @pytest.mark.asyncio
     async def test_rotate_virtual_key_when_secret_manager_not_set(self):
         """Test that rotation is skipped when secret_manager_client is None."""
-        from litellm.types.secret_managers.main import KeyManagementSettings
         import litellm
+        from litellm.types.secret_managers.main import KeyManagementSettings
 
         # Setup
         litellm.secret_manager_client = None

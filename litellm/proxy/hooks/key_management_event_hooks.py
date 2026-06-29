@@ -17,10 +17,17 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
     UpdateKeyRequest,
     UserAPIKeyAuth,
+    hash_token,
 )
 
 # NOTE: This is the prefix for all virtual keys stored in AWS Secrets Manager
 LITELLM_PREFIX_STORED_VIRTUAL_KEYS = "litellm/"
+
+
+def _get_safe_key_audit_object_id(token: str) -> str:
+    if token.startswith("sk-"):
+        return hash_token(token=token)
+    return token
 
 
 class KeyManagementEventHooks:
@@ -124,7 +131,7 @@ class KeyManagementEventHooks:
                         ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=data.key,
+                        object_id=_get_safe_key_audit_object_id(getattr(existing_key_row, "token", None) or data.key),
                         action="updated",
                         updated_values=_updated_values,
                         before_value=_before_value,
