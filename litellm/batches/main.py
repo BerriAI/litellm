@@ -27,6 +27,7 @@ from litellm.llms.azure.batches.handler import AzureBatchesAPI
 from litellm.llms.bedrock.batches.handler import BedrockBatchesHandler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.moonshot.batches.handler import MoonshotBatchesAPI
 from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.secret_managers.main import get_secret_str
@@ -57,6 +58,7 @@ openai_batches_instance = OpenAIBatchesAPI()
 azure_batches_instance = AzureBatchesAPI()
 vertex_ai_batches_instance = VertexAIBatchPrediction(gcs_bucket_name="")
 anthropic_batches_instance = AnthropicBatchesHandler()
+moonshot_batches_instance = MoonshotBatchesAPI()
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
@@ -105,7 +107,7 @@ async def acreate_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "moonshot"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -155,7 +157,7 @@ def create_batch(
     completion_window: Literal["24h"],
     endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions"],
     input_file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "moonshot"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -318,6 +320,18 @@ def create_batch(
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
             )
+        elif custom_llm_provider == "moonshot":
+            api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+            api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+
+            response = moonshot_batches_instance.create_batch(
+                _is_async=_is_async,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+                create_batch_data=_create_batch_request,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support custom_llm_provider={} for 'create_batch'".format(custom_llm_provider),
@@ -337,7 +351,7 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -383,7 +397,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
     litellm_params: dict,
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"] = "openai",
     logging_obj: Optional[Any] = None,
 ):
     api_base: Optional[str] = None
@@ -485,11 +499,23 @@ def _handle_retrieve_batch_providers_without_provider_config(
             timeout=timeout,
             max_retries=optional_params.max_retries,
         )
+    elif custom_llm_provider == "moonshot":
+        api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+        api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+
+        response = moonshot_batches_instance.retrieve_batch(
+            _is_async=_is_async,
+            retrieve_batch_data=_retrieve_batch_request,
+            api_base=api_base,
+            api_key=api_key,
+            timeout=timeout,
+            max_retries=optional_params.max_retries,
+        )
     else:
         raise litellm.exceptions.BadRequestError(
             message=(
                 "LiteLLM doesn't support custom_llm_provider={} for 'retrieve_batch' without a `model` kwarg. "
-                "Supported via this path: 'openai', 'azure', 'vertex_ai', 'anthropic'. "
+                "Supported via this path: 'openai', 'azure', 'vertex_ai', 'anthropic', 'moonshot'. "
                 "'bedrock' is supported but requires `model` to be passed so the provider config can be loaded."
             ).format(custom_llm_provider),
             model="n/a",
@@ -506,7 +532,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -801,6 +827,19 @@ def list_batches(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "moonshot":
+            api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+            api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+
+            response = moonshot_batches_instance.list_batches(
+                _is_async=_is_async,
+                after=after,
+                limit=limit,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
                 message="LiteLLM doesn't support {} for 'list_batch'. Supported providers: {}.".format(
@@ -823,7 +862,7 @@ def list_batches(
 async def acancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "moonshot"] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -869,7 +908,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai"], str] = "openai",
+    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai", "moonshot"], str] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -990,9 +1029,21 @@ def cancel_batch(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
             )
+        elif custom_llm_provider == "moonshot":
+            api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+            api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+
+            response = moonshot_batches_instance.cancel_batch(
+                _is_async=_is_async,
+                cancel_batch_data=_cancel_batch_request,
+                api_base=api_base,
+                api_key=api_key,
+                timeout=timeout,
+                max_retries=optional_params.max_retries,
+            )
         else:
             raise litellm.exceptions.BadRequestError(
-                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', and 'vertex_ai' are supported.".format(
+                message="LiteLLM doesn't support {} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', and 'moonshot' are supported.".format(
                     custom_llm_provider
                 ),
                 model="n/a",

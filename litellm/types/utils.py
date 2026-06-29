@@ -3378,7 +3378,7 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.HOSTED_VLLM.value,
 }
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai"]
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "vertex_ai", "moonshot"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: frozenset[str] = frozenset(get_args(ListBatchesSupportedProvider))
 
