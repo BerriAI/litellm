@@ -62,7 +62,7 @@ class Capability:
 
 PROVIDERS: tuple[Provider, ...] = (
     Provider("openai", "openai-batch", "gpt-4o-mini", can_cancel=True, can_list=True),
-    Provider("azure", "azure-batch", "gpt-4o-mini", can_cancel=True, can_list=True),
+    Provider("azure", "azure-batch", "gpt-4.1-mini-batch", can_cancel=True, can_list=True),
     Provider(
         "vertex_ai", "vertex-batch", "gemini-2.5-flash", can_cancel=True, can_list=True
     ),
