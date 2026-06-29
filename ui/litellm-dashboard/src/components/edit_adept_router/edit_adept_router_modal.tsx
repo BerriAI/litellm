@@ -12,7 +12,7 @@ import {
   Typography,
 } from "antd";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import NotificationsManager from "../molecules/notifications_manager";
 import { all_admin_roles } from "@/utils/roles";
 

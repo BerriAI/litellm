@@ -16,7 +16,7 @@ import type { FormInstance } from "antd";
 import { modelAvailableCall } from "../networking";
 import { all_admin_roles } from "@/utils/roles";
 import { handleAddAdeptRouterSubmit } from "./handle_add_adept_router_submit";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import NotificationManager from "../molecules/notifications_manager";
 
 interface AddAdeptRouterTabProps {
