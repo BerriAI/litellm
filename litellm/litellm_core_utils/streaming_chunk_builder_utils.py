@@ -93,9 +93,7 @@ class ChunkProcessor:
 
         custom_llm_provider = None
         if logging_obj is not None:
-            custom_llm_provider = logging_obj.model_call_details.get(
-                "custom_llm_provider"
-            )
+            custom_llm_provider = logging_obj.model_call_details.get("custom_llm_provider")
 
         try:
             from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -203,9 +201,7 @@ class ChunkProcessor:
         response = self.update_model_response_with_hidden_params(model_response=response, chunk=chunk)
         return response
 
-    def get_combined_tool_content(
-        self, tool_call_chunks: List[Dict[str, Any]]
-    ) -> List[ChatCompletionMessageToolCall]:
+    def get_combined_tool_content(self, tool_call_chunks: List[Dict[str, Any]]) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
         tool_call_map: Dict[int, Dict[str, Any]] = {}  # Map to store tool calls by index
 
