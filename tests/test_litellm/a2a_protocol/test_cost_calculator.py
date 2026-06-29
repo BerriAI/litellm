@@ -3,13 +3,109 @@ Test A2A cost calculator with cost_per_query parameter.
 """
 
 import asyncio
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, AsyncIterator, Optional
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+
+
+def _make_send_message_request(request_id: str, user_text: str = "Hello"):
+    from a2a.compat.v0_3.types import MessageSendParams, SendMessageRequest
+
+    return SendMessageRequest(
+        id=request_id,
+        params=MessageSendParams(
+            message={
+                "role": "user",
+                "parts": [{"kind": "text", "text": user_text}],
+                "messageId": "msg-1",
+            }
+        ),
+    )
+
+
+async def _mock_execute_a2a_send(
+    a2a_client: Any,
+    request: Any,
+    **kwargs: Any,
+) -> Any:
+    mock_response = MagicMock()
+    mock_response.model_dump = MagicMock(
+        return_value={
+            "id": request.id,
+            "jsonrpc": "2.0",
+            "result": {"status": "completed"},
+        }
+    )
+    return mock_response
+
+
+async def _mock_execute_a2a_send_with_assistant_reply(
+    a2a_client: Any,
+    request: Any,
+    **kwargs: Any,
+) -> Any:
+    mock_response = MagicMock()
+    mock_response.model_dump = MagicMock(
+        return_value={
+            "id": request.id,
+            "jsonrpc": "2.0",
+            "result": {
+                "status": {"state": "completed"},
+                "message": {
+                    "role": "assistant",
+                    "parts": [
+                        {
+                            "kind": "text",
+                            "text": "Hello! I am your assistant. How can I help you today?",
+                        }
+                    ],
+                    "messageId": "msg-456",
+                },
+            },
+        }
+    )
+    return mock_response
+
+
+def _make_streaming_request(request_id: str):
+    from a2a.compat.v0_3.types import MessageSendParams, SendStreamingMessageRequest
+
+    return SendStreamingMessageRequest(
+        id=request_id,
+        params=MessageSendParams(
+            message={
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "messageId": "msg-1",
+            }
+        ),
+    )
+
+
+async def _mock_stream_messages(a2a_client: Any, request: Any) -> AsyncIterator[Any]:
+    from a2a.compat.v0_3.types import (
+        Message,
+        Part,
+        Role,
+        SendStreamingMessageResponse,
+        SendStreamingMessageSuccessResponse,
+        TextPart,
+    )
+
+    msg = Message(
+        message_id="msg-agent",
+        role=Role.agent,
+        parts=[Part(root=TextPart(kind="text", text="hello"))],
+        kind="message",
+    )
+    for _ in range(2):
+        yield SendStreamingMessageResponse(
+            root=SendStreamingMessageSuccessResponse(id=request.id, result=msg)
+        )
 
 
 class CostLogger(CustomLogger):
@@ -46,27 +142,18 @@ async def test_asend_message_uses_cost_per_query():
     mock_client._litellm_agent_card = MagicMock()
     mock_client._litellm_agent_card.name = "test-agent"
 
-    # Mock response with required fields
-    mock_response = MagicMock()
-    mock_response.model_dump = MagicMock(
-        return_value={
-            "id": "test-123",
-            "jsonrpc": "2.0",
-            "result": {"status": "completed"},
-        }
-    )
-    mock_client.send_message = AsyncMock(return_value=mock_response)
-
-    # Mock request
-    mock_request = MagicMock()
-    mock_request.id = "test-123"
+    mock_request = _make_send_message_request("test-123")
 
     # Call asend_message with cost_per_query
-    await asend_message(
-        a2a_client=mock_client,
-        request=mock_request,
-        cost_per_query=0.05,
-    )
+    with patch(
+        "litellm.a2a_protocol.main._execute_a2a_send_with_retry",
+        new=_mock_execute_a2a_send,
+    ):
+        await asend_message(
+            a2a_client=mock_client,
+            request=mock_request,
+            cost_per_query=0.05,
+        )
 
     await asyncio.sleep(0.1)
 
@@ -120,49 +207,24 @@ async def test_asend_message_uses_input_output_cost_per_token():
     mock_client._litellm_agent_card = MagicMock()
     mock_client._litellm_agent_card.name = "test-agent"
 
-    # Realistic A2A response with message parts
-    mock_response = MagicMock()
-    mock_response.model_dump = MagicMock(
-        return_value={
-            "id": "test-123",
-            "jsonrpc": "2.0",
-            "result": {
-                "status": {"state": "completed"},
-                "message": {
-                    "role": "assistant",
-                    "parts": [
-                        {
-                            "kind": "text",
-                            "text": "Hello! I am your assistant. How can I help you today?",
-                        }
-                    ],
-                    "messageId": "msg-456",
-                },
-            },
-        }
+    mock_request = _make_send_message_request(
+        "test-123", user_text="Hello, what can you do?"
     )
-    mock_client.send_message = AsyncMock(return_value=mock_response)
-
-    # Mock request with message parts
-    mock_request = MagicMock()
-    mock_request.id = "test-123"
-    mock_request.params = MagicMock()
-    mock_request.params.message = {
-        "role": "user",
-        "parts": [{"kind": "text", "text": "Hello, what can you do?"}],
-        "messageId": "msg-123",
-    }
 
     # Define specific cost per token values
     input_cost_per_token = 0.00001  # $0.01 per 1000 tokens
     output_cost_per_token = 0.00002  # $0.02 per 1000 tokens
 
-    await asend_message(
-        a2a_client=mock_client,
-        request=mock_request,
-        input_cost_per_token=input_cost_per_token,
-        output_cost_per_token=output_cost_per_token,
-    )
+    with patch(
+        "litellm.a2a_protocol.main._execute_a2a_send_with_retry",
+        new=_mock_execute_a2a_send_with_assistant_reply,
+    ):
+        await asend_message(
+            a2a_client=mock_client,
+            request=mock_request,
+            input_cost_per_token=input_cost_per_token,
+            output_cost_per_token=output_cost_per_token,
+        )
 
     await asyncio.sleep(0.1)
 
@@ -225,29 +287,20 @@ async def test_asend_message_passes_agent_id_to_callback():
     mock_client._litellm_agent_card = MagicMock()
     mock_client._litellm_agent_card.name = "test-agent"
 
-    # Mock response
-    mock_response = MagicMock()
-    mock_response.model_dump = MagicMock(
-        return_value={
-            "id": "test-123",
-            "jsonrpc": "2.0",
-            "result": {"status": "completed"},
-        }
-    )
-    mock_client.send_message = AsyncMock(return_value=mock_response)
-
-    # Mock request
-    mock_request = MagicMock()
-    mock_request.id = "test-123"
+    mock_request = _make_send_message_request("test-123")
 
     test_agent_id = "agent-uuid-12345"
 
     # Call asend_message with agent_id
-    await asend_message(
-        a2a_client=mock_client,
-        request=mock_request,
-        agent_id=test_agent_id,
-    )
+    with patch(
+        "litellm.a2a_protocol.main._execute_a2a_send_with_retry",
+        new=_mock_execute_a2a_send,
+    ):
+        await asend_message(
+            a2a_client=mock_client,
+            request=mock_request,
+            agent_id=test_agent_id,
+        )
 
     await asyncio.sleep(0.1)
 
@@ -294,21 +347,7 @@ async def test_asend_message_streaming_propagates_metadata():
     mock_client._litellm_agent_card = MagicMock()
     mock_client._litellm_agent_card.name = "test-agent"
 
-    # Mock streaming response
-    async def mock_stream():
-        yield MagicMock(model_dump=lambda mode, exclude_none: {"chunk": 1})
-        yield MagicMock(model_dump=lambda mode, exclude_none: {"chunk": 2})
-
-    mock_client.send_message_streaming = MagicMock(return_value=mock_stream())
-
-    # Mock request
-    mock_request = MagicMock()
-    mock_request.id = "test-stream-metadata"
-    mock_request.params = MagicMock()
-    mock_request.params.message = {
-        "role": "user",
-        "parts": [{"kind": "text", "text": "Hello"}],
-    }
+    mock_request = _make_streaming_request("test-stream-metadata")
 
     # Metadata from proxy (contains user_api_key, user_id, team_id for SpendLogs)
     test_metadata = {
@@ -319,12 +358,16 @@ async def test_asend_message_streaming_propagates_metadata():
 
     # Consume streaming response with metadata
     chunks = []
-    async for chunk in asend_message_streaming(
-        a2a_client=mock_client,
-        request=mock_request,
-        metadata=test_metadata,
+    with patch(
+        "litellm.a2a_protocol.main._stream_messages",
+        new=_mock_stream_messages,
     ):
-        chunks.append(chunk)
+        async for chunk in asend_message_streaming(
+            a2a_client=mock_client,
+            request=mock_request,
+            metadata=test_metadata,
+        ):
+            chunks.append(chunk)
 
     await asyncio.sleep(0.2)
 
@@ -352,32 +395,22 @@ async def test_asend_message_streaming_triggers_callbacks():
     mock_client._litellm_agent_card = MagicMock()
     mock_client._litellm_agent_card.name = "test-agent"
 
-    # Mock streaming response
-    async def mock_stream():
-        yield MagicMock(model_dump=lambda mode, exclude_none: {"chunk": 1})
-        yield MagicMock(model_dump=lambda mode, exclude_none: {"chunk": 2})
-
-    mock_client.send_message_streaming = MagicMock(return_value=mock_stream())
-
-    # Mock request
-    mock_request = MagicMock()
-    mock_request.id = "test-stream-123"
-    mock_request.params = MagicMock()
-    mock_request.params.message = {
-        "role": "user",
-        "parts": [{"kind": "text", "text": "Hello"}],
-    }
+    mock_request = _make_streaming_request("test-stream-123")
 
     test_agent_id = "test-agent-id-streaming"
 
     # Consume streaming response
     chunks = []
-    async for chunk in asend_message_streaming(
-        a2a_client=mock_client,
-        request=mock_request,
-        agent_id=test_agent_id,
+    with patch(
+        "litellm.a2a_protocol.main._stream_messages",
+        new=_mock_stream_messages,
     ):
-        chunks.append(chunk)
+        async for chunk in asend_message_streaming(
+            a2a_client=mock_client,
+            request=mock_request,
+            agent_id=test_agent_id,
+        ):
+            chunks.append(chunk)
 
     await asyncio.sleep(0.2)
 

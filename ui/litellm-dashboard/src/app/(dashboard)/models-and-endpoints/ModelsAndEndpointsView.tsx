@@ -2,13 +2,14 @@ import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentia
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { useUpdateRetryPolicy } from "@/app/(dashboard)/hooks/routerSettings/useUpdateRetryPolicy";
 import AllModelsTab from "@/app/(dashboard)/models-and-endpoints/components/AllModelsTab";
 import ModelRetrySettingsTab from "@/app/(dashboard)/models-and-endpoints/components/ModelRetrySettingsTab";
 import PriceDataManagementTab from "@/app/(dashboard)/models-and-endpoints/components/PriceDataManagementTab";
 import { handleAddModelSubmit } from "@/components/add_model/handle_add_model_submit";
 import { Team } from "@/components/key_team_helpers/key_list";
 import CredentialsPanel from "@/components/model_add/credentials";
-import { getCallbacksCall, setCallbacksCall } from "@/components/networking";
+import { getCallbacksCall } from "@/components/networking";
 import { Providers, getPlaceholder, getProviderModels } from "@/components/provider_info_helpers";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { transformModelData } from "./utils/modelDataTransformer";
@@ -19,7 +20,7 @@ import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@t
 import type { UploadProps } from "antd";
 import { Form } from "antd";
 import { PlusCircleOutlined } from "@ant-design/icons";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
@@ -42,6 +43,13 @@ interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
 }
 
+interface RouterSettings {
+  model_group_retry_policy?: RetryPolicyObject | null;
+  retry_policy?: GlobalRetryPolicyObject | null;
+  num_retries?: number | null;
+  model_group_alias?: { [key: string]: string } | null;
+}
+
 const HEALTH_PAGE_SIZE = 50;
 
 const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
@@ -52,6 +60,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
   const [selectedModelGroup, setSelectedModelGroup] = useState<string | null>(null);
 
+  const [retryScope, setRetryScope] = useState<string | null>("global");
   const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
   const [globalRetryPolicy, setGlobalRetryPolicy] = useState<GlobalRetryPolicyObject | null>(null);
   const [defaultRetry, setDefaultRetry] = useState<number>(0);
@@ -78,6 +87,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const { data: credentialsResponse, isLoading: isLoadingCredentials } = useCredentials();
   const credentialsList = credentialsResponse?.credentials || [];
   const { data: uiSettings, isLoading: isLoadingUISettings } = useUISettings();
+  const updateRetryPolicy = useUpdateRetryPolicy(accessToken);
 
   const availableModelGroups = useMemo(() => {
     if (!modelDataResponse?.data) return [];
@@ -189,61 +199,66 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     refetchModels();
   };
 
-  const handleSaveRetrySettings = async () => {
-    if (!accessToken) {
-      return;
+  const fetchRouterSettings = useCallback(async (): Promise<RouterSettings | null> => {
+    if (!accessToken || !userID || !userRole) {
+      return null;
     }
-
     try {
-      const payload: any = {
-        router_settings: {},
-      };
-
-      if (selectedModelGroup === "global") {
-        if (globalRetryPolicy) {
-          payload.router_settings.retry_policy = globalRetryPolicy;
-        }
-        NotificationsManager.success("Global retry settings saved successfully");
-      } else {
-        if (modelGroupRetryPolicy) {
-          payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy;
-        }
-        NotificationsManager.success(`Retry settings saved successfully for ${selectedModelGroup}`);
-      }
-
-      await setCallbacksCall(accessToken, payload);
+      const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
+      return routerSettingsInfo.router_settings;
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to save retry settings");
+      console.error("Error fetching model data:", error);
+      return null;
     }
+  }, [accessToken, userID, userRole]);
+
+  const applyRouterSettings = useCallback((routerSettings: RouterSettings) => {
+    setModelGroupRetryPolicy(routerSettings.model_group_retry_policy ?? null);
+    setGlobalRetryPolicy(routerSettings.retry_policy ?? null);
+    setDefaultRetry(routerSettings.num_retries ?? 2);
+    setModelGroupAlias(routerSettings.model_group_alias || {});
+  }, []);
+
+  const loadRetrySettings = useCallback(async () => {
+    const routerSettings = await fetchRouterSettings();
+    if (routerSettings) {
+      applyRouterSettings(routerSettings);
+    }
+  }, [fetchRouterSettings, applyRouterSettings]);
+
+  const handleSaveRetrySettings = () => {
+    updateRetryPolicy.mutate(
+      {
+        retry_policy: globalRetryPolicy,
+        model_group_retry_policy: modelGroupRetryPolicy,
+      },
+      {
+        onSuccess: () => {
+          NotificationsManager.success("Retry settings saved successfully");
+          loadRetrySettings();
+        },
+        onError: () => {
+          NotificationsManager.fromBackend("Failed to save retry settings");
+        },
+      },
+    );
   };
 
   useEffect(() => {
     if (!accessToken || !token || !userRole || !userID || !modelDataResponse) {
       return;
     }
-    const fetchData = async () => {
-      try {
-        const routerSettingsInfo = await getCallbacksCall(accessToken, userID, userRole);
-        let router_settings = routerSettingsInfo.router_settings;
-
-        let model_group_retry_policy = router_settings.model_group_retry_policy;
-        let default_retries = router_settings.num_retries;
-
-        setModelGroupRetryPolicy(model_group_retry_policy);
-        setGlobalRetryPolicy(router_settings.retry_policy);
-        setDefaultRetry(default_retries);
-
-        const model_group_alias = router_settings.model_group_alias || {};
-        setModelGroupAlias(model_group_alias);
-      } catch (error) {
-        console.error("Error fetching model data:", error);
+    let active = true;
+    void (async () => {
+      const routerSettings = await fetchRouterSettings();
+      if (active && routerSettings) {
+        applyRouterSettings(routerSettings);
       }
+    })();
+    return () => {
+      active = false;
     };
-
-    if (accessToken && token && userRole && userID && modelDataResponse) {
-      fetchData();
-    }
-  }, [accessToken, token, userRole, userID, modelDataResponse]);
+  }, [accessToken, token, userRole, userID, modelDataResponse, fetchRouterSettings, applyRouterSettings]);
 
   const isLoading = isLoadingModels || isLoadingModelCostMap || isLoadingCredentials || isLoadingUISettings;
 
@@ -483,8 +498,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     panel: (
                       <ModelRetrySettingsTab
                         key="model-retry-settings"
-                        selectedModelGroup={selectedModelGroup}
-                        setSelectedModelGroup={setSelectedModelGroup}
+                        selectedModelGroup={retryScope}
+                        setSelectedModelGroup={setRetryScope}
                         availableModelGroups={availableModelGroups}
                         globalRetryPolicy={globalRetryPolicy}
                         setGlobalRetryPolicy={setGlobalRetryPolicy}
@@ -492,6 +507,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                         modelGroupRetryPolicy={modelGroupRetryPolicy}
                         setModelGroupRetryPolicy={setModelGroupRetryPolicy}
                         handleSaveRetrySettings={handleSaveRetrySettings}
+                        isSaving={updateRetryPolicy.isPending}
                       />
                     ),
                   },
