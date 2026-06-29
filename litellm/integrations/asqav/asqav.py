@@ -64,11 +64,19 @@ def _read_tail(fh: BinaryIO, size: int) -> bytes:
 
 
 def _content_digest(value: object) -> str | None:
-    """Return a SHA-256 hex digest of a content value, or None if empty."""
+    """Return a SHA-256 hex digest of a content value, or None if empty or not serializable."""
     if value is None:
         return None
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return _sha256_hex(raw)
+    try:
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"), default=repr).encode("utf-8")
+        return _sha256_hex(raw)
+    except Exception:  # noqa: BLE001
+        # Fall back to repr-based digest so non-JSON-serializable values (bytes,
+        # custom objects) still produce a stable, verifiable digest.
+        try:
+            return _sha256_hex(repr(value).encode("utf-8"))
+        except Exception:  # noqa: BLE001
+            return None
 
 
 _SENSITIVE_KEYS = frozenset({"user_api_key", "Authorization", "authorization", "token", "api_key"})
