@@ -10814,6 +10814,7 @@ class Router:
             "retry_after",
             "fallbacks",
             "context_window_fallbacks",
+            "retry_policy",
             "model_group_retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
@@ -10838,6 +10839,12 @@ class Router:
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
+                elif var == "retry_policy":
+                    value = kwargs[var]
+                    if isinstance(value, dict):
+                        value = RetryPolicy(**value)
+                    if value is None or isinstance(value, RetryPolicy):
+                        setattr(self, var, value)
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
@@ -11333,14 +11340,7 @@ class Router:
 
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
-                if self.get_model_list(model_name=model) is None:
-                    message = f"You passed in model={model}. There is no 'model_name' with this string".format(
-                        model
-                    )
-                else:
-                    message = f"You passed in model={model}. There are no healthy deployments for this model".format(
-                        model
-                    )
+                message = f"You passed in model={model}. There are no healthy deployments for this model"
 
                 raise litellm.BadRequestError(
                     message=message,

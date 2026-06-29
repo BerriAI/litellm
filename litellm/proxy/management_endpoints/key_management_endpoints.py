@@ -547,6 +547,79 @@ def _check_allowed_routes_caller_permission(
     )
 
 
+def _check_permissions_caller_permission(
+    permissions: Optional[dict],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set the `permissions` dict on a key.
+
+    The field grants ambient capabilities (e.g. `get_spend_routes` exposes
+    `/global/spend/*`), so it must follow the same admin gate as
+    `allowed_routes`. Without this gate a non-admin can self-grant capabilities
+    they do not hold, including read access to global spend.
+    """
+    if not permissions:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can set `permissions` on a key."},
+    )
+
+
+def _check_budget_limits_delegation_ceiling(
+    budget_limits: Optional[List[BudgetLimitEntry]],
+    delegation_ceiling: Optional[float],
+    user_api_key_dict: UserAPIKeyAuth,
+    is_ui_session_team_key: bool,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    """
+    Enforce three invariants on `budget_limits`:
+
+    - Every `budget_limits[*].max_budget` must be a finite number; applies
+      to every caller including proxy admin.
+    - A CLI session token caller may not set `budget_limits` on a personal
+      key (one with no `team_id`); mirrors the scalar `max_budget` guard in
+      `_common_key_generation_helper`.
+    - Non-admin callers may not set a window above their delegation ceiling.
+    """
+    if not budget_limits:
+        return
+    non_finite = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
+    if non_finite is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
+        )
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if is_ui_session_team_key:
+        return
+    if user_api_key_dict.is_session_token and team_table is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": ("budget_limits cannot be set without specifying team_id when using a CLI session token.")
+            },
+        )
+    if delegation_ceiling is None:
+        return
+    over_ceiling = next((w for w in budget_limits if w.max_budget > delegation_ceiling), None)
+    if over_ceiling is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"budget_limits entry max_budget ({over_ceiling.max_budget}) "
+                    f"cannot exceed the caller's own max_budget ({delegation_ceiling})."
+                )
+            },
+        )
+
+
 async def validate_team_id_used_in_service_account_request(
     team_id: Optional[str],
     prisma_client: Optional[PrismaClient],
@@ -743,6 +816,18 @@ async def _common_key_generation_helper(
                 )
             },
         )
+
+    _check_budget_limits_delegation_ceiling(
+        budget_limits=data.budget_limits,
+        delegation_ceiling=delegation_ceiling,
+        user_api_key_dict=user_api_key_dict,
+        is_ui_session_team_key=is_ui_session_team_key,
+        team_table=team_table,
+    )
+    _check_permissions_caller_permission(
+        permissions=data.permissions,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
@@ -1376,7 +1461,7 @@ async def generate_key_fn(
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-    - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+    - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
@@ -2376,7 +2461,7 @@ async def update_key_fn(
     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-    - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+    - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
 
@@ -4091,6 +4176,86 @@ async def _rotate_master_key(
         verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
 
 
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy._types import CommonProxyErrors
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+
+@router.post(
+    "/credentials/migrate-encryption",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def migrate_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    dry_run: bool = Query(
+        False,
+        description="If true, scan and report without writing any changes.",
+    ),
+):
+    """
+    Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+
+    Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+    Idempotent and resumable — re-running skips already-migrated values. Pass
+    ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        migrate_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await migrate_encryption(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        dry_run=dry_run,
+    )
+    return {"status": "success", "dry_run": dry_run, "report": report.as_dict()}
+
+
+@router.get(
+    "/credentials/migrate-encryption/check",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def check_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Read-only residual scan for compliance attestation. Reports how many at-rest
+    values are still in the legacy format. ``residual_legacy == 0`` attests no
+    legacy ciphertext remains. Admin only; performs no writes.
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        check_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await check_encryption(prisma_client=prisma_client)
+    return {"status": "success", "report": report.as_dict()}
+
+
 async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
@@ -4897,6 +5062,7 @@ async def list_keys(
     status: Optional[str] = Query(None, description="Filter by status (e.g. 'deleted')"),
     project_id: Optional[str] = Query(None, description="Filter keys by project ID"),
     access_group_id: Optional[str] = Query(None, description="Filter keys by access group ID"),
+    agent_id: Optional[str] = Query(None, description="Filter keys by agent ID"),
     substring_matching: bool = Query(
         False,
         description="If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys.",
@@ -5014,6 +5180,7 @@ async def list_keys(
             status=status,
             project_id=project_id,
             access_group_id=access_group_id,
+            agent_id=agent_id,
             use_substring_matching=use_substring_matching,
         )
 
@@ -5234,6 +5401,7 @@ def _build_key_filter_conditions(
     include_created_by_keys: bool = False,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
@@ -5340,6 +5508,8 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"project_id": project_id}]}
     if access_group_id:
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
+    if agent_id and isinstance(agent_id, str):
+        where = {"AND": [where, {"agent_id": agent_id}]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -5367,6 +5537,7 @@ async def _list_key_helper(
     status: Optional[str] = None,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
 ) -> KeyListResponseObject:
     """
@@ -5403,6 +5574,7 @@ async def _list_key_helper(
         include_created_by_keys=include_created_by_keys,
         project_id=project_id,
         access_group_id=access_group_id,
+        agent_id=agent_id,
         use_substring_matching=use_substring_matching,
     )
 
