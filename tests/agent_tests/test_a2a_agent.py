@@ -41,21 +41,24 @@ class MockA2AClient:
         )
 
     async def send_message(self, request):
-        return MockA2AResponse(text="hello")
+        from a2a.compat.v0_3.conversions import pb2_v10
 
-    def send_message_streaming(self, request):
-        async def _stream():
-            yield MockA2AStreamingChunk(text="hel", state="in_progress")
-            yield MockA2AStreamingChunk(text="hello", state="completed")
-
-        return _stream()
+        for text in ("hel", "hello"):
+            event = pb2_v10.StreamResponse()
+            message = event.message
+            message.message_id = uuid4().hex
+            message.role = pb2_v10.ROLE_AGENT
+            message.parts.add().text = text
+            yield event
 
 
 @pytest.fixture
 def mock_a2a_client(monkeypatch):
     import litellm.a2a_protocol.main as a2a_main
 
-    async def _fake_create_a2a_client(base_url, timeout=60.0, extra_headers=None):
+    async def _fake_create_a2a_client(
+        base_url, timeout=60.0, extra_headers=None, streaming=False
+    ):
         return MockA2AClient()
 
     monkeypatch.setattr(a2a_main, "create_a2a_client", _fake_create_a2a_client)
@@ -64,7 +67,7 @@ def mock_a2a_client(monkeypatch):
 @pytest.mark.asyncio
 async def test_a2a_non_streaming(mock_a2a_client):
     """Test non-streaming A2A request."""
-    from a2a.types import MessageSendParams, SendMessageRequest
+    from a2a.compat.v0_3.types import MessageSendParams, SendMessageRequest
     from litellm.a2a_protocol import asend_message
 
     request = SendMessageRequest(
@@ -90,7 +93,7 @@ async def test_a2a_non_streaming(mock_a2a_client):
 @pytest.mark.asyncio
 async def test_a2a_streaming(mock_a2a_client):
     """Test streaming A2A request."""
-    from a2a.types import MessageSendParams, SendStreamingMessageRequest
+    from a2a.compat.v0_3.types import MessageSendParams, SendStreamingMessageRequest
     from litellm.a2a_protocol import asend_message_streaming
 
     request = SendStreamingMessageRequest(

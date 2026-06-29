@@ -1,15 +1,26 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TYPE_CHECKING, TypedDict
 
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionToolCallChunk,
-    ChatCompletionToolParam,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import ChatCompletionMessageToolCall
+
+
+class GuardrailToolParam(BaseModel):
+    """A tool forwarded verbatim to the guardrail for inspection.
+
+    Built-in tools (code_interpreter, file_search, ...) have no ``function`` block
+    and stash their config in tool-specific keys, so only ``type`` is required and
+    ``extra="allow"`` preserves the rest instead of stripping it.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    type: str
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
@@ -36,6 +47,16 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         description=(
             "Behavior when the guardrail endpoint is unreachable due to network errors. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+        ),
+    )
+
+    fail_on_error: Optional[bool] = Field(
+        default=True,
+        description=(
+            "Behavior on any guardrail error, not just unreachability. "
+            "True (default) raises and blocks the request on error. "
+            "False logs a critical error and allows the request to proceed, so only a valid "
+            "guardrail response can block or modify it; broader than unreachable_fallback."
         ),
     )
 
@@ -89,7 +110,7 @@ class GenericGuardrailAPIRequest(BaseModel):
     )
     structured_messages: Optional[List[AllMessageValues]] = None
     images: Optional[List[str]] = None
-    tools: Optional[List[ChatCompletionToolParam]] = None
+    tools: Optional[List[GuardrailToolParam]] = None
     texts: Optional[List[str]] = None
     request_data: GenericGuardrailAPIMetadata
     request_headers: Optional[Dict[str, str]] = Field(
@@ -101,9 +122,7 @@ class GenericGuardrailAPIRequest(BaseModel):
         description="LiteLLM library version running this proxy.",
     )
     additional_provider_specific_params: Optional[Dict[str, Any]] = None
-    tool_calls: Optional[
-        Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]
-    ] = None
+    tool_calls: Optional[Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]] = None
     model: Optional[str] = None  # the model being used for the LLM call
 
 
@@ -112,7 +131,7 @@ class GenericGuardrailAPIResponse:
 
     texts: Optional[List[str]]
     images: Optional[List[str]]
-    tools: Optional[List[ChatCompletionToolParam]]
+    tools: Optional[List[GuardrailToolParam]]
     action: str
     blocked_reason: Optional[str]
 
@@ -122,7 +141,7 @@ class GenericGuardrailAPIResponse:
         texts: Optional[List[str]] = None,
         blocked_reason: Optional[str] = None,
         images: Optional[List[str]] = None,
-        tools: Optional[List[ChatCompletionToolParam]] = None,
+        tools: Optional[List[GuardrailToolParam]] = None,
     ):
         self.action = action
         self.blocked_reason = blocked_reason

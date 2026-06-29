@@ -46,10 +46,9 @@ class TestSearchAPIConfig:
 
         assert result["Content-Type"] == "application/json"
 
-    @patch("litellm.llms.searchapi.search.transformation.get_secret_str")
-    def test_validate_environment_without_api_key(self, mock_get_secret):
+    def test_validate_environment_without_api_key(self, monkeypatch):
         """Test environment validation without API key raises error."""
-        mock_get_secret.return_value = None
+        monkeypatch.delenv("SEARCHAPI_API_KEY", raising=False)
         config = SearchAPIConfig()
         headers = {}
 

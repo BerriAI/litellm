@@ -2120,3 +2120,112 @@ def test_get_logging_payload_failure_without_recovered_usage_is_zero():
     )
 
     assert payload["total_tokens"] == 0
+
+
+def test_get_logging_payload_sets_litellm_call_id_for_correlation():
+    """LIT-3868: a successful spend log must carry the x-litellm-call-id (the
+    trace id) in its metadata, distinct from request_id, which stays the
+    provider response id. Without this there is no way to correlate a DB row
+    with its trace for a successful call.
+    """
+    provider_response_id = "chatcmpl-e6e6f3e9-c392-404e-9a71-5361c79d8470"
+    trace_call_id = "c6a77556-19ce-4406-b287-53f5fb4b2b55"
+
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "id": provider_response_id,
+        "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+    metadata = json.loads(payload["metadata"])
+
+    assert payload["request_id"] == provider_response_id
+    assert metadata["litellm_call_id"] == trace_call_id
+    assert metadata["litellm_call_id"] != payload["request_id"]
+
+
+def test_get_logging_payload_litellm_call_id_falls_back_to_litellm_params():
+    """litellm_call_id may only be present in litellm_params; it must still land
+    in the spend log metadata so correlation works on that path too.
+    """
+    trace_call_id = "fallback-7a1c-42d9-9f0e-2b6c5d4e3f21"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "litellm_call_id": trace_call_id,
+            "metadata": {"user_api_key": "sk-test"},
+        },
+    }
+    response_obj = {
+        "id": "chatcmpl-abc123",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+
+
+def test_get_logging_payload_litellm_call_id_when_response_has_no_id():
+    """When the provider returns no id, request_id falls back to the call id, so
+    request_id and the metadata call id hold the same value and correlation
+    still resolves.
+    """
+    trace_call_id = "noid-5b2e-4c7a-9d10-3f8a1c2b4e6d"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+    assert payload["request_id"] == trace_call_id
+
+
+def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
+    """On a cache hit request_id is suffixed to stay unique, but the metadata
+    litellm_call_id stays the raw trace id so the row still points at its trace.
+    """
+    trace_call_id = "cache-9a1c-42d9-9f0e-2b6c5d4e3f21"
+    kwargs = {
+        "model": "openai/gpt-4o-mini",
+        "call_type": "acompletion",
+        "litellm_call_id": trace_call_id,
+        "cache_hit": True,
+        "litellm_params": {"metadata": {"user_api_key": "sk-test"}},
+    }
+    response_obj = {
+        "id": "chatcmpl-cache-src",
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
+    assert "_cache_hit" in payload["request_id"]
+    assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
