@@ -322,7 +322,7 @@ def create_batch(
             )
         elif custom_llm_provider == "moonshot":
             api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-            api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+            api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
 
             response = moonshot_batches_instance.create_batch(
                 _is_async=_is_async,
@@ -505,7 +505,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
         )
     elif custom_llm_provider == "moonshot":
         api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-        api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+        api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
 
         response = moonshot_batches_instance.retrieve_batch(
             _is_async=_is_async,
@@ -835,7 +835,7 @@ def list_batches(
             )
         elif custom_llm_provider == "moonshot":
             api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-            api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+            api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
 
             response = moonshot_batches_instance.list_batches(
                 _is_async=_is_async,
@@ -914,7 +914,7 @@ async def acancel_batch(
 def cancel_batch(
     batch_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure", "vertex_ai", "moonshot"], str] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "moonshot"] | str = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -1037,7 +1037,7 @@ def cancel_batch(
             )
         elif custom_llm_provider == "moonshot":
             api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-            api_key = optional_params.api_key or litellm.api_key or get_secret_str("MOONSHOT_API_KEY")
+            api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
 
             response = moonshot_batches_instance.cancel_batch(
                 _is_async=_is_async,

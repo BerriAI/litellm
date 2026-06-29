@@ -6,7 +6,7 @@ to Moonshot's endpoint (https://api.moonshot.ai/v1) using the caller-supplied
 or environment-sourced API key / base URL.
 """
 
-from typing import Any, Coroutine, Optional, Union, cast
+from typing import Any, Coroutine, cast
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
@@ -35,22 +35,23 @@ class MoonshotBatchesAPI(BaseLLM):
 
     def _get_client(
         self,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
+        api_key: str | None,
+        api_base: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
         _is_async: bool,
-        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Optional[Union[OpenAI, AsyncOpenAI]]:
+        client: OpenAI | AsyncOpenAI | None = None,
+    ) -> OpenAI | AsyncOpenAI:
         if client is not None:
             return client
 
         resolved_key = api_key or get_secret_str("MOONSHOT_API_KEY")
+        if not resolved_key:
+            raise ValueError("No Moonshot API key found. Pass api_key or set MOONSHOT_API_KEY in the environment.")
+
         resolved_base = api_base or get_secret_str("MOONSHOT_API_BASE") or MOONSHOT_DEFAULT_API_BASE
 
-        kwargs: dict = {"base_url": resolved_base}
-        if resolved_key is not None:
-            kwargs["api_key"] = resolved_key
+        kwargs: dict = {"base_url": resolved_base, "api_key": resolved_key}
         if max_retries is not None:
             kwargs["max_retries"] = max_retries
         if not isinstance(timeout, httpx.Timeout):
@@ -76,12 +77,12 @@ class MoonshotBatchesAPI(BaseLLM):
         self,
         _is_async: bool,
         create_batch_data: CreateBatchRequest,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        api_key: str | None,
+        api_base: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        client: OpenAI | AsyncOpenAI | None = None,
+    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         moonshot_client = self._get_client(
             api_key=api_key,
             api_base=api_base,
@@ -90,10 +91,6 @@ class MoonshotBatchesAPI(BaseLLM):
             _is_async=_is_async,
             client=client,
         )
-        if moonshot_client is None:
-            raise ValueError(
-                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
-            )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):
@@ -117,12 +114,12 @@ class MoonshotBatchesAPI(BaseLLM):
         self,
         _is_async: bool,
         retrieve_batch_data: RetrieveBatchRequest,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        api_key: str | None,
+        api_base: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        client: OpenAI | AsyncOpenAI | None = None,
+    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         moonshot_client = self._get_client(
             api_key=api_key,
             api_base=api_base,
@@ -131,10 +128,6 @@ class MoonshotBatchesAPI(BaseLLM):
             _is_async=_is_async,
             client=client,
         )
-        if moonshot_client is None:
-            raise ValueError(
-                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
-            )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):
@@ -158,12 +151,12 @@ class MoonshotBatchesAPI(BaseLLM):
         self,
         _is_async: bool,
         cancel_batch_data: CancelBatchRequest,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
-    ) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+        api_key: str | None,
+        api_base: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        client: OpenAI | AsyncOpenAI | None = None,
+    ) -> LiteLLMBatch | Coroutine[Any, Any, LiteLLMBatch]:
         moonshot_client = self._get_client(
             api_key=api_key,
             api_base=api_base,
@@ -172,10 +165,6 @@ class MoonshotBatchesAPI(BaseLLM):
             _is_async=_is_async,
             client=client,
         )
-        if moonshot_client is None:
-            raise ValueError(
-                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
-            )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):
@@ -190,8 +179,8 @@ class MoonshotBatchesAPI(BaseLLM):
     async def alist_batches(
         self,
         client: AsyncOpenAI,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
+        after: str | None = None,
+        limit: int | None = None,
     ):
         response = await client.batches.list(after=after, limit=limit)  # type: ignore
         return response
@@ -199,13 +188,13 @@ class MoonshotBatchesAPI(BaseLLM):
     def list_batches(
         self,
         _is_async: bool,
-        api_key: Optional[str],
-        api_base: Optional[str],
-        timeout: Union[float, httpx.Timeout],
-        max_retries: Optional[int],
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        client: Optional[Union[OpenAI, AsyncOpenAI]] = None,
+        api_key: str | None,
+        api_base: str | None,
+        timeout: float | httpx.Timeout,
+        max_retries: int | None,
+        after: str | None = None,
+        limit: int | None = None,
+        client: OpenAI | AsyncOpenAI | None = None,
     ):
         moonshot_client = self._get_client(
             api_key=api_key,
@@ -215,10 +204,6 @@ class MoonshotBatchesAPI(BaseLLM):
             _is_async=_is_async,
             client=client,
         )
-        if moonshot_client is None:
-            raise ValueError(
-                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
-            )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):

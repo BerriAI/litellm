@@ -118,16 +118,6 @@ class TestCreateBatch:
         sdk.batches.create.assert_called_once_with(**CREATE_DATA)
         assert isinstance(result, LiteLLMBatch)
 
-    def test_sync_raises_when_client_none(self):
-        handler = MoonshotBatchesAPI()
-        with patch(GET_CLIENT, return_value=None):
-            with pytest.raises(ValueError, match="Moonshot client could not be initialised"):
-                handler.create_batch(
-                    _is_async=False,
-                    create_batch_data=CREATE_DATA,
-                    **AUTH_KW,
-                )
-
 
 # ==================================================================== retrieve
 
@@ -165,16 +155,6 @@ class TestRetrieveBatch:
         sdk.batches.retrieve.assert_called_once_with(**RETRIEVE_DATA)
         assert isinstance(result, LiteLLMBatch)
 
-    def test_sync_raises_when_client_none(self):
-        handler = MoonshotBatchesAPI()
-        with patch(GET_CLIENT, return_value=None):
-            with pytest.raises(ValueError, match="Moonshot client could not be initialised"):
-                handler.retrieve_batch(
-                    _is_async=False,
-                    retrieve_batch_data=RETRIEVE_DATA,
-                    **AUTH_KW,
-                )
-
 
 # ====================================================================== cancel
 
@@ -211,16 +191,6 @@ class TestCancelBatch:
 
         sdk.batches.cancel.assert_called_once_with(**CANCEL_DATA)
         assert isinstance(result, LiteLLMBatch)
-
-    def test_sync_raises_when_client_none(self):
-        handler = MoonshotBatchesAPI()
-        with patch(GET_CLIENT, return_value=None):
-            with pytest.raises(ValueError, match="Moonshot client could not be initialised"):
-                handler.cancel_batch(
-                    _is_async=False,
-                    cancel_batch_data=CANCEL_DATA,
-                    **AUTH_KW,
-                )
 
 
 # ======================================================================== list
@@ -262,15 +232,6 @@ class TestListBatches:
 
         sdk.batches.list.assert_called_once_with(after="cursor-abc", limit=5)
         assert result is list_resp
-
-    def test_sync_raises_when_client_none(self):
-        handler = MoonshotBatchesAPI()
-        with patch(GET_CLIENT, return_value=None):
-            with pytest.raises(ValueError, match="Moonshot client could not be initialised"):
-                handler.list_batches(
-                    _is_async=False,
-                    **AUTH_KW,
-                )
 
 
 # ============================================================= _get_client unit
@@ -332,3 +293,30 @@ class TestGetClient:
             client=existing,
         )
         assert result is existing
+
+    def test_raises_when_no_key_available(self, monkeypatch):
+        monkeypatch.delenv("MOONSHOT_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        handler = MoonshotBatchesAPI()
+        with pytest.raises(ValueError, match="No Moonshot API key found"):
+            handler._get_client(
+                api_key=None,
+                api_base="https://api.moonshot.ai/v1",
+                timeout=30.0,
+                max_retries=None,
+                _is_async=False,
+            )
+
+    def test_explicit_key_passed_to_openai_client(self):
+        handler = MoonshotBatchesAPI()
+        with patch("litellm.llms.moonshot.batches.handler.OpenAI") as mock_cls:
+            mock_cls.return_value = MagicMock(spec=OpenAI)
+            handler._get_client(
+                api_key="sk-explicit",
+                api_base="https://api.moonshot.ai/v1",
+                timeout=30.0,
+                max_retries=None,
+                _is_async=False,
+            )
+        call_kwargs = mock_cls.call_args.kwargs
+        assert call_kwargs["api_key"] == "sk-explicit"
