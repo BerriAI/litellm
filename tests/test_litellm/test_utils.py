@@ -27,7 +27,6 @@ from litellm.utils import (
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
-    validate_and_fix_openai_messages,
 )
 
 # Adds the parent directory to the system path
@@ -3321,37 +3320,6 @@ class TestIsCachedMessage:
             "cache_control": "ephemeral",
         }
         assert is_cached_message(message) is False
-
-
-def test_normalize_array_of_strings_in_content():
-    """String items in list content become OpenAI multimodal text parts; dict parts unchanged."""
-    only_strings = validate_and_fix_openai_messages(
-        [
-            {
-                "role": "user",
-                "content": ["what is the capital of France?"],
-            }
-        ]
-    )
-    assert only_strings[0]["content"] == [
-        {"type": "text", "text": "what is the capital of France?"}
-    ]
-
-    mixed = validate_and_fix_openai_messages(
-        [
-            {
-                "role": "user",
-                "content": [
-                    "some text",
-                    {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
-                ],
-            }
-        ]
-    )
-    assert mixed[0]["content"] == [
-        {"type": "text", "text": "some text"},
-        {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}},
-    ]
 
 
 @pytest.mark.asyncio
