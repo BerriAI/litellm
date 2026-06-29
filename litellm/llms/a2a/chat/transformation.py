@@ -55,9 +55,7 @@ class A2AConfig(BaseConfig):
         agent_name = model.split("/", 1)[1] if "/" in model else None
 
         # Only lookup if agent name exists and some config is missing
-        if not agent_name or (
-            api_base is not None and api_key is not None and headers is not None
-        ):
+        if not agent_name or (api_base is not None and api_key is not None and headers is not None):
             return api_base, api_key, headers
 
         # Try registry lookup (only available in proxy context)
@@ -84,10 +82,7 @@ class A2AConfig(BaseConfig):
 
                     # Merge other litellm_params (timeout, max_retries, etc.)
                     for key, value in agent.litellm_params.items():
-                        if (
-                            key not in ["api_key", "api_base", "headers", "model"]
-                            and key not in optional_params
-                        ):
+                        if key not in ["api_key", "api_base", "headers", "model"] and key not in optional_params:
                             optional_params[key] = value
         except ImportError:
             pass  # Registry not available (not running in proxy context)

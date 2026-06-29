@@ -125,9 +125,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tools_to_check: List[ChatCompletionToolParam] = (
-            chat_completion_compatible_request.get("tools", [])
-        )
+        tools_to_check: List[ChatCompletionToolParam] = chat_completion_compatible_request.get("tools", [])
         task_mappings: List[Tuple[int, Optional[int]]] = []
 
         # Step 1: Extract all text content and images
@@ -149,6 +147,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tools_to_check:
                 inputs["tools"] = tools_to_check
+            original_structured_messages = structured_messages
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
             # Include model information if available
@@ -175,18 +174,41 @@ class AnthropicMessagesHandler(BaseTranslation):
                     # Note: MCP servers are handled separately in the main transformation
                 data["tools"] = anthropic_tools
 
-            # Step 3: Map guardrail responses back to original message structure
-            await self._apply_guardrail_responses_to_input(
-                messages=messages,
-                responses=guardrailed_texts,
-                task_mappings=task_mappings,
-            )
+            guardrailed_structured_messages = guardrailed_inputs.get("structured_messages")
+            if (
+                guardrailed_structured_messages is not None
+                and guardrailed_structured_messages is not original_structured_messages
+            ):
+                self._write_back_structured_messages(data, guardrailed_structured_messages)
+            else:
+                # Step 3: Map guardrail responses back to original message structure
+                await self._apply_guardrail_responses_to_input(
+                    messages=messages,
+                    responses=guardrailed_texts,
+                    task_mappings=task_mappings,
+                )
 
-        verbose_proxy_logger.debug(
-            "Anthropic Messages: Processed input messages: %s", messages
-        )
+        verbose_proxy_logger.debug("Anthropic Messages: Processed input messages: %s", messages)
 
         return data
+
+    @staticmethod
+    def _write_back_structured_messages(data: dict, structured_messages: list) -> None:
+        """Convert compressed structured_messages back to Anthropic format and write to data."""
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            anthropic_messages_pt,
+        )
+
+        model = str(data.get("model") or "")
+        non_system = [m for m in structured_messages if m.get("role") != "system"]
+        converted = anthropic_messages_pt(messages=non_system, model=model, llm_provider="anthropic")
+        for msg in converted:
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "thinking":
+                        block.pop("cache_control", None)
+        data["messages"] = converted
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
         """Extract tool names from Anthropic messages request (tools[].name)."""
@@ -288,9 +310,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                messages[msg_idx]["content"][content_idx_optional]["text"] = (
-                    guardrail_response
-                )
+                messages[msg_idx]["content"][content_idx_optional]["text"] = guardrail_response
 
     async def process_output_response(
         self,
@@ -369,9 +389,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
-        verbose_proxy_logger.debug(
-            "Anthropic Messages: Processed output response: %s", response
-        )
+        verbose_proxy_logger.debug("Anthropic Messages: Processed output response: %s", response)
 
         return response
 
@@ -391,20 +409,14 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            built_response = (
-                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                    all_chunks=responses_so_far,
-                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
-                    model="",
-                )
+            built_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=responses_so_far,
+                litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                model="",
             )
 
             # Check if model_response is valid and has choices before accessing
-            if (
-                built_response is not None
-                and hasattr(built_response, "choices")
-                and built_response.choices
-            ):
+            if built_response is not None and hasattr(built_response, "choices") and built_response.choices:
                 model_response = cast(ModelResponse, built_response)
                 first_choice = cast(Choices, model_response.choices[0])
                 tool_calls_list = cast(
@@ -418,16 +430,16 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if tool_calls_list:
                     guardrail_inputs["tool_calls"] = tool_calls_list
 
-                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
-                    inputs=guardrail_inputs,
-                    request_data=request_data if request_data is not None else {},
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
+                _guardrailed_inputs = (
+                    await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                        inputs=guardrail_inputs,
+                        request_data=request_data if request_data is not None else {},
+                        input_type="response",
+                        logging_obj=litellm_logging_obj,
+                    )
                 )
             else:
-                verbose_proxy_logger.debug(
-                    "Skipping output guardrail - model response has no choices"
-                )
+                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
@@ -454,9 +466,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 request_data[key] = response
 
         if "litellm_metadata" not in request_data:
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
+            user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
             if user_metadata:
                 request_data["litellm_metadata"] = user_metadata
         return request_data
@@ -604,9 +614,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                         if delta.get("type") == "text_delta":
                             text += delta.get("text", "")
                     except json.JSONDecodeError:
-                        verbose_proxy_logger.warning(
-                            f"Failed to parse JSON from SSE data: {data_line}"
-                        )
+                        verbose_proxy_logger.warning(f"Failed to parse JSON from SSE data: {data_line}")
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error extracting text from SSE: {e}")
@@ -670,14 +678,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                                 if stop_reason is not None:
                                     return True
                             except json.JSONDecodeError:
-                                verbose_proxy_logger.warning(
-                                    f"Failed to parse JSON from SSE data: {data_line}"
-                                )
+                                verbose_proxy_logger.warning(f"Failed to parse JSON from SSE data: {data_line}")
 
                 except Exception as e:
-                    verbose_proxy_logger.error(
-                        f"Error checking streaming end in SSE: {e}"
-                    )
+                    verbose_proxy_logger.error(f"Error checking streaming end in SSE: {e}")
 
             # Handle already-parsed dict format
             elif isinstance(response, dict):
@@ -783,10 +787,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             if isinstance(content_block, dict):
                 if content_block.get("type") == "text":
                     cast(Dict[str, Any], content_block)["text"] = guardrail_response
-            elif (
-                hasattr(content_block, "type")
-                and getattr(content_block, "type", None) == "text"
-            ):
+            elif hasattr(content_block, "type") and getattr(content_block, "type", None) == "text":
                 # Update Pydantic object's text attribute
                 if hasattr(content_block, "text"):
                     content_block.text = guardrail_response

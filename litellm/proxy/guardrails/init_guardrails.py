@@ -53,9 +53,7 @@ def _populate_router_guardrail_list(guardrail_list: List[Guardrail]) -> None:
     from litellm.types.router import GuardrailTypedDict
 
     if llm_router is None:
-        verbose_proxy_logger.debug(
-            "Router not initialized yet, skipping guardrail_list population"
-        )
+        verbose_proxy_logger.debug("Router not initialized yet, skipping guardrail_list population")
         return
 
     router_guardrail_list: List[GuardrailTypedDict] = []
@@ -68,16 +66,10 @@ def _populate_router_guardrail_list(guardrail_list: List[Guardrail]) -> None:
         # Get the callback instance from the registry
         callback = None
         if guardrail_id:
-            callback = IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.get(
-                guardrail_id
-            )
+            callback = IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.get(guardrail_id)
 
         # Build litellm_params dict for the router
-        params_dict = (
-            litellm_params.model_dump()
-            if hasattr(litellm_params, "model_dump")
-            else dict(litellm_params)
-        )
+        params_dict = litellm_params.model_dump() if hasattr(litellm_params, "model_dump") else dict(litellm_params)
 
         router_guardrail: GuardrailTypedDict = GuardrailTypedDict(
             guardrail_name=guardrail_name or "",
@@ -94,9 +86,7 @@ def _populate_router_guardrail_list(guardrail_list: List[Guardrail]) -> None:
         router_guardrail_list.append(router_guardrail)
 
     llm_router.guardrail_list = router_guardrail_list
-    verbose_proxy_logger.debug(
-        f"Populated router guardrail_list with {len(router_guardrail_list)} guardrails"
-    )
+    verbose_proxy_logger.debug(f"Populated router guardrail_list with {len(router_guardrail_list)} guardrails")
 
 
 ### LEGACY IMPLEMENTATION ###
@@ -137,9 +127,7 @@ def initialize_guardrails(
 
                     if guardrail.logging_only is True:
                         if callback == "presidio":
-                            callback_specific_params["presidio"] = {
-                                "logging_only": True
-                            }  # type: ignore
+                            callback_specific_params["presidio"] = {"logging_only": True}  # type: ignore
 
         default_on_callbacks_list = list(default_on_callbacks)
         if len(default_on_callbacks_list) > 0:
@@ -153,7 +141,5 @@ def initialize_guardrails(
 
         return litellm.guardrail_name_config_map
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "error initializing guardrails {}".format(str(e))
-        )
+        verbose_proxy_logger.exception("error initializing guardrails {}".format(str(e)))
         raise e
