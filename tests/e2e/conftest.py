@@ -14,8 +14,6 @@ shared fixtures build on it.
 """
 
 import functools
-import sys
-from pathlib import Path
 from typing import Iterator
 
 import pytest
@@ -23,9 +21,6 @@ import requests
 
 from e2e_config import CONTROL_PLANE_BASE_URL, PROXY_BASE_URL
 from lifecycle import GatewayProvider, ResourceManager
-
-
-_E2E_TEST_RAN = pytest.StashKey[bool]()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -68,40 +63,6 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     reason = _proxy_skip_reason()
     if reason is not None:
         pytest.skip(reason)
-
-
-def pytest_runtest_call(item: pytest.Item) -> None:
-    """Mark that an e2e test body actually ran (not skipped at setup). Skipped
-    sessions never reach this hook, so the session-finish cleanup can use it as a
-    guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
-    `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
-    so they must not arm the destructive DB truncate."""
-    if item.get_closest_marker("e2e") is None:
-        return
-    item.session.stash[_E2E_TEST_RAN] = True
-
-
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Once the whole e2e session is done (all suites), truncate the spend logs so
-    the DB doesn't accumulate test rows. Skipped sessions (no live proxy, no test
-    actually executed) leave the DB alone so a `DATABASE_URL` pointing at a shared
-    instance is never wiped without an e2e run. Best-effort: a cleanup failure (no
-    DB reachable) must not fail the run. The spend_tracking dir goes on sys.path
-    only for this import and is removed after, so a broader `pytest tests/` run is
-    not left with a mutated path."""
-    if not session.stash.get(_E2E_TEST_RAN, False):
-        return
-    spend_dir = str(Path(__file__).parent / "spend_tracking")
-    sys.path.insert(0, spend_dir)
-    try:
-        from spend_e2e_client import reset_spend_logs  # pyright: ignore
-
-        reset_spend_logs()
-    except Exception as exc:  # noqa: BLE001 - cleanup is best-effort
-        print(f"spend-log cleanup skipped: {exc}")
-    finally:
-        if spend_dir in sys.path:
-            sys.path.remove(spend_dir)
 
 
 @pytest.fixture
