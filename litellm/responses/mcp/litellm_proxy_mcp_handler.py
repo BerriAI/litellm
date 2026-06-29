@@ -17,6 +17,7 @@ from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -26,7 +27,6 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingMCPToolCall,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.utils import Rules, function_setup
 
 if TYPE_CHECKING:

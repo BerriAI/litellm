@@ -190,8 +190,11 @@ class _ProxyDBLogger(CustomLogger):
             litellm_params = kwargs.get("litellm_params", {}) or {}
             end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
             metadata = get_litellm_metadata_from_kwargs(kwargs=kwargs)
-            metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
-            _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
+            # Only fetch key details when user_id wasn't already populated (e.g. direct MCP REST calls).
+            # Avoids a cache/DB lookup on every normal LLM request.
+            if metadata.get("user_api_key") and not metadata.get("user_api_key_user_id"):
+                metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata=metadata)
+                _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation = _get_budget_reservation_from_metadata(metadata=metadata)
             user_id = cast(Optional[str], metadata.get("user_api_key_user_id", None))
             team_id = cast(Optional[str], metadata.get("user_api_key_team_id", None))
