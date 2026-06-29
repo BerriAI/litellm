@@ -4091,6 +4091,86 @@ async def _rotate_master_key(
         verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
 
 
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy._types import CommonProxyErrors
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+
+@router.post(
+    "/credentials/migrate-encryption",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def migrate_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    dry_run: bool = Query(
+        False,
+        description="If true, scan and report without writing any changes.",
+    ),
+):
+    """
+    Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+
+    Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+    Idempotent and resumable — re-running skips already-migrated values. Pass
+    ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        migrate_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await migrate_encryption(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        dry_run=dry_run,
+    )
+    return {"status": "success", "dry_run": dry_run, "report": report.as_dict()}
+
+
+@router.get(
+    "/credentials/migrate-encryption/check",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def check_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Read-only residual scan for compliance attestation. Reports how many at-rest
+    values are still in the legacy format. ``residual_legacy == 0`` attests no
+    legacy ciphertext remains. Admin only; performs no writes.
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        check_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await check_encryption(prisma_client=prisma_client)
+    return {"status": "success", "report": report.as_dict()}
+
+
 async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
