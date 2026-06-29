@@ -164,7 +164,7 @@ class TestVoyageMultimodalEmbeddings:
         )
         assert optional_params == {
             "output_dimension": 512,
-            "encoding_format": "base64",
+            "output_encoding": "base64",
             "input_type": "document",
             "truncation": False,
         }
