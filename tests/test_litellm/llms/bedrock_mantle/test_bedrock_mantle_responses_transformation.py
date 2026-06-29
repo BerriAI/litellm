@@ -373,6 +373,48 @@ class TestBedrockMantleResponsesTools:
         assert "web_search" in str(mock_warning.call_args)
 
 
+class TestBedrockMantleResponsesTemperature:
+    """gpt-5.4/5.5 on Mantle accept flexible temperature when reasoning effort is
+    'none' (or unset). The inherited OpenAI Responses gate strips the
+    bedrock_mantle/ prefix to openai.gpt-5.x, which it treats as a raw OpenAI
+    model, so without the provider-aware capability lookup (and the price-map
+    supports_none_reasoning_effort flag) it wrongly rejected temperature != 1.
+    """
+
+    @pytest.mark.parametrize("model", ["openai.gpt-5.4", "openai.gpt-5.5"])
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"temperature": 0, "reasoning": {"effort": "none"}},
+            {"temperature": 0, "reasoning_effort": "none"},
+            {"temperature": 0.3},
+        ],
+    )
+    def test_temperature_allowed_with_effort_none(self, local_cost_map, model, params):
+        cfg = BedrockMantleResponsesAPIConfig()
+        out = cfg.map_openai_params(
+            response_api_optional_params=dict(params),
+            model=model,
+            drop_params=False,
+        )
+        assert out["temperature"] == params["temperature"]
+
+    @pytest.mark.parametrize("model", ["openai.gpt-5.4", "openai.gpt-5.5"])
+    def test_temperature_rejected_with_higher_effort(self, local_cost_map, model):
+        # The gate still applies: flexible temperature is only honored at effort
+        # 'none'/unset, so temperature != 1 with a higher effort must still raise.
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(litellm.UnsupportedParamsError):
+            cfg.map_openai_params(
+                response_api_optional_params={
+                    "temperature": 0,
+                    "reasoning": {"effort": "high"},
+                },
+                model=model,
+                drop_params=False,
+            )
+
+
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self, local_cost_map):
         # gpt-5.x advertises /v1/responses in supported_endpoints (capability)

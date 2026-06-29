@@ -48,14 +48,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return False
         return "gpt-5" in model and "gpt-5-chat" not in model
 
-    @staticmethod
-    def _supports_reasoning_effort_none(model: str) -> bool:
+    def _supports_reasoning_effort_none(self, model: str) -> bool:
         """Return True if the model supports reasoning.effort='none'."""
         from litellm.utils import _supports_factory
 
         return _supports_factory(
             model=model,
-            custom_llm_provider=None,
+            custom_llm_provider=self.custom_llm_provider,
             key="supports_none_reasoning_effort",
         )
 
