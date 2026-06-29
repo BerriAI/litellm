@@ -38,13 +38,13 @@ class SMTPEmailLogger(BaseEmailLogger):
 
         verbose_logger.debug(f"Sending email from {from_email} to {to_email} with subject {subject}")
         cc = os.getenv("EMAIL_CC", None)
-        for receiver_email in to_email:
+        for i, receiver_email in enumerate(to_email):
             asyncio.create_task(
                 send_smtp_email(
                     receiver_email=receiver_email,
                     subject=subject,
                     html=html_body,
-                    cc=cc,
+                    cc=cc if i == 0 else None,
                 )
             )
         return

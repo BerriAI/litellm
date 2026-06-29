@@ -1157,3 +1157,35 @@ async def test_brand_name_rendered_in_budget_alert_body(base_email_logger, mock_
         call_args = mock_send_email.call_args[1]
         assert "TestBrand" in call_args["html_body"]
         assert "TestBrand Dashboard" in call_args["html_body"]
+
+
+@pytest.mark.asyncio
+async def test_smtp_email_logger_cc_only_first_recipient(monkeypatch):
+    """SMTPEmailLogger passes CC only on the first iteration to avoid duplicate CC emails"""
+    import asyncio
+
+    monkeypatch.setenv("EMAIL_CC", "cc@co.com")
+
+    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+
+    logger = SMTPEmailLogger()
+
+    calls = []
+
+    async def fake_send_email(**kwargs):
+        calls.append(kwargs)
+
+    with patch("litellm.proxy.utils.send_email", fake_send_email):
+        await logger.send_email(
+            from_email="from@co.com",
+            to_email=["a@co.com", "b@co.com", "c@co.com"],
+            subject="Test",
+            html_body="<p>hi</p>",
+        )
+
+    await asyncio.sleep(0.1)
+
+    assert len(calls) == 3
+    assert calls[0]["cc"] == "cc@co.com"
+    assert calls[1]["cc"] is None
+    assert calls[2]["cc"] is None
