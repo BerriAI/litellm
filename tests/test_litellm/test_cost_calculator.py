@@ -3115,3 +3115,64 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     assert model_info["cache_read_input_token_cost"] == 2.5e-08
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def test_cost_breakdown_surfaces_cache_read_cost_for_openai_compatible():
+    """
+    Regression for #31594: OpenAI-compatible providers (DeepSeek, etc.) report cache
+    hits under ``usage.prompt_tokens_details.cached_tokens`` rather than the Anthropic-style
+    top-level ``usage.cache_read_input_tokens``.
+
+    completion_cost() already folds the cache discount into the total correctly (via
+    generic_cost_per_token), but the cost_breakdown stored on the logging object omitted
+    ``cache_read_cost`` because that block only read the Anthropic field. The breakdown
+    must surface ``cache_read_cost`` from the prompt_tokens_details fallback too, mirroring
+    db_spend_update_writer._extract_cache_read_tokens.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    model = "deepseek/deepseek-chat"
+    cache_read_rate = litellm.get_model_info(model)["cache_read_input_token_cost"]
+    assert cache_read_rate, "test precondition: deepseek model must define cache_read_input_token_cost"
+
+    cached_tokens = 135936
+    usage = Usage(
+        prompt_tokens=136153,
+        completion_tokens=418,
+        total_tokens=136571,
+        # DeepSeek-style: cache hits only in prompt_tokens_details, no top-level
+        # cache_read_input_tokens (Anthropic convention).
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-31594",
+        function_id="test-function",
+    )
+
+    litellm.completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="deepseek",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown.get("cache_read_cost") == pytest.approx(
+        cached_tokens * cache_read_rate
+    )

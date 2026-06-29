@@ -1631,14 +1631,27 @@ def completion_cost(
                     _cache_read_cost: Optional[float] = None
                     _cache_creation_cost: Optional[float] = None
                     if cost_per_token_usage_object is not None:
+                        _ptd = getattr(cost_per_token_usage_object, "prompt_tokens_details", None)
                         _cr = getattr(cost_per_token_usage_object, "cache_read_input_tokens", None) or (
                             cost_per_token_usage_object.model_extra or {}
                         ).get("cache_read_input_tokens")
+                        # OpenAI-compatible providers (deepseek, etc.) report cache reads under
+                        # prompt_tokens_details.cached_tokens instead of the Anthropic-style
+                        # top-level field. Mirror db_spend_update_writer._extract_cache_read_tokens
+                        # so the breakdown surfaces cache_read_cost for them too. (#31594)
+                        if not _cr and _ptd is not None:
+                            _cr = getattr(_ptd, "cached_tokens", None)
                         _cc = getattr(
                             cost_per_token_usage_object,
                             "cache_creation_input_tokens",
                             None,
                         ) or (cost_per_token_usage_object.model_extra or {}).get("cache_creation_input_tokens")
+                        # OpenAI-compatible cache-write aliases (kimi-k2 etc.), mirroring
+                        # db_spend_update_writer._extract_cache_creation_tokens.
+                        if not _cc and _ptd is not None:
+                            _cc = getattr(_ptd, "cache_write_tokens", None) or getattr(
+                                _ptd, "cache_creation_tokens", None
+                            )
                         if (_cr or _cc) and model:
                             try:
                                 _mi = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
