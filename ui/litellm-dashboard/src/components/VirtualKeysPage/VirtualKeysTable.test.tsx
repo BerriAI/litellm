@@ -1,4 +1,4 @@
-import { act, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, screen, waitFor, within, fireEvent } from "@testing-library/react";
 import { vi, it, expect, beforeEach, describe, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
@@ -28,8 +28,11 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   })),
 }));
 
-vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchAllTeams: vi.fn().mockResolvedValue([{ team_id: "team-1", team_alias: "Test Team" }]),
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useAllTeams: vi.fn(() => ({
+    data: [{ team_id: "team-1", team_alias: "Test Team" }],
+    isLoading: false,
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
@@ -309,10 +312,11 @@ it("should display created_by_user alias over email when both are available", as
 
   renderWithProviders(<VirtualKeysTable />);
 
-  await waitFor(() => {
-    expect(screen.getByText("The Creator")).toBeInTheDocument();
-  });
-  expect(screen.queryByText("creator@example.com")).not.toBeInTheDocument();
+  // Scope to the key's row so we assert the visible cell value: the hover popover that
+  // also holds the email is portaled out of the row, not the displayed "Created By" text.
+  const row = (await screen.findByText("Test Key Alias")).closest("tr") as HTMLElement;
+  expect(within(row).getByText("The Creator")).toBeInTheDocument();
+  expect(within(row).queryByText("creator@example.com")).not.toBeInTheDocument();
 });
 
 it("should render table without crashing when models is null", async () => {

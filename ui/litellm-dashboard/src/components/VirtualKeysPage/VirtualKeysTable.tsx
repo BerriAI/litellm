@@ -1,8 +1,7 @@
 "use client";
 import { useKeys, KeyListCallOptions } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useQuery } from "@tanstack/react-query";
+import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, SwitchVerticalIcon } from "@heroicons/react/outline";
@@ -30,7 +29,6 @@ import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
 import React, { useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { fetchAllTeams } from "../key_team_helpers/filter_helpers";
 import { PaginatedKeyAliasSelect } from "../KeyAliasSelect/PaginatedKeyAliasSelect/PaginatedKeyAliasSelect";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
@@ -67,7 +65,6 @@ const toKeyListFilters = (filters: KeyFilterState): KeyListFilterOptions => ({
 });
 
 export function VirtualKeysTable() {
-  const { accessToken } = useAuthorized();
   const { data: fetchedOrganizations, isLoading: isOrgsLoading } = useOrganizations();
   const resolvedOrganizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
@@ -98,12 +95,7 @@ export function VirtualKeysTable() {
 
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
 
-  const { data: fetchedTeams, isLoading: isTeamsLoading } = useQuery<Team[]>({
-    queryKey: ["allTeamsForKeyFilters", accessToken],
-    queryFn: async () => (accessToken ? await fetchAllTeams(accessToken) : []),
-    enabled: !!accessToken,
-    staleTime: 30000,
-  });
+  const { data: fetchedTeams, isLoading: isTeamsLoading } = useAllTeams();
   const allTeams = useMemo<Team[]>(() => fetchedTeams ?? [], [fetchedTeams]);
 
   // Defer the transition so the button stays in loading state until the table
