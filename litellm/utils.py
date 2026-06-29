@@ -2329,13 +2329,21 @@ def _supports_provider_info_factory(
     return None
 
 
-def _supports_factory(model: str, custom_llm_provider: Optional[str], key: str) -> bool:
+def _supports_factory(
+    model: str,
+    custom_llm_provider: Optional[str],
+    key: str,
+    base_model: Optional[str] = None,
+) -> bool:
     """
     Check if the given model supports function calling and return a boolean value.
 
     Parameters:
     model (str): The model name to be checked.
     custom_llm_provider (Optional[str]): The provider to be checked.
+    base_model (Optional[str]): If set, used as a fallback when the model
+        string itself is not found in the registry (e.g. custom Azure
+        deployment names).
 
     Returns:
     bool: True if the model supports function calling, False otherwise.
