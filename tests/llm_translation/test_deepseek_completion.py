@@ -60,9 +60,7 @@ async def test_deepseek_provider_async_completion(stream):
     messages = [{"role": "user", "content": "Hello, world!"}]
 
     # Mock AsyncHTTPHandler.post method for async test
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.AsyncHTTPHandler.post") as mock_post:
         mock_response_data = litellm.ModelResponse(
             choices=[
                 litellm.Choices(
@@ -100,9 +98,7 @@ async def test_deepseek_provider_async_completion(stream):
     # Check request body
     request_body = json.loads(call_args.kwargs["data"])
     assert call_args.kwargs["url"] == "https://api.deepseek.com/chat/completions"
-    assert (
-        request_body["model"] == "deepseek-reasoner"
-    )  # Model name should be stripped of provider prefix
+    assert request_body["model"] == "deepseek-reasoner"  # Model name should be stripped of provider prefix
     assert request_body["messages"] == messages
     assert request_body["stream"] == stream
 
@@ -165,13 +161,9 @@ def test_completion_cost_deepseek():
         assert response_2.usage.prompt_cache_miss_tokens is not None
         assert (
             response_2.usage.prompt_tokens
-            == response_2.usage.prompt_cache_miss_tokens
-            + response_2.usage.prompt_cache_hit_tokens
+            == response_2.usage.prompt_cache_miss_tokens + response_2.usage.prompt_cache_hit_tokens
         )
-        assert (
-            response_2.usage._cache_read_input_tokens
-            == response_2.usage.prompt_cache_hit_tokens
-        )
+        assert response_2.usage._cache_read_input_tokens == response_2.usage.prompt_cache_hit_tokens
     except litellm.APIError as e:
         pass
     except Exception as e:

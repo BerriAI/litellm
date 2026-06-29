@@ -69,9 +69,7 @@ class TestDeepSeekThinkingParams:
         "reasoning_effort",
         ["minimal", "low", "medium", "high", "xhigh", "default"],
     )
-    def test_map_reasoning_effort_enables_thinking_and_passes_through(
-        self, reasoning_effort
-    ):
+    def test_map_reasoning_effort_enables_thinking_and_passes_through(self, reasoning_effort):
         """Test that reasoning_effort maps to thinking enabled and is passed through."""
         non_default_params = {"reasoning_effort": reasoning_effort}
         optional_params = {}
@@ -213,8 +211,6 @@ class TestDeepSeekThinkingParams:
 
         result = self.config._drop_unsupported_tools(optional_params)
 
-        assert result["tools"] == [
-            {"type": "function", "function": {"name": "get_weather"}}
-        ]
+        assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True
