@@ -1998,16 +1998,11 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Apply additional_drop_params for nested field removal
-        additional_drop_params = litellm_params.get("additional_drop_params")
+        additional_drop_params: list[str] = litellm_params.get("additional_drop_params") or []
         if additional_drop_params:
-            from litellm.litellm_core_utils.dot_notation_indexing import (
-                delete_nested_value,
-                is_nested_path,
-            )
+            from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 
-            nested_paths = [p for p in additional_drop_params if is_nested_path(p)]
-            for path in nested_paths:
+            for path in additional_drop_params:
                 anthropic_messages_optional_request_params = delete_nested_value(
                     anthropic_messages_optional_request_params, path
                 )
