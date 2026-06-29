@@ -2919,12 +2919,8 @@ def test_code_execution_tool_results_extraction():
     assert editor_result["tool_use_id"] == "srvtoolu_01DEF"
     assert editor_result["content"]["is_file_update"] is False
 
-    # Verify text content is properly concatenated
-    assert (
-        "I'll calculate that for you."
-        in transformed_response.choices[0].message.content
-    )
-    assert "Done!" in transformed_response.choices[0].message.content
+    # Tool calls should null content per OpenAI contract
+    assert transformed_response.choices[0].message.content is None
 
 
 def test_code_execution_tool_results_in_hidden_params():
