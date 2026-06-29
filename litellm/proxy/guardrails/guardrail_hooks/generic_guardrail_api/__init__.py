@@ -8,9 +8,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def _get_config_value(
-    litellm_params: Any, optional_params: Any, attribute_name: str
-) -> Optional[Any]:
+def _get_config_value(litellm_params: Any, optional_params: Any, attribute_name: str) -> Optional[Any]:
     if optional_params is not None:
         value = (
             optional_params.get(attribute_name)
@@ -38,12 +36,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
-        streaming_end_of_stream_only=_get_config_value(
-            litellm_params, optional_params, "streaming_end_of_stream_only"
-        ),
-        streaming_sampling_rate=_get_config_value(
-            litellm_params, optional_params, "streaming_sampling_rate"
-        ),
+        streaming_end_of_stream_only=_get_config_value(litellm_params, optional_params, "streaming_end_of_stream_only"),
+        streaming_sampling_rate=_get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)

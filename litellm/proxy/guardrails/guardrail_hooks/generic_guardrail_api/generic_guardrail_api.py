@@ -215,18 +215,11 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Read by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook
         # via getattr(guardrail_to_apply, "streaming_*", default).
         self.streaming_end_of_stream_only: bool = (
-            False
-            if streaming_end_of_stream_only is None
-            else streaming_end_of_stream_only
+            False if streaming_end_of_stream_only is None else streaming_end_of_stream_only
         )
         if streaming_sampling_rate is not None and streaming_sampling_rate < 1:
-            raise ValueError(
-                "streaming_sampling_rate must be >= 1 "
-                f"(got {streaming_sampling_rate})"
-            )
-        self.streaming_sampling_rate: int = (
-            5 if streaming_sampling_rate is None else streaming_sampling_rate
-        )
+            raise ValueError(f"streaming_sampling_rate must be >= 1 (got {streaming_sampling_rate})")
+        self.streaming_sampling_rate: int = 5 if streaming_sampling_rate is None else streaming_sampling_rate
 
         # Set supported event hooks
         if "supported_event_hooks" not in kwargs:
@@ -488,9 +481,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         except httpx.RequestError as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
         except Exception as e:
-            return self._handle_guardrail_request_error(
-                e, inputs, input_type, logging_obj, is_unreachable=False
-            )
+            return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj, is_unreachable=False)
 
     @staticmethod
     def get_config_model() -> Optional[type["GuardrailConfigModel"]]:
@@ -499,4 +490,3 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
 
         return GenericGuardrailAPIConfigModel
-
