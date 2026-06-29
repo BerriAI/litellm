@@ -603,41 +603,8 @@ async def common_checks(
 
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
-        # 3. If team is in budget
-        with tracer.trace("litellm.proxy.auth.common_checks.team_max_budget_check"):
-            await _team_max_budget_check(
-                team_object=team_object,
-                proxy_logging_obj=proxy_logging_obj,
-                valid_token=valid_token,
-            )
-
-        # 3.1. Multi-window budget check for team
-        with tracer.trace("litellm.proxy.auth.common_checks.team_multi_budget_check"):
-            await _team_multi_budget_check(team_object=team_object)
-
-        # 3.2. Multi-window budget check for key
-        with tracer.trace("litellm.proxy.auth.common_checks.virtual_key_multi_budget_check"):
-            if valid_token is not None:
-                await _virtual_key_multi_budget_check(valid_token=valid_token)
-
-        # 3.0.5. If team is over soft budget (alert only, doesn't block)
-        with tracer.trace("litellm.proxy.auth.common_checks.team_soft_budget_check"):
-            await _team_soft_budget_check(
-                team_object=team_object,
-                proxy_logging_obj=proxy_logging_obj,
-                valid_token=valid_token,
-            )
-
-        # 3.1. If organization is in budget
-        with tracer.trace("litellm.proxy.auth.common_checks.organization_max_budget_check"):
-            await _organization_max_budget_check(
-                valid_token=valid_token,
-                team_object=team_object,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-
+        # Key metadata.tags are injected into request_body here so the tag budget
+        # check can read them; this mutation must run before the gathered checks.
         if valid_token is not None:
             from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
@@ -651,51 +618,83 @@ async def common_checks(
                 user_api_key_dict=valid_token,
             )
 
-        with tracer.trace("litellm.proxy.auth.common_checks.tag_max_budget_check"):
-            await _tag_max_budget_check(
-                request_body=request_body,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-                valid_token=valid_token,
-            )
+        async def _user_max_budget_check() -> None:
+            # 4.1 personal budget, if personal key
+            if (
+                (team_object is None or team_object.team_id is None)
+                and user_object is not None
+                and user_object.max_budget is not None
+            ):
+                from litellm.proxy.proxy_server import get_current_spend
 
-        # 4. If user is in budget
-        ## 4.1 check personal budget, if personal key
-        if (
-            (team_object is None or team_object.team_id is None)
-            and user_object is not None
-            and user_object.max_budget is not None
-        ):
-            user_budget = user_object.max_budget
-            from litellm.proxy.proxy_server import get_current_spend
-
-            user_spend = await get_current_spend(
-                counter_key=f"spend:user:{user_object.user_id}",
-                fallback_spend=user_object.spend or 0.0,
-                max_budget=user_budget,
-            )
-            if math.isfinite(user_budget) and user_spend >= user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=user_spend,
+                user_budget = user_object.max_budget
+                user_spend = await get_current_spend(
+                    counter_key=f"spend:user:{user_object.user_id}",
+                    fallback_spend=user_object.spend or 0.0,
                     max_budget=user_budget,
-                    message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
                 )
+                if math.isfinite(user_budget) and user_spend >= user_budget:
+                    raise litellm.BudgetExceededError(
+                        current_cost=user_spend,
+                        max_budget=user_budget,
+                        message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
+                    )
 
-        ## 4.2 check team member budget, if team key
-        with tracer.trace("litellm.proxy.auth.common_checks.check_team_member_budget"):
-            await _check_team_member_budget(
-                team_object=team_object,
-                user_object=user_object,
-                valid_token=valid_token,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
+        # Each scope reads a distinct counter key with no cross-scope ordering
+        # dependency, so the per-scope Redis-first reads run concurrently instead
+        # of one sequential await per scope. return_exceptions lets every scope
+        # settle, then the first error in scope-priority order propagates exactly
+        # as the sequential path raised.
+        budget_check_coros = tuple(
+            coro
+            for coro in (
+                _team_max_budget_check(
+                    team_object=team_object,
+                    proxy_logging_obj=proxy_logging_obj,
+                    valid_token=valid_token,
+                ),
+                _team_multi_budget_check(team_object=team_object),
+                _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
+                _team_soft_budget_check(
+                    team_object=team_object,
+                    proxy_logging_obj=proxy_logging_obj,
+                    valid_token=valid_token,
+                ),
+                _organization_max_budget_check(
+                    valid_token=valid_token,
+                    team_object=team_object,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                ),
+                _tag_max_budget_check(
+                    request_body=request_body,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                    valid_token=valid_token,
+                ),
+                _user_max_budget_check(),
+                _check_team_member_budget(
+                    team_object=team_object,
+                    user_object=user_object,
+                    valid_token=valid_token,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                ),
+                _check_end_user_budget(end_user_obj=end_user_object, route=route)
+                if end_user_object is not None and end_user_object.litellm_budget_table is not None
+                else None,
             )
+            if coro is not None
+        )
 
-        # 5. If end_user ('user' passed to /chat/completions, /embeddings endpoint) is in budget
-        if end_user_object is not None and end_user_object.litellm_budget_table is not None:
-            await _check_end_user_budget(end_user_obj=end_user_object, route=route)
+        with tracer.trace("litellm.proxy.auth.common_checks.budget_checks"):
+            budget_results = await asyncio.gather(*budget_check_coros, return_exceptions=True)
+        budget_error = next((r for r in budget_results if isinstance(r, BaseException)), None)
+        if budget_error is not None:
+            raise budget_error
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
