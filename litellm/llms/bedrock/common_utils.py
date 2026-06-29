@@ -747,9 +747,7 @@ def bedrock_converse_supports_strict_tools(model: str) -> bool:
     if not base.startswith("anthropic"):
         return False
     base_lower = base.lower()
-    return not any(
-        p in base_lower for p in _BEDROCK_CONVERSE_STRICT_REJECTED_OPUS_PATTERNS
-    )
+    return not any(p in base_lower for p in _BEDROCK_CONVERSE_STRICT_REJECTED_OPUS_PATTERNS)
 
 
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
