@@ -2319,9 +2319,7 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
-def _is_unsignable_thinking_block(
-    block: Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock, Dict[str, Any]],
-) -> bool:
+def _is_unsignable_thinking_block(block: object) -> bool:
     """A `thinking` block that Anthropic cannot accept on input.
 
     Anthropic verifies the thinking signature cryptographically, so a block whose
@@ -2336,8 +2334,8 @@ def _is_unsignable_thinking_block(
 
 
 def _drop_unsignable_thinking_blocks(
-    thinking_blocks: List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
-) -> List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
+    thinking_blocks: list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
+) -> list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
     return [block for block in thinking_blocks if not _is_unsignable_thinking_block(block)]
 
 
@@ -2531,9 +2529,7 @@ def anthropic_messages_pt(
 
             _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
             thinking_blocks = (
-                _drop_unsignable_thinking_blocks(_raw_thinking_blocks)
-                if _raw_thinking_blocks is not None
-                else None
+                _drop_unsignable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
             )
 
             # Check if tool_calls contain server tool calls (web search, etc.)
