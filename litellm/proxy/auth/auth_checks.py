@@ -2833,9 +2833,6 @@ def _check_model_access_helper(
     # Filter out models that are access_groups
     filtered_models = [m for m in models if m not in access_groups]
 
-    if _model_in_team_aliases(model=model, team_model_aliases=team_model_aliases):
-        return True
-
     if _model_matches_any_wildcard_pattern_in_list(model=model, allowed_model_list=filtered_models):
         return True
 
@@ -2899,6 +2896,13 @@ def _can_object_call_model(
         _model = llm_router._get_model_from_alias(model)
         if _model:
             potential_models.append(_model)
+    # Expand the team-alias TARGET so it is checked against the caller's
+    # allowlist (key.models / team.models / org.models). The legacy
+    # `_model_in_team_aliases` short-circuit treated any alias source as
+    # authorized regardless of target — that let a key bypass its own
+    # `models` allowlist whenever the team had a matching alias.
+    if team_model_aliases and isinstance(model, str) and model in team_model_aliases:
+        potential_models.append(team_model_aliases[model])
 
     ## check model access for alias + underlying model - allow if either is in allowed models
     for m in potential_models:
@@ -2917,24 +2921,6 @@ def _can_object_call_model(
         param="model",
         code=status.HTTP_403_FORBIDDEN,
     )
-
-
-def _model_in_team_aliases(model: str, team_model_aliases: Optional[Dict[str, str]] = None) -> bool:
-    """
-    Returns True if `model` being accessed is an alias of a team model
-
-    - `model=gpt-4o`
-    - `team_model_aliases={"gpt-4o": "gpt-4o-team-1"}`
-        - returns True
-
-    - `model=gp-4o`
-    - `team_model_aliases={"o-3": "o3-preview"}`
-        - returns False
-    """
-    if team_model_aliases:
-        if model in team_model_aliases:
-            return True
-    return False
 
 
 def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> List[str]:

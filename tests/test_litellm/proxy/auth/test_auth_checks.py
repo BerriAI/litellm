@@ -408,6 +408,139 @@ async def test_can_key_call_resolved_model_teamless_all_team_models_denied():
 
 
 @pytest.mark.asyncio
+async def test_team_model_aliases_cannot_bypass_key_models():
+    """team_model_aliases must not let a key reach models outside its own allowlist.
+
+    Regression guard: when `_check_model_access_helper` short-circuited on any
+    model name present as a key in `team_model_aliases` (regardless of target),
+    a key restricted to one prefixed model could call sibling models simply
+    because the team had a short-name alias for them.
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-key",
+        team_id="team-1",
+        models=["main-g/claude-opus-4-7"],
+        team_models=[
+            "main-g/claude-opus-4-7",
+            "main-g/claude-opus-4-8",
+            "main-d/gpt-5.5",
+        ],
+        team_model_aliases={
+            "claude-opus-4-7": "main-g/claude-opus-4-7",
+            "claude-opus-4-8": "main-g/claude-opus-4-8",
+            "gpt-5.5": "main-d/gpt-5.5",
+        },
+    )
+
+    for short in ("claude-opus-4-8", "gpt-5.5"):
+        with pytest.raises(ProxyException) as exc_info:
+            await can_key_call_model(
+                model=short,
+                llm_model_list=None,
+                valid_token=valid_token,
+                llm_router=None,
+            )
+        assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_team_model_aliases_resolves_short_to_in_key_target():
+    """Short name whose alias target IS in key.models is allowed (legitimate path)."""
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-key",
+        team_id="team-1",
+        models=["main-g/claude-opus-4-7"],
+        team_models=["main-g/claude-opus-4-7", "main-g/claude-opus-4-8"],
+        team_model_aliases={
+            "claude-opus-4-7": "main-g/claude-opus-4-7",
+            "claude-opus-4-8": "main-g/claude-opus-4-8",
+        },
+    )
+
+    assert (
+        await can_key_call_model(
+            model="claude-opus-4-7",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_model_aliases_with_all_team_models_sentinel():
+    """all-team-models sentinel expands to team_models; alias target must still be in team_models."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-key",
+        team_id="team-1",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=["main-g/claude-opus-4-7", "main-g/claude-opus-4-8"],
+        team_model_aliases={
+            "claude-opus-4-7": "main-g/claude-opus-4-7",
+            "claude-opus-4-8": "main-g/claude-opus-4-8",
+            "gpt-5.5": "main-d/gpt-5.5",
+        },
+    )
+
+    assert (
+        await can_key_call_model(
+            model="claude-opus-4-8",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="gpt-5.5",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_can_team_access_model_with_team_owned_aliases():
+    """can_team_access_model: alias target in team.models is allowed; outside team.models is denied."""
+    from litellm.proxy.auth.auth_checks import can_team_access_model
+
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        models=["main-g/claude-opus-4-7"],
+    )
+
+    assert (
+        await can_team_access_model(
+            model="claude-opus-4-7",
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases={"claude-opus-4-7": "main-g/claude-opus-4-7"},
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_team_access_model(
+            model="claude-opus-4-8",
+            team_object=team_object,
+            llm_router=None,
+            team_model_aliases={"claude-opus-4-8": "main-g/claude-opus-4-8"},
+        )
+    assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
 async def test_can_team_access_model_all_team_models_expands_router_models():
     from litellm import Router
     from litellm.proxy._types import SpecialModelNames
