@@ -28,8 +28,11 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   })),
 }));
 
-vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchAllTeams: vi.fn().mockResolvedValue([{ team_id: "team-1", team_alias: "Test Team" }]),
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useAllTeams: vi.fn(() => ({
+    data: [{ team_id: "team-1", team_alias: "Test Team" }],
+    isLoading: false,
+  })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
