@@ -339,7 +339,7 @@ async def test_register_client_returns_existing_server_credentials():
         global_mcp_server_manager.registry.clear()
 
     assert result == {
-        "client_id": "stored_server",
+        "client_id": "existing-client",
         "client_secret": "dummy",
         "redirect_uris": ["https://proxy.litellm.example/callback"],
     }

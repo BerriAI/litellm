@@ -2,6 +2,7 @@ import asyncio
 import html as _html
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -26,6 +27,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import get_server_root_path
+from litellm.secret_managers.main import (
+    get_secret_str,
+    normalize_nonempty_secret_str,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -323,6 +328,88 @@ async def _store_per_user_token_server_side(
     )
 
 
+@dataclass(frozen=True)
+class ManagedOAuthApp:
+    client_id: str
+    client_secret: Optional[str] = None
+
+
+def _resolve_config_secret(raw: object) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    if raw.startswith("os.environ/"):
+        return normalize_nonempty_secret_str(get_secret_str(raw))
+    # A provisioned app stores client_secret encrypted; decrypt_value_helper
+    # returns the original value unchanged for plain operator-typed config.
+    decrypted = decrypt_value_helper(
+        value=raw,
+        key="mcp_managed_oauth_apps",
+        exception_type="debug",
+        return_original_value=True,
+    )
+    return normalize_nonempty_secret_str(decrypted)
+
+
+def _managed_oauth_app(authorization_url: Optional[str]) -> Optional[ManagedOAuthApp]:
+    """Resolve a gateway-owned OAuth app for an MCP server by its authorization
+    host, from ``general_settings.mcp_managed_oauth_apps``.
+
+    Lets one operator-registered app back every user of a provider whose
+    authorization server has no Dynamic Client Registration (e.g. Slack), so no
+    per-server client_id and no end-user input is required.
+    """
+    if not authorization_url:
+        return None
+    from litellm.proxy.proxy_server import general_settings
+
+    registry: object = general_settings.get("mcp_managed_oauth_apps")
+    if not isinstance(registry, dict):
+        return None
+    # hostname (not netloc) so a key like "slack.com" still matches an
+    # authorization_url that carries an explicit port or userinfo
+    host = urlparse(authorization_url).hostname
+    if host is None:
+        return None
+    entry: object = registry.get(host)
+    if not isinstance(entry, dict):
+        return None
+    client_id = _resolve_config_secret(entry.get("client_id"))
+    if client_id is None:
+        return None
+    return ManagedOAuthApp(
+        client_id=client_id,
+        client_secret=_resolve_config_secret(entry.get("client_secret")),
+    )
+
+
+def _effective_client_id(mcp_server: MCPServer) -> Optional[str]:
+    if mcp_server.client_id:
+        return mcp_server.client_id
+    managed = _managed_oauth_app(mcp_server.authorization_url)
+    return managed.client_id if managed else None
+
+
+def _effective_client_secret(mcp_server: MCPServer) -> Optional[str]:
+    if mcp_server.client_secret:
+        return mcp_server.client_secret
+    managed = _managed_oauth_app(mcp_server.authorization_url)
+    return managed.client_secret if managed else None
+
+
+def _effective_oauth_credentials(
+    mcp_server: MCPServer,
+) -> tuple[Optional[str], Optional[str]]:
+    """Resolve client_id and client_secret with a single managed-app lookup,
+    so the stored secret is decrypted at most once per call."""
+    if mcp_server.client_id and mcp_server.client_secret:
+        return mcp_server.client_id, mcp_server.client_secret
+    managed = _managed_oauth_app(mcp_server.authorization_url)
+    return (
+        mcp_server.client_id or (managed.client_id if managed else None),
+        mcp_server.client_secret or (managed.client_secret if managed else None),
+    )
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -356,7 +443,7 @@ async def authorize_with_server(
     )
 
     params = {
-        "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
+        "client_id": _effective_client_id(mcp_server) or client_id,
         "redirect_uri": f"{request_base_url}/callback",
         "state": encoded_state,
         "response_type": response_type or "code",
@@ -396,8 +483,9 @@ async def exchange_token_with_server(
     if mcp_server.token_url is None:
         raise HTTPException(status_code=400, detail="MCP server token url is not set")
 
-    resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
-    resolved_client_secret = mcp_server.client_secret if mcp_server.client_secret else client_secret
+    effective_client_id, effective_client_secret = _effective_oauth_credentials(mcp_server)
+    resolved_client_id = effective_client_id or client_id
+    resolved_client_secret = effective_client_secret or client_secret
 
     if grant_type == "refresh_token":
         if not refresh_token:
@@ -508,23 +596,30 @@ async def register_client_with_server(
     grant_types: Optional[list],
     response_types: Optional[list],
     token_endpoint_auth_method: Optional[str],
-    fallback_client_id: Optional[str] = None,
 ):
     request_base_url = get_request_base_url(request)
-    dummy_return = {
-        "client_id": fallback_client_id or mcp_server.server_name,
-        "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
-    }
 
-    if mcp_server.client_id and mcp_server.client_secret:
-        return dummy_return
+    effective_client_id = _effective_client_id(mcp_server)
+    if effective_client_id:
+        return {
+            "client_id": effective_client_id,
+            "client_secret": "dummy",
+            "redirect_uris": [f"{request_base_url}/callback"],
+        }
 
     if mcp_server.authorization_url is None:
         raise HTTPException(status_code=400, detail="MCP server authorization url is not set")
 
     if mcp_server.registration_url is None:
-        return dummy_return
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "This MCP server's authorization server does not support "
+                "Dynamic Client Registration. Set a client_id (and client_secret) on "
+                "the server, or register a gateway-managed OAuth app for its "
+                "authorization host under general_settings.mcp_managed_oauth_apps"
+            },
+        )
 
     register_data = {
         "client_name": client_name,
@@ -586,7 +681,7 @@ async def authorize(
     # Use server's stored client_id when caller doesn't supply one.
     # Raise a clear error instead of passing an empty string — an empty
     # client_id would silently produce a broken authorization URL.
-    resolved_client_id: str = mcp_server.client_id or client_id or ""
+    resolved_client_id: str = _effective_client_id(mcp_server) or client_id or ""
     if not resolved_client_id:
         raise HTTPException(
             status_code=400,
@@ -1227,7 +1322,6 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 grant_types=data.get("grant_types", []),
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
-                fallback_client_id=resolved.server_name or resolved.name,
             )
         return dummy_return
 
@@ -1241,5 +1335,4 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         grant_types=data.get("grant_types", []),
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
-        fallback_client_id=mcp_server_name,
     )

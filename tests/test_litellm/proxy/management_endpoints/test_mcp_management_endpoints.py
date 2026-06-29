@@ -2263,7 +2263,6 @@ class TestTemporaryMCPSessionEndpoints:
             grant_types=["authorization_code"],
             response_types=["code"],
             token_endpoint_auth_method="client_secret_basic",
-            fallback_client_id="server-1",
         )
 
     @pytest.mark.asyncio
@@ -5034,3 +5033,148 @@ class TestPerUserCredentialConfigServerResolution:
         _, _, _, updates, _ = merge_mock.await_args.args
         assert updates == {"CORP_USERNAME": "alice"}
         assert result.server_id == self.CONFIG_SERVER_ID
+
+
+@pytest.mark.asyncio
+async def test_provision_slack_app_stores_encrypted_managed_app(monkeypatch):
+    """The provision endpoint derives the callback from the deployed gateway URL,
+    stores the client_id and an encrypted client_secret under
+    general_settings.mcp_managed_oauth_apps['slack.com'], and reflects it into
+    the running process."""
+    from litellm.proxy._experimental.mcp_server.slack_app_provisioning import (
+        SlackProvisionedApp,
+    )
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-1234567890")
+
+    req = MagicMock()
+    req.base_url = "https://gateway.acme.com/"
+    req.headers = {}
+
+    saved: dict = {}
+
+    async def fake_get_config():
+        return {}
+
+    async def fake_save_config(new_config):
+        saved["config"] = new_config
+
+    runtime_general_settings: dict = {}
+    fake_proxy_server = types.SimpleNamespace(
+        general_settings=runtime_general_settings,
+        master_key="sk-1234",
+        proxy_config=types.SimpleNamespace(
+            get_config=fake_get_config, save_config=fake_save_config
+        ),
+    )
+
+    provisioned = SlackProvisionedApp(
+        app_id="A1", client_id="123.456", client_secret="top-secret"
+    )
+
+    with (
+        patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),
+        patch(
+            "litellm.proxy._experimental.mcp_server.slack_app_provisioning.provision_slack_app",
+            new=AsyncMock(return_value=provisioned),
+        ),
+        patch.object(
+            mgmt_endpoints,
+            "_read_request_body",
+            new=AsyncMock(
+                return_value={"app_config_token": "xoxe-tok", "app_name": "Acme"}
+            ),
+        ),
+    ):
+        result = await mgmt_endpoints.mcp_provision_slack_app(
+            request=req, user_api_key_dict=generate_mock_user_api_key_auth()
+        )
+
+    assert result["app_id"] == "A1"
+    assert result["client_id"] == "123.456"
+    assert result["redirect_url"] == "https://gateway.acme.com/callback"
+
+    stored = saved["config"]["general_settings"]["mcp_managed_oauth_apps"]["slack.com"]
+    assert stored["client_id"] == "123.456"
+    assert stored["client_secret"] != "top-secret"
+    assert (
+        decrypt_value_helper(
+            value=stored["client_secret"], key="x", return_original_value=True
+        )
+        == "top-secret"
+    )
+    assert (
+        runtime_general_settings["mcp_managed_oauth_apps"]["slack.com"]["client_id"]
+        == "123.456"
+    )
+
+
+@pytest.mark.asyncio
+async def test_provision_slack_app_requires_admin():
+    """Non-admins cannot provision a Slack MCP app."""
+    req = MagicMock()
+    req.base_url = "https://gateway.acme.com/"
+    req.headers = {}
+
+    with patch.object(
+        mgmt_endpoints,
+        "_read_request_body",
+        new=AsyncMock(return_value={"app_config_token": "x"}),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await mgmt_endpoints.mcp_provision_slack_app(
+                request=req,
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.INTERNAL_USER
+                ),
+            )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_provision_slack_app_refuses_overwrite_without_force():
+    """Re-provisioning over an existing managed app must 409 without force, and
+    must not create a throwaway Slack app."""
+    req = MagicMock()
+    req.base_url = "https://gateway.acme.com/"
+    req.headers = {}
+
+    async def fake_get_config():
+        return {
+            "general_settings": {
+                "mcp_managed_oauth_apps": {"slack.com": {"client_id": "existing"}}
+            }
+        }
+
+    save_mock = AsyncMock()
+    fake_proxy_server = types.SimpleNamespace(
+        general_settings={},
+        master_key="sk-1234",
+        proxy_config=types.SimpleNamespace(
+            get_config=fake_get_config, save_config=save_mock
+        ),
+    )
+    provision_mock = AsyncMock()
+
+    with (
+        patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),
+        patch(
+            "litellm.proxy._experimental.mcp_server.slack_app_provisioning.provision_slack_app",
+            new=provision_mock,
+        ),
+        patch.object(
+            mgmt_endpoints,
+            "_read_request_body",
+            new=AsyncMock(return_value={"app_config_token": "tok"}),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await mgmt_endpoints.mcp_provision_slack_app(
+                request=req, user_api_key_dict=generate_mock_user_api_key_auth()
+            )
+
+    assert exc_info.value.status_code == 409
+    provision_mock.assert_not_awaited()
+    save_mock.assert_not_awaited()
