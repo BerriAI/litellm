@@ -2,7 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Path
 
@@ -45,8 +45,8 @@ class CredentialHelperUtils:
 def _is_masked_credential_value(
     *,
     key: str,
-    submitted_value: Any,
-    stored_value: Any,
+    submitted_value: object,
+    stored_value: object,
     unmasked_length: int = 4,
     number_of_asterisks: int = 4,
 ) -> bool:
@@ -64,7 +64,7 @@ def _is_masked_credential_value(
 def _looks_like_masked_credential_value(
     *,
     key: str,
-    submitted_value: Any,
+    submitted_value: object,
     unmasked_length: int = 4,
     number_of_asterisks: int = 4,
 ) -> bool:
