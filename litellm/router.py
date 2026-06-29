@@ -25,6 +25,7 @@ from typing import (
     Any,
     AsyncGenerator,
     AsyncIterator,
+    Awaitable,
     Callable,
     Dict,
     Generator,
@@ -2991,6 +2992,7 @@ class Router:
         messages: list[dict[str, str]],
         ttft_timeout: float | None,
         stream_idle_timeout: float | None = None,
+        deadline: float | None = None,
     ) -> ModelResponse:
         from litellm.main import stream_chunk_builder
 
@@ -2999,9 +3001,8 @@ class Router:
         loop = asyncio.get_running_loop()
         try:
             if ttft_timeout is not None or stream_idle_timeout is not None:
-                deadline = (
-                    loop.time() + ttft_timeout if ttft_timeout is not None else None
-                )
+                if deadline is None and ttft_timeout is not None:
+                    deadline = loop.time() + ttft_timeout
                 await self._collect_until_first_token(
                     aiter, response, chunks, deadline, ttft_timeout
                 )
@@ -3111,6 +3112,40 @@ class Router:
             if idle_timeout_handle is not None:
                 idle_timeout_handle.cancel()
 
+    async def _establish_response_with_ttft(
+        self,
+        response_coro: Awaitable[Union[ModelResponse, CustomStreamWrapper]],
+        ttft_timeout: float | None,
+        model: str,
+        llm_provider: str,
+    ) -> tuple[Union[ModelResponse, CustomStreamWrapper], float | None]:
+        """Await the provider dispatch, bounding it by ttft_timeout when set.
+
+        ttft_timeout must cover dispatch through first token, so the deadline is armed before
+        the establishment await; a provider that hangs before sending response headers is
+        otherwise caught only by the much larger request timeout. Returns the established
+        response and the armed absolute deadline (None when ttft_timeout is unset) so the
+        first-token wait can use the remaining budget.
+        """
+        if ttft_timeout is None:
+            return await response_coro, None
+        deadline = asyncio.get_running_loop().time() + ttft_timeout
+        try:
+            awaited_response = await asyncio.wait_for(
+                response_coro, timeout=ttft_timeout
+            )
+        except asyncio.TimeoutError:
+            verbose_router_logger.warning(
+                f"ttft_timeout={ttft_timeout}s exceeded for model={model}: "
+                "provider did not begin responding before the first-token deadline"
+            )
+            raise litellm.Timeout(
+                message=f"Router ttft_timeout={ttft_timeout}s exceeded: provider did not begin responding before the first-token deadline",
+                model=model,
+                llm_provider=llm_provider,
+            )
+        return awaited_response, deadline
+
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[
@@ -3215,7 +3250,14 @@ class Router:
             )
 
             async def _await_response() -> Union[ModelResponse, CustomStreamWrapper]:
-                awaited_response = await _response
+                awaited_response, ttft_deadline = (
+                    await self._establish_response_with_ttft(
+                        _response,
+                        _ttft_timeout if _forced_stream_for_ttft else None,
+                        str(litellm_params.get("model") or model),
+                        str(litellm_params.get("custom_llm_provider") or ""),
+                    )
+                )
                 if _forced_stream_for_ttft and isinstance(
                     awaited_response, CustomStreamWrapper
                 ):
@@ -3224,6 +3266,7 @@ class Router:
                         messages=messages,
                         ttft_timeout=_ttft_timeout,
                         stream_idle_timeout=_stream_idle_timeout,
+                        deadline=ttft_deadline,
                     )
                 return awaited_response
 
