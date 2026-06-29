@@ -143,3 +143,5 @@ crash.*.log
 
 ui/litellm-dashboard/out/
 litellm.log
+proxy_config.yaml.bak.*
+snapshots/
