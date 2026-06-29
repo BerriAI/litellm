@@ -608,6 +608,35 @@ async def guardrails_usage_logs(
                     effective_guardrail_ids.append(logical_name)
 
         where = _build_usage_logs_where(effective_guardrail_ids or None, policy_id, start_date, end_date)
+
+        if action:
+            # action is derived from SpendLog JSON metadata, not an index column, so we
+            # cannot push the filter to the DB. Fetch all matching index rows, join with
+            # SpendLogs, filter in Python, then slice to the requested page.
+            all_index_rows = await SpendLogGuardrailIndexRepository(prisma_client).table.find_many(
+                where=where,
+                order={"start_time": "desc"},
+            )
+            if not all_index_rows:
+                return UsageLogsResponse(logs=[], total=0, page=page, page_size=page_size)
+            all_request_ids = [r.request_id for r in all_index_rows]
+            spend_logs = await SpendLogsRepository(prisma_client).table.find_many(
+                where={"request_id": {"in": all_request_ids}}
+            )
+            log_by_id = {s.request_id: s for s in spend_logs}
+            all_entries: List[UsageLogEntry] = []
+            for r in all_index_rows:
+                sl = log_by_id.get(r.request_id)
+                if not sl:
+                    continue
+                entry = _usage_log_entry_from_row(r, sl, action)
+                if entry is not None:
+                    all_entries.append(entry)
+            total = len(all_entries)
+            start_idx = (page - 1) * page_size
+            logs_out = all_entries[start_idx : start_idx + page_size]
+            return UsageLogsResponse(logs=logs_out, total=total, page=page, page_size=page_size)
+
         index_rows = await SpendLogGuardrailIndexRepository(prisma_client).table.find_many(
             where=where,
             order={"start_time": "desc"},
@@ -620,15 +649,15 @@ async def guardrails_usage_logs(
             return UsageLogsResponse(logs=[], total=total, page=page, page_size=page_size)
         spend_logs = await SpendLogsRepository(prisma_client).table.find_many(where={"request_id": {"in": request_ids}})
         log_by_id = {s.request_id: s for s in spend_logs}
-        logs_out: List[UsageLogEntry] = []
+        logs_out_unfiltered: List[UsageLogEntry] = []
         for r in index_rows[:page_size]:
             sl = log_by_id.get(r.request_id)
             if not sl:
                 continue
-            entry = _usage_log_entry_from_row(r, sl, action)
+            entry = _usage_log_entry_from_row(r, sl, None)
             if entry is not None:
-                logs_out.append(entry)
-        return UsageLogsResponse(logs=logs_out, total=total, page=page, page_size=page_size)
+                logs_out_unfiltered.append(entry)
+        return UsageLogsResponse(logs=logs_out_unfiltered, total=total, page=page, page_size=page_size)
     except Exception as e:
         from litellm.proxy.utils import handle_exception_on_proxy
 
