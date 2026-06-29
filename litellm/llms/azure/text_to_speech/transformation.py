@@ -86,10 +86,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         """
         # Resolve api_base from multiple sources
         api_base = (
-            api_base
-            or litellm_params_dict.get("api_base")
-            or litellm.api_base
-            or get_secret_str("AZURE_API_BASE")
+            api_base or litellm_params_dict.get("api_base") or litellm.api_base or get_secret_str("AZURE_API_BASE")
         )
 
         # Resolve api_key from multiple sources (Azure-specific)
@@ -337,9 +334,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
         # Check if it's a Cognitive Services endpoint (convert to TTS endpoint)
         if self._is_cognitive_services_endpoint(hostname=hostname):
-            region = self._extract_region_from_hostname(
-                hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN
-            )
+            region = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_tts_url(region=region)
 
         # Check if it's already a TTS endpoint
@@ -353,15 +348,11 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
         """Check if hostname is a Cognitive Services endpoint"""
-        return hostname == self.COGNITIVE_SERVICES_DOMAIN or hostname.endswith(
-            f".{self.COGNITIVE_SERVICES_DOMAIN}"
-        )
+        return hostname == self.COGNITIVE_SERVICES_DOMAIN or hostname.endswith(f".{self.COGNITIVE_SERVICES_DOMAIN}")
 
     def _is_tts_endpoint(self, hostname: str) -> bool:
         """Check if hostname is a TTS endpoint"""
-        return hostname == self.TTS_SPEECH_DOMAIN or hostname.endswith(
-            f".{self.TTS_SPEECH_DOMAIN}"
-        )
+        return hostname == self.TTS_SPEECH_DOMAIN or hostname.endswith(f".{self.TTS_SPEECH_DOMAIN}")
 
     def _extract_region_from_hostname(self, hostname: str, domain: str) -> str:
         """
@@ -419,9 +410,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         azure_voice = voice or self.DEFAULT_VOICE
 
         # Get output format (already mapped in main.py)
-        output_format = optional_params.get(
-            "output_format", "audio-24khz-48kbitrate-mono-mp3"
-        )
+        output_format = optional_params.get("output_format", "audio-24khz-48kbitrate-mono-mp3")
         headers["X-Microsoft-OutputFormat"] = output_format
 
         # Auto-detect SSML: if input contains <speak>, pass it through as-is

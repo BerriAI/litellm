@@ -25,9 +25,7 @@ class VectorStoreRequestUtils:
             VectorStoreSearchOptionalRequestParams instance with only the valid parameters
         """
         valid_keys = get_type_hints(VectorStoreSearchOptionalRequestParams).keys()
-        filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
-        }
+        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
 
         optional_params = vector_store_provider_config.map_openai_params(
             non_default_params=params,
@@ -51,8 +49,6 @@ class VectorStoreRequestUtils:
             VectorStoreCreateOptionalRequestParams instance with only the valid parameters
         """
         valid_keys = get_type_hints(VectorStoreCreateOptionalRequestParams).keys()
-        filtered_params = {
-            k: v for k, v in params.items() if k in valid_keys and v is not None
-        }
+        filtered_params = {k: v for k, v in params.items() if k in valid_keys and v is not None}
 
         return cast(VectorStoreCreateOptionalRequestParams, filtered_params)

@@ -42,9 +42,7 @@ class MCPAuth(str, enum.Enum):
 
 # MCP Literals
 MCPTransportType = Literal[MCPTransport.sse, MCPTransport.http, MCPTransport.stdio]
-MCPSpecVersionType = Literal[
-    MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025
-]
+MCPSpecVersionType = Literal[MCPSpecVersion.nov_2024, MCPSpecVersion.mar_2025, MCPSpecVersion.jun_2025]
 MCPAuthType = Optional[
     Literal[
         MCPAuth.none,
@@ -214,7 +212,5 @@ class MCPPostCallResponseObject(BaseModel):
     Pydantic object used for MCP post_call_hook response
     """
 
-    mcp_tool_call_response: List[
-        Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]
-    ]
+    mcp_tool_call_response: List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]
     hidden_params: HiddenParams

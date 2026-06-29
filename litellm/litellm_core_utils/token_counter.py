@@ -67,9 +67,7 @@ def get_modified_max_tokens(
         ## MODEL INFO
         _model_info = litellm.get_model_info(model=model)
 
-        max_output_tokens = litellm.get_max_tokens(
-            model=base_model
-        )  # assume min context window is 4k tokens
+        max_output_tokens = litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
 
         ## UNKNOWN MAX OUTPUT TOKENS - return user defined amount
         if max_output_tokens is None:
@@ -87,14 +85,10 @@ def get_modified_max_tokens(
         )  # give at least a 10 token buffer. token counting can be imprecise.
 
         input_tokens += int(token_buffer)
-        verbose_logger.debug(
-            f"max_output_tokens: {max_output_tokens}, user_max_tokens: {user_max_tokens}"
-        )
+        verbose_logger.debug(f"max_output_tokens: {max_output_tokens}, user_max_tokens: {user_max_tokens}")
         ## CASE 1: model input + output can't exceed X - happens when max input = max output, e.g. gpt-3.5-turbo
         if _model_info["max_input_tokens"] == max_output_tokens:
-            verbose_logger.debug(
-                f"input_tokens: {input_tokens}, max_output_tokens: {max_output_tokens}"
-            )
+            verbose_logger.debug(f"input_tokens: {input_tokens}, max_output_tokens: {max_output_tokens}")
             if input_tokens > max_output_tokens:
                 pass  # allow call to fail normally - don't set max_tokens to negative.
             elif (
@@ -131,10 +125,7 @@ def resize_image_high_res(
     max_long_side = MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES
 
     # Return early if no resizing is needed
-    if (
-        width <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
-        and height <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES
-    ):
+    if width <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES and height <= MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES:
         return width, height
 
     # Determine the longer and shorter sides
@@ -296,9 +287,7 @@ def calculate_img_tokens(
         int: The number of tokens for the image.
     """
     if use_default_image_token_count:
-        verbose_logger.debug(
-            "Using default image token count: {}".format(DEFAULT_IMAGE_TOKEN_COUNT)
-        )
+        verbose_logger.debug("Using default image token count: {}".format(DEFAULT_IMAGE_TOKEN_COUNT))
         return DEFAULT_IMAGE_TOKEN_COUNT
     if mode == "low" or mode == "auto":
         return base_tokens
@@ -307,12 +296,8 @@ def calculate_img_tokens(
         width, height = get_image_dimensions(
             data=data,
         )
-        resized_width, resized_height = resize_image_high_res(
-            width=width, height=height
-        )
-        tiles_needed_high_res = calculate_tiles_needed(
-            resized_width=resized_width, resized_height=resized_height
-        )
+        resized_width, resized_height = resize_image_high_res(width=width, height=height)
+        tiles_needed_high_res = calculate_tiles_needed(resized_width=resized_width, resized_height=resized_height)
         tile_tokens = (base_tokens * 2) * tiles_needed_high_res
         total_tokens = base_tokens + tile_tokens
         return total_tokens
@@ -338,9 +323,7 @@ class _MessageCountParams:
 
         actual_model = _fix_model_name(model)
         if actual_model == "gpt-3.5-turbo-0301":
-            self.tokens_per_message = (
-                4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
-            )
+            self.tokens_per_message = 4  # every message follows <|start|>{role/name}\n{content}<|end|>\n
             self.tokens_per_name = -1  # if there's a name, the role is omitted
         elif actual_model in litellm.open_ai_chat_completion_models:
             self.tokens_per_message = 3
@@ -349,9 +332,7 @@ class _MessageCountParams:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         else:
-            print_verbose(
-                f"Warning: unknown model {model}. Using default token params."
-            )
+            print_verbose(f"Warning: unknown model {model}. Using default token params.")
             self.tokens_per_message = 3
             self.tokens_per_name = 1
         self.count_function = _get_count_function(model, custom_tokenizer)
@@ -396,9 +377,7 @@ def token_counter(
     if litellm.disable_token_counter is True:
         return 0
 
-    verbose_logger.debug(
-        f"messages in token_counter: {messages}, text in token_counter: {text}"
-    )
+    verbose_logger.debug(f"messages in token_counter: {messages}, text in token_counter: {text}")
     if text is not None and messages is not None:
         raise ValueError("text and messages cannot both be set")
     if use_default_image_token_count is None:
@@ -415,20 +394,12 @@ def token_counter(
         num_tokens = count_function(text_to_count)
 
     elif messages is not None:
-        new_messages = cast(
-            List[AllMessageValues], convert_list_message_to_dict(messages)
-        )
+        new_messages = cast(List[AllMessageValues], convert_list_message_to_dict(messages))
         params = _MessageCountParams(model, custom_tokenizer)
-        num_tokens = _count_messages(
-            params, new_messages, use_default_image_token_count, default_token_count
-        )
+        num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
-            includes_system_message = any(
-                [message.get("role", None) == "system" for message in new_messages]
-            )
-            num_tokens += _count_extra(
-                params.count_function, tools, tool_choice, includes_system_message
-            )
+            includes_system_message = any([message.get("role", None) == "system" for message in new_messages])
+            num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
 
     else:
         raise ValueError("Either text or messages must be provided")
@@ -463,18 +434,12 @@ def _count_messages(
                 if isinstance(value, List):
                     for tool_call in value:
                         if "function" in tool_call:
-                            function_arguments = tool_call["function"].get(
-                                "arguments", []
-                            )
+                            function_arguments = tool_call["function"].get("arguments", [])
                             num_tokens += params.count_function(str(function_arguments))
                         else:
-                            raise ValueError(
-                                f"Unsupported tool call {tool_call} must contain a function key"
-                            )
+                            raise ValueError(f"Unsupported tool call {tool_call} must contain a function key")
                 else:
-                    raise ValueError(
-                        f"Unsupported type {type(value)} for key tool_calls in message {message}"
-                    )
+                    raise ValueError(f"Unsupported type {type(value)} for key tool_calls in message {message}")
             elif isinstance(value, str):
                 num_tokens += params.count_function(value)
                 if key == "name":
@@ -605,9 +570,7 @@ def _count_image_tokens(
     if isinstance(image_url, dict):
         detail = image_url.get("detail", "auto")
         if detail not in ["low", "high", "auto"]:
-            raise ValueError(
-                f"Invalid detail value: {detail}. Expected 'low', 'high', or 'auto'."
-            )
+            raise ValueError(f"Invalid detail value: {detail}. Expected 'low', 'high', or 'auto'.")
         url = image_url.get("url")
         if not url:
             raise ValueError("Missing required key 'url' in image_url dict.")
@@ -625,10 +588,7 @@ def _count_image_tokens(
             use_default_image_token_count=use_default_image_token_count,
         )
     else:
-        raise ValueError(
-            f"Invalid image_url type: {type(image_url).__name__}. "
-            "Expected str or dict with 'url' field."
-        )
+        raise ValueError(f"Invalid image_url type: {type(image_url).__name__}. Expected str or dict with 'url' field.")
 
 
 def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
@@ -650,13 +610,9 @@ def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     if expected_cls is None:
         raise ValueError(f"Unknown Anthropic content type: '{content_type}'")
 
-    missing = [
-        k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content
-    ]
+    missing = [k for k in getattr(expected_cls, "__required_keys__", set()) if k not in content]
     if missing:
-        raise ValueError(
-            f"Missing required fields in {content_type} block: {', '.join(missing)}"
-        )
+        raise ValueError(f"Missing required fields in {content_type} block: {', '.join(missing)}")
 
     return expected_cls
 
@@ -728,9 +684,7 @@ def _count_content_list(
                 num_tokens += count_function(str(c.get("text", "")))
             elif c["type"] == "image_url":
                 image_url = c.get("image_url")
-                num_tokens += _count_image_tokens(
-                    image_url, use_default_image_token_count
-                )
+                num_tokens += _count_image_tokens(image_url, use_default_image_token_count)
             elif c["type"] in ("tool_use", "tool_result"):
                 num_tokens += _count_anthropic_content(
                     c,
@@ -756,11 +710,7 @@ def _count_content_list(
                 if tool_name:
                     num_tokens += count_function(tool_name)
             else:
-                content_type = (
-                    c.get("type", type(c).__name__)
-                    if isinstance(c, dict)
-                    else type(c).__name__
-                )
+                content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, tool_reference)."
@@ -770,8 +720,7 @@ def _count_content_list(
         if default_token_count is not None:
             return default_token_count
         raise ValueError(
-            f"Error getting number of tokens from content list: {e}, "
-            f"default_token_count={default_token_count}"
+            f"Error getting number of tokens from content list: {e}, default_token_count={default_token_count}"
         )
 
 

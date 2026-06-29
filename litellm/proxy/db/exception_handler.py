@@ -305,9 +305,7 @@ async def call_with_db_reconnect_retry(
             (
                 lock_timeout_seconds
                 if lock_timeout_seconds is not None
-                else getattr(
-                    prisma_client, "_db_auth_reconnect_lock_timeout_seconds", None
-                )
+                else getattr(prisma_client, "_db_auth_reconnect_lock_timeout_seconds", None)
             ),
             _DEFAULT_RECONNECT_LOCK_TIMEOUT_SECONDS,
         )
@@ -332,8 +330,7 @@ async def call_with_db_reconnect_retry(
             )
         except Exception as reconnect_exc:
             verbose_proxy_logger.warning(
-                "DB reconnect attempt raised; preserving original transport error. "
-                "reason=%s reconnect_error=%s",
+                "DB reconnect attempt raised; preserving original transport error. reason=%s reconnect_error=%s",
                 reason,
                 reconnect_exc,
             )

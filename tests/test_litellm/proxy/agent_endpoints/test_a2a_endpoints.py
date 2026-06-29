@@ -968,6 +968,193 @@ async def test_get_extended_agent_card_rewrites_url():
 
 
 @pytest.mark.asyncio
+async def test_get_agent_card_uses_proxy_base_url_when_set(monkeypatch):
+    """Regression: discovery must expose the public proxy URL, not the internal one."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "1.0"
+    agent.agent_card_params["supportedInterfaces"] = [
+        {
+            "url": "http://old-proxy.example.com/a2a/test-agent",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "1.0",
+        }
+    ]
+    mock_request = MagicMock()
+    mock_request.base_url = "http://litellm-internal:4000/"
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["url"] == "https://litellm.example.com/a2a/test-agent"
+    assert (
+        body["supportedInterfaces"][0]["url"]
+        == "https://litellm.example.com/a2a/test-agent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_agent_card_normalizes_0_3_discovery_card():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.agent_card_params["protocolVersion"] = "0.3"
+    agent.agent_card_params["supportedInterfaces"] = [
+        {
+            "url": "http://localhost:4000/a2a/test-agent",
+            "protocolBinding": "JSONRPC",
+            "protocolVersion": "0.3",
+        }
+    ]
+    mock_request = MagicMock()
+    mock_request.base_url = "http://localhost:4000/"
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["protocolVersion"] == "0.3"
+    assert body["url"] == "http://localhost:4000/a2a/test-agent"
+    assert "supportedInterfaces" not in body
+
+
+@pytest.mark.asyncio
+async def test_get_agent_card_0_3_card_with_a2a_version_1_0_header():
+    """Regression: 0.3 card normalized to 1.0 must not KeyError on debug log."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.agent_card_params = {
+        "name": "Test Agent",
+        "description": "A test agent",
+        "url": "http://backend-agent:10001",
+        "version": "1.0.0",
+        "capabilities": {"streaming": True},
+        "skills": [
+            {"id": "s1", "name": "skill one", "description": "d", "tags": ["t"]}
+        ],
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+    }
+    mock_request = MagicMock()
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.headers = {"a2a-version": "1.0"}
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import get_agent_card
+
+        response = await get_agent_card(
+            agent_id="test-agent",
+            request=mock_request,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert "url" not in body
+    assert body["supportedInterfaces"][0]["url"] == (
+        "http://localhost:4000/a2a/test-agent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_extended_agent_card_uses_proxy_base_url_when_set(monkeypatch):
+    """Regression: proxied extended cards must rewrite url to the public proxy base."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("GetExtendedAgentCard", {})
+    mock_request.base_url = "http://litellm-internal:4000/"
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    upstream_card = {
+        "name": "Test Agent",
+        "url": "http://backend-agent:10001",
+        "description": "A test agent",
+    }
+    upstream_response = {"jsonrpc": "2.0", "id": "req-1", "result": upstream_card}
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+    mock_http_response.raise_for_status = MagicMock()
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["result"]["url"] == "https://litellm.example.com/a2a/test-agent"
+
+
+def test_build_merged_agent_card_uses_proxy_base_url_for_supported_interfaces(
+    monkeypatch,
+):
+    """Regression: agent create/update must front supportedInterfaces with the public base."""
+    from litellm.proxy.agent_endpoints.endpoints import _build_merged_agent_card
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    mock_request = MagicMock()
+    mock_request.base_url = "http://litellm-internal:4000/"
+
+    merged = _build_merged_agent_card(
+        {"name": "My Agent", "url": "http://upstream:8080"},
+        agent_id="jenkins_agent",
+        http_request=mock_request,
+    )
+
+    assert merged["supportedInterfaces"][0]["url"] == (
+        "https://litellm.example.com/a2a/jenkins_agent"
+    )
+
+
+@pytest.mark.asyncio
 async def test_unknown_method_returns_jsonrpc_error():
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -1074,6 +1261,173 @@ async def test_pascal_method_names_normalize_to_wire_format(
             f"Expected '{expected_wire_method}' forwarded for PascalCase '{pascal_method}', "
             f"but got '{forwarded_body['method']}'"
         )
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {
+            "message": {
+                "messageId": "msg-1",
+                "role": "ROLE_USER",
+                "parts": [{"text": "hello"}],
+            },
+            "configuration": {},
+        },
+        {
+            "message": {
+                "messageId": "msg-2",
+                "role": "user",
+                "parts": [{"kind": "text", "text": "hello"}],
+            },
+        },
+    ],
+)
+def test_build_message_send_params_accepts_wire_and_a2a_10(params):
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    result = _build_message_send_params(params)
+    assert result.message.role.value == "user"
+    assert result.message.parts[0].root.text == "hello"
+
+
+def test_build_message_send_params_proto_fallback_ignores_unknown_fields():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _build_message_send_params
+
+    result = _build_message_send_params(
+        {
+            "message": {
+                "messageId": "msg-1",
+                "role": "ROLE_USER",
+                "parts": [{"text": "hello"}],
+            },
+            "configuration": {},
+            "futureField": "ignored",
+        }
+    )
+    assert result.message.role.value == "user"
+
+
+@pytest.mark.asyncio
+async def test_handle_stream_message_rejects_invalid_params_with_32602():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _handle_stream_message
+
+    response = await _handle_stream_message(
+        api_base="http://upstream.local",
+        request_id="req-1",
+        params={"message": 12345},
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+    body = "".join(
+        chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks
+    )
+    payload = json.loads(body.strip())
+    assert payload["error"]["code"] == -32602
+    assert payload["id"] == "req-1"
+
+
+@pytest.mark.asyncio
+async def test_send_message_pascal_case_routes_to_asend_message():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    params = {
+        "message": {
+            "messageId": "msg-123",
+            "role": "ROLE_USER",
+            "parts": [{"text": "Hello"}],
+        },
+        "configuration": {},
+    }
+    mock_request = _make_request_mock("SendMessage", params)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+    captured = {}
+
+    async def capture_asend_message(request, **kwargs):
+        captured["method"] = request.method
+        captured["role"] = request.params.message.role.value
+        response = MagicMock()
+        response.model_dump.return_value = {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "result": {
+                "contextId": "ctx-1",
+                "kind": "message",
+                "messageId": "msg-123",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "role": "agent",
+            },
+        }
+        return response
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch(
+                "litellm.a2a_protocol.asend_message",
+                new=AsyncMock(side_effect=capture_asend_message),
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert "error" not in body, f"Got error: {body}"
+    assert captured["method"] == "message/send"
+    assert captured["role"] == "user"
+    assert "message" in body["result"]
+    assert body["result"]["message"]["role"] == "ROLE_AGENT"
+
+
+def test_normalize_response_wraps_flat_message_result_for_1_0():
+    from litellm.proxy.a2a.version_convert import normalize_jsonrpc_response
+
+    wire_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {
+            "contextId": "ctx-1",
+            "kind": "message",
+            "messageId": "msg-1",
+            "parts": [{"kind": "text", "text": "hello"}],
+            "role": "agent",
+            "taskId": "task-1",
+        },
+    }
+    formatted = normalize_jsonrpc_response(wire_response, "1.0", method="message/send")
+    assert "message" in formatted["result"]
+    assert formatted["result"]["message"]["role"] == "ROLE_AGENT"
+    assert formatted["result"]["message"]["parts"] == [{"text": "hello"}]
+    assert "contextId" not in formatted["result"]
+
+
+def test_normalize_response_keeps_wire_format_for_0_3():
+    from litellm.proxy.a2a.version_convert import normalize_jsonrpc_response
+
+    wire_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {
+            "contextId": "ctx-1",
+            "kind": "message",
+            "messageId": "msg-1",
+            "parts": [{"kind": "text", "text": "hello"}],
+            "role": "agent",
+        },
+    }
+    assert (
+        normalize_jsonrpc_response(wire_response, "0.3", method="message/send")
+        is wire_response
+    )
 
 
 @pytest.mark.asyncio
@@ -1560,3 +1914,36 @@ async def test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers()
     assert (
         posted_headers.get("X-LiteLLM-Team-Id") == "real-team"
     ), "authenticated team id must not be overridden by forwarded client headers"
+
+
+def _agent(protocol_version):
+    agent = MagicMock()
+    agent.agent_card_params = (
+        {"protocolVersion": protocol_version} if protocol_version is not None else {}
+    )
+    return agent
+
+
+def _request_with_a2a_header(value):
+    request = MagicMock()
+    request.headers = {"a2a-version": value} if value is not None else {}
+    return request
+
+
+def test_served_version_config_governs_over_header():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _served_version
+
+    # A 0.3-configured agent serves 0.3 even when the client asks for 1.0.
+    agent = _agent("0.3")
+    request = _request_with_a2a_header("1.0")
+    assert _served_version(agent, request) == "0.3"
+
+    # A 1.0-configured agent serves 1.0 even when the client asks for 0.3.
+    assert _served_version(_agent("1.0"), _request_with_a2a_header("0.3")) == "1.0"
+
+
+def test_served_version_falls_back_to_header_when_unconfigured():
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _served_version
+
+    assert _served_version(_agent(None), _request_with_a2a_header("1.0")) == "1.0"
+    assert _served_version(_agent(None), _request_with_a2a_header(None)) == "0.3"

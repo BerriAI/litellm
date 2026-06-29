@@ -160,9 +160,7 @@ class ChatClient:
         # Make streaming request
         session = requests.Session()
         try:
-            response = session.post(
-                url, headers=self._get_headers(), json=data, stream=True
-            )
+            response = session.post(url, headers=self._get_headers(), json=data, stream=True)
             response.raise_for_status()
 
             # Parse SSE stream

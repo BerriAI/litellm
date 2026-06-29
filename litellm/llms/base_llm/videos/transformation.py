@@ -282,18 +282,14 @@ class BaseVideoConfig(ABC):
         Returns:
             Tuple[str, list]: (url, files_list) for the multipart POST request
         """
-        raise NotImplementedError(
-            "video create character is not supported for this provider"
-        )
+        raise NotImplementedError("video create character is not supported for this provider")
 
     def transform_video_create_character_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> CharacterObject:
-        raise NotImplementedError(
-            "video create character is not supported for this provider"
-        )
+        raise NotImplementedError("video create character is not supported for this provider")
 
     def transform_video_get_character_request(
         self,
@@ -308,18 +304,14 @@ class BaseVideoConfig(ABC):
         Returns:
             Tuple[str, Dict]: (url, params) for the GET request
         """
-        raise NotImplementedError(
-            "video get character is not supported for this provider"
-        )
+        raise NotImplementedError("video get character is not supported for this provider")
 
     def transform_video_get_character_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
     ) -> CharacterObject:
-        raise NotImplementedError(
-            "video get character is not supported for this provider"
-        )
+        raise NotImplementedError("video get character is not supported for this provider")
 
     def get_video_edit_prefetch_params(
         self,

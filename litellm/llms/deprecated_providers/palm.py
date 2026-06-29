@@ -19,9 +19,7 @@ class PalmError(Exception):
             url="https://developers.generativeai.google/api/python/google/generativeai/chat",
         )
         self.response = httpx.Response(status_code=status_code, request=self.request)
-        super().__init__(
-            self.message
-        )  # Call the base class constructor with the parameters it needs
+        super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
 class PalmConfig:
@@ -102,9 +100,7 @@ def completion(
     try:
         import google.generativeai as palm  # type: ignore
     except Exception:
-        raise Exception(
-            "Importing google.generativeai failed, please run 'pip install -q google-generativeai"
-        )
+        raise Exception("Importing google.generativeai failed, please run 'pip install -q google-generativeai")
     palm.configure(api_key=api_key)
 
     model = model
@@ -167,9 +163,7 @@ def completion(
             choices_list.append(choice_obj)
         model_response.choices = choices_list  # type: ignore
     except Exception:
-        raise PalmError(
-            message=traceback.format_exc(), status_code=response.status_code
-        )
+        raise PalmError(message=traceback.format_exc(), status_code=response.status_code)
 
     try:
         completion_response = model_response["choices"][0]["message"].get("content")
@@ -181,9 +175,7 @@ def completion(
 
     ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
     prompt_tokens = len(encoding.encode(prompt))
-    completion_tokens = len(
-        encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-    )
+    completion_tokens = len(encoding.encode(model_response["choices"][0]["message"].get("content", "")))
 
     model_response.created = int(time.time())
     model_response.model = "palm/" + model

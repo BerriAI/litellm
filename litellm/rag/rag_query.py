@@ -30,11 +30,7 @@ class RAGQuery:
         elif isinstance(content, list) and len(content) > 0:
             # Handle list of content items, extract text from first text item
             for item in content:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "text"
-                    and "text" in item
-                ):
+                if isinstance(item, dict) and item.get("type") == "text" and "text" in item:
                     return item["text"]
 
         return None
@@ -48,9 +44,7 @@ class RAGQuery:
 
         for chunk in context_chunks:
             if isinstance(chunk, dict):
-                result_content: Optional[List[VectorStoreResultContent]] = chunk.get(
-                    "content"
-                )
+                result_content: Optional[List[VectorStoreResultContent]] = chunk.get("content")
                 if result_content:
                     for content_item in result_content:
                         content_text: Optional[str] = content_item.get("text")
@@ -80,9 +74,7 @@ class RAGQuery:
                 message = getattr(choice, "message", None)
                 if message is not None:
                     # Get existing provider_specific_fields or create new dict
-                    provider_fields = (
-                        getattr(message, "provider_specific_fields", None) or {}
-                    )
+                    provider_fields = getattr(message, "provider_specific_fields", None) or {}
 
                     # Add search results
                     provider_fields["search_results"] = search_results
@@ -107,9 +99,7 @@ class RAGQuery:
         return documents
 
     @staticmethod
-    def get_top_chunks_from_rerank(
-        search_response: Any, rerank_response: Any
-    ) -> List[Any]:
+    def get_top_chunks_from_rerank(search_response: Any, rerank_response: Any) -> List[Any]:
         """Get the original search results corresponding to the top reranked results."""
         top_chunks = []
         original_results = search_response.get("data", [])

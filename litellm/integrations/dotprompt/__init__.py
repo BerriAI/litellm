@@ -42,9 +42,7 @@ def _get_prompt_data_from_dotprompt_content(dotprompt_content: str) -> dict:
     return {"content": content.strip(), "metadata": metadata}
 
 
-def prompt_initializer(
-    litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec"
-) -> "CustomPromptManagement":
+def prompt_initializer(litellm_params: "PromptLiteLLMParams", prompt_spec: "PromptSpec") -> "CustomPromptManagement":
     """
     Initialize a prompt from a .prompt file.
     """

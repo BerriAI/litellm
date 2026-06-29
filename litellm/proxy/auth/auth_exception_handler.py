@@ -107,16 +107,10 @@ class UserAPIKeyAuthExceptionHandler:
             # is labeled — a fresh UserAPIKeyAuth here would drop everything auth had
             # already looked up (e.g. an expired key whose team/user is known). Copy
             # so the handler is side-effect-free for the caller's identity object.
-            user_api_key_dict = (
-                resolved_identity.model_copy()
-                if resolved_identity is not None
-                else UserAPIKeyAuth()
-            )
+            user_api_key_dict = resolved_identity.model_copy() if resolved_identity is not None else UserAPIKeyAuth()
             user_api_key_dict.parent_otel_span = parent_otel_span
             user_api_key_dict.request_route = route
-            user_api_key_dict.api_key = (
-                user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
-            )
+            user_api_key_dict.api_key = user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
 
             # Stamp identity onto the request's server span now, before the request
             # is rejected; the OTEL failure hooks don't touch the server span, so
@@ -136,9 +130,7 @@ class UserAPIKeyAuthExceptionHandler:
                     resolve_llm_provider_for_rate_limit,
                 )
 
-                _, e.llm_provider = resolve_llm_provider_for_rate_limit(
-                    request_data.get("model")
-                )
+                _, e.llm_provider = resolve_llm_provider_for_rate_limit(request_data.get("model"))
 
             # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(

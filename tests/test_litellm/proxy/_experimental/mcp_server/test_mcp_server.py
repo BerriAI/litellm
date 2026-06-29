@@ -284,8 +284,11 @@ def test_prepare_mcp_server_headers_oauth2_m2m_omits_litellm_caller_authorizatio
     assert extra_headers is None
 
 
-def test_prepare_mcp_server_headers_oauth2_interactive_copies_oauth2_headers():
-    """Interactive OAuth still forwards the user's OAuth token in extra_headers."""
+def test_prepare_mcp_server_headers_oauth2_interactive_drops_caller_authorization():
+    """A v2-migrated interactive OAuth (authorization_code) server must NOT forward the
+    caller's Authorization: the resolver injects the stored per-user token, so a
+    caller-supplied bearer must not override another user's stored credential. Non-auth
+    headers are still carried; only the credential is dropped."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             _prepare_mcp_server_headers,
@@ -293,7 +296,7 @@ def test_prepare_mcp_server_headers_oauth2_interactive_copies_oauth2_headers():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    user_oauth = {"Authorization": "Bearer upstream-user-token"}
+    caller_oauth = {"Authorization": "Bearer caller-supplied-token"}
 
     server = MCPServer(
         server_id="3lo-server",
@@ -307,12 +310,13 @@ def test_prepare_mcp_server_headers_oauth2_interactive_copies_oauth2_headers():
         server=server,
         mcp_server_auth_headers=None,
         mcp_auth_header=None,
-        oauth2_headers=user_oauth,
+        oauth2_headers=caller_oauth,
         raw_headers=None,
     )
 
     assert server_auth_header is None
-    assert extra_headers == user_oauth
+    # Caller's Authorization is dropped (only key present) -> extra_headers is None.
+    assert extra_headers is None
 
 
 def test_prepare_mcp_server_headers_m2m_skips_authorization_from_raw_extra_headers():
@@ -2813,8 +2817,10 @@ async def test_mcp_routing_with_conflicting_alias_and_group_name():
 
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
-async def test_oauth2_headers_passed_to_mcp_client():
-    """Test that OAuth2 headers are properly passed through to the MCP client for OAuth2 servers like github_mcp"""
+async def test_oauth2_caller_headers_not_forwarded_for_migrated_server():
+    """A v2-migrated authorization_code server (like github_mcp) must NOT forward the
+    caller's oauth2 Authorization to the MCP client — the resolver injects the stored
+    per-user token, so a caller-supplied bearer cannot override another user's credential."""
     try:
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -2928,20 +2934,13 @@ async def test_oauth2_headers_passed_to_mcp_client():
     assert captured_client_args["server"].server_id == oauth2_server.server_id
     assert captured_client_args["server"].auth_type == MCPAuth.oauth2
 
-    # Most importantly: verify that OAuth2 headers were passed as extra_headers
-    assert (
-        captured_client_args["extra_headers"] is not None
-    ), "Expected extra_headers to be passed for OAuth2 server"
-    assert (
-        captured_client_args["extra_headers"] == oauth2_headers
-    ), f"Expected OAuth2 headers to be passed as extra_headers, got {captured_client_args['extra_headers']}"
-
-    # Verify the Authorization header specifically
-    assert "Authorization" in captured_client_args["extra_headers"]
-    assert (
-        captured_client_args["extra_headers"]["Authorization"]
-        == "Bearer github_oauth_token_12345"
-    )
+    # Security: a v2-migrated authorization_code server must NOT forward the caller's
+    # oauth2 Authorization upstream. The v2 resolver injects the stored per-user token,
+    # so a caller-supplied bearer cannot override another user's stored credential.
+    extra_headers = captured_client_args["extra_headers"]
+    assert extra_headers is None or "Authorization" not in {
+        k.lower() for k in extra_headers
+    }, f"Caller Authorization must not be forwarded, got {extra_headers}"
 
 
 @pytest.mark.asyncio

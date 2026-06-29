@@ -12,9 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 class FallbackCreateRequest(BaseModel):
     """Request model for creating/updating fallbacks"""
 
-    model: str = Field(
-        description="The model name to configure fallbacks for (e.g., 'gpt-3.5-turbo')"
-    )
+    model: str = Field(description="The model name to configure fallbacks for (e.g., 'gpt-3.5-turbo')")
     fallback_models: List[str] = Field(
         description="List of fallback model names in order of priority",
         min_length=1,
@@ -75,9 +73,7 @@ class RouterSettingsField(BaseModel):
     field_value: Any
     field_description: str
     field_default: Any = None
-    options: Optional[List[str]] = (
-        None  # For fields with predefined options/enum values
-    )
+    options: Optional[List[str]] = None  # For fields with predefined options/enum values
     ui_field_name: str  # User-friendly display name
     link: Optional[str] = None  # Documentation link for the field
 

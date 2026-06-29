@@ -14,9 +14,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     if isinstance(use_v2, str):
         use_v2 = use_v2.lower() == "true"
     if use_v2:
-        return initialize_guardrail_v2(
-            litellm_params=litellm_params, guardrail=guardrail
-        )
+        return initialize_guardrail_v2(litellm_params=litellm_params, guardrail=guardrail)
 
     import litellm
 

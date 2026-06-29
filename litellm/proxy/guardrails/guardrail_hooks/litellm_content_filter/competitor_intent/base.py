@@ -16,9 +16,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 ZERO_WIDTH = re.compile(r"[\u200b-\u200d\u2060\ufeff]")
 LEET = {"@": "a", "4": "a", "0": "o", "3": "e", "1": "i", "5": "s", "7": "t"}
 
-OTHER_MEANING_DEFAULT_THRESHOLD = (
-    0.65  # Below this → treat as non-competitor (safe default).
-)
+OTHER_MEANING_DEFAULT_THRESHOLD = 0.65  # Below this → treat as non-competitor (safe default).
 
 
 def normalize(text: str) -> str:
@@ -66,12 +64,8 @@ class BaseCompetitorIntentChecker:
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
-        self.brand_self: List[str] = [
-            s.lower().strip() for s in (config.get("brand_self") or []) if s
-        ]
-        competitors: List[str] = [
-            s.lower().strip() for s in (config.get("competitors") or []) if s
-        ]
+        self.brand_self: List[str] = [s.lower().strip() for s in (config.get("brand_self") or []) if s]
+        competitors: List[str] = [s.lower().strip() for s in (config.get("competitors") or []) if s]
         aliases_map: Dict[str, List[str]] = config.get("competitor_aliases") or {}
         self.competitor_canonical: Dict[str, str] = {}
         self._competitor_tokens: Set[str] = set()
@@ -84,9 +78,7 @@ class BaseCompetitorIntentChecker:
                     self._competitor_tokens.add(a)
                     self.competitor_canonical[a] = c
 
-        other: List[str] = [
-            s.lower().strip() for s in (config.get("locations") or []) if s
-        ]
+        other: List[str] = [s.lower().strip() for s in (config.get("locations") or []) if s]
         self._other_meaning_tokens: Set[str] = set(other)
         self._ambiguous: Set[str] = self._competitor_tokens & self._other_meaning_tokens
 
@@ -94,12 +86,8 @@ class BaseCompetitorIntentChecker:
         self.threshold_high = float(config.get("threshold_high", 0.70))
         self.threshold_medium = float(config.get("threshold_medium", 0.45))
         self.threshold_low = float(config.get("threshold_low", 0.30))
-        self.reframe_message_template: Optional[str] = config.get(
-            "reframe_message_template"
-        )
-        self.refuse_message_template: Optional[str] = config.get(
-            "refuse_message_template"
-        )
+        self.reframe_message_template: Optional[str] = config.get("reframe_message_template")
+        self.refuse_message_template: Optional[str] = config.get("refuse_message_template")
         self._comparison_words: List[str] = list(
             config.get("comparison_words")
             or [
@@ -114,9 +102,7 @@ class BaseCompetitorIntentChecker:
                 "ranked",
             ]
         )
-        self._domain_words: List[str] = [
-            s.lower().strip() for s in (config.get("domain_words") or []) if s
-        ]
+        self._domain_words: List[str] = [s.lower().strip() for s in (config.get("domain_words") or []) if s]
 
     def _classify_ambiguous(self, text: str, token: str) -> Tuple[str, float]:
         """
@@ -154,19 +140,13 @@ class BaseCompetitorIntentChecker:
         for b in self.brand_self:
             if _word_boundary_match(normalized, b):
                 entities["brand_self"].append(b)
-                evidence.append(
-                    {"type": "entity", "key": "brand_self", "value": b, "match": b}
-                )
+                evidence.append({"type": "entity", "key": "brand_self", "value": b, "match": b})
 
         matches = self._find_matches(text)
         if not matches:
-            has_comparison = any(
-                re.search(r"\b" + re.escape(w) + r"\b", normalized)
-                for w in self._comparison_words
-            )
+            has_comparison = any(re.search(r"\b" + re.escape(w) + r"\b", normalized) for w in self._comparison_words)
             has_domain = self._domain_words and any(
-                re.search(r"\b" + re.escape(w) + r"\b", normalized)
-                for w in self._domain_words
+                re.search(r"\b" + re.escape(w) + r"\b", normalized) for w in self._domain_words
             )
             if has_comparison and has_domain:
                 evidence.append(
@@ -201,9 +181,7 @@ class BaseCompetitorIntentChecker:
         for token, canonical, _ in matches:
             label, conf = self._classify_ambiguous(normalized, token)
             if label == "OTHER_MEANING":
-                evidence.append(
-                    {"type": "signal", "key": "other_meaning", "match": token}
-                )
+                evidence.append({"type": "signal", "key": "other_meaning", "match": token})
                 continue
             if label == "COMPETITOR":
                 competitor_resolved.append(canonical)
@@ -238,14 +216,9 @@ class BaseCompetitorIntentChecker:
                 "evidence": evidence,
             }
 
-        has_comparison = any(
-            re.search(r"\b" + re.escape(w) + r"\b", normalized)
-            for w in self._comparison_words
-        )
+        has_comparison = any(re.search(r"\b" + re.escape(w) + r"\b", normalized) for w in self._comparison_words)
         if has_comparison:
-            evidence.append(
-                {"type": "signal", "key": "comparison", "match": "comparison language"}
-            )
+            evidence.append({"type": "signal", "key": "comparison", "match": "comparison language"})
         confidence = 0.75 if has_comparison else 0.55
         if confidence >= self.threshold_high:
             intent = "competitor_comparison"
@@ -256,9 +229,7 @@ class BaseCompetitorIntentChecker:
         else:
             intent = "other"
 
-        resolved_action_hint: CompetitorActionHint = cast(
-            CompetitorActionHint, self.policy.get(intent, "allow")
-        )
+        resolved_action_hint: CompetitorActionHint = cast(CompetitorActionHint, self.policy.get(intent, "allow"))
         if intent == "log_only":
             resolved_action_hint = "log_only"
         if intent == "other":
@@ -268,8 +239,7 @@ class BaseCompetitorIntentChecker:
             "intent": cast(CompetitorIntentType, intent),
             "confidence": round(confidence, 2),
             "entities": entities,
-            "signals": ["competitor_resolved"]
-            + (["comparison"] if has_comparison else []),
+            "signals": ["competitor_resolved"] + (["comparison"] if has_comparison else []),
             "action_hint": resolved_action_hint,
             "evidence": evidence,
         }

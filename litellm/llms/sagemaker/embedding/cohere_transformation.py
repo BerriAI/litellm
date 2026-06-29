@@ -55,12 +55,8 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
             optional_params["input_type"] = non_default_params["input_type"]
         return optional_params
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return SagemakerError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def transform_embedding_request(
         self,
@@ -109,10 +105,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         invoking this transform.
         """
         input_value = (
-            logging_obj.model_call_details.get("input")
-            or request_data.get("texts")
-            or request_data.get("images")
-            or []
+            logging_obj.model_call_details.get("input") or request_data.get("texts") or request_data.get("images") or []
         )
         if isinstance(input_value, str):
             input_value = [input_value]

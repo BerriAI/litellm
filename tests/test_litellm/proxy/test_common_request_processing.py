@@ -17,7 +17,9 @@ from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     ProxyConfig,
     _await_llm_call_cancelling_on_disconnect,
+    _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
+    _ClientDisconnectedBeforeFirstChunk,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     _has_attribute_error_in_chain,
@@ -2675,6 +2677,176 @@ class TestStreamCloseOnDisconnect:
         await gen.aclose()
 
         assert upstream.aclosed
+
+    @staticmethod
+    def _request_that_disconnects() -> Request:
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        return Request({"type": "http", "method": "POST", "headers": []}, receive)
+
+    @staticmethod
+    def _request_that_stays_connected() -> Request:
+        async def receive():
+            await asyncio.Event().wait()
+
+        return Request({"type": "http", "method": "POST", "headers": []}, receive)
+
+    async def test_create_response_returns_499_on_disconnect_before_first_chunk(self):
+        """LIT-3568: client disconnects during the time-to-first-token wait.
+
+        create_response buffers the first chunk before Starlette starts serving
+        the StreamingResponse, so this window has no disconnect listener. The
+        request must be cancelled (upstream generator closed) and a 499 returned
+        instead of blocking until the request timeout.
+        """
+        upstream_closed = asyncio.Event()
+
+        async def never_yields_first_chunk():
+            try:
+                await asyncio.Event().wait()
+                yield "data: never\n\n"
+            finally:
+                upstream_closed.set()
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=never_yields_first_chunk(),
+                media_type="text/event-stream",
+                headers={},
+                request=self._request_that_disconnects(),
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 499
+        assert upstream_closed.is_set()
+
+    async def test_create_response_streams_normally_when_connected(self):
+        """The disconnect race must not steal a first chunk that does arrive:
+        a connected client still gets a StreamingResponse, not a 499."""
+
+        async def yields_immediately():
+            yield "data: hello\n\n"
+            yield "data: world\n\n"
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=yields_immediately(),
+                media_type="text/event-stream",
+                headers={},
+                request=self._request_that_stays_connected(),
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+
+    async def test_buffer_first_chunk_without_request_is_passthrough(self):
+        """No request -> preserve the original eager __anext__ behavior."""
+
+        async def gen():
+            yield "data: first\n\n"
+
+        first = await _buffer_first_chunk_honoring_disconnect(gen(), request=None)
+        assert first == "data: first\n\n"
+
+    async def test_create_response_prioritizes_disconnect_in_same_scheduler_turn(self):
+        """Same-turn race: the first chunk and the disconnect both resolve before
+        the branch runs. Because the disconnect watcher has already consumed
+        http.disconnect, returning the chunk would leave Starlette's later
+        listener blind to it and the upstream running. The observed disconnect
+        must win -> 499 and the generator closed."""
+        closed = asyncio.Event()
+
+        async def yields_immediately():
+            try:
+                yield "data: hello\n\n"
+            finally:
+                closed.set()
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=yields_immediately(),
+                media_type="text/event-stream",
+                headers={},
+                request=self._request_that_disconnects(),
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 499
+        assert closed.is_set()
+
+    async def test_receive_error_does_not_trigger_false_disconnect(self):
+        """A request.receive() that raises must not masquerade as a disconnect;
+        a first chunk that arrives is still served as a normal stream."""
+
+        async def receive():
+            raise RuntimeError("receive boom")
+
+        request = Request({"type": "http", "method": "POST", "headers": []}, receive)
+
+        async def yields_immediately():
+            yield "data: hello\n\n"
+
+        response = await asyncio.wait_for(
+            create_response(
+                generator=yields_immediately(),
+                media_type="text/event-stream",
+                headers={},
+                request=request,
+            ),
+            timeout=5,
+        )
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+
+    async def test_disconnect_cancellation_survives_generator_aclose_error(self):
+        """A failing upstream aclose() during disconnect cleanup must not swallow
+        the disconnect signal: the sentinel is still raised."""
+
+        class AcloseRaises:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                await asyncio.Event().wait()
+                raise StopAsyncIteration
+
+            async def aclose(self):
+                raise RuntimeError("aclose boom")
+
+        with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
+            await asyncio.wait_for(
+                _buffer_first_chunk_honoring_disconnect(
+                    AcloseRaises(), request=self._request_that_disconnects()
+                ),
+                timeout=5,
+            )
+
+    async def test_buffer_first_chunk_raises_sentinel_and_closes_on_disconnect(self):
+        closed = asyncio.Event()
+
+        async def blocking_gen():
+            try:
+                await asyncio.Event().wait()
+                yield "data: never\n\n"
+            finally:
+                closed.set()
+
+        with pytest.raises(_ClientDisconnectedBeforeFirstChunk):
+            await asyncio.wait_for(
+                _buffer_first_chunk_honoring_disconnect(
+                    blocking_gen(), request=self._request_that_disconnects()
+                ),
+                timeout=5,
+            )
+        assert closed.is_set()
 
 
 class TestHandleLLMApiExceptionRetryAfter:

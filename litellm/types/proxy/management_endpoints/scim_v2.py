@@ -11,9 +11,7 @@ from pydantic import (
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
 
-SCIM_ENTERPRISE_USER_SCHEMA = (
-    "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
-)
+SCIM_ENTERPRISE_USER_SCHEMA = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 SCIM_ENTERPRISE_METADATA_KEY = "scim_enterprise"
 
 
@@ -90,9 +88,7 @@ class SCIMUser(SCIMResource):
     )
 
     @model_serializer(mode="wrap")
-    def _omit_absent_enterprise(
-        self, handler: SerializerFunctionWrapHandler
-    ) -> Dict[str, Any]:
+    def _omit_absent_enterprise(self, handler: SerializerFunctionWrapHandler) -> Dict[str, Any]:
         dumped = handler(self)
         if self.enterprise_user is None:
             dumped.pop(SCIM_ENTERPRISE_USER_SCHEMA, None)

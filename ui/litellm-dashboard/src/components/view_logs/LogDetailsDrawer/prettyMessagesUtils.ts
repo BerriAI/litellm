@@ -39,18 +39,24 @@ export const ROLE_STYLES: Record<string, RoleStyle> = {
  * Parse request messages and response message from log data
  */
 export const parseMessages = (request: any, response: any): ParsedMessages => {
-  // Parse request messages
+  // Parse request messages. `request` is either the raw request body
+  // ({ messages: [...] }) or, when prompts come from cold storage, the bare
+  // messages array itself.
   const requestMessages: ParsedMessage[] = [];
 
-  if (request?.messages && Array.isArray(request.messages)) {
-    request.messages.forEach((msg: any) => {
-      requestMessages.push({
-        role: msg.role || "user",
-        content: parseMessageContent(msg.content),
-        toolCallId: msg.tool_call_id,
-      });
+  const requestMessageList = Array.isArray(request)
+    ? request
+    : Array.isArray(request?.messages)
+      ? request.messages
+      : [];
+
+  requestMessageList.forEach((msg: any) => {
+    requestMessages.push({
+      role: msg.role || "user",
+      content: parseMessageContent(msg.content),
+      toolCallId: msg.tool_call_id,
     });
-  }
+  });
 
   // Parse response message
   let responseMessage: ParsedMessage | null = null;

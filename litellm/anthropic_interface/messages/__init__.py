@@ -102,9 +102,7 @@ def create(
     AnthropicMessagesResponse,
     Iterator[bytes],
     AsyncIterator[Any],
-    Coroutine[
-        Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]
-    ],
+    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]],
 ]:
     """
     Async wrapper for Anthropic's messages API

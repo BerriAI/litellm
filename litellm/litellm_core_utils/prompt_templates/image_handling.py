@@ -91,9 +91,7 @@ async def async_convert_url_to_base64(url: str) -> str:
             raise
         except Exception:
             pass
-    raise litellm.ImageFetchError(
-        f"Error: Unable to fetch image from URL after 3 attempts. url={url}"
-    )
+    raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
 
 
 def convert_url_to_base64(url: str) -> str:

@@ -582,5 +582,51 @@ class TestMCPClientResolvedAuth:
             await http_client.aclose()
 
 
+def _all_logged_messages(mock_logger):
+    return " ".join(
+        str(call.args[0])
+        for level in ("info", "debug", "warning", "error", "exception")
+        for call in getattr(mock_logger, level).call_args_list
+        if call.args
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_tool_does_not_log_arguments():
+    from mcp.types import CallToolRequestParams
+
+    secret = "ssn-123-45-6789"
+    client = MCPClient(server_url="http://test-server")
+    client.run_with_session = AsyncMock(return_value=MagicMock())
+    params = CallToolRequestParams(
+        name="search_tool", arguments={"input": secret, "model": "gpt-5-mini"}
+    )
+
+    with patch.object(mcp_client_module, "verbose_logger") as mock_logger:
+        await client.call_tool(params)
+
+    logged = _all_logged_messages(mock_logger)
+    assert "search_tool" in logged
+    assert secret not in logged
+    assert "gpt-5-mini" not in logged
+
+
+@pytest.mark.asyncio
+async def test_get_prompt_does_not_log_arguments():
+    from mcp.types import GetPromptRequestParams
+
+    secret = "ssn-987-65-4321"
+    client = MCPClient(server_url="http://test-server")
+    client.run_with_session = AsyncMock(return_value=MagicMock())
+    params = GetPromptRequestParams(name="my_prompt", arguments={"input": secret})
+
+    with patch.object(mcp_client_module, "verbose_logger") as mock_logger:
+        await client.get_prompt(params)
+
+    logged = _all_logged_messages(mock_logger)
+    assert "my_prompt" in logged
+    assert secret not in logged
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
