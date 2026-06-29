@@ -8,7 +8,7 @@ the final guardrails list.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class PolicyMatchContext(BaseModel):
@@ -301,6 +301,19 @@ class PolicyAttachmentCreateRequest(BaseModel):
         default=None,
         description="Tag patterns this attachment applies to. Supports wildcards (e.g., health-*).",
     )
+
+    @model_validator(mode="after")
+    def validate_scope_has_selector(self) -> "PolicyAttachmentCreateRequest":
+        if self.scope == "*":
+            return self
+
+        if any((self.teams, self.keys, self.models, self.tags)):
+            return self
+
+        raise ValueError(
+            "Specific policy attachments must include at least one non-empty selector "
+            "(teams, keys, models, or tags). Use scope='*' for global attachments."
+        )
 
 
 class PolicyAttachmentDBResponse(BaseModel):
