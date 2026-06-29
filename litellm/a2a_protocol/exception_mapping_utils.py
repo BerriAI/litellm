@@ -182,10 +182,7 @@ async def handle_a2a_localhost_retry(
         ImportError: If the A2A SDK is not installed
     """
     if not A2A_SDK_AVAILABLE:
-        raise ImportError(
-            "A2A SDK is required for localhost retry handling. "
-            "Install it with: pip install a2a-sdk"
-        )
+        raise ImportError("A2A SDK is required for localhost retry handling. Install it with: pip install a2a-sdk")
 
     if agent_card is None:
         raise RuntimeError(

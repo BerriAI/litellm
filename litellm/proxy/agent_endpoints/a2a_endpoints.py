@@ -78,9 +78,7 @@ def _build_message_send_params(params: dict[str, Any]) -> "MessageSendParams":
         return to_compat_send_message_request(pb, "").params
 
 
-def _served_version(
-    agent: "AgentResponse", request: Request, original_method: str | None = None
-) -> A2AVersion:
+def _served_version(agent: "AgentResponse", request: Request, original_method: str | None = None) -> A2AVersion:
     """Protocol version LiteLLM serves for this agent.
 
     The agent's configured version governs. For agents that pin no version, fall back
@@ -260,9 +258,7 @@ async def _a2a_sse_event_source(
             except Exception:
                 continue
             if isinstance(event, dict):
-                event = normalize_stream_event(
-                    event, served_version, request_id=request_id
-                )
+                event = normalize_stream_event(event, served_version, request_id=request_id)
             yield event
     finally:
         await resp.aclose()
@@ -385,17 +381,18 @@ async def _handle_stream_message(
         invalid_params_message = f"Invalid params: {e}"
 
         async def _invalid_params_stream():
-            yield json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32602, "message": invalid_params_message},
-                }
-            ) + "\n"
+            yield (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32602, "message": invalid_params_message},
+                    }
+                )
+                + "\n"
+            )
 
-        return StreamingResponse(
-            _invalid_params_stream(), media_type="application/x-ndjson"
-        )
+        return StreamingResponse(_invalid_params_stream(), media_type="application/x-ndjson")
 
     async def stream_response():
         try:
@@ -429,9 +426,7 @@ async def _handle_stream_message(
                     else:
                         obj = chunk
                     if isinstance(obj, dict):
-                        obj = normalize_stream_event(
-                            obj, served_version, request_id=request_id
-                        )
+                        obj = normalize_stream_event(obj, served_version, request_id=request_id)
                     return json.dumps(obj) + "\n"
 
                 def _ndjson_error(proxy_exc: Any) -> str:
@@ -469,9 +464,7 @@ async def _handle_stream_message(
                     else:
                         obj = chunk
                     if isinstance(obj, dict):
-                        obj = normalize_stream_event(
-                            obj, served_version, request_id=request_id
-                        )
+                        obj = normalize_stream_event(obj, served_version, request_id=request_id)
                     yield json.dumps(obj) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
@@ -567,9 +560,7 @@ async def get_agent_card(
         served_version = _served_version(agent, request)
         agent_card = normalize_agent_card(agent_card, served_version)
 
-        verbose_proxy_logger.debug(
-            f"Returning agent card for '{agent_id}' with proxy URL: {proxy_url}"
-        )
+        verbose_proxy_logger.debug(f"Returning agent card for '{agent_id}' with proxy URL: {proxy_url}")
         return JSONResponse(content=agent_card)
 
     except HTTPException:
@@ -837,7 +828,9 @@ async def invoke_agent_a2a(
             response_dict: Dict[str, Any] = (
                 response.model_dump(mode="json", exclude_none=True)  # type: ignore
                 if hasattr(response, "model_dump")
-                else response if isinstance(response, dict) else {}
+                else response
+                if isinstance(response, dict)
+                else {}
             )
             return JSONResponse(
                 content=normalize_jsonrpc_response(
@@ -873,9 +866,7 @@ async def invoke_agent_a2a(
             "agent/getAuthenticatedExtendedCard",
         }:
             if not agent_url:
-                return _jsonrpc_error(
-                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
-                )
+                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
             if isinstance(params, dict):
                 params = normalize_request_params(params, served_version, method=method)
             if method == "tasks/pushNotificationConfig/set":
@@ -914,9 +905,7 @@ async def invoke_agent_a2a(
             if method == "agent/getAuthenticatedExtendedCard":
                 if isinstance(result.get("result"), dict):
                     card = result["result"]
-                    proxy_url = get_custom_url(
-                        str(request.base_url), route=f"a2a/{agent_id}"
-                    )
+                    proxy_url = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
                     # Rewrite the upstream agent URL in both 0.3 (top-level `url`)
                     # and 1.0 (`supportedInterfaces[0].url`) wire formats so that
                     # downstream clients never see the upstream internal address.
@@ -927,9 +916,7 @@ async def invoke_agent_a2a(
                         interfaces[0]["url"] = proxy_url
                     result["result"] = normalize_agent_card(card, served_version)
             else:
-                result = normalize_jsonrpc_response(
-                    result, served_version, method=method
-                )
+                result = normalize_jsonrpc_response(result, served_version, method=method)
             from litellm.types.agents import LiteLLMSendMessageResponse
 
             response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
@@ -946,9 +933,7 @@ async def invoke_agent_a2a(
 
         elif method == "tasks/resubscribe":
             if not agent_url:
-                return _jsonrpc_error(
-                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
-                )
+                return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
             if isinstance(params, dict):
                 params = normalize_request_params(params, served_version, method=method)
             forward_body = {

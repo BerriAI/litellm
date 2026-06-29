@@ -159,9 +159,7 @@ def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
 
 
 def _get_a2a_client_agent_card(a2a_client: Any) -> Optional["AgentCard"]:
-    agent_card = cast(
-        Optional["AgentCard"], getattr(a2a_client, "_litellm_agent_card", None)
-    )
+    agent_card = cast(Optional["AgentCard"], getattr(a2a_client, "_litellm_agent_card", None))
     if agent_card is not None:
         return agent_card
     agent_card = cast(Optional["AgentCard"], getattr(a2a_client, "agent_card", None))
@@ -201,14 +199,11 @@ async def _send_message_via_completion_bridge(
     return LiteLLMSendMessageResponse.from_dict(response_dict, request_id=str(request.id))
 
 
-async def _send_message(
-    a2a_client: "A2AClientType", request: "SendMessageRequest"
-) -> "SendMessageResponse":
+async def _send_message(a2a_client: "A2AClientType", request: "SendMessageRequest") -> "SendMessageResponse":
     """Send a non-streaming message via a2a-sdk 1.x and return JSON-RPC response."""
     if _a2a_conversions is None:
         raise ImportError(
-            "The 'a2a' package is required for A2A agent invocation. "
-            "Install it with: pip install a2a-sdk"
+            "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
     pb_request = _a2a_conversions.to_core_send_message_request(request)
@@ -283,8 +278,7 @@ async def _stream_messages(
     """Stream message events via a2a-sdk 1.x and yield JSON-RPC chunks."""
     if _a2a_conversions is None:
         raise ImportError(
-            "The 'a2a' package is required for A2A agent invocation. "
-            "Install it with: pip install a2a-sdk"
+            "The 'a2a' package is required for A2A agent invocation. Install it with: pip install a2a-sdk"
         )
 
     pb_request = _a2a_conversions.to_core_send_message_request(request)
@@ -341,9 +335,7 @@ async def _execute_a2a_stream_with_retry(
                 continue
             raise
     if not stream_succeeded:
-        raise RuntimeError(
-            "A2A send_message_streaming failed: no response received after retry attempts."
-        )
+        raise RuntimeError("A2A send_message_streaming failed: no response received after retry attempts.")
 
 
 @client
@@ -645,21 +637,13 @@ async def asend_message_streaming(
         raise ValueError("request is required")
 
     _raw_logging_obj = kwargs.get("litellm_logging_obj")
-    logging_obj: Logging | None = (
-        _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
-    )
+    logging_obj: Logging | None = _raw_logging_obj if isinstance(_raw_logging_obj, Logging) else None
 
     if a2a_client is None:
         if api_base is None:
-            raise ValueError(
-                "Either a2a_client or api_base is required for standard A2A flow"
-            )
-        logging_trace_id = (
-            getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
-        )
-        trace_id = logging_trace_id or (
-            str(request.id) if request.id else str(uuid.uuid4())
-        )
+            raise ValueError("Either a2a_client or api_base is required for standard A2A flow")
+        logging_trace_id = getattr(logging_obj, "litellm_trace_id", None) if logging_obj else None
+        trace_id = logging_trace_id or (str(request.id) if request.id else str(uuid.uuid4()))
         extra_headers: dict[str, str] = {"X-LiteLLM-Trace-Id": trace_id}
         if agent_id:
             extra_headers["X-LiteLLM-Agent-Id"] = agent_id
@@ -685,9 +669,7 @@ async def asend_message_streaming(
             proxy_server_request=proxy_server_request,
         )
 
-    verbose_logger.info(
-        f"A2A send_message_streaming request_id={request.id}, agent={agent_name}"
-    )
+    verbose_logger.info(f"A2A send_message_streaming request_id={request.id}, agent={agent_name}")
 
     agent_card = _get_a2a_client_agent_card(a2a_client)
     card_url = get_agent_card_url(agent_card) if agent_card else None

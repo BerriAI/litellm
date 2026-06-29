@@ -36,9 +36,7 @@ RequestId = Union[str, int, None]
 JsonDict = dict[str, object]
 
 _V1_SEND_ENVELOPE_KEYS = frozenset({"message", "task"})
-_V1_STREAM_ENVELOPE_KEYS = frozenset(
-    {"message", "task", "statusUpdate", "artifactUpdate"}
-)
+_V1_STREAM_ENVELOPE_KEYS = frozenset({"message", "task", "statusUpdate", "artifactUpdate"})
 
 
 def _dump_03(model: BaseModel) -> JsonDict:
@@ -46,9 +44,7 @@ def _dump_03(model: BaseModel) -> JsonDict:
     return model.model_dump(by_alias=True, exclude_none=True, mode="json")
 
 
-def _best_effort(
-    convert: Callable[[], JsonDict], fallback: JsonDict, *, label: str
-) -> JsonDict:
+def _best_effort(convert: Callable[[], JsonDict], fallback: JsonDict, *, label: str) -> JsonDict:
     """Run a conversion, returning ``fallback`` unchanged if it raises."""
     try:
         return convert()
@@ -57,9 +53,7 @@ def _best_effort(
         return fallback
 
 
-def normalize_jsonrpc_response(
-    content: JsonDict, target: A2AVersion, *, method: str
-) -> JsonDict:
+def normalize_jsonrpc_response(content: JsonDict, target: A2AVersion, *, method: str) -> JsonDict:
     """Convert a JSON-RPC response's ``result`` to ``target``.
 
     Errors and non-dict results pass through untouched.
@@ -70,17 +64,13 @@ def normalize_jsonrpc_response(
     if not isinstance(result, dict):
         return content
 
-    converted = _convert_result(
-        result, target, method=method, request_id=_as_request_id(content.get("id"))
-    )
+    converted = _convert_result(result, target, method=method, request_id=_as_request_id(content.get("id")))
     if converted is result:
         return content
     return {**content, "result": converted}
 
 
-def normalize_stream_event(
-    event: JsonDict, target: A2AVersion, *, request_id: RequestId
-) -> JsonDict:
+def normalize_stream_event(event: JsonDict, target: A2AVersion, *, request_id: RequestId) -> JsonDict:
     """Convert a single streamed JSON-RPC event's ``result`` to ``target``."""
     if event.get("error") is not None:
         return event
@@ -94,9 +84,7 @@ def normalize_stream_event(
     return {**event, "result": converted}
 
 
-def normalize_request_params(
-    params: JsonDict, served: A2AVersion, *, method: str
-) -> JsonDict:
+def normalize_request_params(params: JsonDict, served: A2AVersion, *, method: str) -> JsonDict:
     """Down-convert forwarded request ``params`` from the served version to 0.3.
 
     Upstream agents in this proxy pivot on 0.3 wire format, so when LiteLLM serves
@@ -140,9 +128,7 @@ def normalize_agent_card(card: JsonDict, target: A2AVersion) -> JsonDict:
     current = _detect_card_version(card)
     if current == target and not (target == "0.3" and "supportedInterfaces" in card):
         return card
-    return _best_effort(
-        lambda: _convert_agent_card(card, target), card, label="agent card"
-    )
+    return _best_effort(lambda: _convert_agent_card(card, target), card, label="agent card")
 
 
 def _as_request_id(value: object) -> RequestId:
@@ -173,9 +159,7 @@ def _detect_send_version(result: JsonDict) -> A2AVersion | None:
     return None
 
 
-def _convert_send_result(
-    result: JsonDict, target: A2AVersion, *, request_id: RequestId
-) -> JsonDict:
+def _convert_send_result(result: JsonDict, target: A2AVersion, *, request_id: RequestId) -> JsonDict:
     current = _detect_send_version(result)
     if current is None or current == target:
         return result
@@ -186,9 +170,7 @@ def _convert_send_result(
     )
 
 
-def _send_result_to(
-    result: JsonDict, target: A2AVersion, request_id: RequestId
-) -> JsonDict:
+def _send_result_to(result: JsonDict, target: A2AVersion, request_id: RequestId) -> JsonDict:
     from a2a.compat.v0_3.conversions import (
         MessageToDict,
         ParseDict,
@@ -250,9 +232,7 @@ def _list_tasks_result_to(result: JsonDict, target: A2AVersion) -> JsonDict:
         return result
     return {
         **result,
-        "tasks": [
-            _task_to(item, target) if isinstance(item, dict) else item for item in tasks
-        ],
+        "tasks": [_task_to(item, target) if isinstance(item, dict) else item for item in tasks],
     }
 
 
@@ -283,9 +263,7 @@ def _detect_stream_version(result: JsonDict) -> A2AVersion | None:
     return None
 
 
-def _convert_stream_result(
-    result: JsonDict, target: A2AVersion, *, request_id: RequestId
-) -> JsonDict:
+def _convert_stream_result(result: JsonDict, target: A2AVersion, *, request_id: RequestId) -> JsonDict:
     current = _detect_stream_version(result)
     if current is None or current == target:
         return result
@@ -296,9 +274,7 @@ def _convert_stream_result(
     )
 
 
-def _stream_result_to(
-    result: JsonDict, target: A2AVersion, request_id: RequestId
-) -> JsonDict:
+def _stream_result_to(result: JsonDict, target: A2AVersion, request_id: RequestId) -> JsonDict:
     from a2a.compat.v0_3.conversions import (
         MessageToDict,
         ParseDict,
@@ -314,9 +290,7 @@ def _stream_result_to(
             id=str(request_id) if request_id is not None else "",
             result=event,  # pyright: ignore[reportArgumentType]
         )
-        return MessageToDict(
-            to_core_stream_response(wrapper), preserving_proto_field_name=False
-        )
+        return MessageToDict(to_core_stream_response(wrapper), preserving_proto_field_name=False)
 
     pb = pb2_v10.StreamResponse()
     ParseDict(result, pb, ignore_unknown_fields=True)
@@ -378,32 +352,38 @@ def _lower_request_params(params: JsonDict, *, method: str) -> JsonDict:
     )
 
     lowerings: dict[str, Callable[[JsonDict], BaseModel]] = {
-        "tasks/get": lambda p: to_compat_get_task_request(
-            _parse(ParseDict, p, pb2_v10.GetTaskRequest()), ""
-        ).params,
-        "tasks/cancel": lambda p: to_compat_cancel_task_request(
-            _parse(ParseDict, p, pb2_v10.CancelTaskRequest()), ""
-        ).params,
-        "tasks/resubscribe": lambda p: to_compat_subscribe_to_task_request(
-            _parse(ParseDict, p, pb2_v10.SubscribeToTaskRequest()), ""
-        ).params,
-        "tasks/pushNotificationConfig/set": lambda p: to_compat_create_task_push_notification_config_request(
-            _parse(
-                ParseDict,
-                _flatten_create_push_notification_params(p),
-                pb2_v10.TaskPushNotificationConfig(),
-            ),
-            "",
-        ).params,
-        "tasks/pushNotificationConfig/get": lambda p: to_compat_get_task_push_notification_config_request(
-            _parse(ParseDict, p, pb2_v10.GetTaskPushNotificationConfigRequest()), ""
-        ).params,
-        "tasks/pushNotificationConfig/list": lambda p: to_compat_list_task_push_notification_config_request(
-            _parse(ParseDict, p, pb2_v10.ListTaskPushNotificationConfigsRequest()), ""
-        ).params,
-        "tasks/pushNotificationConfig/delete": lambda p: to_compat_delete_task_push_notification_config_request(
-            _parse(ParseDict, p, pb2_v10.DeleteTaskPushNotificationConfigRequest()), ""
-        ).params,
+        "tasks/get": lambda p: to_compat_get_task_request(_parse(ParseDict, p, pb2_v10.GetTaskRequest()), "").params,
+        "tasks/cancel": lambda p: (
+            to_compat_cancel_task_request(_parse(ParseDict, p, pb2_v10.CancelTaskRequest()), "").params
+        ),
+        "tasks/resubscribe": lambda p: (
+            to_compat_subscribe_to_task_request(_parse(ParseDict, p, pb2_v10.SubscribeToTaskRequest()), "").params
+        ),
+        "tasks/pushNotificationConfig/set": lambda p: (
+            to_compat_create_task_push_notification_config_request(
+                _parse(
+                    ParseDict,
+                    _flatten_create_push_notification_params(p),
+                    pb2_v10.TaskPushNotificationConfig(),
+                ),
+                "",
+            ).params
+        ),
+        "tasks/pushNotificationConfig/get": lambda p: (
+            to_compat_get_task_push_notification_config_request(
+                _parse(ParseDict, p, pb2_v10.GetTaskPushNotificationConfigRequest()), ""
+            ).params
+        ),
+        "tasks/pushNotificationConfig/list": lambda p: (
+            to_compat_list_task_push_notification_config_request(
+                _parse(ParseDict, p, pb2_v10.ListTaskPushNotificationConfigsRequest()), ""
+            ).params
+        ),
+        "tasks/pushNotificationConfig/delete": lambda p: (
+            to_compat_delete_task_push_notification_config_request(
+                _parse(ParseDict, p, pb2_v10.DeleteTaskPushNotificationConfigRequest()), ""
+            ).params
+        ),
     }
     lower = lowerings.get(method)
     if lower is None:
@@ -432,9 +412,7 @@ def _lower_list_tasks_params(params: JsonDict) -> JsonDict:
     return lowered
 
 
-def _proto_task_state_name_to_0_3(
-    name: str, valid_0_3_values: frozenset[str]
-) -> str | None:
+def _proto_task_state_name_to_0_3(name: str, valid_0_3_values: frozenset[str]) -> str | None:
     """Map a 1.0 protobuf ``TaskState`` enum name to its 0.3 wire string.
 
     The ``TASK_STATE_<NAME>`` enum names line up with the 0.3 wire values once the
@@ -466,8 +444,6 @@ def _flatten_create_push_notification_params(params: JsonDict) -> JsonDict:
     return flat
 
 
-def _parse(
-    parse_dict: Callable[..., object], data: JsonDict, message: object
-) -> object:
+def _parse(parse_dict: Callable[..., object], data: JsonDict, message: object) -> object:
     parse_dict(data, message, ignore_unknown_fields=True)
     return message
