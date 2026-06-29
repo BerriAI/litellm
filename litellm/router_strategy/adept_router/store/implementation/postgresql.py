@@ -20,8 +20,7 @@ class PostgresTemplateRepo(AdeptTemplateStore):
     def __init__(self, db_url: str) -> None:
         if not db_url:
             raise ValueError(
-                "A PostgreSQL connection URL is required. "
-                "Example: postgresql+psycopg2://user:password@host:5432/dbname"
+                "A PostgreSQL connection URL is required. Example: postgresql+psycopg2://user:password@host:5432/dbname"
             )
 
         self.engine = create_engine(
@@ -38,23 +37,15 @@ class PostgresTemplateRepo(AdeptTemplateStore):
     def _initialize_db(self) -> None:
         try:
             Base.metadata.create_all(self.engine)
-            verbose_router_logger.info(
-                "AdeptRouter: initialized PostgreSQL template store."
-            )
+            verbose_router_logger.info("AdeptRouter: initialized PostgreSQL template store.")
         except Exception as e:
-            verbose_router_logger.error(
-                f"AdeptRouter: error initializing PostgreSQL database: {str(e)}"
-            )
+            verbose_router_logger.error(f"AdeptRouter: error initializing PostgreSQL database: {str(e)}")
             raise
 
     def match_by_hash(self, template_hash: str, router_id: str) -> Optional[str]:
         try:
             with self.Session() as session:
-                row = (
-                    session.query(Template)
-                    .filter_by(router_id=router_id, template_hash=template_hash)
-                    .first()
-                )
+                row = session.query(Template).filter_by(router_id=router_id, template_hash=template_hash).first()
                 return row.id if row else None
         except Exception as e:
             verbose_router_logger.error(f"Error matching template by hash: {str(e)}")
@@ -68,9 +59,7 @@ class PostgresTemplateRepo(AdeptTemplateStore):
         additional_information: Optional[Dict[str, Any]] = None,
     ) -> bool:
         if not template_id:
-            verbose_router_logger.error(
-                "template_id is required to store a conversation."
-            )
+            verbose_router_logger.error("template_id is required to store a conversation.")
             return False
         try:
             with self.Session() as session:
@@ -83,9 +72,7 @@ class PostgresTemplateRepo(AdeptTemplateStore):
                     )
                 )
                 session.commit()
-                verbose_router_logger.debug(
-                    f"Stored conversation for template {template_id}"
-                )
+                verbose_router_logger.debug(f"Stored conversation for template {template_id}")
             return True
         except Exception as e:
             verbose_router_logger.error(f"Error storing conversation: {str(e)}")
@@ -120,34 +107,22 @@ class PostgresTemplateRepo(AdeptTemplateStore):
                         router_id=router_id,
                         additional_information=additional_information,
                     )
-                    .on_conflict_do_nothing(
-                        index_elements=["router_id", "template_hash"]
-                    )
+                    .on_conflict_do_nothing(index_elements=["router_id", "template_hash"])
                 )
                 session.execute(stmt)
                 session.commit()
-                row = (
-                    session.query(Template)
-                    .filter_by(router_id=router_id, template_hash=template_hash)
-                    .first()
-                )
+                row = session.query(Template).filter_by(router_id=router_id, template_hash=template_hash).first()
                 surviving_id = row.id if row else template_id
-                verbose_router_logger.debug(
-                    f"AdeptRouter: stored template {surviving_id}"
-                )
+                verbose_router_logger.debug(f"AdeptRouter: stored template {surviving_id}")
                 return surviving_id
         except Exception as e:
-            verbose_router_logger.error(
-                f"AdeptRouter: error storing template: {str(e)}"
-            )
+            verbose_router_logger.error(f"AdeptRouter: error storing template: {str(e)}")
             return None
 
     def get_template(self, template_id: str) -> Optional[Dict[str, Any]]:
         try:
             with self.Session() as session:
-                row = session.execute(
-                    select(Template).where(Template.id == template_id)
-                ).scalar_one_or_none()
+                row = session.execute(select(Template).where(Template.id == template_id)).scalar_one_or_none()
                 if row:
                     return {
                         "id": row.id,
@@ -166,9 +141,7 @@ class PostgresTemplateRepo(AdeptTemplateStore):
     def count_conversation_by_template_id(self, template_id: str) -> Optional[int]:
         try:
             with self.Session() as session:
-                count = session.scalar(
-                    select(func.count()).where(Conversation.template_id == template_id)
-                )
+                count = session.scalar(select(func.count()).where(Conversation.template_id == template_id))
                 return count or 0
         except Exception as e:
             verbose_router_logger.error(f"Error counting conversations: {str(e)}")

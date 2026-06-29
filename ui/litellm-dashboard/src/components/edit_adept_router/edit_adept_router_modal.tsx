@@ -1,16 +1,5 @@
 import React, { useEffect, useState } from "react";
-import {
-  Alert,
-  Button,
-  Collapse,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Select as AntdSelect,
-  Tag,
-  Typography,
-} from "antd";
+import { Alert, Button, Collapse, Form, Input, InputNumber, Modal, Select as AntdSelect, Tag, Typography } from "antd";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -49,8 +38,8 @@ const EditAdeptRouterModal: React.FC<EditAdeptRouterModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-  const [tagPrefix, setTagPrefix] = useState<string>("");
-  const [pgPasswordAlreadySet, setPgPasswordAlreadySet] = useState(false);
+  const pgPasswordAlreadySet = !!modelData?.litellm_params?.adept_router_pg_password;
+  const watchedTagPrefix = Form.useWatch("adept_router_tag_prefix", form);
 
   const isAdmin = all_admin_roles.includes(userRole);
 
@@ -83,9 +72,6 @@ const EditAdeptRouterModal: React.FC<EditAdeptRouterModalProps> = ({
 
     const lp = modelData.litellm_params || {};
     const prefix = lp.adept_router_tag_prefix || "";
-
-    setTagPrefix(prefix);
-    setPgPasswordAlreadySet(!!lp.adept_router_pg_password);
 
     form.setFieldsValue({
       adept_router_name: modelData.model_name,
@@ -150,8 +136,8 @@ const EditAdeptRouterModal: React.FC<EditAdeptRouterModalProps> = ({
     }
   };
 
-  const tagPrefixPreview = tagPrefix
-    ? `<${tagPrefix}_fieldname>value</${tagPrefix}_fieldname>`
+  const tagPrefixPreview = watchedTagPrefix
+    ? `<${watchedTagPrefix}_fieldname>value</${watchedTagPrefix}_fieldname>`
     : null;
 
   return (
@@ -192,10 +178,7 @@ const EditAdeptRouterModal: React.FC<EditAdeptRouterModalProps> = ({
           name="adept_router_tag_prefix"
           tooltip="Optional XML tag prefix users wrap variable content with"
         >
-          <Input
-            placeholder="e.g., var"
-            onChange={(e) => setTagPrefix(e.target.value)}
-          />
+          <Input placeholder="e.g., var" />
         </Form.Item>
         {tagPrefixPreview && (
           <Form.Item wrapperCol={{ offset: 10, span: 14 }}>
@@ -241,9 +224,7 @@ const EditAdeptRouterModal: React.FC<EditAdeptRouterModalProps> = ({
           name="adept_router_pg_password"
           tooltip="Stored encrypted at rest. Leave blank to keep the current password."
         >
-          <Input.Password
-            placeholder={pgPasswordAlreadySet ? "•••••••• (leave blank to keep)" : "Database password"}
-          />
+          <Input.Password placeholder={pgPasswordAlreadySet ? "•••••••• (leave blank to keep)" : "Database password"} />
         </Form.Item>
 
         <div className="flex items-center my-4">
@@ -268,14 +249,16 @@ const EditAdeptRouterModal: React.FC<EditAdeptRouterModalProps> = ({
               label: (
                 <Text strong>
                   Trainer Integration{" "}
-                  <Tag color="orange" className="font-normal">Experimental</Tag>
+                  <Tag color="orange" className="font-normal">
+                    Experimental
+                  </Tag>
                 </Text>
               ),
               children: (
                 <div>
                   <Paragraph type="secondary" className="text-sm mb-3">
-                    Connect your own training pipeline. When a template reaches the conversations
-                    threshold, ADEPT calls your trainer URL.
+                    Connect your own training pipeline. When a template reaches the conversations threshold, ADEPT calls
+                    your trainer URL.
                   </Paragraph>
                   <Form.Item
                     label="Trainer URL"
@@ -293,19 +276,19 @@ const EditAdeptRouterModal: React.FC<EditAdeptRouterModalProps> = ({
                       <div>
                         <Paragraph className="text-xs mb-1">
                           <strong>Trigger:</strong>{" "}
-                          <code>POST {"{trainer_url}"}/run-workflow/{"{template_id}"}</code>
-                          {" "}fires at every N conversations (N = threshold).
+                          <code>
+                            POST {"{trainer_url}"}/run-workflow/{"{template_id}"}
+                          </code>{" "}
+                          fires at every N conversations (N = threshold).
                         </Paragraph>
                         <Paragraph className="text-xs mb-1">
                           <strong>Reading data &amp; completing the loop:</strong>
                         </Paragraph>
-                        <pre className="bg-gray-50 p-2 rounded text-xs overflow-x-auto mb-1">
-                          {TRAINER_SQL_EXAMPLE}
-                        </pre>
+                        <pre className="bg-gray-50 p-2 rounded text-xs overflow-x-auto mb-1">{TRAINER_SQL_EXAMPLE}</pre>
                         <Paragraph className="text-xs mb-0">
-                          <strong>Registering the model:</strong> add the trained model as a
-                          regular LiteLLM model entry. The router picks up the updated{" "}
-                          <code>target_model</code> on the next request — no restart needed.
+                          <strong>Registering the model:</strong> add the trained model as a regular LiteLLM model
+                          entry. The router picks up the updated <code>target_model</code> on the next request — no
+                          restart needed.
                         </Paragraph>
                       </div>
                     }

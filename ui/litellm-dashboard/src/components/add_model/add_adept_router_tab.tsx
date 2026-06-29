@@ -41,12 +41,7 @@ UPDATE templates
 SET target_model = 'your-trained-model-name'
 WHERE id = '<template_id>';`;
 
-const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({
-  form,
-  onSuccess,
-  accessToken,
-  userRole,
-}) => {
+const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({ form, onSuccess, accessToken, userRole }) => {
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [tagPrefix, setTagPrefix] = useState<string>("");
@@ -100,16 +95,14 @@ const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({
       });
   };
 
-  const tagPrefixPreview = tagPrefix
-    ? `<${tagPrefix}_fieldname>value</${tagPrefix}_fieldname>`
-    : null;
+  const tagPrefixPreview = tagPrefix ? `<${tagPrefix}_fieldname>value</${tagPrefix}_fieldname>` : null;
 
   return (
     <>
       <Title level={2}>Add ADEPT Router</Title>
       <Text className="text-gray-600 mb-6">
-        ADEPT routing learns from your traffic. It extracts a structural template from each
-        prompt by masking variable content, then matches future requests to known templates.
+        ADEPT routing learns from your traffic. It extracts a structural template from each prompt by masking variable
+        content, then matches future requests to known templates.
       </Text>
 
       <Card className="mb-4">
@@ -121,13 +114,12 @@ const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({
           description={
             <div>
               <Paragraph className="mb-2">
-                ADEPT extracts a <strong>template</strong> from each prompt by masking variable
-                spans (numbers, emails, URLs, IDs). Structurally equivalent prompts produce the
-                same template and are routed to the same model.
+                ADEPT extracts a <strong>template</strong> from each prompt by masking variable spans (numbers, emails,
+                URLs, IDs). Structurally equivalent prompts produce the same template and are routed to the same model.
               </Paragraph>
               <Paragraph className="mb-2">
-                If you set a <strong>Tag Prefix</strong>, wrap variable parts of your prompts in
-                XML tags — ADEPT strips those values before matching:
+                If you set a <strong>Tag Prefix</strong>, wrap variable parts of your prompts in XML tags — ADEPT strips
+                those values before matching:
               </Paragraph>
               <pre className="bg-gray-100 p-2 rounded text-xs overflow-x-auto">
                 {`Tag prefix: "var"\n\nPrompt:\n  Get order <var_id>ORD-123</var_id> for <var_email>user@acme.com</var_email>\n\nTemplate (after extraction):\n  Get order <var_id></var_id> for <var_email></var_email>`}
@@ -241,15 +233,17 @@ const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({
                 label: (
                   <Text strong>
                     Trainer Integration{" "}
-                    <Tag color="orange" className="font-normal">Experimental</Tag>
+                    <Tag color="orange" className="font-normal">
+                      Experimental
+                    </Tag>
                   </Text>
                 ),
                 children: (
                   <div>
                     <Paragraph type="secondary" className="text-sm mb-3">
-                      Connect your own training pipeline. When a template reaches the
-                      conversations threshold, ADEPT calls your trainer URL. Your pipeline
-                      reads training data from the database and writes back the trained model name.
+                      Connect your own training pipeline. When a template reaches the conversations threshold, ADEPT
+                      calls your trainer URL. Your pipeline reads training data from the database and writes back the
+                      trained model name.
                     </Paragraph>
                     <Form.Item
                       label="Trainer URL"
@@ -267,8 +261,10 @@ const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({
                         <div>
                           <Paragraph className="text-xs mb-1">
                             <strong>Trigger:</strong>{" "}
-                            <code>POST {"{trainer_url}"}/run-workflow/{"{template_id}"}</code>
-                            {" "}fires at every N conversations (N = threshold above).
+                            <code>
+                              POST {"{trainer_url}"}/run-workflow/{"{template_id}"}
+                            </code>{" "}
+                            fires at every N conversations (N = threshold above).
                           </Paragraph>
                           <Paragraph className="text-xs mb-1">
                             <strong>Reading data &amp; completing the loop:</strong>
@@ -277,10 +273,9 @@ const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({
                             {TRAINER_SQL_EXAMPLE}
                           </pre>
                           <Paragraph className="text-xs mb-0">
-                            <strong>Registering the model:</strong> add the trained model as a
-                            regular LiteLLM model entry so ADEPT can route to it. The router
-                            picks up the updated <code>target_model</code> on the next request
-                            with no restart needed.
+                            <strong>Registering the model:</strong> add the trained model as a regular LiteLLM model
+                            entry so ADEPT can route to it. The router picks up the updated <code>target_model</code> on
+                            the next request with no restart needed.
                           </Paragraph>
                         </div>
                       }
@@ -312,9 +307,7 @@ const AddAdeptRouterTab: React.FC<AddAdeptRouterTabProps> = ({
 
           <div className="flex justify-between items-center mt-4">
             <Tooltip title="Get help on our GitHub">
-              <Typography.Link href="https://github.com/BerriAI/litellm/issues">
-                Need Help?
-              </Typography.Link>
+              <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
             </Tooltip>
             <Button type="primary" onClick={handleSubmit}>
               Add ADEPT Router

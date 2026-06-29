@@ -67,9 +67,7 @@ def test_threshold_modulo_triggers_at_multiples():
     mock_storage.store_conversation.return_value = True
     mock_storage.store_template.return_value = True
 
-    router = _make_template_router(
-        mock_storage, conversations_threshold=5, trainer_url="http://trainer.test"
-    )
+    router = _make_template_router(mock_storage, conversations_threshold=5, trainer_url="http://trainer.test")
 
     with patch.object(router, "_trigger_trainer") as mock_trigger:
         # count=5 → triggers
@@ -93,9 +91,7 @@ def test_threshold_modulo_triggers_at_multiples():
 def test_trainer_url_used_in_trigger():
     """_trigger_trainer fires POST to trainer_url, skips if not set."""
     mock_storage = MagicMock()
-    router_with = _make_template_router(
-        mock_storage, trainer_url="http://my-trainer.internal"
-    )
+    router_with = _make_template_router(mock_storage, trainer_url="http://my-trainer.internal")
     router_without = _make_template_router(mock_storage, trainer_url=None)
 
     with patch(
@@ -121,12 +117,8 @@ def test_different_system_prompts_produce_different_hashes():
         AdeptTemplateRouter,
     )
 
-    hash_a = AdeptTemplateRouter._hash_template(
-        "<doc></doc>", system_prompt="You are an invoice extractor."
-    )
-    hash_b = AdeptTemplateRouter._hash_template(
-        "<doc></doc>", system_prompt="You are a contract reviewer."
-    )
+    hash_a = AdeptTemplateRouter._hash_template("<doc></doc>", system_prompt="You are an invoice extractor.")
+    hash_b = AdeptTemplateRouter._hash_template("<doc></doc>", system_prompt="You are a contract reviewer.")
     assert hash_a != hash_b
 
 
@@ -137,12 +129,8 @@ def test_same_tool_always_produces_same_hash():
     )
 
     system = "You are a ticket classifier."
-    hash_1 = AdeptTemplateRouter._hash_template(
-        "<ticket></ticket>", system_prompt=system
-    )
-    hash_2 = AdeptTemplateRouter._hash_template(
-        "<ticket></ticket>", system_prompt=system
-    )
+    hash_1 = AdeptTemplateRouter._hash_template("<ticket></ticket>", system_prompt=system)
+    hash_2 = AdeptTemplateRouter._hash_template("<ticket></ticket>", system_prompt=system)
     assert hash_1 == hash_2
 
 
@@ -259,10 +247,7 @@ def test_init_adept_router_deployment_registers_router():
 
     assert "my_adept" in router.adept_routers
     call_kwargs = MockAdeptRouter.call_args[1]
-    assert (
-        "postgresql+psycopg2://user:pass@db.internal.com:5432/adept_db"
-        in call_kwargs["pg_url"]
-    )
+    assert "postgresql+psycopg2://user:pass@db.internal.com:5432/adept_db" in call_kwargs["pg_url"]
     assert call_kwargs["conversations_threshold"] == 20
     assert call_kwargs["trainer_url"] == "http://trainer.internal"
 
@@ -334,9 +319,7 @@ def test_routing_decision_stored_in_conversation():
         "adept_routed_to_slm": True,
     }
 
-    asyncio.get_event_loop().run_until_complete(
-        adept.async_log_success_event(kwargs, response, start, end)
-    )
+    asyncio.run(adept.async_log_success_event(kwargs, response, start, end))
 
     call_args = mock_template_router.store_conversation.call_args
     assert call_args is not None
@@ -374,9 +357,7 @@ def test_routing_decision_fallback_stored():
         "adept_routed_to_slm": False,
     }
 
-    asyncio.get_event_loop().run_until_complete(
-        adept.async_log_success_event(kwargs, response, start, end)
-    )
+    asyncio.run(adept.async_log_success_event(kwargs, response, start, end))
 
     call_args = mock_template_router.store_conversation.call_args
     assert call_args is not None
@@ -405,9 +386,7 @@ def test_pg_url_special_chars_encoded():
 
     captured_url = {}
 
-    def capture_adept(
-        model_name, default_model, litellm_router_instance, pg_url, **kwargs
-    ):
+    def capture_adept(model_name, default_model, litellm_router_instance, pg_url, **kwargs):
         captured_url["pg_url"] = pg_url
         return MagicMock()
 
@@ -418,9 +397,7 @@ def test_pg_url_special_chars_encoded():
         router.init_adept_router_deployment(deployment)
 
     pg_url = captured_url["pg_url"]
-    assert (
-        "p%40ss%3Aw%2Frd" in pg_url
-    ), f"Expected encoded password in URL, got: {pg_url}"
+    assert "p%40ss%3Aw%2Frd" in pg_url, f"Expected encoded password in URL, got: {pg_url}"
     assert "p@ss:w/rd" not in pg_url
 
 
@@ -438,9 +415,7 @@ def test_seed_config_missing_description_logs_warning():
     adept.litellm_router_instance = mock_router
     adept.template_router = mock_template_router
 
-    with patch(
-        "litellm.router_strategy.adept_router.adept_router.verbose_router_logger"
-    ) as mock_log:
+    with patch("litellm.router_strategy.adept_router.adept_router.verbose_router_logger") as mock_log:
         adept._seed_templates([{"target_model": "my-slm"}])  # missing description
         warning_calls = [str(c) for c in mock_log.warning.call_args_list]
         assert any("description" in w for w in warning_calls)
@@ -501,9 +476,7 @@ def test_store_template_race_condition_safe():
             # Second execute raises IntegrityError — but ON CONFLICT DO NOTHING should prevent this
             # at the DB level. Here we verify the code handles it gracefully anyway.
             if call_count["n"] > 0:
-                mock_sess.execute.side_effect = IntegrityError(
-                    "stmt", "params", Exception("unique")
-                )
+                mock_sess.execute.side_effect = IntegrityError("stmt", "params", Exception("unique"))
             call_count["n"] += 1
             yield mock_sess
 
@@ -573,9 +546,7 @@ def test_init_adept_router_idempotent_when_params_unchanged():
     from litellm.router import Router
 
     router = Router(model_list=[])
-    deployment = _make_adept_deployment(
-        trainer_url="http://trainer.internal", threshold=10
-    )
+    deployment = _make_adept_deployment(trainer_url="http://trainer.internal", threshold=10)
 
     # Mock must expose the same attribute values the deployment carries, otherwise
     # the params-diff check sees MagicMock != real-value and forces a rebuild.
@@ -614,9 +585,7 @@ def test_init_adept_router_rebuilds_when_trainer_url_changes():
     # First init: trainer_url unset
     initial_mock = MagicMock()
     initial_mock.default_model = "gpt-4o"
-    initial_mock.template_router = MagicMock(
-        trainer_url=None, conversations_threshold=10, tag_prefix=""
-    )
+    initial_mock.template_router = MagicMock(trainer_url=None, conversations_threshold=10, tag_prefix="")
     with _patch(
         "litellm.router_strategy.adept_router.adept_router.AdeptRouter",
         return_value=initial_mock,
@@ -631,9 +600,7 @@ def test_init_adept_router_rebuilds_when_trainer_url_changes():
         "litellm.router_strategy.adept_router.adept_router.AdeptRouter",
         return_value=rebuilt_mock,
     ) as MockAdeptRouter:
-        router.init_adept_router_deployment(
-            _make_adept_deployment(trainer_url="http://trainer.internal")
-        )
+        router.init_adept_router_deployment(_make_adept_deployment(trainer_url="http://trainer.internal"))
 
     MockAdeptRouter.assert_called_once()
     assert MockAdeptRouter.call_args[1]["trainer_url"] == "http://trainer.internal"

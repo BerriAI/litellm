@@ -17,9 +17,7 @@ class Template(Base):
 
     conversations = relationship("Conversation", back_populates="template")
 
-    __table_args__ = (
-        Index("ix_templates_router_hash", "router_id", "template_hash", unique=True),
-    )
+    __table_args__ = (Index("ix_templates_router_hash", "router_id", "template_hash", unique=True),)
 
 
 class Conversation(Base):

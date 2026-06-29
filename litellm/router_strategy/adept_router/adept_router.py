@@ -69,17 +69,14 @@ class AdeptRouter(CustomLogger):
             target_model = entry.get("target_model", self.default_model)
             if not description:
                 verbose_router_logger.warning(
-                    f"AdeptRouter: seed_config entry missing 'description', skipping: "
-                    f"{str(entry)[:100]}"
+                    f"AdeptRouter: seed_config entry missing 'description', skipping: {str(entry)[:100]}"
                 )
                 continue
             masked = self.template_router._normalize_text(description)
             masked = self.template_router._mask_text(masked)
             # Use the shared hash function so seeding stays consistent with live routing.
             template_hash = AdeptTemplateRouter._hash_template(masked)
-            existing = self.template_router.template_store.match_by_hash(
-                template_hash, router_id
-            )
+            existing = self.template_router.template_store.match_by_hash(template_hash, router_id)
             if existing is None:
                 self.template_router.template_store.store_template(
                     template_id=str(uuid4()),
@@ -88,9 +85,7 @@ class AdeptRouter(CustomLogger):
                     target_model=target_model,
                     router_id=router_id,
                 )
-                verbose_router_logger.info(
-                    f"AdeptRouter: seeded template for target_model={target_model}"
-                )
+                verbose_router_logger.info(f"AdeptRouter: seeded template for target_model={target_model}")
 
     async def async_pre_routing_hook(
         self,
@@ -112,23 +107,18 @@ class AdeptRouter(CustomLogger):
         system_prompt = self._extract_system_prompt_from_messages(messages)
 
         # route() uses a sync SQLAlchemy session — run in a thread to avoid blocking the event loop.
-        template_match = await asyncio.to_thread(
-            self.template_router.route, message_content, system_prompt
-        )
+        template_match = await asyncio.to_thread(self.template_router.route, message_content, system_prompt)
 
         if template_match is not None:
             routed_model = template_match.get("target_model") or self.default_model
             routed_to_slm = bool(template_match.get("target_model"))
             verbose_router_logger.info(
-                f"AdeptRouter: matched template {template_match.get('template_id')}, "
-                f"routing to {routed_model}"
+                f"AdeptRouter: matched template {template_match.get('template_id')}, routing to {routed_model}"
             )
         else:
             routed_model = self.default_model
             routed_to_slm = False
-            verbose_router_logger.info(
-                f"AdeptRouter: no template match, falling back to {self.default_model}"
-            )
+            verbose_router_logger.info(f"AdeptRouter: no template match, falling back to {self.default_model}")
 
         # Stash routing decision so async_log_success_event can record it without re-querying.
         request_kwargs["adept_routed_to_slm"] = routed_to_slm
@@ -145,10 +135,9 @@ class AdeptRouter(CustomLogger):
         # router_ids. Gate on the requested model_group so only the router that
         # actually handled this request logs it.
         litellm_params = kwargs.get("litellm_params") or {}
-        request_model_group = (
-            (litellm_params.get("metadata") or {}).get("model_group")
-            or (litellm_params.get("litellm_metadata") or {}).get("model_group")
-        )
+        request_model_group = (litellm_params.get("metadata") or {}).get("model_group") or (
+            litellm_params.get("litellm_metadata") or {}
+        ).get("model_group")
         if request_model_group is not None and request_model_group != self.model_name:
             return
 
@@ -171,17 +160,9 @@ class AdeptRouter(CustomLogger):
                 return
 
             response_content = None
-            if (
-                response_obj
-                and hasattr(response_obj, "choices")
-                and response_obj.choices
-            ):
+            if response_obj and hasattr(response_obj, "choices") and response_obj.choices:
                 choice = response_obj.choices[0]
-                response_content = (
-                    choice.message.content
-                    if hasattr(choice, "message")
-                    else str(choice)
-                )
+                response_content = choice.message.content if hasattr(choice, "message") else str(choice)
 
             if response_content is None:
                 return
@@ -190,18 +171,12 @@ class AdeptRouter(CustomLogger):
             if response_obj and hasattr(response_obj, "usage"):
                 token_usage = {
                     "prompt_tokens": getattr(response_obj.usage, "prompt_tokens", 0),
-                    "completion_tokens": getattr(
-                        response_obj.usage, "completion_tokens", 0
-                    ),
+                    "completion_tokens": getattr(response_obj.usage, "completion_tokens", 0),
                     "total_tokens": getattr(response_obj.usage, "total_tokens", 0),
                 }
 
             cost_usd = kwargs.get("response_cost")
-            latency_ms = (
-                (end_time - start_time).total_seconds() * 1000
-                if start_time and end_time
-                else None
-            )
+            latency_ms = (end_time - start_time).total_seconds() * 1000 if start_time and end_time else None
             system_prompt = self._extract_system_prompt_from_messages(messages)
             routed_to_slm: Optional[bool] = kwargs.get("adept_routed_to_slm")
             actual_model: str = kwargs.get("model", "unknown")
@@ -224,9 +199,7 @@ class AdeptRouter(CustomLogger):
             verbose_router_logger.exception("AdeptRouter: failed to log success event")
 
     @staticmethod
-    def _extract_system_prompt_from_messages(
-        messages: List[Dict[str, Any]]
-    ) -> Optional[str]:
+    def _extract_system_prompt_from_messages(messages: List[Dict[str, Any]]) -> Optional[str]:
         for msg in messages:
             if msg.get("role") == "system":
                 content = msg.get("content")

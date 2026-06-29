@@ -72,23 +72,15 @@ class AdeptTemplateRouter(BaseTemplateRouter):
         # built once here rather than on every _extract_template call.
         escaped_prefix = re.escape(self.tag_prefix)
         self.TAG_CONTENT_RE = re.compile(
-            r"<"
-            + escaped_prefix
-            + r"([a-zA-Z0-9_ ]+)>([^<]*)</"
-            + escaped_prefix
-            + r"\1>"
+            r"<" + escaped_prefix + r"([a-zA-Z0-9_ ]+)>([^<]*)</" + escaped_prefix + r"\1>"
         )
-        self.TAG_REPLACEMENT = (
-            r"<" + escaped_prefix + r"\1></" + escaped_prefix + r"\1>"
-        )
+        self.TAG_REPLACEMENT = r"<" + escaped_prefix + r"\1></" + escaped_prefix + r"\1>"
 
         self.template_store: AdeptTemplateStore = PostgresTemplateRepo(pg_url)
 
     def get_router_id(self) -> str:
         if self._router_id_cache is None:
-            self._router_id_cache = self.litellm_router_instance.get_model_ids(
-                model_name=self.model_name
-            )[0]
+            self._router_id_cache = self.litellm_router_instance.get_model_ids(model_name=self.model_name)[0]
         return self._router_id_cache
 
     def _normalize_text(self, text: str) -> str:
@@ -98,33 +90,24 @@ class AdeptTemplateRouter(BaseTemplateRouter):
         text = self.ID_RE.sub("{ID}", text)
         text = self.EMAIL_RE.sub("{EMAIL}", text)
         text = self.URL_RE.sub("{URL}", text)
-        text = self.UUID_RE.sub(
-            "{UUID}", text
-        )  # before NUM — see UUID_RE comment above
+        text = self.UUID_RE.sub("{UUID}", text)  # before NUM — see UUID_RE comment above
         text = self.NUM_RE.sub("{NUM}", text)
         return text
 
     def _extract_tag_content(self, text: str) -> List[Tuple[str, str]]:
         """Return (tag_name, value) pairs for all XML-tagged spans in text."""
-        return [
-            (match.group(1), match.group(2))
-            for match in self.TAG_CONTENT_RE.finditer(text)
-        ]
+        return [(match.group(1), match.group(2)) for match in self.TAG_CONTENT_RE.finditer(text)]
 
     def _extract_template(self, prompt: str) -> Tuple[str, List[Tuple[str, str]]]:
         normalized = self._normalize_text(prompt)
         extractions = self._extract_tag_content(normalized)
         skeleton = self.TAG_CONTENT_RE.sub(self.TAG_REPLACEMENT, normalized)
         masked_template = self._mask_text(skeleton)
-        verbose_router_logger.debug(
-            f"Extracted template: {masked_template[:100]}... ({len(extractions)} tags)"
-        )
+        verbose_router_logger.debug(f"Extracted template: {masked_template[:100]}... ({len(extractions)} tags)")
         return masked_template, extractions
 
     @staticmethod
-    def _hash_template(
-        masked_template: str, system_prompt: Optional[str] = None
-    ) -> str:
+    def _hash_template(masked_template: str, system_prompt: Optional[str] = None) -> str:
         """
         Produce a routing key from the masked template skeleton.
 
@@ -139,9 +122,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
             payload = masked_template
         return hashlib.sha256(payload.encode()).hexdigest()
 
-    def route(
-        self, prompt: str, system_prompt: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+    def route(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[Dict[str, Any]]:
         try:
             masked_template, _ = self._extract_template(prompt)
             template_hash = self._hash_template(masked_template, system_prompt)
@@ -154,9 +135,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
             stored = self.template_store.get_template(template_id)
             if stored is None:
                 # Hash pointed to a deleted row — safe to ignore; next store_conversation will recreate it.
-                verbose_router_logger.debug(
-                    "Template ID found but no metadata — stale reference"
-                )
+                verbose_router_logger.debug("Template ID found but no metadata — stale reference")
                 return None
 
             verbose_router_logger.info(f"Matched template {template_id}")
@@ -189,12 +168,8 @@ class AdeptTemplateRouter(BaseTemplateRouter):
             template_id = self.template_store.match_by_hash(template_hash, router_id)
 
             if template_id is None:
-                verbose_router_logger.info(
-                    "No existing template found, storing new template."
-                )
-                template_additional_info = (
-                    {"system_prompt": system_prompt} if system_prompt else None
-                )
+                verbose_router_logger.info("No existing template found, storing new template.")
+                template_additional_info = {"system_prompt": system_prompt} if system_prompt else None
                 # store_template returns the surviving id (handles concurrent inserts safely).
                 stored_id = self.template_store.store_template(
                     template_id=str(uuid4()),
@@ -225,9 +200,7 @@ class AdeptTemplateRouter(BaseTemplateRouter):
                 additional_information=additional_info,
             )
 
-            conversation_count = self.template_store.count_conversation_by_template_id(
-                template_id
-            )
+            conversation_count = self.template_store.count_conversation_by_template_id(template_id)
             # Modulo check re-triggers at N, 2N, 3N... so training improves as traffic grows.
             if (
                 conversation_count is not None

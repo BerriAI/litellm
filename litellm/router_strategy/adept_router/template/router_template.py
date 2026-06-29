@@ -6,9 +6,7 @@ class BaseTemplateRouter(ABC):
     """Abstract base class for template-based prompt routing."""
 
     @abstractmethod
-    def route(
-        self, prompt: str, system_prompt: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+    def route(self, prompt: str, system_prompt: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Match a prompt to a stored template.
 
