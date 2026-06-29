@@ -2083,7 +2083,8 @@ async def _resolve_cli_session_budget(
         except Exception:
             return None  # team lookup failed: don't apply fallback cap
 
-    return None
+    # No team and no personal budget — cap the session
+    return litellm.max_ui_session_budget
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
