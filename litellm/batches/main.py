@@ -321,8 +321,17 @@ def create_batch(
                 create_batch_data=_create_batch_request,
             )
         elif custom_llm_provider == "moonshot":
-            api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-            api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
+            if optional_params.api_key:
+                # Caller supplied their own key — they may also control the base URL.
+                api_key = optional_params.api_key
+                api_base = (
+                    optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+                )
+            else:
+                # Using server-side credentials — ignore caller-supplied api_base so the
+                # server key cannot be forwarded to a caller-controlled endpoint.
+                api_key = get_secret_str("MOONSHOT_API_KEY")
+                api_base = get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
 
             response = moonshot_batches_instance.create_batch(
                 _is_async=_is_async,
@@ -504,8 +513,12 @@ def _handle_retrieve_batch_providers_without_provider_config(
             max_retries=optional_params.max_retries,
         )
     elif custom_llm_provider == "moonshot":
-        api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-        api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
+        if optional_params.api_key:
+            api_key = optional_params.api_key
+            api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+        else:
+            api_key = get_secret_str("MOONSHOT_API_KEY")
+            api_base = get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
 
         response = moonshot_batches_instance.retrieve_batch(
             _is_async=_is_async,
@@ -834,8 +847,14 @@ def list_batches(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "moonshot":
-            api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-            api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
+            if optional_params.api_key:
+                api_key = optional_params.api_key
+                api_base = (
+                    optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+                )
+            else:
+                api_key = get_secret_str("MOONSHOT_API_KEY")
+                api_base = get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
 
             response = moonshot_batches_instance.list_batches(
                 _is_async=_is_async,
@@ -1036,8 +1055,14 @@ def cancel_batch(
                 max_retries=optional_params.max_retries,
             )
         elif custom_llm_provider == "moonshot":
-            api_base = optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
-            api_key = optional_params.api_key or get_secret_str("MOONSHOT_API_KEY")
+            if optional_params.api_key:
+                api_key = optional_params.api_key
+                api_base = (
+                    optional_params.api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
+                )
+            else:
+                api_key = get_secret_str("MOONSHOT_API_KEY")
+                api_base = get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
 
             response = moonshot_batches_instance.cancel_batch(
                 _is_async=_is_async,
