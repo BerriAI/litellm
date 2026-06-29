@@ -48,14 +48,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return False
         return "gpt-5" in model and "gpt-5-chat" not in model
 
-    @staticmethod
-    def _supports_reasoning_effort_none(model: str) -> bool:
+    def _supports_reasoning_effort_none(self, model: str) -> bool:
         """Return True if the model supports reasoning.effort='none'."""
         from litellm.utils import _supports_factory
 
         return _supports_factory(
             model=model,
-            custom_llm_provider=None,
+            custom_llm_provider=self.custom_llm_provider,
             key="supports_none_reasoning_effort",
         )
 
@@ -95,10 +94,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if self._is_gpt_5_model(model=model):
             temperature = params.get("temperature")
             if temperature is not None and temperature != 1:
-                reasoning = params.get("reasoning") or {}
+                reasoning = params.get("reasoning")
                 effort = (
                     reasoning.get("effort") if isinstance(reasoning, dict) else None
                 )
+                if effort is None:
+                    effort = params.get("reasoning_effort")
                 supports_none = self._supports_reasoning_effort_none(model=model)
                 if supports_none and (effort == "none" or effort is None):
                     pass  # flexible temperature allowed
