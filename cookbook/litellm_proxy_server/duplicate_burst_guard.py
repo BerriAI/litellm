@@ -11,8 +11,8 @@ This is an in-memory, single-process example. Use a shared store if your proxy
 runs multiple workers or needs duplicate detection across instances.
 
 The request fingerprint uses a whitelist of model-affecting fields and scopes
-duplicates by request user/session before API-key owner. Adjust those fields if
-your deployment needs different duplicate semantics.
+duplicates by authenticated API-key owner plus request user/session. Adjust
+those fields if your deployment needs different duplicate semantics.
 """
 
 import asyncio
@@ -32,9 +32,14 @@ from litellm.types.utils import CallTypesLiteral
 
 FINGERPRINT_REQUEST_KEYS = (
     "model",
+    "system",
     "messages",
     "prompt",
     "input",
+    "query",
+    "documents",
+    "instructions",
+    "previous_response_id",
     "temperature",
     "max_tokens",
     "max_completion_tokens",
@@ -56,7 +61,9 @@ FINGERPRINT_REQUEST_KEYS = (
     "reasoning_effort",
     "thinking",
     "extra_body",
+    "vector_store_id",
 )
+SKIP_CALL_TYPES: frozenset[str] = frozenset({"aimage_edit"})
 
 
 class DuplicateBurstGuard(CustomLogger):
@@ -76,6 +83,9 @@ class DuplicateBurstGuard(CustomLogger):
         data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> dict[str, object]:
+        if call_type in SKIP_CALL_TYPES:
+            return data
+
         fingerprint = self._fingerprint(
             data=data, user_api_key_dict=user_api_key_dict, call_type=call_type
         )
@@ -127,19 +137,19 @@ class DuplicateBurstGuard(CustomLogger):
         key_user_id: object = None
         if user_api_key_dict is not None:
             key_user_id = user_api_key_dict.user_id
-        user_id: object = (
+        request_user_id: object = (
             data.get("user")
             or metadata.get("user_id")
             or metadata.get("session_id")
-            or key_user_id
-            or "anonymous"
+            or "anonymous_request"
         )
         request = {key: data[key] for key in FINGERPRINT_REQUEST_KEYS if key in data}
         raw = json.dumps(
             {
+                "api_key_identity": key_user_id or "anonymous_key",
                 "call_type": call_type,
                 "request": request,
-                "request_identity": user_id,
+                "request_identity": request_user_id,
             },
             default=str,
             ensure_ascii=False,
