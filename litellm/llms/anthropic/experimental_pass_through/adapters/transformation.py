@@ -47,6 +47,19 @@ def truncate_tool_name(name: str) -> str:
     return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
 
 
+def resolve_tool_name(raw_name: Optional[str], fallback: str) -> str:
+    """
+    Return a usable tool name, substituting ``fallback`` when the name is missing or blank.
+
+    OpenAI-compatible backends (e.g. Mistral via vLLM) reject tool calls whose function name
+    is empty, so an Anthropic tool_use block or tool definition without a usable name must be
+    given a non-empty placeholder rather than passed through as an empty string.
+    """
+    if raw_name is not None and str(raw_name).strip():
+        return str(raw_name)
+    return fallback
+
+
 def create_tool_name_mapping(
     tools: List[Dict[str, Any]],
 ) -> Dict[str, str]:
@@ -529,8 +542,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                     has_cache_control_in_text = True
                                 assistant_content_list.append(text_block)
                             elif content.get("type") == "tool_use":
-                                # Truncate tool name for OpenAI's 64-char limit
-                                tool_name = truncate_tool_name(content.get("name", ""))
+                                original_name = resolve_tool_name(content.get("name"), "litellm_unnamed_tool")
+                                tool_name = truncate_tool_name(original_name)
                                 function_chunk: ChatCompletionToolCallFunctionChunk = {
                                     "name": tool_name,
                                     "arguments": json.dumps(content.get("input", {})),
@@ -750,11 +763,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_tools.append(tool)  # type: ignore[arg-type]
                 continue
 
-            raw_name = tool.get("name")
-            if raw_name is None or (isinstance(raw_name, str) and not str(raw_name).strip()):
-                original_name = f"litellm_unnamed_tool_{idx}"
-            else:
-                original_name = str(raw_name)
+            original_name = resolve_tool_name(tool.get("name"), f"litellm_unnamed_tool_{idx}")
             truncated_name = truncate_tool_name(original_name)
 
             # Store mapping if name was truncated

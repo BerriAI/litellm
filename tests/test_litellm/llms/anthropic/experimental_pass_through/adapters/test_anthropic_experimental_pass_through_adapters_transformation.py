@@ -1075,6 +1075,68 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     )
 
 
+@pytest.mark.parametrize("tool_use_name", ["", "   ", None])
+def test_translate_anthropic_messages_to_openai_tool_use_without_name(tool_use_name):
+    """Regression test for https://github.com/BerriAI/litellm/issues/30515.
+
+    A tool_use block whose name is missing or blank must not produce an empty OpenAI
+    function name; OpenAI-compatible backends such as Mistral via vLLM reject those.
+    Before the fix an empty name was passed through verbatim and a None name crashed
+    with a TypeError inside truncate_tool_name.
+    """
+    messages = cast(
+        Any,
+        [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": tool_use_name,
+                        "input": {"q": "x"},
+                    }
+                ],
+            },
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=messages)
+
+    tool_calls = result[1]["tool_calls"]
+    assert len(tool_calls) == 1
+    function_name = tool_calls[0]["function"]["name"]
+    assert function_name and function_name.strip()
+
+
+def test_translate_anthropic_messages_to_openai_tool_use_preserves_name():
+    """A valid tool_use name must be passed through unchanged."""
+    messages = cast(
+        Any,
+        [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "get_weather",
+                        "input": {"location": "London"},
+                    }
+                ],
+            },
+        ],
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=messages)
+
+    assert result[1]["tool_calls"][0]["function"]["name"] == "get_weather"
+
+
 def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_content_items():
     """
     Test that tool_result with multiple content items creates a single tool message
