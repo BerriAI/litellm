@@ -1461,7 +1461,14 @@ class PrometheusLogger(CustomLogger):
         _user_spend = _metadata.get("user_api_key_user_spend", None)
         _user_max_budget = _metadata.get("user_api_key_user_max_budget", None)
 
-        results = await asyncio.gather(
+        # Bound the per-request budget-metric emission so that slow Redis/DB
+        # lookups under load cannot consume the whole LoggingWorker watchdog
+        # (LOGGING_WORKER_MAX_TIME_PER_COROUTINE, default 20s) and get the entire
+        # success-logging event cancelled. Budget gauges are also refreshed by the
+        # periodic cron every PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
+        # so dropping one slow per-request emission only loses sub-cron real-time
+        # detail, not correctness.
+        gather_coro = asyncio.gather(
             self._set_api_key_budget_metrics_after_api_request(
                 user_api_key=user_api_key,
                 user_api_key_alias=user_api_key_alias,
@@ -1488,6 +1495,17 @@ class PrometheusLogger(CustomLogger):
             ),
             return_exceptions=True,
         )
+        budget_metrics_timeout = float(os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT", "5.0"))
+        try:
+            results = await asyncio.wait_for(gather_coro, timeout=budget_metrics_timeout)
+        except asyncio.TimeoutError:
+            verbose_logger.debug(
+                "[Non-Blocking] Prometheus: per-request budget metric emission "
+                "exceeded %ss under load; skipping (values are refreshed by the "
+                "periodic budget-metrics cron job).",
+                budget_metrics_timeout,
+            )
+            return
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 verbose_logger.debug(
