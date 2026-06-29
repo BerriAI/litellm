@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Sequence, cast
 
-from opentelemetry.context import attach, get_current
+from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import Span, Tracer, get_current_span, use_span
 
@@ -251,6 +251,20 @@ class OpenTelemetryV2(CustomLogger):
             return
         self._close_llm_call(kwargs, start_time, end_time)
 
+    def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
+        """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
+        processor stamps team/key/metadata onto the span. Identity is read from the
+        parsed payload, never the client's ``params._meta`` carrier, so it can't be
+        spoofed."""
+        bag = promoted_baggage(
+            identity,
+            model,
+            promoted_keys=tuple(self.config.baggage_promoted_keys),
+            metadata_keys=tuple(self.config.baggage_metadata_keys),
+            team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
+        )
+        return set_request_baggage(bag, context=context) if bag else context
+
     def _emit_mcp_tool_call(
         self,
         kwargs: Mapping[str, Any],
@@ -281,6 +295,7 @@ class OpenTelemetryV2(CustomLogger):
         if data.identity.call_id:
             self._open_llm_calls.pop(data.identity.call_id, None)
         parent_context, links = resolve_mcp_span_context()
+        parent_context = self._seed_identity_baggage(data.identity, None, parent_context)
         self._emitter.emit(
             SpanRole.MCP_TOOL_CALL,
             data,
@@ -316,6 +331,7 @@ class OpenTelemetryV2(CustomLogger):
         if data.identity.call_id:
             self._open_llm_calls.pop(data.identity.call_id, None)
         parent_context, links = resolve_mcp_span_context()
+        parent_context = self._seed_identity_baggage(data.identity, None, parent_context)
         self._emitter.emit(
             SpanRole.MCP_LIST_TOOLS,
             data,
@@ -365,16 +381,7 @@ class OpenTelemetryV2(CustomLogger):
         # root span — parent to it (ambient fallback on the SDK path). Seed identity
         # Baggage so the span — and the SDK path, which has none — is labeled
         # consistently.
-        parent_ctx = resolve_request_span_context()
-        bag = promoted_baggage(
-            data.identity,
-            data.request_model,
-            promoted_keys=tuple(self.config.baggage_promoted_keys),
-            metadata_keys=tuple(self.config.baggage_metadata_keys),
-            team_metadata_keys=tuple(self.config.baggage_team_metadata_keys),
-        )
-        if bag:
-            parent_ctx = set_request_baggage(bag, context=parent_ctx)
+        parent_ctx = self._seed_identity_baggage(data.identity, data.request_model, resolve_request_span_context())
         return self._emitter.emit(
             SpanRole.LLM_CALL,
             data,

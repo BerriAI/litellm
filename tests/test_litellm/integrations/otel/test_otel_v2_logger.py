@@ -528,9 +528,25 @@ def test_mcp_span_ignores_client_supplied_baggage(make_payload, span_name):
     span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
     # Trace context still honored: proves the carrier was processed, not dropped wholesale.
     assert span.parent is not None and span.parent.span_id == 0x2222222222222222
-    # ...but the client's spoofed identity baggage never lands as a span attribute.
-    assert span.attributes.get(LiteLLM.TEAM_ID) != "spoofed-team"
+    # Identity is the authenticated payload's team, never the client's spoofed value.
+    assert span.attributes[LiteLLM.TEAM_ID] == "t1"
     assert "litellm.metadata.user_api_key_user_id" not in span.attributes
+
+
+@pytest.mark.parametrize("make_payload, span_name", _MCP_SPAN_CASES)
+def test_mcp_span_carries_authenticated_identity(make_payload, span_name):
+    """An MCP span is labeled with the authenticated request's identity (team/key),
+    seeded from the parsed payload like the LLM-call span. Without this seeding the
+    span — parented to an empty remote context — would carry no team/key attribute at
+    all, so it couldn't be attributed or filtered by team in the traces backend."""
+    logger, exporter = _logger()
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": make_payload()}, None, None, None
+        )
+    )
+    span = next(s for s in exporter.get_finished_spans() if s.name == span_name)
+    assert span.attributes[LiteLLM.TEAM_ID] == "t1"
 
 
 def test_mcp_span_malformed_traceparent_starts_root():
