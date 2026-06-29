@@ -2465,17 +2465,6 @@ class ProxyBaseLLMRequestProcessing:
                 return
         elif not isinstance(first_chunk, str) and not hasattr(first_chunk, "choices"):
             return
-        # Strip trailing usage-only / empty-choices chunks (e.g. OpenAI's final SSE
-        # `data: {"choices":[],"usage":{...}}`) so stream_chunk_builder can safely
-        # inspect the last chunk's finish_reason without an IndexError.
-        def _has_empty_choices(c: Any) -> bool:
-            if isinstance(c, dict):
-                return c.get("choices") == []
-            return bool(hasattr(c, "choices") and getattr(c, "choices") == [])
-
-        chunks = [c for c in chunks if not _has_empty_choices(c)]
-        if not chunks:
-            return
         # Optimization, not a correctness guard: dispatch_success_handlers is the
         # authoritative de-dup via has_dispatched_final_stream_success. This just
         # skips the stream_chunk_builder assembly when completion already logged.
