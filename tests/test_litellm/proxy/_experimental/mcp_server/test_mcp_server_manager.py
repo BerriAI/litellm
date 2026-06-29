@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -670,6 +670,118 @@ class TestMCPServerManager:
         subject_token = await self._capture_list_subject_token(server, oauth2_headers=None)
         assert subject_token is None
 
+    def _token_exchange_server(self, server_id: str) -> "MCPServer":
+        return MCPServer(
+            server_id=server_id,
+            name=f"{server_id}-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+
+    async def _capture_subject_token(self, call) -> Optional[str]:
+        """Run a manager method (via ``call(manager)``) and return the subject_token it threaded
+        into ``_create_mcp_client``."""
+        manager = MCPServerManager()
+        captured: Dict[str, Any] = {}
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+        ):  # pragma: no cover - helper
+            captured["subject_token"] = subject_token
+            return AsyncMock()
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        await call(manager)
+        return captured.get("subject_token")
+
+    @pytest.mark.asyncio
+    async def test_prompts_thread_subject_token_for_token_exchange(self):
+        """prompts/list on an OBO server must exchange the caller's bearer, not connect with none."""
+        server = self._token_exchange_server("te-prompts")
+        st = await self._capture_subject_token(
+            lambda m: m.get_prompts_from_server(
+                server=server, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
+        )
+        assert st == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_resources_thread_subject_token_for_token_exchange(self):
+        """resources/list on an OBO server must exchange the caller's bearer."""
+        server = self._token_exchange_server("te-resources")
+        st = await self._capture_subject_token(
+            lambda m: m.get_resources_from_server(
+                server=server, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
+        )
+        assert st == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_read_resource_threads_subject_token_for_token_exchange(self):
+        """resources/read on an OBO server must exchange the caller's bearer."""
+        server = self._token_exchange_server("te-read")
+        st = await self._capture_subject_token(
+            lambda m: m.read_resource_from_server(
+                server=server,
+                url="https://up.example.com/r",
+                raw_headers={"authorization": "Bearer subj-jwt"},
+            )
+        )
+        assert st == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_prompts_no_subject_token_for_non_token_exchange(self):
+        """A non-OBO server must not get the caller's bearer threaded (no cross-mode leak)."""
+        server = MCPServer(
+            server_id="none-prompts",
+            name="none-prompts-server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        st = await self._capture_subject_token(
+            lambda m: m.get_prompts_from_server(
+                server=server, raw_headers={"authorization": "Bearer subj-jwt"}
+            )
+        )
+        assert st is None
+
+    @pytest.mark.asyncio
+    async def test_caller_header_cannot_bypass_v2_for_token_exchange(self):
+        """A caller-supplied per-server header (x-mcp-*) must NOT disable the OBO exchange:
+        _create_mcp_client keeps the v2 spec and runs the resolver (which exchanges the subject),
+        rather than deferring to v1 and forwarding the caller's header verbatim upstream."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        exchanged_subjects = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                exchanged_subjects.append(
+                    subject.inbound_token.get_secret_value() if subject.inbound_token else None
+                )
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-bypass")
+
+        client = await manager._create_mcp_client(
+            server,
+            mcp_auth_header="Bearer x-mcp-caller-header",
+            subject_token="subj-jwt",
+        )
+
+        # The resolver ran and exchanged the subject despite the per-server header; not bypassed.
+        assert exchanged_subjects == ["subj-jwt"]
+        assert client is not None
+
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
@@ -1097,6 +1209,7 @@ class TestMCPServerManager:
             mcp_auth_header="auth",
             extra_headers=None,
             stdio_env=None,
+            subject_token=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)

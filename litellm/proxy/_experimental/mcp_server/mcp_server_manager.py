@@ -76,6 +76,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    TokenExchangeConfig,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -1676,6 +1677,22 @@ class MCPServerManager:
             return auth_value
         return None
 
+    def _obo_subject_token(
+        self,
+        server: MCPServer,
+        raw_headers: Optional[Dict[str, str]],
+        oauth2_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[str]:
+        """The caller's bearer as the token_exchange (OBO) subject token, for that mode only.
+
+        Prompts/resources discovery and reads on a token_exchange server must exchange the caller's
+        token like the tools paths do, not connect with no credential. Other modes never read the
+        inbound bearer, so return None to avoid forwarding it.
+        """
+        if server.auth_type != MCPAuth.oauth2_token_exchange:
+            return None
+        return self._extract_bearer_token(oauth2_headers, raw_headers)
+
     def _build_stdio_env(
         self,
         server: MCPServer,
@@ -1900,11 +1917,13 @@ class MCPServerManager:
         spec = None if transport == MCPTransport.stdio else to_server_spec(server)
         provider = cred_provider or self._cred_provider
         # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
-        # so it wins - except for authorization_code, whose per-user token the v2 resolver owns. A
-        # caller must not be able to substitute another user's stored credential, so we keep the v2
-        # spec and ignore the override there; the REST tools preview supplies its not-yet-persisted
-        # token through the resolver (cred_provider), never this path.
-        if spec is not None and mcp_auth_header and not isinstance(spec.config, AuthorizationCodeConfig):
+        # so it wins - except for the per-user modes the v2 resolver owns (authorization_code's
+        # stored token and token_exchange's RFC 8693 minted token). A caller must not be able to
+        # substitute another user's stored credential, nor silently disable the OBO exchange and
+        # forward an arbitrary bearer upstream, so we keep the v2 spec and ignore the override for
+        # both; the REST tools preview supplies its not-yet-persisted token through the resolver
+        # (cred_provider), never this path.
+        if spec is not None and mcp_auth_header and not isinstance(spec.config, (AuthorizationCodeConfig, TokenExchangeConfig)):
             spec = None
         auth_value = (
             await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token) if spec is None else None
@@ -2209,12 +2228,14 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
+            subject_token = self._obo_subject_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
             )
 
             prompts = await client.list_prompts()
@@ -2249,12 +2270,14 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
+            subject_token = self._obo_subject_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
             )
 
             resources = await client.list_resources()
@@ -2289,12 +2312,14 @@ class MCPServerManager:
                 extra_headers.update(server.static_headers)
 
             stdio_env = self._build_stdio_env(server, raw_headers)
+            subject_token = self._obo_subject_token(server, raw_headers)
 
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
             )
 
             resource_templates = await client.list_resource_templates()
@@ -2328,12 +2353,14 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
+        subject_token = self._obo_subject_token(server, raw_headers)
 
         client = await self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
             stdio_env=stdio_env,
+            subject_token=subject_token,
         )
 
         return await client.read_resource(url)
@@ -2358,12 +2385,14 @@ class MCPServerManager:
             extra_headers.update(server.static_headers)
 
         stdio_env = self._build_stdio_env(server, raw_headers)
+        subject_token = self._obo_subject_token(server, raw_headers)
 
         client = await self._create_mcp_client(
             server=server,
             mcp_auth_header=mcp_auth_header,
             extra_headers=extra_headers,
             stdio_env=stdio_env,
+            subject_token=subject_token,
         )
 
         get_prompt_request_params = GetPromptRequestParams(
