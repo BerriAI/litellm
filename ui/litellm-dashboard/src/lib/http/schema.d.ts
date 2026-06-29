@@ -2981,8 +2981,8 @@ export interface paths {
         /**
          * Get Active Tasks Stats
          * @description Returns:
-         *       total_active_tasks: int
-         *       by_name: { coroutine_name: count }
+         *     total_active_tasks: int
+         *     by_name: { coroutine_name: count }
          */
         get: operations["get_active_tasks_stats_debug_asyncio_tasks_get"];
         put?: never;
@@ -22610,10 +22610,10 @@ export interface components {
         /**
          * ContentFilterCategoryConfig
          * @description category: "harmful_self_harm"
-         *                   enabled: true
-         *                   action: "BLOCK"
-         *                   severity_threshold: "medium"
-         *                   category_file: "/path/to/custom_file.yaml"  # optional override
+         *     enabled: true
+         *     action: "BLOCK"
+         *     severity_threshold: "medium"
+         *     category_file: "/path/to/custom_file.yaml"  # optional override
          */
         ContentFilterCategoryConfig: {
             /**
