@@ -43,6 +43,23 @@ class TestDeepinfraRerankTransform:
         with pytest.raises(ValueError, match="Deepinfra API Base is required"):
             self.config.get_complete_url(None, model)
 
+    def test_get_complete_url_preserves_openai_in_host(self):
+        """Regression: only a trailing '/openai' segment should be stripped.
+
+        A plain str.replace("openai", "") corrupted any api_base that contained
+        'openai' elsewhere (e.g. a gateway host or proxy path), producing a
+        malformed URL. The host/path must be preserved.
+        """
+        model = "Qwen/Qwen3-Reranker-0.6B"
+
+        # 'openai' in the host, with a trailing '/openai' segment to strip
+        url = self.config.get_complete_url("https://openai-gw.mycorp.com/v1/openai", model)
+        assert url == "https://openai-gw.mycorp.com/v1/inference/Qwen/Qwen3-Reranker-0.6B"
+
+        # 'openai' in the host, no trailing '/openai' segment to strip
+        url = self.config.get_complete_url("https://my-openai-proxy.example.com/v1", model)
+        assert url == "https://my-openai-proxy.example.com/v1/inference/Qwen/Qwen3-Reranker-0.6B"
+
     def test_map_cohere_rerank_params_basic(self):
         """Test basic parameter mapping for DeepInfra rerank."""
         params = self.config.map_cohere_rerank_params(
@@ -166,9 +183,7 @@ class TestDeepinfraRerankTransform:
         assert result._hidden_params["model"] == self.model
 
         # Verify logging was called
-        mock_logging.post_call.assert_called_once_with(
-            original_response=mock_response.text
-        )
+        mock_logging.post_call.assert_called_once_with(original_response=mock_response.text)
 
     def test_transform_rerank_response_minimal(self):
         """Test response transformation with minimal data."""
@@ -245,12 +260,8 @@ class TestDeepinfraRerankTransform:
                 query="query1",
                 documents=documents,
             )
-            assert (
-                params["queries"] == expected_queries
-            ), f"Failed for {len(documents)} documents"
-            assert len(params["queries"]) == len(
-                documents
-            ), "Queries length must match documents length"
+            assert params["queries"] == expected_queries, f"Failed for {len(documents)} documents"
+            assert len(params["queries"]) == len(documents), "Queries length must match documents length"
 
     def test_get_error_class_basic(self):
         """Test error class generation for basic error."""
