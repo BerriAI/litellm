@@ -8676,7 +8676,24 @@ async def test_initialize_sets_azure_api_version_when_unset(monkeypatch):
     monkeypatch.delenv("AZURE_API_VERSION", raising=False)
     await initialize(
         config=None,
+        api_version=litellm.AZURE_DEFAULT_API_VERSION,
+        api_version_explicit=False,
+        drop_params=False,
+        add_function_to_prompt=False,
+        telemetry=False,
+    )
+    assert os.environ["AZURE_API_VERSION"] == litellm.AZURE_DEFAULT_API_VERSION
+
+
+@pytest.mark.asyncio
+async def test_initialize_explicit_api_version_overrides_env(monkeypatch):
+    """An explicitly-supplied --api_version overrides an existing AZURE_API_VERSION,
+    preserving the explicit CLI override path."""
+    monkeypatch.setenv("AZURE_API_VERSION", "2025-04-01-preview")
+    await initialize(
+        config=None,
         api_version="2099-12-01-preview",
+        api_version_explicit=True,
         drop_params=False,
         add_function_to_prompt=False,
         telemetry=False,
@@ -8685,16 +8702,17 @@ async def test_initialize_sets_azure_api_version_when_unset(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_initialize_explicit_api_version_overrides_env(monkeypatch):
-    """An explicitly-passed --api_version (a value other than the click default)
-    still overrides an existing AZURE_API_VERSION, preserving the explicit CLI
-    override path."""
+async def test_initialize_explicit_default_api_version_overrides_env(monkeypatch):
+    """An operator can explicitly pass --api_version equal to the litellm default to
+    move an azure proxy back to that version even when AZURE_API_VERSION is already
+    set to something else; the explicit flag, not the value, decides the override."""
     monkeypatch.setenv("AZURE_API_VERSION", "2025-04-01-preview")
     await initialize(
         config=None,
-        api_version="2099-12-01-preview",
+        api_version=litellm.AZURE_DEFAULT_API_VERSION,
+        api_version_explicit=True,
         drop_params=False,
         add_function_to_prompt=False,
         telemetry=False,
     )
-    assert os.environ["AZURE_API_VERSION"] == "2099-12-01-preview"
+    assert os.environ["AZURE_API_VERSION"] == litellm.AZURE_DEFAULT_API_VERSION

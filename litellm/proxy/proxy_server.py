@@ -6410,6 +6410,7 @@ async def initialize(
     alias=None,
     api_base=None,
     api_version=None,
+    api_version_explicit=False,
     debug=False,
     detailed_debug=False,
     temperature=None,
@@ -6517,12 +6518,12 @@ async def initialize(
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        # An explicitly-passed --api_version (any value other than the click
-        # default) still overrides the env. The bare default must not clobber an
+        # An explicitly-passed --api_version overrides the env (including a move
+        # back to the litellm default). The click default must not clobber an
         # operator-set AZURE_API_VERSION: changing it after azure deployments are
         # registered shifts their hashed deployment ids, so the store_model_in_db
         # reconciliation then deletes them.
-        if api_version != litellm.AZURE_DEFAULT_API_VERSION:
+        if api_version_explicit:
             os.environ["AZURE_API_VERSION"] = api_version
         else:
             os.environ.setdefault("AZURE_API_VERSION", api_version)
