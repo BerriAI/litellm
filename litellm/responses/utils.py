@@ -239,13 +239,48 @@ class ResponsesAPIRequestUtils:
         return responses_api_response
 
     @staticmethod
+    def _encode_id_payload(payload: str) -> str:
+        """Base64url-encode ``payload`` without ``=`` padding.
+
+        Uses URL-safe base64 (``-`` and ``_`` instead of ``+`` and ``/``) and
+        strips trailing ``=`` padding so the encoded id is safe to use as an
+        object-storage key component. MinIO rejects object names containing
+        ``=`` padding (``XMinioInvalidObjectName``), which silently drops
+        Langfuse traces whose observation ids are derived from these managed
+        responses/container ids. See GitHub issue #31055.
+        """
+        return (
+            base64.urlsafe_b64encode(payload.encode("utf-8"))
+            .decode("utf-8")
+            .rstrip("=")
+        )
+
+    @staticmethod
+    def _decode_id_payload(encoded: str) -> str:
+        """Decode a payload produced by :meth:`_encode_id_payload` (or legacy ids).
+
+        Restores any stripped ``=`` padding and uses URL-safe base64 decoding,
+        which also accepts standard-base64 input (``+`` / ``/``) produced by
+        older LiteLLM versions. This keeps decoding backward-compatible with
+        response/container/item ids issued before the padding fix landed.
+        """
+        cleaned = encoded
+        missing = len(cleaned) % 4
+        if missing:
+            cleaned += "=" * (4 - missing)
+        # urlsafe_b64decode translates -_ -> +/, so it decodes both URL-safe
+        # and standard base64 alphabets.
+        return base64.urlsafe_b64decode(cleaned.encode("utf-8")).decode("utf-8")
+
+    @staticmethod
     def _build_encrypted_item_id(model_id: str, item_id: str) -> str:
         """Encode model_id into an output item ID for encrypted-content items.
 
-        Format: ``encitem_{base64("litellm:model_id:{model_id};item_id:{original_id}")}``
+        Format: ``encitem_{base64url("litellm:model_id:{model_id};item_id:{original_id}")}``
+        (URL-safe base64 without ``=`` padding — see #31055).
         """
         assembled = f"litellm:model_id:{model_id};item_id:{item_id}"
-        encoded = base64.b64encode(assembled.encode("utf-8")).decode("utf-8")
+        encoded = ResponsesAPIRequestUtils._encode_id_payload(assembled)
         return f"encitem_{encoded}"
 
     @staticmethod
@@ -259,11 +294,7 @@ class ResponsesAPIRequestUtils:
             return None
         try:
             cleaned = encoded_id[len("encitem_") :]
-            # Restore any padding that may have been stripped in transit
-            missing = len(cleaned) % 4
-            if missing:
-                cleaned += "=" * (4 - missing)
-            decoded = base64.b64decode(cleaned.encode("utf-8")).decode("utf-8")
+            decoded = ResponsesAPIRequestUtils._decode_id_payload(cleaned)
             # Split on first ";" only so that semicolons inside item_id are preserved
             parts = decoded.split(";", 1)
             if len(parts) < 2:
@@ -283,10 +314,11 @@ class ResponsesAPIRequestUtils:
         When Codex or other clients send items with encrypted_content but no ID,
         we encode the model_id directly into the encrypted_content itself.
 
-        Format: ``litellm_enc:{base64("model_id:{model_id}")};{original_encrypted_content}``
+        Format: ``litellm_enc:{base64url("model_id:{model_id}")};{original_encrypted_content}``
+        (URL-safe base64 without ``=`` padding — see #31055).
         """
         metadata = f"model_id:{model_id}"
-        encoded_metadata = base64.b64encode(metadata.encode("utf-8")).decode("utf-8")
+        encoded_metadata = ResponsesAPIRequestUtils._encode_id_payload(metadata)
         return f"litellm_enc:{encoded_metadata};{encrypted_content}"
 
     @staticmethod
@@ -311,14 +343,7 @@ class ResponsesAPIRequestUtils:
             metadata_b64 = parts[0].replace("litellm_enc:", "")
             original_content = parts[1]
 
-            # Restore padding if needed
-            missing = len(metadata_b64) % 4
-            if missing:
-                metadata_b64 += "=" * (4 - missing)
-
-            decoded_metadata = base64.b64decode(metadata_b64.encode("utf-8")).decode(
-                "utf-8"
-            )
+            decoded_metadata = ResponsesAPIRequestUtils._decode_id_payload(metadata_b64)
             model_id = decoded_metadata.replace("model_id:", "")
             return model_id, original_content
         except Exception:
@@ -432,12 +457,17 @@ class ResponsesAPIRequestUtils:
         model_id: Optional[str],
         response_id: str,
     ) -> str:
-        """Build the responses_api_response_id"""
+        """Build the responses_api_response_id
+
+        The id is base64url-encoded **without** ``=`` padding so it is safe to
+        use as an object-storage key component (e.g. Langfuse observation ids
+        routed to MinIO/S3 blob storage). See GitHub issue #31055.
+        """
         assembled_id: str = str(
             SpecialEnums.LITELLM_MANAGED_RESPONSE_COMPLETE_STR.value
         ).format(custom_llm_provider, model_id, response_id)
-        base64_encoded_id: str = base64.b64encode(assembled_id.encode("utf-8")).decode(
-            "utf-8"
+        base64_encoded_id: str = ResponsesAPIRequestUtils._encode_id_payload(
+            assembled_id
         )
         return f"resp_{base64_encoded_id}"
 
@@ -452,9 +482,10 @@ class ResponsesAPIRequestUtils:
             DecodedResponseId: Structured tuple with custom_llm_provider, model_id, and response_id
         """
         try:
-            # Remove prefix and decode
+            # Remove prefix and decode (supports both legacy padded standard
+            # base64 and new URL-safe base64 without padding — see #31055)
             cleaned_id = response_id.replace("resp_", "")
-            decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
+            decoded_id = ResponsesAPIRequestUtils._decode_id_payload(cleaned_id)
 
             # Parse components using known prefixes
             if ";" not in decoded_id:
@@ -540,15 +571,16 @@ class ResponsesAPIRequestUtils:
     ) -> str:
         """Build a managed container ID with provider and model info encoded.
 
-        Format: cntr_{base64("litellm:custom_llm_provider:{provider};model_id:{model};container_id:{original}")}
+        Format: cntr_{base64url("litellm:custom_llm_provider:{provider};model_id:{model};container_id:{original}")}
+
+        Uses URL-safe base64 without ``=`` padding so the id is safe as an
+        object-storage key component (see #31055).
         """
         # Avoid serializing Python None as the literal string "None" (breaks router affinity).
         provider_part = "" if custom_llm_provider is None else custom_llm_provider
         model_part = "" if model_id is None else model_id
         assembled_id = f"litellm:custom_llm_provider:{provider_part};model_id:{model_part};container_id:{container_id}"
-        base64_encoded_id = base64.b64encode(assembled_id.encode("utf-8")).decode(
-            "utf-8"
-        )
+        base64_encoded_id = ResponsesAPIRequestUtils._encode_id_payload(assembled_id)
         return f"cntr_{base64_encoded_id}"
 
     @staticmethod
@@ -567,9 +599,10 @@ class ResponsesAPIRequestUtils:
                     response_id=container_id,
                 )
 
-            # Remove prefix and decode
+            # Remove prefix and decode (supports legacy padded and new
+            # padding-free URL-safe base64 — see #31055)
             cleaned_id = container_id.replace("cntr_", "")
-            decoded_id = base64.b64decode(cleaned_id.encode("utf-8")).decode("utf-8")
+            decoded_id = ResponsesAPIRequestUtils._decode_id_payload(cleaned_id)
 
             # Parse components using regex to handle semicolons in the container_id
             if not decoded_id.startswith("litellm:"):
