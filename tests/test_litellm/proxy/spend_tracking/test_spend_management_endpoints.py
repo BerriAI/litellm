@@ -2920,10 +2920,11 @@ async def test_build_ui_spend_logs_response_dict_rows_session_counts():
     )
 
     session_id = "sess-abc-123"
+    api_key = "hashed-key-xyz"
     dict_rows = [
-        {"request_id": "req-1", "session_id": session_id, "call_type": "completion"},
-        {"request_id": "req-2", "session_id": session_id, "call_type": "mcp_tool_call"},
-        {"request_id": "req-3", "session_id": None, "call_type": "completion"},
+        {"request_id": "req-1", "session_id": session_id, "call_type": "completion", "api_key": api_key},
+        {"request_id": "req-2", "session_id": session_id, "call_type": "mcp_tool_call", "api_key": api_key},
+        {"request_id": "req-3", "session_id": None, "call_type": "completion", "api_key": api_key},
     ]
 
     mock_prisma = MagicMock()

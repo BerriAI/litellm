@@ -3447,6 +3447,16 @@ async def _build_ui_spend_logs_response(
     mcp_spend_map: Dict[str, Dict[str, Union[int, float]]] = {}
     if enrich_session_counts and session_ids:
         try:
+            # Collect api_keys already present in the authorized page rows so the
+            # aggregate is scoped to the same ownership as the main query — prevents
+            # cross-tenant disclosure via a colliding session_id.
+            authorized_api_keys = list(
+                {
+                    (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                    for row in data
+                    if (row.get("api_key") if isinstance(row, dict) else getattr(row, "api_key", None))
+                }
+            )
             rows = await prisma_client.db.query_raw(
                 """
                 SELECT session_id,
@@ -3454,10 +3464,12 @@ async def _build_ui_spend_logs_response(
                        COALESCE(SUM(spend), 0)::double precision AS mcp_tool_call_spend
                 FROM "LiteLLM_SpendLogs"
                 WHERE session_id = ANY($1::text[])
+                  AND api_key = ANY($2::text[])
                   AND call_type IN ('call_mcp_tool', 'list_mcp_tools')
                 GROUP BY session_id
                 """,
                 session_ids,
+                authorized_api_keys,
             )
             mcp_spend_map = {
                 row["session_id"]: {
