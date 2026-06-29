@@ -3979,16 +3979,18 @@ class ProxyConfig:
         if config is not None and isinstance(config, dict):
             general_settings = config.get("general_settings", {})
             litellm_settings = config.get("litellm_settings", {})
-            strict_config_validation = general_settings.get(
+            strict_config_validation = general_settings.get("strict_config_validation", False) or litellm_settings.get(
                 "strict_config_validation", False
-            ) or litellm_settings.get("strict_config_validation", False)
+            )
 
             if not strict_config_validation:
                 import os
 
-                strict_config_validation = os.getenv(
-                    "LITELLM_STRICT_CONFIG_VALIDATION", "False"
-                ).lower() in ["true", "1", "yes"]
+                strict_config_validation = os.getenv("LITELLM_STRICT_CONFIG_VALIDATION", "False").lower() in [
+                    "true",
+                    "1",
+                    "yes",
+                ]
 
             valid_root_keys = {
                 "model_list",
@@ -4031,9 +4033,7 @@ class ProxyConfig:
                         try:
                             import difflib
 
-                            matches = difflib.get_close_matches(
-                                key, valid_root_keys, n=1, cutoff=0.7
-                            )
+                            matches = difflib.get_close_matches(key, valid_root_keys, n=1, cutoff=0.7)
                             if matches:
                                 suggestion = matches[0]
                         except ImportError:
