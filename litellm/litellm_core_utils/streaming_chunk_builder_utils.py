@@ -516,11 +516,7 @@ class ChunkProcessor:
         incoming_dict = incoming.model_dump(exclude_none=True)
 
         for key, value in incoming_dict.items():
-            if (
-                isinstance(value, dict)
-                and key in merged
-                and isinstance(merged[key], dict)
-            ):
+            if isinstance(value, dict) and key in merged and isinstance(merged[key], dict):
                 for nested_key, nested_value in value.items():
                     if nested_value is not None:
                         merged[key][nested_key] = nested_value
