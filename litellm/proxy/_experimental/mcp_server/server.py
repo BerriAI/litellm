@@ -2829,9 +2829,7 @@ if MCP_AVAILABLE:
                 traceback_str="",
             )
         except Exception as log_exc:
-            verbose_logger.debug(
-                "MCP protocol-error logging failed (continuing): %s", log_exc
-            )
+            verbose_logger.debug("MCP protocol-error logging failed (continuing): %s", log_exc)
 
     def _wrap_send_for_protocol_error_logging(
         inner_send: Send,
@@ -2866,11 +2864,7 @@ if MCP_AVAILABLE:
                 if not raw_body:
                     return
                 payload = json.loads(raw_body)
-                if (
-                    isinstance(payload, dict)
-                    and "error" in payload
-                    and "result" not in payload
-                ):
+                if isinstance(payload, dict) and "error" in payload and "result" not in payload:
                     already_logged["done"] = True
                     await _log_mcp_protocol_rejection(
                         request_method=request_method,
@@ -3811,11 +3805,7 @@ if MCP_AVAILABLE:
             if body and request_method == "POST" and not is_jsonrpc_response:
                 try:
                     _req = json.loads(body)
-                    if (
-                        isinstance(_req, dict)
-                        and _req.get("jsonrpc") == "2.0"
-                        and isinstance(_req.get("method"), str)
-                    ):
+                    if isinstance(_req, dict) and _req.get("jsonrpc") == "2.0" and isinstance(_req.get("method"), str):
                         _protocol_log_method = _req.get("method")
                         _protocol_log_id = _req.get("id")
                         _raw_params = _req.get("params")
