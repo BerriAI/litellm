@@ -153,6 +153,13 @@ def _creds_lookup(*, model_id: str) -> Dict[str, str]:
     return dict(CREDS[model_id])
 
 
+def _alias_lookup(*, model_id: str) -> str:
+    # The endpoint swaps the request model for the deployment's real provider
+    # model before calling the provider; mirror that with the CREDS model so a
+    # wrong/hardcoded model_id KeyErrors instead of hiding.
+    return CREDS[model_id]["model"]
+
+
 @pytest.fixture
 def harness():
     """Seam harness. Patches only true I/O boundaries; pure encode/decode/merge
@@ -169,6 +176,7 @@ def harness():
     router.get_deployment_credentials_with_provider = MagicMock(
         side_effect=_creds_lookup
     )
+    router.get_deployment_model_for_alias = MagicMock(side_effect=_alias_lookup)
 
     read_body = AsyncMock(side_effect=lambda request: body_holder["body"])
     pre_call = AsyncMock(side_effect=lambda **kw: (body_holder["body"], MagicMock()))

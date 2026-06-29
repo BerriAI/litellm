@@ -5174,6 +5174,48 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
     )
 
 
+def test_get_deployment_model_for_alias_resolves_underlying_model():
+    """
+    The proxy batch-create path resolves a model-group alias to its deployment
+    so it can hand the provider the deployment's real model id, not the alias.
+    get_llm_provider cannot resolve a proxy alias, so without this the Bedrock
+    batch transform receives the alias as a modelId and AWS rejects it.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-batch-haiku",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                    "aws_region_name": "us-east-1",
+                },
+                "model_info": {"id": "bedrock-batch-dep-0"},
+            }
+        ]
+    )
+
+    assert (
+        router.get_deployment_model_for_alias(model_id="bedrock-batch-haiku")
+        == "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+    # Resolving by deployment id returns the same underlying model.
+    assert (
+        router.get_deployment_model_for_alias(model_id="bedrock-batch-dep-0")
+        == "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+
+
+def test_get_deployment_model_for_alias_returns_none_for_unknown_model():
+    router = _router_with_two_deployments([False, False])
+    assert router.get_deployment_model_for_alias(model_id="does-not-exist") is None
+
+
+def test_get_deployment_model_for_alias_returns_none_for_blocked_deployment():
+    router = _router_with_two_deployments([True, False])
+    assert router.get_deployment_model_for_alias(model_id="dep-0") is None
+    assert router.get_deployment_model_for_alias(model_id="dep-1") == "openai/gpt-4o-1"
+
+
 def test_resolve_unblocked_deployment_resolves_alias_id_and_wildcard():
     """
     _resolve_unblocked_deployment underpins both the credential resolver and the
