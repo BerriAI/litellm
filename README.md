@@ -555,9 +555,8 @@ The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
 3. Install dependencies `uv sync --all-extras --group proxy-dev`
-4. `uv run prisma generate`
-5. `prisma generate`
-6. Start proxy backend `python litellm/proxy/proxy_cli.py`
+4. `uv run prisma generate --schema litellm/proxy/schema.prisma`
+5. Start proxy backend `python litellm/proxy/proxy_cli.py`
 
 #### Frontend
 1. Navigate to `ui/litellm-dashboard`
