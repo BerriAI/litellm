@@ -1,6 +1,33 @@
 import { modelCreateCall, Model } from "../networking";
 import NotificationManager from "../molecules/notifications_manager";
 
+export type AutoRouterType = "complexity" | "semantic";
+
+export interface ComplexityTiers {
+  SIMPLE: string;
+  MEDIUM: string;
+  COMPLEX: string;
+  REASONING: string;
+}
+
+export interface ModelTestDeployment {
+  litellmParamsObj: Record<string, unknown>;
+  modelInfoObj: Record<string, unknown>;
+  modelName: string;
+}
+
+export const resolveAutoRouterDefaultModel = (
+  routerType: AutoRouterType,
+  complexityTiers: ComplexityTiers,
+  semanticDefaultModel?: string,
+): string =>
+  routerType === "complexity"
+    ? complexityTiers.MEDIUM || complexityTiers.SIMPLE || complexityTiers.COMPLEX || complexityTiers.REASONING || ""
+    : semanticDefaultModel || "";
+
+export const prepareAutoRouterTestDeployment = (defaultModel: string): ModelTestDeployment[] =>
+  defaultModel ? [{ litellmParamsObj: { model: defaultModel }, modelInfoObj: {}, modelName: defaultModel }] : [];
+
 export const handleAddAutoRouterSubmit = async (values: any, accessToken: string, form: any, callback?: () => void) => {
   try {
     console.log("=== AUTO ROUTER SUBMIT HANDLER CALLED ===");

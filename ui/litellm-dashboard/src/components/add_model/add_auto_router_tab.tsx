@@ -5,7 +5,13 @@ import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { all_admin_roles } from "@/utils/roles";
-import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import {
+  handleAddAutoRouterSubmit,
+  prepareAutoRouterTestDeployment,
+  resolveAutoRouterDefaultModel,
+  type AutoRouterType,
+  type ComplexityTiers,
+} from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "./RouterConfigBuilder";
 import ComplexityRouterConfig from "./ComplexityRouterConfig";
@@ -19,14 +25,7 @@ interface AddAutoRouterTabProps {
   userRole: string;
 }
 
-type RouterType = "complexity" | "semantic";
-
-interface ComplexityTiers {
-  SIMPLE: string;
-  MEDIUM: string;
-  COMPLEX: string;
-  REASONING: string;
-}
+type RouterType = AutoRouterType;
 
 const { Title, Link } = Typography;
 
@@ -109,8 +108,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       }
 
       // For complexity router, use the first non-empty tier as default
-      const defaultModel =
-        complexityTiers.MEDIUM || complexityTiers.SIMPLE || complexityTiers.COMPLEX || complexityTiers.REASONING;
+      const defaultModel = resolveAutoRouterDefaultModel("complexity", complexityTiers);
 
       // Set form values for complexity router
       form.setFieldsValue({
@@ -437,20 +435,38 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
         width={700}
       >
         {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
-        {isResultModalVisible && (
-          <ConnectionErrorDisplay
-            key={connectionTestId}
-            formValues={form.getFieldsValue()}
-            accessToken={accessToken}
-            testMode="chat"
-            modelName={form.getFieldValue("auto_router_name")}
-            onClose={() => {
-              setIsResultModalVisible(false);
-              setIsTestingConnection(false);
-            }}
-            onTestComplete={() => setIsTestingConnection(false)}
-          />
-        )}
+        {isResultModalVisible &&
+          (() => {
+            const defaultModel = resolveAutoRouterDefaultModel(
+              routerType,
+              complexityTiers,
+              form.getFieldValue("auto_router_default_model"),
+            );
+            return (
+              <ConnectionErrorDisplay
+                key={connectionTestId}
+                formValues={form.getFieldsValue()}
+                accessToken={accessToken}
+                testMode="chat"
+                modelName={defaultModel || form.getFieldValue("auto_router_name")}
+                prepareDeployments={async () => {
+                  if (!defaultModel) {
+                    throw new Error(
+                      routerType === "complexity"
+                        ? "Select at least one complexity tier model before testing the connection."
+                        : "Select a default model before testing the connection.",
+                    );
+                  }
+                  return prepareAutoRouterTestDeployment(defaultModel);
+                }}
+                onClose={() => {
+                  setIsResultModalVisible(false);
+                  setIsTestingConnection(false);
+                }}
+                onTestComplete={() => setIsTestingConnection(false)}
+              />
+            );
+          })()}
       </Modal>
     </>
   );
