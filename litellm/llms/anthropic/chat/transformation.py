@@ -1836,7 +1836,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
     def update_headers_with_optional_anthropic_beta(
-        self, headers: dict, optional_params: dict
+        self, headers: dict, optional_params: dict, litellm_params: Optional[dict] = None
     ) -> dict:
         """Update headers with optional anthropic beta."""
 
@@ -1845,6 +1845,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         is_vertex_request = optional_params.get("is_vertex_request", False)
         if is_vertex_request:
             return headers
+
+        # Auto-add context-1m beta header when [1m] suffix is present
+        _context_1m = bool(re.search(r"\[1m\]$", optional_params.get("_original_model", "")))
+        if _context_1m:
+            self._ensure_beta_header(headers, "context-1m-2025-08-07")
 
         _tools = optional_params.get("tools", [])
         for tool in _tools:
@@ -1939,7 +1944,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
         headers = self.update_headers_with_optional_anthropic_beta(
-            headers=headers, optional_params=optional_params
+            headers=headers, optional_params=optional_params, litellm_params=litellm_params
         )
 
         # === Tool-name sanitization (single chokepoint) ===
