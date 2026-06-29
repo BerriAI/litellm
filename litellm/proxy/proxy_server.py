@@ -8351,6 +8351,44 @@ async def model_info(
     )
 
 
+def _blocked_response_usage(
+    model: str,
+    block_message: str,
+    messages: Optional[list] = None,
+    prompt: Optional[Any] = None,
+    tools: Optional[list] = None,
+) -> "litellm.Usage":
+    """
+    Compute token usage for a synthetic guardrail-blocked response.
+
+    The original request still consumed input tokens and the synthetic block
+    message has real content, so both are counted rather than reported as zero.
+    ``messages``+``tools`` cover chat/completions; ``prompt`` covers text
+    completions. Best-effort: any failure falls back to 0 so a blocked response
+    is always returned.
+    """
+    prompt_tokens = 0
+    completion_tokens = 0
+    try:
+        if messages:
+            prompt_tokens = litellm.token_counter(
+                model=model, messages=messages, tools=tools
+            )
+        elif prompt:
+            prompt_tokens = litellm.token_counter(model=model, text=prompt)
+        if block_message:
+            completion_tokens = litellm.token_counter(model=model, text=block_message)
+    except Exception as token_count_error:
+        verbose_proxy_logger.debug(
+            "Failed to count tokens for blocked response: %s", token_count_error
+        )
+    return litellm.Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+    )
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -8457,6 +8495,15 @@ async def chat_completion(
         _chat_response.model = e.model  # type: ignore
         _chat_response.choices[0].message.content = e.message  # type: ignore
         _chat_response.choices[0].finish_reason = "content_filter"  # type: ignore
+        # Count real usage (set before the stream branch so both paths carry it):
+        # input from the original request messages/tools, output from the block
+        # message.
+        _chat_response.usage = _blocked_response_usage(  # type: ignore
+            e.model,
+            e.message,
+            messages=_data.get("messages"),
+            tools=_data.get("tools"),
+        )
 
         if data.get("stream", None) is not None and data["stream"] is True:
             _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
@@ -8478,8 +8525,6 @@ async def chat_completion(
                 media_type="text/event-stream",
                 status_code=200,  # Return 200 for passthrough mode
             )
-        _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
-        _chat_response.usage = _usage  # type: ignore
         return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
@@ -8608,10 +8653,8 @@ async def completion(
             # Set text attribute dynamically for text completion format
             setattr(_text_response.choices[0], "text", e.message)
             _text_response.model = e.model  # type: ignore[assignment]
-            _usage = litellm.Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
+            _usage = _blocked_response_usage(
+                e.model, e.message, prompt=_data.get("prompt")
             )
             # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
             setattr(_text_response, "usage", _usage)
@@ -8637,10 +8680,8 @@ async def completion(
             _response = litellm.TextCompletionResponse()
             _response.choices[0].text = e.message
             _response.model = e.model  # type: ignore
-            _usage = litellm.Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
+            _usage = _blocked_response_usage(
+                e.model, e.message, prompt=_data.get("prompt")
             )
             _response.usage = _usage  # type: ignore
             return _response
