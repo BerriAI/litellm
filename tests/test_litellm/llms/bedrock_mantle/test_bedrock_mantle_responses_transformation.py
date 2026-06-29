@@ -400,16 +400,23 @@ class TestBedrockMantleResponsesTemperature:
         assert out["temperature"] == params["temperature"]
 
     @pytest.mark.parametrize("model", ["openai.gpt-5.4", "openai.gpt-5.5"])
-    def test_temperature_rejected_with_higher_effort(self, local_cost_map, model):
+    @pytest.mark.parametrize(
+        "effort_params",
+        [
+            {"reasoning": {"effort": "high"}},
+            {"reasoning_effort": "high"},
+        ],
+    )
+    def test_temperature_rejected_with_higher_effort(
+        self, local_cost_map, model, effort_params
+    ):
         # The gate still applies: flexible temperature is only honored at effort
-        # 'none'/unset, so temperature != 1 with a higher effort must still raise.
+        # 'none'/unset, so temperature != 1 with a higher effort must still raise --
+        # whether the effort arrives nested under reasoning or as the shorthand.
         cfg = BedrockMantleResponsesAPIConfig()
         with pytest.raises(litellm.UnsupportedParamsError):
             cfg.map_openai_params(
-                response_api_optional_params={
-                    "temperature": 0,
-                    "reasoning": {"effort": "high"},
-                },
+                response_api_optional_params={"temperature": 0, **effort_params},
                 model=model,
                 drop_params=False,
             )

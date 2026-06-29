@@ -94,10 +94,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if self._is_gpt_5_model(model=model):
             temperature = params.get("temperature")
             if temperature is not None and temperature != 1:
-                reasoning = params.get("reasoning") or {}
+                reasoning = params.get("reasoning")
                 effort = (
                     reasoning.get("effort") if isinstance(reasoning, dict) else None
                 )
+                if effort is None:
+                    effort = params.get("reasoning_effort")
                 supports_none = self._supports_reasoning_effort_none(model=model)
                 if supports_none and (effort == "none" or effort is None):
                     pass  # flexible temperature allowed
