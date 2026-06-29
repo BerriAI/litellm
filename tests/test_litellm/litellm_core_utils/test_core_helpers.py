@@ -10,8 +10,8 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 
 
-def test_reconstruct_model_name_prefers_deployment_value():
-    """Ensure deployment metadata wins when reconstructing the model name."""
+def test_reconstruct_model_name_prefers_deployment_value_without_model_group():
+    """Ensure deployment metadata wins when no canonical model group is present."""
 
     metadata = {"deployment": "vertex_ai/gemini-1.5-flash"}
 
@@ -22,6 +22,70 @@ def test_reconstruct_model_name_prefers_deployment_value():
     )
 
     assert result == "vertex_ai/gemini-1.5-flash"
+
+
+@pytest.mark.parametrize(
+    "provider,deployment,model_group",
+    [
+        ("anthropic", "anthropic/claude-4-opus", "claude-4-opus"),
+        ("bedrock", "bedrock/us.anthropic.claude-3-sonnet", "claude-3-sonnet"),
+        ("vertex_ai", "vertex_ai/gemini-3.1-pro-preview", "gemini-3.1-pro-preview"),
+        ("gemini", "gemini/gemini-3.1-pro-preview", "gemini-3.1-pro-preview"),
+        ("azure", "azure/gpt-5.5", "gpt-5.5"),
+        ("azure_ai", "azure_ai/DeepSeek-V4-Pro", "DeepSeek-V4-Pro"),
+    ],
+)
+def test_reconstruct_model_name_uses_bare_model_group_for_gateway_routes(
+    provider, deployment, model_group
+):
+    """Gateway deployments should log the canonical model group name."""
+
+    metadata = {
+        "deployment": deployment,
+        "model_group": model_group,
+    }
+
+    result = reconstruct_model_name(
+        model_name=model_group,
+        custom_llm_provider=provider,
+        metadata=metadata,
+    )
+
+    assert result == model_group
+
+
+def test_reconstruct_model_name_preserves_prefixed_model_group():
+    """Prefixed model groups are intentionally provider-qualified aliases."""
+
+    metadata = {
+        "deployment": "vertex_ai/gemini-3.1-pro-preview",
+        "model_group": "vertex_ai/gemini-3.1-pro-preview",
+    }
+
+    result = reconstruct_model_name(
+        model_name="gemini-3.1-pro-preview",
+        custom_llm_provider="vertex_ai",
+        metadata=metadata,
+    )
+
+    assert result == "vertex_ai/gemini-3.1-pro-preview"
+
+
+def test_reconstruct_model_name_ignores_bare_alias_model_group():
+    """Operator aliases should not replace the resolved upstream model name."""
+
+    metadata = {
+        "deployment": "claude-4-sonnet-20250514",
+        "model_group": "my-anthropic-model-group",
+    }
+
+    result = reconstruct_model_name(
+        model_name="claude-4-sonnet-20250514",
+        custom_llm_provider="anthropic",
+        metadata=metadata,
+    )
+
+    assert result == "claude-4-sonnet-20250514"
 
 
 def test_reconstruct_model_name_adds_bedrock_prefix_when_missing():
