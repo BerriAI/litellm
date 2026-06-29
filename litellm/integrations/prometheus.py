@@ -1121,8 +1121,19 @@ class PrometheusLogger(CustomLogger):
             GuardrailEventHooks.pre_call.value,
             GuardrailEventHooks.post_call.value,
         }
+        guardrail_information = (
+            standard_logging_payload.get("guardrail_information") or []
+        )
+        # Most guardrails record a list of entries, but some (e.g. xecguard) assign
+        # a single dict to guardrail_information. Normalize to a list so we iterate
+        # entries, not dict keys (which would pass strings into the loop below and
+        # raise AttributeError on info.get(...)).
+        if isinstance(guardrail_information, dict):
+            guardrail_information = [guardrail_information]
         total = 0.0
-        for info in standard_logging_payload.get("guardrail_information") or []:
+        for info in guardrail_information:
+            if not isinstance(info, dict):
+                continue
             mode = info.get("guardrail_mode")
             modes = mode if isinstance(mode, list) else [mode]
             # A mode may be a GuardrailEventHooks, a plain string, a GuardrailMode

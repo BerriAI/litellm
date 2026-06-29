@@ -137,6 +137,26 @@ def test_get_guardrail_overhead_seconds_ignores_dict_inside_list_mode():
     assert abs(PrometheusLogger._get_guardrail_overhead_seconds(payload) - 0.1) < 1e-6
 
 
+def test_get_guardrail_overhead_seconds_handles_dict_shaped_information():
+    """Some guardrails (e.g. xecguard) assign a single dict to
+    guardrail_information instead of a list. It must be treated as one entry and
+    must never raise (iterating a dict would otherwise yield string keys)."""
+    # single post_call dict -> treated as one entry and counted
+    counted = StandardLoggingPayload(
+        guardrail_information={
+            "guardrail_mode": GuardrailEventHooks.post_call,
+            "duration": 0.2,
+        },
+    )
+    assert abs(PrometheusLogger._get_guardrail_overhead_seconds(counted) - 0.2) < 1e-6
+
+    # single logging_only dict (the xecguard shape) -> excluded, no error
+    excluded = StandardLoggingPayload(
+        guardrail_information={"guardrail_mode": "logging_only", "duration": 0.5},
+    )
+    assert PrometheusLogger._get_guardrail_overhead_seconds(excluded) == 0.0
+
+
 def _patch_label_factory(monkeypatch):
     monkeypatch.setattr(
         "litellm.integrations.prometheus.prometheus_label_factory",
