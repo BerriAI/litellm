@@ -2485,6 +2485,7 @@ async def update_key_fn(
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - budget_alert_thresholds: Optional[List[float]] - Per-key budget alert thresholds as fractions of max_budget (e.g. [0.8, 0.9]). Overrides the global defaults set in alerting_args. Each threshold fires a webhook alert once per budget period.
 
     Example:
     ```bash

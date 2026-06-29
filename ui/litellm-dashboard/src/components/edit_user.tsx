@@ -22,9 +22,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ visible, possibleUIRoles,
     form.resetFields();
     form.setFieldValue(
       "budget_alert_thresholds",
-      Array.isArray(user?.metadata?.budget_alert_thresholds)
-        ? user.metadata.budget_alert_thresholds.join(", ")
-        : ""
+      Array.isArray(user?.metadata?.budget_alert_thresholds) ? user.metadata.budget_alert_thresholds.join(", ") : "",
     );
   }, [user, form]);
 

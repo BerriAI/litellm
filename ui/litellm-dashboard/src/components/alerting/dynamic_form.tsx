@@ -48,15 +48,16 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
             return [key, parsed];
           }
           return [key, val];
-        })
+        }),
       );
       handleSubmit(converted);
     }
   };
 
-  const listDisplayValue = (fieldValue: any): string => {
+  const listDisplayValue = (fieldValue: unknown): string => {
     if (Array.isArray(fieldValue)) return fieldValue.join(", ");
-    return fieldValue || "";
+    if (typeof fieldValue === "string") return fieldValue;
+    return "";
   };
 
   return (
