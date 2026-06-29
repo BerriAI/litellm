@@ -351,7 +351,9 @@ def create_batch(
 @client
 async def aretrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"
+    ] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
@@ -397,7 +399,9 @@ def _handle_retrieve_batch_providers_without_provider_config(
     litellm_params: dict,
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"
+    ] = "openai",
     logging_obj: Optional[Any] = None,
 ):
     api_base: Optional[str] = None
@@ -532,7 +536,9 @@ def _handle_retrieve_batch_providers_without_provider_config(
 @client
 def retrieve_batch(
     batch_id: str,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"] = "openai",
+    custom_llm_provider: Literal[
+        "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "moonshot"
+    ] = "openai",
     metadata: Optional[Dict[str, str]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,

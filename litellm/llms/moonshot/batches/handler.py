@@ -46,11 +46,7 @@ class MoonshotBatchesAPI(BaseLLM):
             return client
 
         resolved_key = api_key or get_secret_str("MOONSHOT_API_KEY")
-        resolved_base = (
-            api_base
-            or get_secret_str("MOONSHOT_API_BASE")
-            or MOONSHOT_DEFAULT_API_BASE
-        )
+        resolved_base = api_base or get_secret_str("MOONSHOT_API_BASE") or MOONSHOT_DEFAULT_API_BASE
 
         kwargs: dict = {"base_url": resolved_base}
         if resolved_key is not None:
@@ -96,18 +92,13 @@ class MoonshotBatchesAPI(BaseLLM):
         )
         if moonshot_client is None:
             raise ValueError(
-                "Moonshot client could not be initialised. "
-                "Pass api_key or set MOONSHOT_API_KEY in the environment."
+                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
             )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):
-                raise ValueError(
-                    "Expected an AsyncOpenAI client for async create_batch."
-                )
-            return self.acreate_batch(
-                create_batch_data=create_batch_data, client=moonshot_client
-            )
+                raise ValueError("Expected an AsyncOpenAI client for async create_batch.")
+            return self.acreate_batch(create_batch_data=create_batch_data, client=moonshot_client)
 
         response = cast(OpenAI, moonshot_client).batches.create(**create_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
@@ -142,18 +133,13 @@ class MoonshotBatchesAPI(BaseLLM):
         )
         if moonshot_client is None:
             raise ValueError(
-                "Moonshot client could not be initialised. "
-                "Pass api_key or set MOONSHOT_API_KEY in the environment."
+                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
             )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):
-                raise ValueError(
-                    "Expected an AsyncOpenAI client for async retrieve_batch."
-                )
-            return self.aretrieve_batch(
-                retrieve_batch_data=retrieve_batch_data, client=moonshot_client
-            )
+                raise ValueError("Expected an AsyncOpenAI client for async retrieve_batch.")
+            return self.aretrieve_batch(retrieve_batch_data=retrieve_batch_data, client=moonshot_client)
 
         response = cast(OpenAI, moonshot_client).batches.retrieve(**retrieve_batch_data)  # type: ignore[arg-type]
         return LiteLLMBatch(**response.model_dump())
@@ -188,18 +174,13 @@ class MoonshotBatchesAPI(BaseLLM):
         )
         if moonshot_client is None:
             raise ValueError(
-                "Moonshot client could not be initialised. "
-                "Pass api_key or set MOONSHOT_API_KEY in the environment."
+                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
             )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):
-                raise ValueError(
-                    "Expected an AsyncOpenAI client for async cancel_batch."
-                )
-            return self.acancel_batch(
-                cancel_batch_data=cancel_batch_data, client=moonshot_client
-            )
+                raise ValueError("Expected an AsyncOpenAI client for async cancel_batch.")
+            return self.acancel_batch(cancel_batch_data=cancel_batch_data, client=moonshot_client)
 
         response = cast(OpenAI, moonshot_client).batches.cancel(**cancel_batch_data)
         return LiteLLMBatch(**response.model_dump())
@@ -236,15 +217,12 @@ class MoonshotBatchesAPI(BaseLLM):
         )
         if moonshot_client is None:
             raise ValueError(
-                "Moonshot client could not be initialised. "
-                "Pass api_key or set MOONSHOT_API_KEY in the environment."
+                "Moonshot client could not be initialised. Pass api_key or set MOONSHOT_API_KEY in the environment."
             )
 
         if _is_async:
             if not isinstance(moonshot_client, AsyncOpenAI):
-                raise ValueError(
-                    "Expected an AsyncOpenAI client for async list_batches."
-                )
+                raise ValueError("Expected an AsyncOpenAI client for async list_batches.")
             return self.alist_batches(client=moonshot_client, after=after, limit=limit)
 
         return cast(OpenAI, moonshot_client).batches.list(after=after, limit=limit)  # type: ignore

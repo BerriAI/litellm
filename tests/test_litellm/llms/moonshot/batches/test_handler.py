@@ -11,7 +11,6 @@ real.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -66,7 +65,12 @@ def _sync_client() -> MagicMock:
 
 
 def _async_client() -> MagicMock:
-    return MagicMock(spec=AsyncOpenAI)
+    client = MagicMock(spec=AsyncOpenAI)
+    client.batches.create = AsyncMock()
+    client.batches.retrieve = AsyncMock()
+    client.batches.cancel = AsyncMock()
+    client.batches.list = AsyncMock()
+    return client
 
 
 # ====================================================================== create
@@ -97,10 +101,11 @@ class TestCreateBatch:
         assert isinstance(result, LiteLLMBatch)
         assert result.id == "batch-123"
 
-    def test_async_create_batch(self):
+    @pytest.mark.asyncio
+    async def test_async_create_batch(self):
         handler = MoonshotBatchesAPI()
         sdk = _async_client()
-        sdk.batches.create = AsyncMock(return_value=_sdk_response(_batch_dict()))
+        sdk.batches.create.return_value = _sdk_response(_batch_dict())
 
         with patch(GET_CLIENT, return_value=sdk):
             coro = handler.create_batch(
@@ -108,7 +113,7 @@ class TestCreateBatch:
                 create_batch_data=CREATE_DATA,
                 **AUTH_KW,
             )
-        result = asyncio.get_event_loop().run_until_complete(coro)
+        result = await coro
 
         sdk.batches.create.assert_called_once_with(**CREATE_DATA)
         assert isinstance(result, LiteLLMBatch)
@@ -143,10 +148,11 @@ class TestRetrieveBatch:
         sdk.batches.retrieve.assert_called_once_with(**RETRIEVE_DATA)
         assert isinstance(result, LiteLLMBatch)
 
-    def test_async_retrieve_batch(self):
+    @pytest.mark.asyncio
+    async def test_async_retrieve_batch(self):
         handler = MoonshotBatchesAPI()
         sdk = _async_client()
-        sdk.batches.retrieve = AsyncMock(return_value=_sdk_response(_batch_dict()))
+        sdk.batches.retrieve.return_value = _sdk_response(_batch_dict())
 
         with patch(GET_CLIENT, return_value=sdk):
             coro = handler.retrieve_batch(
@@ -154,7 +160,7 @@ class TestRetrieveBatch:
                 retrieve_batch_data=RETRIEVE_DATA,
                 **AUTH_KW,
             )
-        result = asyncio.get_event_loop().run_until_complete(coro)
+        result = await coro
 
         sdk.batches.retrieve.assert_called_once_with(**RETRIEVE_DATA)
         assert isinstance(result, LiteLLMBatch)
@@ -189,10 +195,11 @@ class TestCancelBatch:
         sdk.batches.cancel.assert_called_once_with(**CANCEL_DATA)
         assert isinstance(result, LiteLLMBatch)
 
-    def test_async_cancel_batch(self):
+    @pytest.mark.asyncio
+    async def test_async_cancel_batch(self):
         handler = MoonshotBatchesAPI()
         sdk = _async_client()
-        sdk.batches.cancel = AsyncMock(return_value=_sdk_response(_batch_dict(status="cancelling")))
+        sdk.batches.cancel.return_value = _sdk_response(_batch_dict(status="cancelling"))
 
         with patch(GET_CLIENT, return_value=sdk):
             coro = handler.cancel_batch(
@@ -200,7 +207,7 @@ class TestCancelBatch:
                 cancel_batch_data=CANCEL_DATA,
                 **AUTH_KW,
             )
-        result = asyncio.get_event_loop().run_until_complete(coro)
+        result = await coro
 
         sdk.batches.cancel.assert_called_once_with(**CANCEL_DATA)
         assert isinstance(result, LiteLLMBatch)
@@ -237,11 +244,12 @@ class TestListBatches:
         sdk.batches.list.assert_called_once_with(after=None, limit=10)
         assert result is list_resp
 
-    def test_async_list_batches(self):
+    @pytest.mark.asyncio
+    async def test_async_list_batches(self):
         handler = MoonshotBatchesAPI()
         sdk = _async_client()
         list_resp = MagicMock()
-        sdk.batches.list = AsyncMock(return_value=list_resp)
+        sdk.batches.list.return_value = list_resp
 
         with patch(GET_CLIENT, return_value=sdk):
             coro = handler.list_batches(
@@ -250,7 +258,7 @@ class TestListBatches:
                 limit=5,
                 **AUTH_KW,
             )
-        result = asyncio.get_event_loop().run_until_complete(coro)
+        result = await coro
 
         sdk.batches.list.assert_called_once_with(after="cursor-abc", limit=5)
         assert result is list_resp
@@ -274,7 +282,7 @@ class TestGetClient:
         handler = MoonshotBatchesAPI()
         with patch("litellm.llms.moonshot.batches.handler.OpenAI") as mock_cls:
             mock_cls.return_value = MagicMock(spec=OpenAI)
-            client = handler._get_client(
+            handler._get_client(
                 api_key=None,
                 api_base="https://api.moonshot.ai/v1",
                 timeout=30.0,
@@ -303,7 +311,7 @@ class TestGetClient:
         handler = MoonshotBatchesAPI()
         with patch("litellm.llms.moonshot.batches.handler.AsyncOpenAI") as mock_cls:
             mock_cls.return_value = MagicMock(spec=AsyncOpenAI)
-            client = handler._get_client(
+            handler._get_client(
                 api_key="sk-test",
                 api_base="https://api.moonshot.ai/v1",
                 timeout=30.0,
