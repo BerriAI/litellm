@@ -61,6 +61,23 @@ if TYPE_CHECKING:
 else:
     AsyncIOScheduler = Any
 
+_DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT = 5.0
+
+
+def _get_budget_metrics_per_request_timeout() -> float:
+    raw = os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT")
+    if raw is None:
+        return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+    try:
+        return float(raw)
+    except ValueError:
+        verbose_logger.debug(
+            "[Non-Blocking] Prometheus: invalid PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT=%r; using default %ss.",
+            raw,
+            _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT,
+        )
+        return _DEFAULT_BUDGET_METRICS_PER_REQUEST_TIMEOUT
+
 
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
@@ -1468,6 +1485,7 @@ class PrometheusLogger(CustomLogger):
         # periodic cron every PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES,
         # so dropping one slow per-request emission only loses sub-cron real-time
         # detail, not correctness.
+        budget_metrics_timeout = _get_budget_metrics_per_request_timeout()
         gather_coro = asyncio.gather(
             self._set_api_key_budget_metrics_after_api_request(
                 user_api_key=user_api_key,
@@ -1495,7 +1513,6 @@ class PrometheusLogger(CustomLogger):
             ),
             return_exceptions=True,
         )
-        budget_metrics_timeout = float(os.getenv("PROMETHEUS_BUDGET_METRICS_PER_REQUEST_TIMEOUT", "5.0"))
         try:
             results = await asyncio.wait_for(gather_coro, timeout=budget_metrics_timeout)
         except asyncio.TimeoutError:

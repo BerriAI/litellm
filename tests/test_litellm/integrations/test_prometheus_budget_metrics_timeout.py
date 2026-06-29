@@ -98,6 +98,23 @@ async def test_budget_metric_emission_completes_within_timeout(prometheus_logger
 
 
 @pytest.mark.asyncio
+async def test_invalid_timeout_env_falls_back_to_default(prometheus_logger, monkeypatch):
+    """A malformed timeout env value must not raise (which would recreate the
+    failure mode); it falls back to the default and every branch still runs."""
+    monkeypatch.setenv(TIMEOUT_ENV, "not-a-number")
+
+    prometheus_logger._set_api_key_budget_metrics_after_api_request = AsyncMock()
+    prometheus_logger._set_team_budget_metrics_after_api_request = AsyncMock()
+    prometheus_logger._set_user_budget_metrics_after_api_request = AsyncMock()
+    prometheus_logger._set_org_budget_metrics_after_api_request = AsyncMock()
+
+    await _call_increment(prometheus_logger)
+
+    assert prometheus_logger._set_api_key_budget_metrics_after_api_request.await_count == 1
+    assert prometheus_logger._set_org_budget_metrics_after_api_request.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_outer_cancellation_still_propagates(prometheus_logger, monkeypatch):
     """Only asyncio.TimeoutError is swallowed; an outer cancellation (cooperative
     shutdown / watchdog) injected while awaiting must still propagate."""
