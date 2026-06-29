@@ -8224,16 +8224,6 @@ def validate_and_fix_openai_messages(messages: List):
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
-        content = message.get("content")
-        if isinstance(content, list):
-            normalized_content = []
-            for item in content:
-                if isinstance(item, str):
-                    normalized_content.append({"type": "text", "text": item})
-                else:
-                    normalized_content.append(item)
-            message["content"] = normalized_content
-
         convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
