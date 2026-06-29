@@ -259,6 +259,26 @@ class TestVoyageMultimodalEmbeddings:
         )
         assert optional_params.get("output_dimension") == 1024
 
+    def test_encoding_format_reaches_outbound_payload_as_output_encoding(self):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+        from litellm.utils import get_optional_params_embeddings
+
+        optional_params = get_optional_params_embeddings(
+            model="voyage-multimodal-3.5",
+            custom_llm_provider="voyage",
+            encoding_format="base64",
+        )
+        assert optional_params.get("output_encoding") == "base64"
+        assert "encoding_format" not in optional_params
+
+        payload = VoyageMultimodalEmbeddingConfig().transform_embedding_request(
+            "voyage-multimodal-3.5", "hello", optional_params, {}
+        )
+        assert payload["output_encoding"] == "base64"
+        assert "encoding_format" not in payload
+
     def test_get_supported_openai_params_voyage_routes_multimodal(self):
         from litellm.litellm_core_utils.get_supported_openai_params import (
             get_supported_openai_params,
