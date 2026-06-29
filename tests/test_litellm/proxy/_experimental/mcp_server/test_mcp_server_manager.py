@@ -603,6 +603,73 @@ class TestMCPServerManager:
         assert captured_extra_headers == {"Authorization": "Bearer token"}
         assert isinstance(result, CallToolResult)
 
+    async def _capture_list_subject_token(self, server, oauth2_headers, raw_headers=None):
+        """Run _get_tools_from_server and return the subject_token it threaded to _create_mcp_client."""
+        manager = MCPServerManager()
+        captured = {}
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+        ):  # pragma: no cover - helper
+            captured["subject_token"] = subject_token
+            return AsyncMock()
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+        await manager._get_tools_from_server(
+            server=server, oauth2_headers=oauth2_headers, raw_headers=raw_headers
+        )
+        return captured["subject_token"]
+
+    @pytest.mark.asyncio
+    async def test_list_threads_subject_token_for_token_exchange(self):
+        """tools/list discovery must hand the caller's bearer to the resolver for OBO servers."""
+        server = MCPServer(
+            server_id="te-list",
+            name="te-list-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        subject_token = await self._capture_list_subject_token(
+            server, oauth2_headers={"Authorization": "Bearer subj-jwt"}
+        )
+        assert subject_token == "subj-jwt"
+
+    @pytest.mark.asyncio
+    async def test_list_does_not_thread_subject_token_for_non_token_exchange(self):
+        """A non-OBO server must not get the caller's bearer threaded (no leak across modes)."""
+        server = MCPServer(
+            server_id="none-list",
+            name="none-list-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+        subject_token = await self._capture_list_subject_token(
+            server, oauth2_headers={"Authorization": "Bearer subj-jwt"}
+        )
+        assert subject_token is None
+
+    @pytest.mark.asyncio
+    async def test_list_subject_token_none_without_oauth2_headers(self):
+        """Background/registry refresh (no oauth2 headers) lists with no subject token, as before."""
+        server = MCPServer(
+            server_id="te-list-bg",
+            name="te-list-bg-server",
+            url="https://up.example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+        subject_token = await self._capture_list_subject_token(server, oauth2_headers=None)
+        assert subject_token is None
+
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,

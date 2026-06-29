@@ -1838,6 +1838,7 @@ if MCP_AVAILABLE:
                         add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
                         user_api_key_auth=user_api_key_auth,
+                        oauth2_headers=oauth2_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
 

@@ -2032,6 +2032,7 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: Optional[dict[str, str]] = None,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        oauth2_headers: Optional[dict[str, str]] = None,
     ) -> list[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -2105,11 +2106,21 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
+            # token_exchange (OBO) discovery needs the caller's token too: list it with the user's own
+            # token (mirrors the call path), not v1's deleted client_credentials fallback. Other modes
+            # never read the inbound bearer, so leave subject_token None to avoid forwarding it.
+            subject_token = (
+                self._extract_bearer_token(oauth2_headers, raw_headers)
+                if server.auth_type == MCPAuth.oauth2_token_exchange
+                else None
+            )
+
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
 
