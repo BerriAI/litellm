@@ -2840,3 +2840,49 @@ async def test_extract_user_id_none_without_litellm_key(proxy_globals):
 
     request = _token_request({"content-type": "application/json"})
     assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rejects_blocked_key(proxy_globals):
+    """A blocked LiteLLM key must not resolve an identity. get_key_object returns the DB row without
+    checking blocked/expiry (the main auth pipeline does, and the public token endpoint bypasses it),
+    so a revoked key could otherwise overwrite the stored per-user OAuth token for its user."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="blocked-user", blocked=True)
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-blocked-key"})
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rejects_expired_key(proxy_globals):
+    """An expired LiteLLM key must not resolve an identity, for the same reason as a blocked key."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="expired-user", expires=expired)
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-expired-key"})
+    assert await _extract_user_id_from_request(request) is None

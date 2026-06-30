@@ -2,7 +2,8 @@ import asyncio
 import html as _html
 import json
 import time
-from typing import Any, Dict, Optional, Tuple
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -28,6 +29,9 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
 # Keeps us from hammering the upstream IdP on each discovery request.
@@ -250,6 +254,28 @@ def _litellm_key_from_request(request: Request) -> Optional[str]:
     return None
 
 
+def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
+    """The key's ``user_id``, or ``None`` if the key is blocked or expired.
+
+    The OAuth token endpoint is unauthenticated, so the presented key is validated here before its
+    identity is trusted to key a stored credential; a revoked or expired key must not be able to
+    write or overwrite the per-user OAuth token. ``get_key_object`` resolves a row without these
+    checks (the main ``user_api_key_auth`` pipeline enforces them downstream, which this endpoint
+    bypasses), so they are applied here. Deleted keys are already rejected upstream, where
+    ``get_key_object`` raises on a row that no longer exists.
+    """
+    if key_obj.blocked is True:
+        return None
+    expires = key_obj.expires
+    if expires is not None:
+        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry < datetime.now(timezone.utc):
+            return None
+    return key_obj.user_id
+
+
 async def _extract_user_id_from_request(request: Request) -> Optional[str]:
     """Resolve the LiteLLM ``user_id`` at the OAuth token endpoint so a per-user token is stored
     under the same identity the egress later reads it by (``user_api_key_auth.user_id``).
@@ -260,7 +286,9 @@ async def _extract_user_id_from_request(request: Request) -> Optional[str]:
     than a ``UserAPIKeyAuth``; the previous code read only ``Authorization`` and did
     ``getattr(cached, "user_id")`` with no ``model_type`` rehydration and no DB fallback, so it
     silently returned ``None`` and the token was never persisted, which makes the egress 401 on every
-    reconnect. Returns ``None`` only when no key is present or it cannot be resolved.
+    reconnect. The resolved key is validated (``_active_key_user_id``) before its identity is trusted,
+    so a blocked or expired key cannot write. Returns ``None`` when no key is present, the key cannot
+    be resolved, or it is blocked/expired.
     """
     token = _litellm_key_from_request(request)
     if not token:
@@ -278,7 +306,7 @@ async def _extract_user_id_from_request(request: Request) -> Optional[str]:
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
-        return getattr(key_obj, "user_id", None)
+        return _active_key_user_id(key_obj)
     except Exception as exc:
         verbose_logger.debug(
             "_extract_user_id_from_request: could not resolve a LiteLLM user_id for the presented "
