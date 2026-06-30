@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+import json
+import re
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException
@@ -18,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -25,6 +28,8 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER = "x-headroom-bypass"
+HEADROOM_RETRIEVE_TOOL_NAME = "headroom_retrieve"
+_HASH_PATTERN = re.compile(r"hash=([a-f0-9]{24})")
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -33,6 +38,124 @@ def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
     return isinstance(value, list)
+
+
+def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
+    hashes: list[str] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            hashes.extend(_HASH_PATTERN.findall(content))
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        hashes.extend(_HASH_PATTERN.findall(text))
+    return hashes
+
+
+def _build_headroom_retrieve_tool() -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "description": (
+                "Retrieve original content that was compressed by Headroom. "
+                "Call this when you encounter a compression marker containing a hash."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "hash": {
+                        "type": "string",
+                        "description": "The 24-character hex hash from the compression marker.",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional search query for BM25-ranked retrieval.",
+                    },
+                },
+                "required": ["hash"],
+            },
+        },
+    }
+
+
+def has_headroom_retrieve_tool(tools: object) -> bool:
+    if not isinstance(tools, list):
+        return False
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if tool.get("type") == "function" and isinstance(function, dict):
+            if function.get("name") == HEADROOM_RETRIEVE_TOOL_NAME:
+                return True
+    return False
+
+
+def _extract_headroom_tool_calls(
+    response: object,
+) -> list[dict[str, object]]:
+    choices = getattr(response, "choices", None)
+    if not isinstance(choices, list) or not choices:
+        return []
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        return []
+    tool_calls = getattr(message, "tool_calls", None)
+    if not isinstance(tool_calls, list):
+        return []
+
+    result: list[dict[str, object]] = []
+    for tc in tool_calls:
+        fn = getattr(tc, "function", None)
+        if fn is None:
+            continue
+        name = getattr(fn, "name", None)
+        if name != HEADROOM_RETRIEVE_TOOL_NAME:
+            continue
+        arguments_str = getattr(fn, "arguments", "{}")
+        try:
+            arguments: dict[str, object] = json.loads(arguments_str)
+        except (json.JSONDecodeError, TypeError):
+            arguments = {}
+        result.append(
+            {
+                "id": getattr(tc, "id", None),
+                "type": "function",
+                "name": name,
+                "arguments": arguments,
+            }
+        )
+    return result
+
+
+def _build_assistant_message_from_response(response: object) -> dict[str, object]:
+    choices = getattr(response, "choices", None)
+    if not isinstance(choices, list) or not choices:
+        return {"role": "assistant", "content": None, "tool_calls": []}
+    message = getattr(choices[0], "message", None)
+    if message is None:
+        return {"role": "assistant", "content": None, "tool_calls": []}
+    content = getattr(message, "content", None)
+    tool_calls = getattr(message, "tool_calls", None)
+    raw_tool_calls: list[dict[str, object]] = []
+    if isinstance(tool_calls, list):
+        for tc in tool_calls:
+            fn = getattr(tc, "function", None)
+            raw_tool_calls.append(
+                {
+                    "id": getattr(tc, "id", None),
+                    "type": "function",
+                    "function": {
+                        "name": getattr(fn, "name", None) if fn else None,
+                        "arguments": getattr(fn, "arguments", "{}") if fn else "{}",
+                    },
+                }
+            )
+    return {"role": "assistant", "content": content, "tool_calls": raw_tool_calls}
 
 
 class HeadroomGuardrail(CustomGuardrail):
@@ -77,6 +200,12 @@ class HeadroomGuardrail(CustomGuardrail):
         value = headers.get(BYPASS_HEADER)
         return str(value).lower() == "true"
 
+    def _request_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.headroom_api_key:
+            headers["Authorization"] = f"Bearer {self.headroom_api_key}"
+        return headers
+
     async def _call_compress(
         self,
         messages: list[dict[str, object]],
@@ -86,15 +215,11 @@ class HeadroomGuardrail(CustomGuardrail):
         if model:
             payload["model"] = model
 
-        request_headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self.headroom_api_key:
-            request_headers["Authorization"] = f"Bearer {self.headroom_api_key}"
-
         try:
             raw_response: HttpxResponse | None = await self.async_handler.post(  # pyright: ignore[reportUnknownMemberType]
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
-                headers=request_headers,
+                headers=self._request_headers(),
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
             raise HTTPException(
@@ -168,6 +293,46 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         return filtered
 
+    async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
+        params: dict[str, str] = {}
+        if query:
+            params["query"] = query
+
+        try:
+            raw_response: HttpxResponse | None = await self.async_handler.get(  # pyright: ignore[reportUnknownMemberType]
+                url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
+                params=params,
+                headers=self._request_headers(),
+            )
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
+            verbose_proxy_logger.warning(
+                "Headroom: retrieve failed for hash=%s: %s", hash_value, e
+            )
+            return f"[Headroom: retrieval failed for hash={hash_value}]"
+
+        if raw_response is None or raw_response.status_code == 404:
+            return f"[Headroom: hash={hash_value} not found or expired]"
+
+        if raw_response.status_code != 200:
+            verbose_proxy_logger.warning(
+                "Headroom: retrieve returned %s for hash=%s",
+                raw_response.status_code,
+                hash_value,
+            )
+            return f"[Headroom: retrieval error {raw_response.status_code} for hash={hash_value}]"
+
+        try:
+            body: object = raw_response.json()
+        except Exception:
+            return raw_response.text
+
+        if _is_str_object_dict(body):
+            original_content = body.get("original_content")
+            if isinstance(original_content, str):
+                return original_content
+
+        return str(body)
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -199,7 +364,111 @@ class HeadroomGuardrail(CustomGuardrail):
             model=model if isinstance(model, str) else None,
         )
 
-        return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
+        hashes = extract_hashes_from_messages(compressed)
+        if not hashes:
+            return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
+
+        existing_tools = inputs.get("tools")
+        retrieve_tool = _build_headroom_retrieve_tool()
+        if isinstance(existing_tools, list) and not has_headroom_retrieve_tool(existing_tools):
+            merged_tools: list[object] = list(existing_tools) + [retrieve_tool]
+        elif existing_tools is None:
+            merged_tools = [retrieve_tool]
+        else:
+            merged_tools = list(existing_tools) if isinstance(existing_tools, list) else [retrieve_tool]
+
+        return {**inputs, "structured_messages": compressed, "tools": merged_tools}  # pyright: ignore[reportReturnType]
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict,
+    ) -> Tuple[bool, Dict]:
+        if not has_headroom_retrieve_tool(tools):
+            return False, {}
+
+        tool_calls = _extract_headroom_tool_calls(response)
+        if not tool_calls:
+            return False, {}
+
+        return True, {"tool_calls": tool_calls}
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        anthropic_messages_provider_config: Any,
+        anthropic_messages_optional_request_params: Dict,
+        logging_obj: Any,
+        stream: bool,
+        kwargs: Dict,
+    ) -> AgenticLoopPlan:
+        tool_calls: list[dict[str, object]] = tools.get("tool_calls", [])  # type: ignore[assignment]
+
+        tool_results: list[dict[str, object]] = []
+        for tc in tool_calls:
+            arguments = tc.get("arguments", {})
+            hash_value = arguments.get("hash", "") if isinstance(arguments, dict) else ""
+            query = arguments.get("query") if isinstance(arguments, dict) else None
+            content = await self._call_retrieve(
+                hash_value=str(hash_value),
+                query=str(query) if query else None,
+            )
+            verbose_proxy_logger.debug(
+                "Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content)
+            )
+            tool_results.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.get("id"),
+                    "content": content,
+                }
+            )
+
+        assistant_message = _build_assistant_message_from_response(response)
+        follow_up_messages = list(messages) + [assistant_message] + tool_results
+
+        max_tokens: Optional[int] = (
+            anthropic_messages_optional_request_params.get("max_tokens")
+            or kwargs.get("max_tokens")
+        )
+        optional_params_without_max_tokens = {
+            k: v
+            for k, v in anthropic_messages_optional_request_params.items()
+            if k != "max_tokens"
+        }
+
+        full_model_name = model
+        if logging_obj is not None:
+            agentic_params = getattr(logging_obj, "model_call_details", {}).get(
+                "agentic_loop_params", {}
+            )
+            candidate = agentic_params.get("model", model)
+            if isinstance(candidate, str) and candidate:
+                full_model_name = candidate
+
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                model=full_model_name,
+                messages=follow_up_messages,
+                max_tokens=max_tokens,
+                optional_params=optional_params_without_max_tokens,
+                kwargs={
+                    k: v
+                    for k, v in kwargs.items()
+                    if not k.startswith("_headroom") and k != "litellm_logging_obj"
+                },
+            ),
+            metadata={"tool_type": "headroom_ccr"},
+        )
 
     @staticmethod
     def get_config_model() -> type[GuardrailConfigModel[object]] | None:
