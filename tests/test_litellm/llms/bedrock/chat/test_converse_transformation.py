@@ -51,6 +51,35 @@ def test_transform_usage():
     assert openai_usage.completion_tokens_details.text_tokens == usage["outputTokens"]
 
 
+def test_transform_usage_bedrock_native_count_suffix():
+    """Bedrock Converse returns cacheRead/WriteInputTokenCount (Count suffix).
+
+    The Anthropic-direct API uses cacheReadInputTokens / cacheWriteInputTokens
+    (no Count suffix). When only the Count-suffixed keys are present — as in a
+    real ConverseStream response — _transform_usage must still populate
+    cache_read_input_tokens and cache_creation_input_tokens correctly.
+    """
+    usage = ConverseTokenUsageBlock(
+        **{
+            "inputTokens": 5,
+            "outputTokens": 120,
+            "totalTokens": 5910,
+            "cacheReadInputTokenCount": 200,
+            "cacheWriteInputTokenCount": 5685,
+            # Anthropic-direct keys intentionally absent to reproduce the
+            # Bedrock Converse API response shape.
+        }
+    )
+    config = AmazonConverseConfig()
+    openai_usage = config._transform_usage(usage)
+
+    assert openai_usage._cache_read_input_tokens == 200
+    assert openai_usage._cache_creation_input_tokens == 5685
+    assert openai_usage.prompt_tokens == 5 + 200 + 5685
+    assert openai_usage.completion_tokens == 120
+    assert openai_usage.prompt_tokens_details.cached_tokens == 200
+
+
 def test_transform_usage_with_reasoning_content():
     """Test that completion_tokens_details correctly tracks reasoning vs text tokens."""
     usage = ConverseTokenUsageBlock(
