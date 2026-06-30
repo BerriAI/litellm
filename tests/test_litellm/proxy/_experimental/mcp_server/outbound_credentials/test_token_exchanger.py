@@ -325,7 +325,6 @@ async def test_access_or_unknown_issued_token_type_is_accepted(issued_token_type
 @pytest.mark.parametrize(
     "config",
     [
-        TokenExchangeConfig(client_id="c", client_secret=SecretStr("s")),
         TokenExchangeConfig(token_exchange_endpoint="https://idp/token", client_secret=SecretStr("s")),
         TokenExchangeConfig(token_exchange_endpoint="https://idp/token", client_id="c"),
     ],
@@ -335,6 +334,18 @@ async def test_incomplete_config_is_misconfigured_without_hitting_idp(config):
     result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"
+    assert post.calls == []
+
+
+@pytest.mark.asyncio
+async def test_missing_endpoint_is_precondition_required_without_hitting_idp():
+    # No endpoint configured (and none discoverable): fail closed with a 412-mapped precondition
+    # rather than guessing an IdP or falling back. The subject token is never POSTed anywhere.
+    config = TokenExchangeConfig(client_id="c", client_secret=SecretStr("s"))
+    post = _RecordingPost({"access_token": "x"})
+    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    assert isinstance(result, Error)
+    assert result.error.tag == "precondition_required"
     assert post.calls == []
 
 

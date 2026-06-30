@@ -144,6 +144,22 @@ def test_token_exchange_falls_back_to_token_url_when_no_exchange_endpoint():
     assert spec.config.token_exchange_endpoint == "https://idp.example.com/token"
 
 
+def test_token_exchange_with_creds_but_no_endpoint_is_owned_for_fail_closed():
+    # An OBO server with client credentials but no endpoint is still owned by v2 (spec, not None) so
+    # it fails closed at the exchanger (412) rather than silently deferring to v1 and connecting
+    # unauthenticated. The endpoint stays None for the exchanger to reject.
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.token_exchange_endpoint is None
+
+
 def test_token_exchange_omits_audience_when_unset():
     spec = to_server_spec(
         _server(

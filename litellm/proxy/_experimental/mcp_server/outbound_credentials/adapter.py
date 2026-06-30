@@ -102,15 +102,17 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
 
 
 def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
-    """Build a token_exchange (RFC 8693 OBO) spec, or defer (None) if the exchange config is absent.
+    """Build a token_exchange (RFC 8693 OBO) spec, or defer (None) when it is not OBO-configured.
 
-    Mirrors v1's ``has_token_exchange_config`` precondition: an endpoint (``token_exchange_endpoint``
-    or ``token_url``) plus ``client_id``/``client_secret`` must all be present, else there is nothing
-    to exchange against and the server stays on v1 (parity-safe). ``audience`` is forwarded only when
-    the operator set it; a missing one is omitted, not derived.
+    An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
+    ``token_exchange_endpoint``/``token_url`` is absent: a missing endpoint then fails closed (412) at
+    the exchanger rather than silently deferring to v1 and connecting unauthenticated, since the
+    gateway must not guess the IdP or fall back to a weaker source. Without client credentials there is
+    nothing to own, so the server stays on v1 (parity-safe). ``audience`` is forwarded only when the
+    operator set it; a missing one is omitted, not derived.
     """
     endpoint = server.token_exchange_endpoint or server.token_url
-    if not endpoint or not server.client_id or not server.client_secret:
+    if not server.client_id or not server.client_secret:
         return None
     return ServerSpec(
         server_id=server.server_id,

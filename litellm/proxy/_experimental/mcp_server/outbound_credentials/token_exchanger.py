@@ -180,12 +180,14 @@ class Rfc8693TokenExchanger:
         endpoint = config.token_exchange_endpoint
         client_id = config.client_id
         client_secret = config.client_secret
-        if not endpoint or not client_id or client_secret is None:
+        if not endpoint:
+            # No endpoint configured and none discoverable: fail closed (412) rather than guess an IdP
+            # or fall back to a weaker source. The caller's token is never sent anywhere.
             return Error(
-                CredError.of_misconfigured(
-                    "token_exchange requires token_exchange_endpoint, client_id and client_secret"
-                )
+                CredError.of_precondition_required("token exchange endpoint is not configured for this server")
             )
+        if not client_id or client_secret is None:
+            return Error(CredError.of_misconfigured("token_exchange requires client_id and client_secret"))
 
         cache_key = _cache_key(subject_token, tenant_id, config)
         server_id = server.server_id
