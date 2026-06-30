@@ -686,3 +686,71 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     # Even if LiteLLM_Params construction fails the deployment should survive
     result = expand_wildcard_deployments_for_model_info([deployment])
     assert result == [deployment]
+
+
+def test_get_complete_model_list_excludes_wildcard_routes_by_default():
+    """
+    Regression: wildcard routes like bedrock/* must NOT appear in the model
+    list when return_wildcard_routes=False (the default for /v1/models).
+    Previously, wildcards with a router deployment were never removed from
+    unique_models, leaking them into the response.
+    """
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+            },
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*", "gpt-4"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=router,
+    )
+
+    assert "bedrock/*" not in result
+    assert "gpt-4" in result
+
+
+def test_get_complete_model_list_includes_wildcard_routes_when_requested():
+    """
+    When return_wildcard_routes=True the wildcard pattern should appear in the
+    result (once), alongside the expanded models.
+    """
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+            },
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=router,
+    )
+
+    assert "bedrock/*" in result
+    assert result.count("bedrock/*") == 1
