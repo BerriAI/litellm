@@ -11,6 +11,7 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
   for (let i = 0; i < transformedData.length; i++) {
     let curr_model = transformedData[i];
     let litellm_model_name = curr_model?.litellm_params?.model;
+    let display_litellm_model_name = curr_model?.model_info?.team_public_model_name || litellm_model_name;
     let custom_llm_provider = curr_model?.litellm_params?.custom_llm_provider;
     let model_info = curr_model?.model_info;
 
@@ -56,6 +57,7 @@ export const transformModelData = (rawModelData: any, getProviderFromModel: (mod
     transformedData[i].input_cost = input_cost;
     transformedData[i].output_cost = output_cost;
     transformedData[i].litellm_model_name = litellm_model_name;
+    transformedData[i].display_litellm_model_name = display_litellm_model_name;
 
     // Convert Cost in terms of Cost per 1M tokens
     if (transformedData[i].input_cost != null) {

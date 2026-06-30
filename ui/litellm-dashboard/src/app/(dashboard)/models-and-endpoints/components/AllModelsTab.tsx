@@ -582,7 +582,7 @@ const AllModelsTab = ({
                 },
                 {
                   label: "LiteLLM Model Name",
-                  value: modelToDelete.litellm_model_name || "Not Set",
+                  value: modelToDelete.display_litellm_model_name || modelToDelete.litellm_model_name || "Not Set",
                 },
                 {
                   label: "Provider",

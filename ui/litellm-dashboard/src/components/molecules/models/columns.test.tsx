@@ -170,11 +170,38 @@ describe("columns", () => {
       model_name: "GPT-4",
       provider: "openai",
       litellm_model_name: "gpt-4",
+      display_litellm_model_name: "gpt-4",
     });
     render(<TestTable data={[model]} columns={cols} />);
 
     expect(screen.getByText("GPT-4")).toBeInTheDocument();
     expect(screen.getByText("gpt-4")).toBeInTheDocument();
+  });
+
+  it("should display canonical LiteLLM model name when display_litellm_model_name is set", () => {
+    const cols = columns(
+      defaultProps.userRole,
+      defaultProps.userID,
+      defaultProps.premiumUser,
+      defaultProps.setSelectedModelId,
+      defaultProps.setSelectedTeamId,
+      defaultProps.getDisplayModelName,
+      defaultProps.handleEditClick,
+      defaultProps.handleRefreshClick,
+      defaultProps.expandedRows,
+      defaultProps.setExpandedRows,
+    );
+
+    const model = createMockModel({
+      model_name: "claude-opus-4-8",
+      provider: "anthropic",
+      litellm_model_name: "anthropic/claude-opus-4-8",
+      display_litellm_model_name: "claude-opus-4-8",
+    });
+    render(<TestTable data={[model]} columns={cols} />);
+
+    expect(screen.getAllByText("claude-opus-4-8").length).toBeGreaterThan(0);
+    expect(screen.queryByText("anthropic/claude-opus-4-8")).not.toBeInTheDocument();
   });
 
   it("should display credential name when available", () => {
