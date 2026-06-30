@@ -2737,8 +2737,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_max_reasoning_effort": true
     },
     "azure_ai/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -35412,8 +35411,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_max_reasoning_effort": true
     },
     "vertex_ai/claude-sonnet-4-6": {
         "supports_adaptive_thinking": true,
@@ -42938,8 +42936,7 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_max_reasoning_effort": true,
-        "supports_output_config": true
+        "supports_max_reasoning_effort": true
     },
     "vertex_ai/claude-sonnet-4-6@default": {
         "supports_adaptive_thinking": true,
