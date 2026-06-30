@@ -527,6 +527,197 @@ async def test_key_generation_with_object_permission(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,request_kwargs,expected_in_error",
+    [
+        (
+            "access_group_ids",
+            {"access_group_ids": ["acme_private"]},
+            "Access groups",
+        ),
+        (
+            "mcp_toolsets",
+            {"object_permission": {"mcp_toolsets": ["acme_toolset"]}},
+            "MCP toolsets",
+        ),
+        (
+            "vector_stores",
+            {"object_permission": {"vector_stores": ["acme_vs"]}},
+            "Vector stores",
+        ),
+        (
+            "search_tools",
+            {"object_permission": {"search_tools": ["acme_search"]}},
+            "search_tools",
+        ),
+    ],
+)
+async def test_generate_key_personal_non_admin_denied_for_team_scoped_fields(
+    monkeypatch, field, request_kwargs, expected_in_error
+):
+    """generate_key_fn must reject access_group_ids and
+    object_permission.{mcp_toolsets, vector_stores, search_tools} when the
+    caller is a non-admin and the request has no team_id. Mutating any of the
+    three validator calls in _common_key_generation_helper or unmoving the
+    enforce_member_can_assign_access_groups call in _personal_key_generation_check
+    must break this test."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="should-not-create")
+    )
+    mock_prisma_client.insert_data = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy._types import (
+        GenerateKeyRequest,
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        generate_key_fn,
+    )
+
+    if "object_permission" in request_kwargs:
+        request_kwargs = {
+            **request_kwargs,
+            "object_permission": LiteLLM_ObjectPermissionBase(
+                **request_kwargs["object_permission"]
+            ),
+        }
+    request_data = GenerateKeyRequest(**request_kwargs)
+
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises((HTTPException, ProxyException)) as exc:
+        await generate_key_fn(
+            data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+        )
+    code = getattr(exc.value, "status_code", None) or getattr(exc.value, "code", None)
+    assert int(code) == 403
+    body = str(
+        getattr(exc.value, "detail", None) or getattr(exc.value, "message", exc.value)
+    )
+    assert expected_in_error in body
+    mock_prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_key_personal_non_admin_denied_vector_stores(monkeypatch):
+    """/key/update must reject vector_stores on a personal key by a non-admin.
+    Reverting the enforce_member_can_assign_access_groups move (i.e. putting
+    it back inside `if _team_id_to_check is not None`) does NOT cover
+    object_permission fields; this test exercises _validate_update_key_data
+    which calls _validate_mcp_servers_for_key_update."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    mock_prisma_client.db = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache",
+        MagicMock(),
+    )
+
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        LitellmUserRoles,
+        UpdateKeyRequest,
+    )
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_update_key_data,
+    )
+
+    existing_key_row = MagicMock(
+        token="hashed_alice_personal_key",
+        user_id="alice",
+        team_id=None,
+        created_by="alice",
+        max_budget=None,
+        organization_id=None,
+        project_id=None,
+    )
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        object_permission=LiteLLM_ObjectPermissionBase(vector_stores=["acme_vs"]),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "Vector stores" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_personal_non_admin_denied_access_groups(
+    monkeypatch,
+):
+    """/key/update on a personal key must also gate access_group_ids for
+    non-admins. Reverting the enforce move (putting it back inside
+    `if _team_id_to_check is not None`) breaks this test."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data  # type: ignore
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateKeyRequest
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _validate_update_key_data,
+    )
+
+    existing_key_row = MagicMock(
+        token="hashed_alice_personal_key",
+        user_id="alice",
+        team_id=None,
+        created_by="alice",
+        max_budget=None,
+        organization_id=None,
+        project_id=None,
+    )
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        access_group_ids=["ag-private"],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "Access groups" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_generate_key_helper_fn_with_access_group_ids(monkeypatch):
     """Ensure generate_key_helper_fn passes access_group_ids into the key insert payload."""
     mock_prisma_client = AsyncMock()
@@ -11643,6 +11834,85 @@ async def test_regenerate_premium_gate_allows_actual_master_key_holder():
     assert result.token == "sk-new-master"
 
 
+@pytest.mark.asyncio
+async def test_regenerate_applies_normalized_mcp_object_permission():
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionBase,
+        RegenerateKeyRequest,
+    )
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    data = RegenerateKeyRequest(
+        key="sk-old",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_servers=["server-alias"]),
+    )
+    existing_key = _make_regenerate_existing_key()
+    mock_prisma_client = AsyncMock()
+    mock_repo = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=existing_key)
+    execute_mock = AsyncMock(return_value=MagicMock())
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.master_key", None),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.hash_token", lambda token: "hashed-old"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.VerificationTokenRepository",
+            return_value=mock_repo,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.enforce_member_can_assign_access_groups",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.can_modify_verification_token",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
+            new_callable=AsyncMock,
+            return_value={"mcp_servers": ["server-id"]},
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_search_tools_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_vector_stores_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._persist_deleted_verification_tokens",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._execute_virtual_key_regeneration",
+            execute_mock,
+        ),
+    ):
+        await regenerate_key_fn(
+            key="sk-old",
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN.value,
+                api_key="sk-admin",
+                user_id="admin",
+            ),
+        )
+
+    regenerated_data = execute_mock.await_args.kwargs["data"]
+    assert regenerated_data.object_permission.mcp_servers == ["server-id"]
+
+
 # ---------------------------------------------------------------------------
 # Regression tests for GHSA-q775-qw9r-2r4g: budget escalation via key/generate
 # ---------------------------------------------------------------------------
@@ -12759,5 +13029,360 @@ async def test_cli_session_token_personal_key_without_budget_allowed():
             user_api_key_dict=caller,
             litellm_changed_by=None,
             team_table=None,  # no team in request = personal key, but no explicit budget
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_window_cannot_exceed_caller_max_budget(monkeypatch):
+    """A non-admin caller may not set a `budget_limits` window above
+    their own `max_budget`."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=10.0,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 1_000_000.0},
+        ],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 400
+    assert "budget_limits" in str(exc_info.value.detail)
+    assert "1000000" in str(exc_info.value.detail).replace(",", "")
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_window_within_caller_max_budget_allowed(monkeypatch):
+    """Counterpart: a window within the caller's ceiling must still pass."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": 25.0}],
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_admin_unrestricted(monkeypatch):
+    """Proxy admin can set any window budget regardless of their own max_budget."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-1",
+        max_budget=10.0,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": 1_000_000.0}],
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "admin-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+async def test_budget_limits_window_non_finite_rejected_for_non_admin(monkeypatch, non_finite):
+    """A non-admin caller submitting a non-finite `budget_limits` window
+    gets 400. The finite-number invariant applies before role / ceiling
+    checks."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=10.0,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 400
+    assert "finite" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+async def test_budget_limits_window_non_finite_rejected_for_admin(monkeypatch, non_finite):
+    """The finite-number invariant applies to every caller including
+    proxy admin."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-1",
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": non_finite}],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 400
+    assert "finite" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_session_token_personal_key_rejected(monkeypatch):
+    """A CLI session token caller may not set `budget_limits` on a
+    personal key (no `team_id`). Mirrors the scalar `max_budget` guard."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        is_session_token=True,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": 1_000_000.0}],
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 400
+    assert "session token" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_session_token_team_key_uses_team_ceiling(monkeypatch):
+    """A CLI session token acting on a team key uses the team's
+    `max_budget` as the ceiling; values within it are permitted."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    team = LiteLLM_TeamTableCachedObj(team_id="team-1", max_budget=50.0)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        team_id="team-1",
+        is_session_token=True,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": 25.0}],
+        team_id="team-1",
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=team,
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_session_token_team_key_over_team_budget_rejected(monkeypatch):
+    """Same shape, but window exceeds the team's `max_budget`."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    team = LiteLLM_TeamTableCachedObj(team_id="team-1", max_budget=50.0)
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        team_id="team-1",
+        is_session_token=True,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": 1_000_000.0}],
+        team_id="team-1",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=team,
+        )
+    assert exc_info.value.status_code == 400
+    assert "cannot exceed" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_budget_limits_session_token_personal_key_admin_unaffected(monkeypatch):
+    """A proxy admin using a session token is exempt from the personal-key
+    reject; the role short-circuit runs first."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-1",
+        is_session_token=True,
+    )
+    request = GenerateKeyRequest(
+        budget_limits=[{"budget_duration": "1d", "max_budget": 1_000_000.0}],
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "admin-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_permissions_field_rejected_for_non_admin(monkeypatch):
+    """A non-admin caller may not set the `permissions` field on a key
+    they create."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+    request = GenerateKeyRequest(permissions={"get_spend_routes": True})
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "permissions" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_permissions_empty_default_allowed_for_non_admin(monkeypatch):
+    """
+    The empty `{}` default on GenerateKeyRequest.permissions must continue
+    to pass for non-admin callers; only a non-empty dict triggers the gate.
+    """
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "user-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=GenerateKeyRequest(),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_permissions_admin_can_set_any(monkeypatch):
+    """Proxy admin can still set `permissions` on a key."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-1",
+    )
+    request = GenerateKeyRequest(permissions={"get_spend_routes": True})
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+        new_callable=AsyncMock,
+        return_value={"key": "sk-test", "expires": None, "user_id": "admin-1"},
+    ):
+        result = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+            team_table=None,
         )
     assert result is not None
