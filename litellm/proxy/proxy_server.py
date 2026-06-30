@@ -14634,9 +14634,6 @@ async def delete_callback(
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
 
-        # Restart the proxy to apply changes
-        await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
-
         await _create_config_audit_log(
             "litellm_settings",
             "deleted",
@@ -14644,6 +14641,9 @@ async def delete_callback(
             {"success_callback": success_callbacks},
             user_api_key_dict,
         )
+
+        # Restart the proxy to apply changes
+        await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
         return {
             "message": f"Successfully deleted callback: {callback_name}",

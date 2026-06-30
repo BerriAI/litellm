@@ -8916,6 +8916,48 @@ def test_delete_callback_audits_litellm_settings_deletion(
         restore()
 
 
+def test_delete_callback_audits_before_reload_failure(_update_config_setup, monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+
+    client, prisma, restore = _update_config_setup()
+    audit_create = AsyncMock()
+    prisma.db.litellm_auditlog.create = audit_create
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    from litellm.proxy.proxy_server import proxy_config as real_proxy_config
+
+    monkeypatch.setattr(
+        real_proxy_config,
+        "get_config",
+        AsyncMock(
+            return_value={
+                "litellm_settings": {"success_callback": ["langfuse", "datadog"]}
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        real_proxy_config, "save_config", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        real_proxy_config,
+        "add_deployment",
+        AsyncMock(side_effect=RuntimeError("reload failed")),
+    )
+    try:
+        resp = client.post(
+            "/config/callback/delete", json={"callback_name": "datadog"}
+        )
+        assert resp.status_code == 500, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "litellm_settings"
+        assert written["action"] == "deleted"
+    finally:
+        restore()
+
+
 def test_update_config_redacts_all_environment_variable_values(
     _update_config_setup, monkeypatch
 ):
