@@ -801,9 +801,10 @@ async def test_new_user_license_over_limit(mocker):
     # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
 
-    # Setup the mock count response to return a high number of users
-    async def mock_count(*args, **kwargs):
-        return 1000  # High user count
+    # 1000 billable users (no SCIM-deactivated rows): the filtered count used
+    # for "deactivated" returns 0, so billable == total == 1000
+    async def mock_count(*args, where=None, **kwargs):
+        return 0 if where is not None else 1000
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
 
@@ -850,6 +851,69 @@ async def test_new_user_license_over_limit(mocker):
 
     # Verify that the license check was called with the correct user count
     mock_license_check.is_over_limit.assert_called_once_with(total_users=1000)
+
+
+@pytest.mark.asyncio
+async def test_new_user_license_gate_counts_only_billable_users(mocker):
+    """
+    The /user/new license gate must count billable users only (excluding
+    SCIM-deactivated rows). Deactivated users that push the raw total over
+    max_users must not block creation, while active users over the limit must.
+    """
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        _noop,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        _noop,
+    )
+
+    license_check = LicenseCheck()
+    license_check.airgapped_license_data = {"max_users": 2}  # type: ignore
+    mocker.patch("litellm.proxy.proxy_server._license_check", license_check)
+
+    key_gen = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(side_effect=RuntimeError("reached key generation")),
+    )
+
+    def _prisma(total, deactivated):
+        client = mocker.MagicMock()
+
+        async def _count(*args, where=None, **kwargs):
+            return deactivated if where is not None else total
+
+        client.db.litellm_usertable.count = _count
+        return client
+
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    request = NewUserRequest(user_role="internal_user")
+
+    # 2 active + 3 deactivated -> billable 2, not over max_users 2: gate passes
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", _prisma(total=5, deactivated=3)
+    )
+    with pytest.raises(ProxyException) as passed:
+        await new_user(data=request, user_api_key_dict=admin)
+    assert key_gen.call_count == 1
+    assert "License is over limit" not in str(passed.value.message)
+
+    # 3 active, 0 deactivated -> billable 3, over max_users 2: gate blocks
+    key_gen.reset_mock()
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client", _prisma(total=3, deactivated=0)
+    )
+    with pytest.raises(ProxyException) as blocked:
+        await new_user(data=request, user_api_key_dict=admin)
+    assert blocked.value.code == 403 or blocked.value.code == "403"
+    assert "License is over limit" in str(blocked.value.message)
+    assert key_gen.call_count == 0
 
 
 @pytest.mark.asyncio

@@ -94,19 +94,32 @@ def test_registry_parent_integrity_no_orphans():
 
 
 def test_registry_hierarchy_shape():
-    assert set(root_roles()) == {SpanRole.PROXY_REQUEST}
+    # MCP roles have no in-process parent: per the MCP semconv they root (or adopt
+    # the client's propagated _meta context), so they sit alongside PROXY_REQUEST.
+    assert set(root_roles()) == {
+        SpanRole.PROXY_REQUEST,
+        SpanRole.MCP_TOOL_CALL,
+        SpanRole.MCP_LIST_TOOLS,
+    }
     # Guardrails parent to the request span, not the LLM call: a pre-call
     # guardrail runs before the LLM call exists, so it's a sibling of it.
     assert set(child_roles(SpanRole.PROXY_REQUEST)) == {
         SpanRole.LLM_CALL,
-        SpanRole.MCP_TOOL_CALL,
         SpanRole.GUARDRAIL,
         SpanRole.DB_CALL,
         SpanRole.SERVICE,
     }
     assert SPAN_REGISTRY[SpanRole.LLM_CALL].kind is LiteLLMSpanKind.CLIENT
-    # The proxy is an MCP client to the upstream tool server: CLIENT span.
+    # The proxy is an MCP client to the upstream tool server: CLIENT span. Listing
+    # tools is the same client relationship, so it's a CLIENT span too.
     assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].kind is LiteLLMSpanKind.CLIENT
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].kind is LiteLLMSpanKind.CLIENT
+    # MCP spans don't nest under the transport: they link the PROXY_REQUEST span
+    # instead of parenting to it (OTel GenAI MCP semconv).
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].parent is None
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].parent is None
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].links is SpanRole.PROXY_REQUEST
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].links is SpanRole.PROXY_REQUEST
     assert SPAN_REGISTRY[SpanRole.PROXY_REQUEST].kind is LiteLLMSpanKind.SERVER
     assert SPAN_REGISTRY[SpanRole.GUARDRAIL].parent is SpanRole.PROXY_REQUEST
     # An outbound datastore call is a CLIENT span; an internal service is INTERNAL.

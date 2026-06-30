@@ -181,6 +181,79 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     assert len(tool_use_blocks) == 2
 
 
+@pytest.mark.parametrize(
+    "thinking_block",
+    [
+        {"type": "thinking", "thinking": "oss reasoning", "signature": None},
+        {"type": "thinking", "thinking": "oss reasoning", "signature": ""},
+        {"type": "thinking", "thinking": "oss reasoning"},
+    ],
+    ids=["null_signature", "empty_signature", "missing_signature"],
+)
+def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
+    """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
+    with no Anthropic signature. Anthropic verifies the signature cryptographically,
+    so replaying a null/empty/missing-signature thinking block is rejected with
+    400 ... thinking.signature.str: Input should be a valid string.
+    anthropic_messages_pt must drop the unsignable thinking block while preserving
+    the assistant's answer text. Regression for LIT-4007.
+    """
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "2+2 equals 4.",
+            "thinking_blocks": [thinking_block],
+        },
+        {"role": "user", "content": "Now what is 3+3?"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+    )
+
+    assistant = next(m for m in result if m["role"] == "assistant")
+    content = assistant["content"]
+    assert all(
+        block.get("type") != "thinking" for block in content
+    ), f"unsignable thinking block must be dropped, got {content!r}"
+    assert any(
+        block.get("type") == "text" and block.get("text") == "2+2 equals 4."
+        for block in content
+    ), f"assistant answer text must be preserved, got {content!r}"
+
+
+def test_anthropic_messages_pt_keeps_signed_thinking_block():
+    """A genuine Anthropic round-trip still holds its original signature, so that
+    thinking block must be forwarded unchanged (we only drop unsignable blocks).
+    Regression for LIT-4007.
+    """
+    signed_block = {
+        "type": "thinking",
+        "thinking": "genuine anthropic reasoning",
+        "signature": "ErcBCkgIValidSignatureBytes",
+    }
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "2+2 equals 4.",
+            "thinking_blocks": [signed_block],
+        },
+        {"role": "user", "content": "Now what is 3+3?"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+    )
+
+    assistant = next(m for m in result if m["role"] == "assistant")
+    thinking_blocks = [b for b in assistant["content"] if b.get("type") == "thinking"]
+    assert len(thinking_blocks) == 1
+    assert thinking_blocks[0]["signature"] == "ErcBCkgIValidSignatureBytes"
+    assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
+
+
 def test_convert_to_azure_openai_messages():
     """Test coverting image_url to azure_openai spec"""
 
@@ -1551,6 +1624,69 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
     tool_spec = result[0].get("toolSpec")
     assert tool_spec is not None
     assert tool_spec["name"] == "get_weather"
+
+
+def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
+    """
+    Regression for LIT-3858: Responses built-in tools (image_generation, namespace,
+    tool_search, custom) have no Bedrock toolSpec equivalent. They must be dropped, not
+    emitted as junk ``litellm_unnamed_tool_N`` toolSpecs the model can hallucinate calls to.
+    Mappable ``function`` and Anthropic ``input_schema`` tools must survive untouched.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "noop",
+                "description": "x",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {"type": "image_generation", "output_format": "png"},
+        {"type": "namespace", "name": "grp", "description": "g", "tools": []},
+        {"type": "custom", "name": "free_form"},
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["noop"]
+    assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
+
+
+def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
+    """
+    The drop guard for unmappable tools must not regress Anthropic Messages format tools,
+    which carry an ``input_schema`` instead of an OpenAI ``function`` key.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "image_generation",
+            "output_format": "png",
+        },
+        {
+            "name": "lookup",
+            "description": "look something up",
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["lookup"]
 
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():

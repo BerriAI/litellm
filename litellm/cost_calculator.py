@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _parse_prompt_tokens_details,
     calculate_cost_component,
     generic_cost_per_token,
+    get_token_type_cost_breakdown,
     get_billable_input_tokens,
     select_cost_metric_for_model,
 )
@@ -1050,6 +1051,7 @@ def _store_cost_breakdown_in_logging_obj(
     margin_total_amount: Optional[float] = None,
     cache_read_cost: Optional[float] = None,
     cache_creation_cost: Optional[float] = None,
+    reasoning_cost: Optional[float] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1087,6 +1089,7 @@ def _store_cost_breakdown_in_logging_obj(
             margin_total_amount=margin_total_amount,
             cache_read_cost=cache_read_cost,
             cache_creation_cost=cache_creation_cost,
+            reasoning_cost=reasoning_cost,
         )
 
     except Exception as breakdown_error:
@@ -1628,28 +1631,23 @@ def completion_cost(
 
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
+                    _reasoning_cost: Optional[float] = None
                     _cache_read_cost: Optional[float] = None
                     _cache_creation_cost: Optional[float] = None
-                    if cost_per_token_usage_object is not None:
-                        _cr = getattr(cost_per_token_usage_object, "cache_read_input_tokens", None) or (
-                            cost_per_token_usage_object.model_extra or {}
-                        ).get("cache_read_input_tokens")
-                        _cc = getattr(
-                            cost_per_token_usage_object,
-                            "cache_creation_input_tokens",
-                            None,
-                        ) or (cost_per_token_usage_object.model_extra or {}).get("cache_creation_input_tokens")
-                        if (_cr or _cc) and model:
-                            try:
-                                _mi = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-                                _cr_rate = _mi.get("cache_read_input_token_cost")
-                                if _cr and _cr_rate is not None:
-                                    _cache_read_cost = float(_cr) * float(_cr_rate)
-                                _cc_rate = _mi.get("cache_creation_input_token_cost")
-                                if _cc and _cc_rate is not None:
-                                    _cache_creation_cost = float(_cc) * float(_cc_rate)
-                            except Exception:
-                                pass
+                    if cost_per_token_usage_object is not None and model:
+                        _breakdown_provider: Optional[str] = (
+                            custom_llm_provider if isinstance(custom_llm_provider, str) else None
+                        )
+                        _token_type_breakdown = get_token_type_cost_breakdown(
+                            model=model,
+                            custom_llm_provider=_breakdown_provider,
+                            usage=cost_per_token_usage_object,
+                            service_tier=service_tier,
+                            data_residency=data_residency,
+                        )
+                        _reasoning_cost = _token_type_breakdown.reasoning_cost
+                        _cache_read_cost = _token_type_breakdown.cache_read_cost
+                        _cache_creation_cost = _token_type_breakdown.cache_creation_cost
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
                         prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
@@ -1665,6 +1663,7 @@ def completion_cost(
                         margin_total_amount=margin_total_amount,
                         cache_read_cost=_cache_read_cost,
                         cache_creation_cost=_cache_creation_cost,
+                        reasoning_cost=_reasoning_cost,
                     )
 
                 return _final_cost

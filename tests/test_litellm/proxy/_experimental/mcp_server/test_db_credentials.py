@@ -643,3 +643,82 @@ async def test_rotate_user_env_vars_skips_undecryptable_rows():
     assert prisma.db.litellm_mcpuserenvvars.update.call_count == 1
     where = prisma.db.litellm_mcpuserenvvars.update.call_args.kwargs["where"]
     assert where["user_id_server_id"]["server_id"] == "srv-ok"
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_uses_client_secret_basic(monkeypatch):
+    """LIT-4091: a per-user refresh against a server with token_endpoint_auth_method=client_secret_basic
+    sends HTTP Basic and keeps the secret out of the body."""
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    server = MagicMock()
+    server.token_url = "https://idp.example.com/oauth2/token"
+    server.server_id = "srv"
+    server.client_id = "cid"
+    server.client_secret = "sec"
+    server.token_endpoint_auth_method = "client_secret_basic"
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"access_token": "new-at", "expires_in": 3600}
+    mock_response.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+
+    monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **kwargs: mock_client)
+    monkeypatch.setattr(db_mod, "store_user_oauth_credential", AsyncMock())
+    monkeypatch.setattr(
+        db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "new-at"})
+    )
+
+    result = await db_mod.refresh_user_oauth_token(
+        prisma_client=MagicMock(),
+        user_id="alice",
+        server=server,
+        cred={"refresh_token": "rt"},
+    )
+
+    assert result is not None
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["headers"]["Authorization"] == "Basic " + base64.b64encode(b"cid:sec").decode()
+    assert "client_secret" not in kwargs["data"]
+    assert "client_id" not in kwargs["data"]
+    assert kwargs["data"]["grant_type"] == "refresh_token"
+    assert kwargs["data"]["refresh_token"] == "rt"
+
+
+@pytest.mark.asyncio
+async def test_refresh_user_oauth_token_defaults_to_client_secret_post(monkeypatch):
+    """Backward compatibility: with no token_endpoint_auth_method the refresh keeps credentials in
+    the body (client_secret_post) and sends no Authorization header."""
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    server = MagicMock()
+    server.token_url = "https://idp.example.com/oauth2/token"
+    server.server_id = "srv"
+    server.client_id = "cid"
+    server.client_secret = "sec"
+    server.token_endpoint_auth_method = None
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {"access_token": "new-at", "expires_in": 3600}
+    mock_response.raise_for_status = MagicMock()
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+
+    monkeypatch.setattr(db_mod, "get_async_httpx_client", lambda **kwargs: mock_client)
+    monkeypatch.setattr(db_mod, "store_user_oauth_credential", AsyncMock())
+    monkeypatch.setattr(
+        db_mod, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "new-at"})
+    )
+
+    await db_mod.refresh_user_oauth_token(
+        prisma_client=MagicMock(),
+        user_id="alice",
+        server=server,
+        cred={"refresh_token": "rt"},
+    )
+
+    _, kwargs = mock_client.post.call_args
+    assert "Authorization" not in kwargs["headers"]
+    assert kwargs["data"]["client_id"] == "cid"
+    assert kwargs["data"]["client_secret"] == "sec"

@@ -80,6 +80,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
+    validate_key_vector_stores_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -348,7 +349,21 @@ def _personal_key_membership_check(
     return True
 
 
+def _object_permission_to_dict(
+    object_permission: Optional[LiteLLM_ObjectPermissionBase],
+) -> Optional[ObjectPermissionDict]:
+    if object_permission is None:
+        return None
+    return cast(ObjectPermissionDict, object_permission.model_dump(exclude_unset=True))
+
+
 def _personal_key_generation_check(user_api_key_dict: UserAPIKeyAuth, data: GenerateKeyRequest):
+    TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_table=None,
+        access_group_ids=data.access_group_ids,
+    )
+
     if (
         litellm.key_generation_settings is None
         or litellm.key_generation_settings.get("personal_key_generation") is None
@@ -545,6 +560,79 @@ def _check_allowed_routes_caller_permission(
             )
         },
     )
+
+
+def _check_permissions_caller_permission(
+    permissions: Optional[dict],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Only proxy admins may set the `permissions` dict on a key.
+
+    The field grants ambient capabilities (e.g. `get_spend_routes` exposes
+    `/global/spend/*`), so it must follow the same admin gate as
+    `allowed_routes`. Without this gate a non-admin can self-grant capabilities
+    they do not hold, including read access to global spend.
+    """
+    if not permissions:
+        return
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins can set `permissions` on a key."},
+    )
+
+
+def _check_budget_limits_delegation_ceiling(
+    budget_limits: Optional[List[BudgetLimitEntry]],
+    delegation_ceiling: Optional[float],
+    user_api_key_dict: UserAPIKeyAuth,
+    is_ui_session_team_key: bool,
+    team_table: Optional[LiteLLM_TeamTableCachedObj],
+) -> None:
+    """
+    Enforce three invariants on `budget_limits`:
+
+    - Every `budget_limits[*].max_budget` must be a finite number; applies
+      to every caller including proxy admin.
+    - A CLI session token caller may not set `budget_limits` on a personal
+      key (one with no `team_id`); mirrors the scalar `max_budget` guard in
+      `_common_key_generation_helper`.
+    - Non-admin callers may not set a window above their delegation ceiling.
+    """
+    if not budget_limits:
+        return
+    non_finite = next((w for w in budget_limits if not math.isfinite(w.max_budget)), None)
+    if non_finite is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": (f"budget_limits entry max_budget ({non_finite.max_budget}) must be a finite number.")},
+        )
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    if is_ui_session_team_key:
+        return
+    if user_api_key_dict.is_session_token and team_table is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": ("budget_limits cannot be set without specifying team_id when using a CLI session token.")
+            },
+        )
+    if delegation_ceiling is None:
+        return
+    over_ceiling = next((w for w in budget_limits if w.max_budget > delegation_ceiling), None)
+    if over_ceiling is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"budget_limits entry max_budget ({over_ceiling.max_budget}) "
+                    f"cannot exceed the caller's own max_budget ({delegation_ceiling})."
+                )
+            },
+        )
 
 
 async def validate_team_id_used_in_service_account_request(
@@ -744,6 +832,18 @@ async def _common_key_generation_helper(
             },
         )
 
+    _check_budget_limits_delegation_ceiling(
+        budget_limits=data.budget_limits,
+        delegation_ceiling=delegation_ceiling,
+        user_api_key_dict=user_api_key_dict,
+        is_ui_session_team_key=is_ui_session_team_key,
+        team_table=team_table,
+    )
+    _check_permissions_caller_permission(
+        permissions=data.permissions,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
     try:
         from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
@@ -845,17 +945,24 @@ async def _common_key_generation_helper(
         data_json.pop("tags")
 
     # Validate MCP servers in object_permission are within team scope
+    _is_proxy_admin_caller = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         prisma_client=prisma_client,
-        is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+        is_proxy_admin=_is_proxy_admin_caller,
     )
     if normalized_object_permission is not None:
         data_json["object_permission"] = normalized_object_permission
     await validate_key_search_tools_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
+        is_proxy_admin=_is_proxy_admin_caller,
+    )
+    await validate_key_vector_stores_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+        is_proxy_admin=_is_proxy_admin_caller,
     )
 
     data_json = await _set_object_permission(
@@ -2058,7 +2165,7 @@ async def _validate_mcp_servers_for_key_update(
     prisma_client: Any,
     user_api_key_cache: Any,
     is_proxy_admin: bool,
-) -> Optional[dict]:
+) -> Optional[ObjectPermissionDict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
     # If team_id isn't being changed, resolve the existing key's team
@@ -2069,13 +2176,7 @@ async def _validate_mcp_servers_for_key_update(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-    object_permission_dict: Optional[dict] = None
-    if data.object_permission is not None:
-        object_permission_dict = (
-            data.object_permission.model_dump(exclude_unset=True)
-            if hasattr(data.object_permission, "model_dump")
-            else dict(data.object_permission)  # type: ignore[arg-type]
-        )
+    object_permission_dict = _object_permission_to_dict(data.object_permission)
     normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
@@ -2085,6 +2186,12 @@ async def _validate_mcp_servers_for_key_update(
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
+        is_proxy_admin=is_proxy_admin,
+    )
+    await validate_key_vector_stores_against_team(
+        object_permission=object_permission_dict,
+        team_obj=effective_team_obj,
+        is_proxy_admin=is_proxy_admin,
     )
     return normalized_object_permission
 
@@ -2216,20 +2323,18 @@ async def _validate_update_key_data(
                 detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
             )
 
-        # Field-level opt-in: non-admin members may only assign access groups when
-        # the team has enabled KEY_ACCESS_GROUP_ASSIGNMENT.
-        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
-            user_api_key_dict=user_api_key_dict,
-            team_table=team_obj,
-            access_group_ids=data.access_group_ids,
-        )
-
         if team_obj is not None:
             await _check_team_key_limits(
                 team_table=team_obj,
                 data=data,
                 prisma_client=prisma_client,
             )
+
+    TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_obj,
+        access_group_ids=data.access_group_ids,
+    )
 
     # Validate key against project limits if project_id is being set
     _project_id_to_check = getattr(data, "project_id", None) or getattr(existing_key_row, "project_id", None)
@@ -4091,6 +4196,86 @@ async def _rotate_master_key(
         verbose_proxy_logger.debug(f"Successfully re-encrypted {len(credentials)} credentials with new master key")
 
 
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    from litellm.proxy._types import CommonProxyErrors
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+
+@router.post(
+    "/credentials/migrate-encryption",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def migrate_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    dry_run: bool = Query(
+        False,
+        description="If true, scan and report without writing any changes.",
+    ),
+):
+    """
+    Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+
+    Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+    Idempotent and resumable — re-running skips already-migrated values. Pass
+    ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        migrate_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await migrate_encryption(
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        dry_run=dry_run,
+    )
+    return {"status": "success", "dry_run": dry_run, "report": report.as_dict()}
+
+
+@router.get(
+    "/credentials/migrate-encryption/check",
+    tags=["credential management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def check_encryption_endpoint(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Read-only residual scan for compliance attestation. Reports how many at-rest
+    values are still in the legacy format. ``residual_legacy == 0`` attests no
+    legacy ciphertext remains. Admin only; performs no writes.
+    """
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.credential_migration import (
+        check_encryption,
+    )
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    report = await check_encryption(prisma_client=prisma_client)
+    return {"status": "success", "report": report.as_dict()}
+
+
 async def get_new_token(data: Optional[RegenerateKeyRequest]) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
@@ -4458,9 +4643,7 @@ async def regenerate_key_fn(
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
-        # Gate access_group_ids on regenerate, same as /key/generate and
-        # /key/update. Use the existing key's team since the body may omit it.
-        if data is not None and data.access_group_ids:
+        if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
             if _key_in_db.team_id is not None:
                 regenerate_team_table = await get_team_object(
@@ -4469,10 +4652,31 @@ async def regenerate_key_fn(
                     user_api_key_cache=user_api_key_cache,
                     check_db_only=True,
                 )
+            _regen_is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
                 user_api_key_dict=user_api_key_dict,
                 team_table=regenerate_team_table,
                 access_group_ids=data.access_group_ids,
+            )
+            _regen_object_permission_dict = _object_permission_to_dict(data.object_permission)
+            normalized_object_permission = await validate_key_mcp_servers_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                prisma_client=prisma_client,
+                is_proxy_admin=_regen_is_proxy_admin,
+            )
+            if normalized_object_permission is not None:
+                data.object_permission = LiteLLM_ObjectPermissionBase(**normalized_object_permission)
+                _regen_object_permission_dict = normalized_object_permission
+            await validate_key_search_tools_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                is_proxy_admin=_regen_is_proxy_admin,
+            )
+            await validate_key_vector_stores_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                is_proxy_admin=_regen_is_proxy_admin,
             )
 
         verbose_proxy_logger.info(

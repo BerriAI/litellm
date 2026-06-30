@@ -22,6 +22,7 @@ jobs:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: >-
+        tests/test_litellm/batches
         tests/test_litellm/secret_managers
         tests/test_litellm/a2a_protocol
         tests/test_litellm/anthropic_interface
@@ -36,6 +37,7 @@ jobs:
         tests/test_litellm/passthrough
         tests/test_litellm/sandbox
         tests/test_litellm/vector_stores
+        tests/test_litellm/videos
         tests/test_litellm/test_*.py
       workers: 2
       reruns: 2

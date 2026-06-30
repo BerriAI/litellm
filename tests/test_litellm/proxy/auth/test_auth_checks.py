@@ -3990,3 +3990,189 @@ class TestManagementObjectTTLHonored:
         )
 
         assert mem.last_ttl == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+
+
+class _BudgetSpendConcurrencyProbe:
+    """Stand-in for get_current_spend that pins how many scope checks are in flight.
+
+    Each call registers itself, records the peak simultaneous count, and blocks on
+    ``release`` until the test lets it proceed. ``all_arrived`` only fires once
+    ``expected`` distinct scope reads are suspended here at the same time, which can
+    happen only if common_checks gathers the per-scope reads instead of awaiting
+    them one after another.
+    """
+
+    def __init__(self, expected: int):
+        self.expected = expected
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.all_arrived = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def __call__(self, *args, **kwargs) -> float:
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if self.in_flight >= self.expected:
+            self.all_arrived.set()
+        try:
+            await self.release.wait()
+        finally:
+            self.in_flight -= 1
+        return 0.0
+
+
+@pytest.mark.asyncio
+async def test_common_checks_budget_reads_run_concurrently():
+    """Independent per-scope budget reads in common_checks must run concurrently.
+
+    team max, team window, key window, and end-user each read a distinct spend
+    counter with no cross-scope dependency. With the gather they are all suspended
+    in get_current_spend simultaneously; reverting to sequential awaits leaves only
+    one in flight at a time, so ``all_arrived`` never fires and this test times out.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    team = LiteLLM_TeamTable(
+        team_id="t1",
+        spend=0.0,
+        max_budget=100.0,
+        budget_limits=[{"budget_duration": "1d", "max_budget": 100.0}],
+    )
+    token = UserAPIKeyAuth(
+        token="k1",
+        budget_limits=[{"budget_duration": "1d", "max_budget": 100.0}],
+    )
+    end_user = LiteLLM_EndUserTable(
+        user_id="eu1",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+    )
+
+    probe = _BudgetSpendConcurrencyProbe(expected=4)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", probe
+    ):
+        task = asyncio.create_task(
+            common_checks(
+                request_body={"messages": [{"role": "user", "content": "hi"}]},
+                team_object=team,
+                user_object=None,
+                end_user_object=end_user,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=MagicMock(spec=Request),
+            )
+        )
+        try:
+            await asyncio.wait_for(probe.all_arrived.wait(), timeout=3.0)
+            assert probe.max_in_flight == 4
+        finally:
+            probe.release.set()
+        assert await task is True
+
+
+@pytest.mark.asyncio
+async def test_common_checks_budget_gather_raises_highest_priority_scope():
+    """A gathered scope that is over budget must still raise BudgetExceededError.
+
+    When more than one scope is over budget the error from the highest-priority
+    scope (team, matching the previous sequential order) propagates; when only a
+    lower-priority scope (end-user) is over budget its error still surfaces. This
+    fails if any scope is dropped from the gather or if errors are swallowed.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        if counter_key == "spend:team:t1":
+            return _spend_by_counter.team
+        if counter_key == "spend:end_user:eu1":
+            return _spend_by_counter.end_user
+        return 0.0
+
+    team = LiteLLM_TeamTable(team_id="t1", spend=0.0, max_budget=100.0)
+    end_user = LiteLLM_EndUserTable(
+        user_id="eu1",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=100.0),
+    )
+
+    async def _run():
+        return await common_checks(
+            request_body={"messages": [{"role": "user", "content": "hi"}]},
+            team_object=team,
+            user_object=None,
+            end_user_object=end_user,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=None,
+            request=MagicMock(spec=Request),
+        )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ):
+        # Both team and end-user over budget: team wins on priority.
+        _spend_by_counter.team = 999.0
+        _spend_by_counter.end_user = 999.0
+        with pytest.raises(litellm.BudgetExceededError) as both_over:
+            await _run()
+        assert "Team=t1" in str(both_over.value)
+
+        # Only the lower-priority end-user scope over budget: its error still raises.
+        _spend_by_counter.team = 0.0
+        _spend_by_counter.end_user = 999.0
+        with pytest.raises(litellm.BudgetExceededError) as end_user_over:
+            await _run()
+        assert "End User=eu1" in str(end_user_over.value)
+
+
+@pytest.mark.asyncio
+async def test_common_checks_personal_user_budget_blocks_in_gather():
+    """The personal-key user budget scope is enforced inside the gather.
+
+    For a personal key (no team) whose user is over budget, the gathered user
+    check must raise BudgetExceededError. This guards the relocated personal
+    user-budget read and fails if that scope is dropped from the gather.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=100.0)
+    token = UserAPIKeyAuth(token="k1", user_id="u1")
+
+    async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        return 999.0 if counter_key == "spend:user:u1" else 0.0
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None), patch(
+        "litellm.proxy.proxy_server.get_current_spend", _spend_by_counter
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as over:
+            await common_checks(
+                request_body={"messages": [{"role": "user", "content": "hi"}]},
+                team_object=None,
+                user_object=user,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=MagicMock(),
+                valid_token=token,
+                request=MagicMock(spec=Request),
+            )
+    assert "User=u1" in str(over.value)

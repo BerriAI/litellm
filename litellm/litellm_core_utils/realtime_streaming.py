@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, ca
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
@@ -315,8 +316,10 @@ class RealTimeStreaming:
                 self.logging_obj.model_call_details["realtime_tools"] = self.session_tools
                 self.logging_obj.model_call_details["realtime_tool_calls"] = self.tool_calls
             ## ASYNC LOGGING
-            # Create an event loop for the new thread
-            asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
+            # Route through the bounded logging worker (per-coroutine timeout +
+            # concurrency cap) instead of a bare create_task, so a slow callback
+            # can't leave suspended tasks pinning each call's response in memory.
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(self.logging_obj.async_success_handler(self.messages))
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
 
@@ -347,6 +350,7 @@ class RealTimeStreaming:
                     if self._content_sent_after_setup:
                         verbose_logger.debug("Dropping follow-up setup after content was already sent to backend")
                         continue
+                    msg = self._maybe_inject_guardrail_auto_response_disable(msg)
                     await self.backend_ws.send(msg)  # type: ignore[union-attr, attr-defined]
                     self._cache_session_configuration_request(msg)
                     sent = True
@@ -622,6 +626,36 @@ class RealTimeStreaming:
         # — such as a duplicate session.created — can retry.
         if sent:
             self._guardrail_turn_detection_update_sent = True
+
+    def _maybe_inject_guardrail_auto_response_disable(self, setup_message: str) -> str:
+        """Fold the transcription-guardrail auto-response disable into the setup.
+
+        Gemini/Vertex Live reject a second ``setup`` (1007), so the guardrail's
+        ``automaticActivityDetection.disabled=true`` cannot be delivered as a
+        follow-up session.update; it must live in the one-and-only setup, or a
+        ``realtime_input_transcription`` guardrail is bypassed (the model
+        auto-responds before the proxy can gate the turn). Applies only to the
+        bidi ``setup`` shape; OpenAI sessions accept follow-up updates and so are
+        left untouched (handled by ``_maybe_send_guardrail_turn_detection_update``).
+        """
+        if self._guardrail_turn_detection_update_sent:
+            return setup_message
+        if not self._has_audio_transcription_guardrails():
+            return setup_message
+        try:
+            obj = json.loads(setup_message)
+        except (json.JSONDecodeError, TypeError):
+            return setup_message
+        setup = obj.get("setup") if isinstance(obj, dict) else None
+        if not isinstance(setup, dict):
+            return setup_message
+        automatic = setup.setdefault("realtimeInputConfig", {}).setdefault("automaticActivityDetection", {})
+        automatic["disabled"] = True
+        self._guardrail_turn_detection_update_sent = True
+        verbose_logger.debug(
+            "Realtime: folded automaticActivityDetection.disabled=true into setup for transcription-guardrail gating"
+        )
+        return json.dumps(obj)
 
     def _has_realtime_guardrails_for_event_hooks(
         self,

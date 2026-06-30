@@ -533,7 +533,7 @@ class ChatCompletionCachedContent(TypedDict):
 class ChatCompletionThinkingBlock(TypedDict, total=False):
     type: Required[Literal["thinking"]]
     thinking: str
-    signature: str
+    signature: Optional[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 

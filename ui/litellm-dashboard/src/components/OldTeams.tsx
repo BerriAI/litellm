@@ -51,7 +51,7 @@ import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import SearchToolSelector from "./SearchTools/SearchToolSelector";
+import SearchToolSelector from "./search_tools/SearchToolSelector";
 
 interface TeamProps {
   accessToken: string | null;

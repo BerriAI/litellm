@@ -58,7 +58,7 @@ def get_supported_openai_params(
             supported_params = list(dict.fromkeys([*supported_params, *base_model_params]))
         return supported_params
 
-    if custom_llm_provider == "bedrock":
+    if custom_llm_provider == "bedrock" or custom_llm_provider == "bedrock_converse":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "meta_llama":
         provider_config = litellm.ProviderConfigManager.get_provider_chat_config(

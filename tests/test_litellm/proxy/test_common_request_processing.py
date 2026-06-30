@@ -4066,3 +4066,289 @@ class TestAllmPassthroughStreamingProviderGate:
         streamed = [chunk async for chunk in result.body_iterator]
         assert streamed == chunks
         mock_handler.assert_not_awaited()
+
+
+class TestResponseCostHeaderForTypedDictResponses:
+    """
+    Regression for LIT-4076. x-litellm-response-cost went missing on Anthropic
+    /v1/messages and Google :generateContent even though it appeared on
+    /chat/completions and /responses. /v1/messages returns a TypedDict that cannot
+    hold _hidden_params at all, and :generateContent carries _hidden_params but no
+    synchronously-populated response_cost. In both cases the raw response_cost is
+    empty at header-build time. The non-streaming header build now recovers the cost
+    from the logging object whenever the response itself never recorded one, while
+    leaving object responses (ModelResponse etc.) untouched.
+    """
+
+    def _build_logging_obj(self, *, model_call_details, response_cost_calculator):
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-lit4076"
+        logging_obj.cost_breakdown = None
+        logging_obj.model_call_details = model_call_details
+        logging_obj._response_cost_calculator = response_cost_calculator
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        return logging_obj
+
+    async def _drive_non_streaming(self, *, monkeypatch, response, logging_obj, route_type):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return response
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+
+        async def fake_post_call_success_hook(data, user_api_key_dict, response):
+            return response
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_success_hook = fake_post_call_success_hook
+
+        fastapi_response = Response()
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+
+        with patch.object(
+            ProxyBaseLLMRequestProcessing,
+            "_has_post_call_guardrails",
+            return_value=False,
+        ):
+            await processing_obj.base_process_llm_request(
+                request=MagicMock(spec=Request, headers={}),
+                fastapi_response=fastapi_response,
+                user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+                route_type=route_type,
+                proxy_logging_obj=proxy_logging_obj,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                select_data_generator=None,
+                llm_router=None,
+                skip_pre_call_logic=True,
+            )
+        return fastapi_response
+
+    @pytest.mark.asyncio
+    async def test_messages_typeddict_emits_cost_header_from_stored_cost(self, monkeypatch):
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        response = AnthropicMessagesResponse(
+            id="msg_1",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": "hi"}],
+            model="claude-haiku-4-5",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00123},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="anthropic_messages",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00123"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_content_typeddict_emits_cost_header_via_recompute(self, monkeypatch):
+        from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+
+        response = GenerateContentResponseBody(
+            candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}}],
+            usageMetadata={
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15,
+            },
+        )
+        recompute = MagicMock(return_value=0.00456)
+        logging_obj = self._build_logging_obj(
+            model_call_details={},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.00456"
+        recompute.assert_called_once()
+        assert recompute.call_args.kwargs["result"] is response
+
+    @pytest.mark.asyncio
+    async def test_generate_content_emits_real_nonzero_cost_header_from_usage_metadata(self, monkeypatch):
+        """
+        End-to-end regression for LIT-4076 using the real cost calculator (not a
+        mock). A native :generateContent body reports tokens under usageMetadata,
+        which the cost calculator did not read, so the synchronously-recovered
+        cost was 0.0 and the header was dropped even though the async logging path
+        billed a real non-zero amount. The header must now carry the true cost.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+        from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+        from litellm.types.utils import ModelResponse, Usage
+
+        response = GenerateContentResponseBody(
+            candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+            usageMetadata={
+                "promptTokenCount": 1000,
+                "candidatesTokenCount": 500,
+                "totalTokenCount": 1500,
+            },
+        )
+
+        real_logging = LiteLLMLoggingObj(
+            model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="agenerate_content",
+            start_time=None,
+            litellm_call_id="call-lit4076-real",
+            function_id="fn",
+        )
+        real_logging.model_call_details["custom_llm_provider"] = "gemini"
+        real_logging.optional_params = {}
+
+        logging_obj = self._build_logging_obj(
+            model_call_details={},
+            response_cost_calculator=real_logging._response_cost_calculator,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        expected_cost = litellm.completion_cost(
+            completion_response=ModelResponse(
+                model="gemini-2.5-flash",
+                usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+            model="gemini-2.5-flash",
+            custom_llm_provider="gemini",
+        )
+        assert expected_cost > 0
+        assert float(fastapi_response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_emits_cost_header(self, monkeypatch):
+        """
+        Models the real :generateContent response: it DOES carry a _hidden_params
+        attribute (which is why x-litellm-model-group / x-litellm-model-api-base
+        appear), but no response_cost is populated synchronously at header-build
+        time. The cost is only available on the logging object. The previous
+        ``not hasattr(response, "_hidden_params")`` guard skipped recovery here, so
+        x-litellm-response-cost went missing even though the cost was computed.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0004521},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.0004521"
+        assert fastapi_response.headers["x-litellm-model-group"] == "gemini-2.5-flash"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_zero_cost_drops_header(self, monkeypatch):
+        """
+        A recovered cost of 0 must normalize to a dropped header, exactly like
+        /chat/completions, so :generateContent does not start emitting
+        x-litellm-response-cost: 0.0 where nothing was emitted before.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_object_response_with_hidden_params_is_unaffected(self, monkeypatch):
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(_hidden_params={"response_cost": 0.009})
+        recompute = MagicMock(side_effect=AssertionError("must not recompute for object responses"))
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 123.0},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="acompletion",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.009"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_object_response_zero_cost_drops_header_like_chat_completions(self, monkeypatch):
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(_hidden_params={"response_cost": 0.0})
+        recompute = MagicMock(side_effect=AssertionError("must not recompute for object responses"))
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.00789},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="acompletion",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+        recompute.assert_not_called()

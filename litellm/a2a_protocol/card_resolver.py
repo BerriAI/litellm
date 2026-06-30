@@ -4,7 +4,7 @@ Custom A2A Card Resolver for LiteLLM.
 Extends the A2A SDK's card resolver to support multiple well-known paths.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict
 
 from litellm._logging import verbose_logger
 from litellm.constants import LOCALHOST_URL_PATTERNS
@@ -27,7 +27,7 @@ except ImportError:
     pass
 
 
-def is_localhost_or_internal_url(url: Optional[str]) -> bool:
+def is_localhost_or_internal_url(url: str | None) -> bool:
     """
     Check if a URL is a localhost or internal URL.
 
@@ -46,6 +46,29 @@ def is_localhost_or_internal_url(url: Optional[str]) -> bool:
     url_lower = url.lower()
 
     return any(pattern in url_lower for pattern in LOCALHOST_URL_PATTERNS)
+
+
+def get_agent_card_url(agent_card: "AgentCard") -> str | None:
+    """Return the agent endpoint URL from the resolved SDK card."""
+    url = getattr(agent_card, "url", None)
+    if url:
+        return url
+
+    interfaces = getattr(agent_card, "supported_interfaces", None)
+    if interfaces:
+        return getattr(interfaces[0], "url", None)
+    return None
+
+
+def set_agent_card_url(agent_card: "AgentCard", url: str) -> None:
+    """Set the agent endpoint URL on the resolved SDK card."""
+    normalized = url.rstrip("/") + "/"
+    if hasattr(agent_card, "url"):
+        agent_card.url = normalized
+
+    interfaces = getattr(agent_card, "supported_interfaces", None)
+    if interfaces:
+        interfaces[0].url = normalized
 
 
 def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
@@ -70,6 +93,12 @@ def fix_agent_card_url(agent_card: "AgentCard", base_url: str) -> "AgentCard":
         fixed_url = base_url.rstrip("/") + "/"
         agent_card.url = fixed_url
 
+    interfaces = getattr(agent_card, "supported_interfaces", None)
+    if interfaces:
+        interface_url = getattr(interfaces[0], "url", None)
+        if interface_url and is_localhost_or_internal_url(interface_url):
+            interfaces[0].url = base_url.rstrip("/") + "/"
+
     return agent_card
 
 
@@ -84,8 +113,8 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):  # type: ignore[misc]
 
     async def get_agent_card(
         self,
-        relative_card_path: Optional[str] = None,
-        http_kwargs: Optional[Dict[str, Any]] = None,
+        relative_card_path: str | None = None,
+        http_kwargs: Dict[str, Any] | None = None,
     ) -> "AgentCard":
         """
         Fetch the agent card, trying multiple well-known paths.

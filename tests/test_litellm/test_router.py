@@ -3268,6 +3268,34 @@ async def test_router_acompletion_with_unknown_model_and_no_fallback():
     assert "no healthy deployments for this model" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_router_unknown_model_error_message_renders_model_name_literally():
+    """
+    The unknown-model error message renders the caller-supplied model name
+    verbatim. A name containing Python format-field syntax must be treated as
+    literal text, not re-interpreted as a format template, which would distort
+    the message and balloon its length.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "azure/gpt-4o-real", "api_key": "fake-key"},
+            }
+        ]
+    )
+
+    weird_model = "ghost{:>200}model"
+    messages = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await router.acompletion(model=weird_model, messages=messages)
+
+    message = str(excinfo.value)
+    assert weird_model in message
+    assert "          " not in message  # no padding run from an expanded format field
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies

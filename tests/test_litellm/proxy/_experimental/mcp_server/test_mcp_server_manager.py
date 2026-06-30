@@ -323,6 +323,28 @@ class TestMCPServerManager:
         assert cost_info["tool_name_to_cost_per_query"]["geocode"] == 1e-3
         assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method from config is carried onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+        config = {
+            "basic_provider": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "token_endpoint_auth_method": "client_secret_basic",
+            },
+            "default_provider": {
+                "url": "https://example.com/mcp2",
+                "transport": MCPTransport.http,
+            },
+        }
+
+        await manager.load_servers_from_config(config)
+
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+        assert by_name["basic_provider"].token_endpoint_auth_method == "client_secret_basic"
+        assert by_name["default_provider"].token_endpoint_auth_method is None
+
     def test_normalize_mcp_server_cost_info_preserves_float_values(self):
         mcp_info = {
             "server_name": "maps",
@@ -3291,6 +3313,31 @@ class TestMCPServerTimestamps:
 
         assert mcp_server.created_at == created
         assert mcp_server.updated_at == updated
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method stored in the credentials JSON is loaded onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+
+        basic_record = LiteLLM_MCPServerTable(
+            server_id="basic-db-1",
+            server_name="basic_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={"token_endpoint_auth_method": "client_secret_basic"},
+        )
+        basic_server = await manager.build_mcp_server_from_table(basic_record, credentials_are_encrypted=False)
+        assert basic_server.token_endpoint_auth_method == "client_secret_basic"
+
+        default_record = LiteLLM_MCPServerTable(
+            server_id="default-db-1",
+            server_name="default_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={},
+        )
+        default_server = await manager.build_mcp_server_from_table(default_record, credentials_are_encrypted=False)
+        assert default_server.token_endpoint_auth_method is None
 
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""

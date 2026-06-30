@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities for cost_per_token()
 
+from dataclasses import dataclass
 from typing import Any, Literal, Optional, Tuple, TypedDict, cast
 
 import litellm
@@ -811,6 +812,107 @@ def generic_cost_per_token(
         completion_cost *= uplift
 
     return prompt_cost, completion_cost
+
+
+def _coerce_token_count(value: object) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
+
+
+@dataclass(frozen=True, slots=True)
+class TokenTypeCostBreakdown:
+    reasoning_cost: float
+    cache_read_cost: float
+    cache_creation_cost: float
+
+
+def get_token_type_cost_breakdown(
+    model: str,
+    custom_llm_provider: Optional[str],
+    usage: Usage,
+    service_tier: Optional[str] = None,
+    data_residency: Optional[str] = None,
+) -> TokenTypeCostBreakdown:
+    """
+    Provider-agnostic cost of reasoning and cache tokens, derived from the usage
+    object and model pricing alone.
+
+    This works for every provider, including Perplexity/Cerebras/Dashscope whose
+    cost calculators bypass ``generic_cost_per_token``, because cache tokens always
+    land on ``prompt_tokens_details`` (via the Usage constructor and provider
+    transformations) and reasoning tokens on ``completion_tokens_details``. It reuses
+    the same rate-resolution primitives as the total-cost path so the breakdown can
+    never drift from the totals. Returns zeros (never raises) when the model or its
+    pricing cannot be resolved.
+    """
+    try:
+        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
+
+    (
+        _prompt_base_cost,
+        completion_base_cost,
+        cache_creation_cost_rate,
+        cache_creation_cost_above_1hr_rate,
+        cache_read_cost_rate,
+    ) = _get_token_base_cost(model_info=model_info, usage=usage, service_tier=service_tier)
+
+    reasoning_tokens = (
+        _parse_completion_tokens_details(usage)["reasoning_tokens"]
+        if usage.completion_tokens_details is not None
+        else 0
+    )
+    if not reasoning_tokens:
+        reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
+
+    # Reasoning is billed at the explicit per-reasoning-token rate when the model
+    # defines one, otherwise at the standard output-token rate - this mirrors how the
+    # total completion cost is computed, so the breakdown can never diverge from it.
+    reasoning_rate = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
+    if reasoning_rate is None:
+        reasoning_rate = completion_base_cost
+    reasoning_cost = float(reasoning_tokens) * reasoning_rate
+
+    cache_read_tokens = 0
+    cache_creation_tokens = 0
+    cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
+    if usage.prompt_tokens_details is not None:
+        prompt_tokens_details = _parse_prompt_tokens_details(usage)
+        cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
+        cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
+        cache_creation_token_details = prompt_tokens_details["cache_creation_token_details"]
+        # Some OpenAI-compatible providers (e.g. kimi-k2) report cache-write tokens
+        # under `cache_write_tokens`; mirror the total-cost normalization path.
+        if not cache_creation_tokens:
+            cache_creation_tokens = _coerce_token_count(getattr(usage.prompt_tokens_details, "cache_write_tokens", 0))
+    # Fall back to the private top-level counters the Usage constructor mirrors cache
+    # tokens onto, so providers/callers that bypass prompt_tokens_details are covered.
+    if not cache_read_tokens:
+        cache_read_tokens = _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0))
+    if not cache_creation_tokens:
+        cache_creation_tokens = _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0))
+
+    cache_read_cost = float(cache_read_tokens) * cache_read_cost_rate
+    cache_creation_cost = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=cache_creation_token_details,
+        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr_rate,
+        cache_creation_cost=cache_creation_cost_rate,
+    )
+
+    # Apply the same flat regional-processing uplift the totals get, so per-type
+    # costs stay reconciled with input_cost/output_cost for regionalized OpenAI hosts.
+    uplift = _get_regional_uplift_multiplier(model_info, data_residency)
+    if uplift != 1.0:
+        reasoning_cost *= uplift
+        cache_read_cost *= uplift
+        cache_creation_cost *= uplift
+
+    return TokenTypeCostBreakdown(
+        reasoning_cost=reasoning_cost,
+        cache_read_cost=cache_read_cost,
+        cache_creation_cost=cache_creation_cost,
+    )
 
 
 def calculate_image_response_cost_from_usage(

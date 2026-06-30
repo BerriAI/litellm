@@ -34,6 +34,8 @@ from models import (
     KeyInfoResponse,
     ModelInfoEntry,
     ModelInfoResponse,
+    OcrBody,
+    OcrResponse,
     SpendLogRow,
     SpendLogs,
     SpendLogsParams,
@@ -120,9 +122,7 @@ class Gateway:
         )
 
     def chat_stream(self, key: str, body: ChatBody) -> StreamingResponse:
-        return self.transport.stream(
-            "/chat/completions", headers=self.transport.bearer(key), json=body
-        )
+        return self.transport.stream("/chat/completions", headers=self.transport.bearer(key), json=body)
 
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:
         return self.transport.post(
@@ -130,6 +130,14 @@ class Gateway:
             headers=self.transport.bearer(key),
             json=body,
             response_type=EmbedResponse,
+        )
+
+    def ocr(self, key: str, body: OcrBody) -> Result[OcrResponse]:
+        return self.transport.post(
+            "/v1/ocr",
+            headers=self.transport.bearer(key),
+            json=body,
+            response_type=OcrResponse,
         )
 
     # ---- spend read-back ------------------------------------------------
@@ -150,9 +158,7 @@ class Gateway:
     def poll_logs_for_key(
         self, key: str, *, min_rows: int = 1, predicate: RowsPredicate | None = None
     ) -> list[SpendLogRow]:
-        return self._poll(
-            lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate
-        )
+        return self._poll(lambda: self.spend_logs(SpendLogsParams(api_key=key)), min_rows, predicate)
 
     def poll_logs_for_request_id(
         self,

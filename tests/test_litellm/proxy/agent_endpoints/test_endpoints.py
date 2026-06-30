@@ -786,3 +786,32 @@ class TestCheckAgentUrlHealth:
         )
         result = await _check_agent_url_health(agent)
         assert result["healthy"] is True
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://0.0.0.0:4000/", "http://localhost:4000/", "https://api.example.com/"],
+)
+def test_merged_agent_card_url_has_no_double_slash_without_proxy_base_url(
+    monkeypatch, base_url
+):
+    """Without PROXY_BASE_URL, request.base_url carries a trailing slash; the merged
+    card's supportedInterfaces URL must still join cleanly (no `//a2a`)."""
+    from litellm.proxy.agent_endpoints.endpoints import _build_merged_agent_card
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+
+    http_request = MagicMock()
+    http_request.base_url = base_url
+
+    merged = _build_merged_agent_card(
+        _sample_agent_card_params(),
+        agent_id="agent-xyz",
+        http_request=http_request,
+        agent_name="Test Agent",
+    )
+
+    interface_url = merged["supportedInterfaces"][0]["url"]
+    assert interface_url == f"{base_url.rstrip('/')}/a2a/agent-xyz"
+    assert "//a2a" not in interface_url
