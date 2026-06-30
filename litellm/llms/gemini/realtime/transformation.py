@@ -10,7 +10,10 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import (
+    BaseRealtimeConfig,
+    RealtimeMessage,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -181,7 +184,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return mime_types.get(input_audio_format, "application/octet-stream")
 
-    def _manual_turn_detection_enabled(self, session_configuration_request: Optional[str]) -> bool:
+    def _manual_turn_detection_enabled(self, session_configuration_request: Optional[RealtimeMessage]) -> bool:
         if not session_configuration_request:
             return False
         try:
@@ -191,7 +194,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         except (json.JSONDecodeError, TypeError, AttributeError):
             return False
 
-    def _handle_input_audio_buffer_commit_or_end(self, session_configuration_request: Optional[str]) -> List[str]:
+    def _handle_input_audio_buffer_commit_or_end(
+        self, session_configuration_request: Optional[RealtimeMessage]
+    ) -> List[str]:
         """Map OpenAI buffer commit/end to Gemini Live turn-boundary signals."""
         if self._manual_turn_detection_enabled(session_configuration_request):
             realtime_input_dict: BidiGenerateContentRealtimeInput = {
@@ -400,7 +405,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self,
         json_message: dict,
         model: str,
-        session_configuration_request: Optional[str],
+        session_configuration_request: Optional[RealtimeMessage],
     ) -> List[str]:
         """
         Handle session.update by sending setup to Gemini.
@@ -522,7 +527,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self,
         message: str,
         model: str,
-        session_configuration_request: Optional[str] = None,
+        session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> List[str]:
         realtime_input_dict: BidiGenerateContentRealtimeInput = {}
         try:
@@ -573,14 +578,14 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self,
         model: str,
         logging_session_id: str,
-        session_configuration_request: Optional[str] = None,
+        session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> OpenAIRealtimeStreamSessionEvents:
+        session_configuration_request_dict: BidiGenerateContentSetup = {}
         if session_configuration_request:
-            session_configuration_request_dict: BidiGenerateContentSetup = json.loads(
-                session_configuration_request
-            ).get("setup", {})
-        else:
-            session_configuration_request_dict = {}
+            try:
+                session_configuration_request_dict = json.loads(session_configuration_request).get("setup", {})
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+                session_configuration_request_dict = {}
 
         _model = session_configuration_request_dict.get("model") or model
         generation_config = session_configuration_request_dict.get("generationConfig", {}) or {}
@@ -624,7 +629,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         output_item_id: str,
         conversation_id: str,
         delta_type: ALL_DELTA_TYPES,
-        session_configuration_request: Optional[str] = None,
+        session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> List[OpenAIRealtimeEvents]:
         session_configuration_request_dict: BidiGenerateContentSetup = {}
         if session_configuration_request is not None:
@@ -969,7 +974,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         current_response_id: Optional[str],
         current_conversation_id: Optional[str],
         output_items: Optional[List[OpenAIRealtimeOutputItemDone]],
-        session_configuration_request: Optional[str] = None,
+        session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> OpenAIRealtimeDoneEvent:
         if current_conversation_id is None:
             current_conversation_id = "conv_{}".format(uuid.uuid4())

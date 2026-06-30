@@ -1,5 +1,6 @@
 """Abstraction function for OpenAI's realtime API"""
 
+import asyncio
 import os
 from typing import Any, Dict, Optional, cast
 
@@ -336,8 +337,8 @@ async def _arealtime(
             websocket=websocket,
             logging_obj=litellm_logging_obj,
             provider_config=provider_config,
-            api_base=api_base,
-            api_key=api_key,
+            api_base=dynamic_api_base or litellm_params.api_base or api_base,
+            api_key=dynamic_api_key or litellm_params.api_key or api_key,
             client=client,
             timeout=timeout,
             headers=headers,
@@ -539,6 +540,55 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "xai":
         url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
+    elif custom_llm_provider == LlmProviders.VOLCENGINE.value:
+        from litellm.llms.volcengine.realtime.protocol import (
+            EV_CONNECTION_FAILED,
+            EV_CONNECTION_STARTED,
+            EV_DIALOG_COMMON_ERROR,
+            EV_SESSION_FAILED,
+            MSG_ERROR,
+            decode_realtime_frame,
+            parse_payload,
+        )
+
+        volcengine_realtime_config = ProviderConfigManager.get_provider_realtime_config(
+            model=model,
+            provider=LlmProviders.VOLCENGINE,
+        )
+        if volcengine_realtime_config is None:
+            raise ValueError(f"Unsupported model: {model}")
+        url = volcengine_realtime_config.get_complete_url(api_base=api_base, model=model, api_key=api_key)
+        ssl_context = get_shared_realtime_ssl_context()
+        headers = volcengine_realtime_config.validate_environment(headers={}, model=model, api_key=api_key)
+        async with websockets.connect(  # type: ignore
+            url,
+            additional_headers=headers,
+            max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+            ssl=ssl_context,
+        ) as ws:
+            setup = volcengine_realtime_config.session_configuration_request(model)
+            if setup is not None:
+                await ws.send(setup)
+            message = await asyncio.wait_for(ws.recv(), timeout=float(request_timeout or 30.0))
+            if isinstance(message, str):
+                message = message.encode("utf-8")
+            frame = decode_realtime_frame(bytes(message))
+            if frame.event == EV_CONNECTION_STARTED:
+                return True
+            detail = ""
+            try:
+                payload = parse_payload(frame)
+                if payload:
+                    detail = payload.decode("utf-8", errors="replace")
+            except (EOFError, OSError, ValueError):
+                detail = "unparseable response payload"
+            if frame.message_type == MSG_ERROR or frame.event in {
+                EV_CONNECTION_FAILED,
+                EV_SESSION_FAILED,
+                EV_DIALOG_COMMON_ERROR,
+            }:
+                raise ValueError(f"Volcengine realtime health check failed: {detail}")
+            raise ValueError(f"Unexpected Volcengine realtime health check event: {frame.event}")
     elif custom_llm_provider == "vertex_ai":
         vertex_location = litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
         resolved_location = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)

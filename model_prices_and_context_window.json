@@ -42801,156 +42801,362 @@
         "supports_vision": true
     },
     "volcengine/doubao-seed-2-0-pro-260215": {
+        "cache_read_input_token_cost": 9.28e-08,
+        "cache_read_input_token_cost_above_128k_tokens": 2.784e-07,
+        "cache_read_input_token_cost_above_32k_tokens": 1.392e-07,
+        "input_cost_per_token": 4.64e-07,
+        "input_cost_per_token_above_128k_tokens": 1.392e-06,
+        "input_cost_per_token_above_32k_tokens": 6.96e-07,
         "litellm_provider": "volcengine",
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "output_cost_per_token": 2.32e-06,
+        "output_cost_per_token_above_128k_tokens": 6.96e-06,
+        "output_cost_per_token_above_32k_tokens": 3.48e-06,
+        "source": "https://www.volcengine.com/docs/82379/1544106",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
-        "supports_vision": true,
-        "tiered_pricing": [
-            {
-                "input_cost_per_token": 4.6e-07,
-                "output_cost_per_token": 2.3e-06,
-                "range": [
-                    0,
-                    32000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 7e-07,
-                "output_cost_per_token": 3.5e-06,
-                "range": [
-                    32000.0,
-                    128000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 1.4e-06,
-                "output_cost_per_token": 7e-06,
-                "range": [
-                    128000.0,
-                    256000.0
-                ]
-            }
-        ]
+        "supports_vision": true
     },
     "volcengine/doubao-seed-2-0-lite-260215": {
+        "cache_read_input_token_cost": 1.74e-08,
+        "cache_read_input_token_cost_above_128k_tokens": 5.22e-08,
+        "cache_read_input_token_cost_above_32k_tokens": 2.61e-08,
+        "input_cost_per_audio_token": 1.305e-06,
+        "input_cost_per_token": 8.7e-08,
+        "input_cost_per_token_above_128k_tokens": 2.61e-07,
+        "input_cost_per_token_above_32k_tokens": 1.305e-07,
         "litellm_provider": "volcengine",
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "output_cost_per_token": 5.22e-07,
+        "output_cost_per_token_above_128k_tokens": 1.566e-06,
+        "output_cost_per_token_above_32k_tokens": 7.83e-07,
+        "source": "https://www.volcengine.com/docs/82379/1544106",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
-        "supports_vision": true,
-        "tiered_pricing": [
-            {
-                "input_cost_per_token": 8.7e-08,
-                "output_cost_per_token": 5.2e-07,
-                "range": [
-                    0,
-                    32000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 1.3e-07,
-                "output_cost_per_token": 7.8e-07,
-                "range": [
-                    32000.0,
-                    128000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 2.6e-07,
-                "output_cost_per_token": 1.6e-06,
-                "range": [
-                    128000.0,
-                    256000.0
-                ]
-            }
-        ]
+        "supports_vision": true
     },
     "volcengine/doubao-seed-2-0-mini-260215": {
+        "cache_read_input_token_cost": 5.8e-09,
+        "cache_read_input_token_cost_above_128k_tokens": 2.32e-08,
+        "cache_read_input_token_cost_above_32k_tokens": 1.16e-08,
+        "input_cost_per_audio_token": 4.35e-07,
+        "input_cost_per_token": 2.9e-08,
+        "input_cost_per_token_above_128k_tokens": 1.16e-07,
+        "input_cost_per_token_above_32k_tokens": 5.8e-08,
         "litellm_provider": "volcengine",
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "output_cost_per_token": 2.9e-07,
+        "output_cost_per_token_above_128k_tokens": 1.16e-06,
+        "output_cost_per_token_above_32k_tokens": 5.8e-07,
+        "source": "https://www.volcengine.com/docs/82379/1544106",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
-        "supports_vision": true,
-        "tiered_pricing": [
-            {
-                "input_cost_per_token": 2.9e-08,
-                "output_cost_per_token": 2.9e-07,
-                "range": [
-                    0,
-                    32000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 5.8e-08,
-                "output_cost_per_token": 5.8e-07,
-                "range": [
-                    32000.0,
-                    128000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 1.2e-07,
-                "output_cost_per_token": 1.2e-06,
-                "range": [
-                    128000.0,
-                    256000.0
-                ]
-            }
-        ]
+        "supports_vision": true
     },
     "volcengine/doubao-seed-2-0-code-preview-260215": {
+        "cache_read_input_token_cost": 9.28e-08,
+        "cache_read_input_token_cost_above_128k_tokens": 2.784e-07,
+        "cache_read_input_token_cost_above_32k_tokens": 1.392e-07,
+        "input_cost_per_token": 4.64e-07,
+        "input_cost_per_token_above_128k_tokens": 1.392e-06,
+        "input_cost_per_token_above_32k_tokens": 6.96e-07,
         "litellm_provider": "volcengine",
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "source": "https://www.volcengine.com/docs/82379/1330310",
+        "output_cost_per_token": 2.32e-06,
+        "output_cost_per_token_above_128k_tokens": 6.96e-06,
+        "output_cost_per_token_above_32k_tokens": 3.48e-06,
+        "source": "https://www.volcengine.com/docs/82379/1544106",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": false,
-        "supports_vision": true,
-        "tiered_pricing": [
-            {
-                "input_cost_per_token": 4.6e-07,
-                "output_cost_per_token": 2.3e-06,
-                "range": [
-                    0,
-                    32000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 7e-07,
-                "output_cost_per_token": 3.5e-06,
-                "range": [
-                    32000.0,
-                    128000.0
-                ]
-            },
-            {
-                "input_cost_per_token": 1.4e-06,
-                "output_cost_per_token": 7e-06,
-                "range": [
-                    128000.0,
-                    256000.0
-                ]
-            }
-        ]
+        "supports_vision": true
+    },
+    "volcengine/volc.bigasr.sauc.duration": {
+        "input_cost_per_second": 0.00018125,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
+            "audio_encoding": "pcm16",
+            "billing_unit": "duration",
+            "model_version": "1.0",
+            "protocol": "volcengine_openspeech_sauc_websocket",
+            "resource_id": "volc.bigasr.sauc.duration",
+            "sample_rate_hz": 16000
+        },
+        "mode": "audio_transcription",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false
+    },
+    "volcengine/volc.bigasr.sauc.concurrent": {
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
+            "audio_encoding": "pcm16",
+            "billing_unit": "concurrent",
+            "model_version": "1.0",
+            "protocol": "volcengine_openspeech_sauc_websocket",
+            "resource_id": "volc.bigasr.sauc.concurrent",
+            "sample_rate_hz": 16000
+        },
+        "mode": "audio_transcription",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false
+    },
+    "volcengine/volc.seedasr.sauc.duration": {
+        "input_cost_per_second": 4.02777778e-05,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
+            "audio_encoding": "pcm16",
+            "billing_unit": "duration",
+            "model_version": "2.0",
+            "protocol": "volcengine_openspeech_sauc_websocket",
+            "resource_id": "volc.seedasr.sauc.duration",
+            "sample_rate_hz": 16000
+        },
+        "mode": "audio_transcription",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false
+    },
+    "volcengine/volc.seedasr.sauc.concurrent": {
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel",
+            "audio_encoding": "pcm16",
+            "billing_unit": "concurrent",
+            "model_version": "2.0",
+            "protocol": "volcengine_openspeech_sauc_websocket",
+            "resource_id": "volc.seedasr.sauc.concurrent",
+            "sample_rate_hz": 16000
+        },
+        "mode": "audio_transcription",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false
+    },
+    "volcengine/volc.speech.dialog": {
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/realtime/dialogue",
+            "input_audio_sample_rate_hz": 16000,
+            "output_audio_sample_rate_hz": 24000,
+            "protocol": "volcengine_openspeech_realtime_dialog_websocket",
+            "resource_id": "volc.speech.dialog"
+        },
+        "mode": "realtime",
+        "source": "https://www.volcengine.com/docs/6561/1594356",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-tts-2.0": {
+        "health_check_voice": "zh_female_vv_uranus_bigtts",
+        "input_cost_per_character": 4.35e-05,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "default_voice": "zh_female_vv_uranus_bigtts",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "resource_id": "seed-tts-2.0",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-tts-2.0-standard": {
+        "health_check_voice": "zh_female_vv_uranus_bigtts",
+        "input_cost_per_character": 4.35e-05,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "default_voice": "zh_female_vv_uranus_bigtts",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "request_model": "seed-tts-2.0-standard",
+            "resource_id": "seed-tts-2.0",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-tts-2.0-expressive": {
+        "health_check_voice": "zh_female_vv_uranus_bigtts",
+        "input_cost_per_character": 4.35e-05,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "default_voice": "zh_female_vv_uranus_bigtts",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "request_model": "seed-tts-2.0-expressive",
+            "resource_id": "seed-tts-2.0",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-tts-1.0": {
+        "input_cost_per_character": 7.25e-05,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "billing_unit": "character",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "resource_id": "seed-tts-1.0",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-tts-1.0-concurr": {
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "billing_unit": "concurrent",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "resource_id": "seed-tts-1.0-concurr",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-icl-2.0": {
+        "input_cost_per_character": 4.35e-05,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "billing_unit": "character",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "resource_id": "seed-icl-2.0",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-icl-1.0": {
+        "input_cost_per_character": 0.000116,
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "billing_unit": "character",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "resource_id": "seed-icl-1.0",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
+    },
+    "volcengine/seed-icl-1.0-concurr": {
+        "litellm_provider": "volcengine",
+        "metadata": {
+            "api_base": "wss://openspeech.bytedance.com/api/v3/tts/bidirection",
+            "billing_unit": "concurrent",
+            "protocol": "volcengine_openspeech_bidirectional_tts_websocket",
+            "resource_id": "seed-icl-1.0-concurr",
+            "supported_response_formats": [
+                "pcm",
+                "wav"
+            ]
+        },
+        "mode": "audio_speech",
+        "source": "https://www.volcengine.com/docs/6561/1359370",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true
     },
     "zai.glm-5": {
         "input_cost_per_token": 1e-06,

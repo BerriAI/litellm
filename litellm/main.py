@@ -7502,7 +7502,32 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure" and provider_config is None:
+    if custom_llm_provider == "volcengine":
+        from litellm.llms.volcengine.audio_transcription.handler import (
+            VolcEngineAudioTranscription,
+        )
+        from litellm.llms.volcengine.audio_transcription.transformation import (
+            VolcEngineAudioTranscriptionConfig,
+        )
+
+        response = VolcEngineAudioTranscription().audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            model_response=model_response,
+            atranscription=atranscription,
+            timeout=timeout,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            provider_config=(
+                provider_config
+                if isinstance(provider_config, VolcEngineAudioTranscriptionConfig)
+                else None
+            ),
+        )
+    elif custom_llm_provider == "azure" and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
@@ -7728,7 +7753,7 @@ def speech(
 
     if max_retries is None:
         max_retries = litellm.num_retries or openai.DEFAULT_MAX_RETRIES
-    litellm_params_dict = get_litellm_params(**kwargs)
+    litellm_params_dict = get_litellm_params(metadata=metadata, **kwargs)
 
     # Get provider-specific text-to-speech config and map parameters
     text_to_speech_provider_config = ProviderConfigManager.get_provider_text_to_speech_config(
@@ -7767,7 +7792,33 @@ def speech(
         Coroutine[Any, Any, HttpxBinaryResponseContent],
         None,
     ] = None
-    if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
+    if custom_llm_provider == "volcengine":
+        from litellm.llms.volcengine.text_to_speech.transformation import (
+            VolcEngineTextToSpeechConfig,
+        )
+
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = VolcEngineTextToSpeechConfig()
+        volcengine_config = cast(
+            VolcEngineTextToSpeechConfig, text_to_speech_provider_config
+        )
+        response = volcengine_config.dispatch_text_to_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params_dict=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            aspeech=aspeech or False,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    elif (
+        custom_llm_provider == "openai"
+        or custom_llm_provider in litellm.openai_compatible_providers
+    ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",

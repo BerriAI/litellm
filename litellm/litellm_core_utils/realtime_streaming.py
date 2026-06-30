@@ -5,7 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, Union, ca
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import (
+    BaseRealtimeConfig,
+    RealtimeMessage,
+)
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
@@ -85,7 +88,7 @@ class RealTimeStreaming:
         self.current_conversation_id: Optional[str] = None
         self.current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]] = None
         self.current_delta_type: Optional[ALL_DELTA_TYPES] = None
-        self.session_configuration_request: Optional[str] = None
+        self.session_configuration_request: Optional[RealtimeMessage] = None
         self.user_api_key_dict = user_api_key_dict
         self.request_data: Dict = request_data or {}
         # Violation counter for end_session_after_n_fails support
@@ -579,7 +582,7 @@ class RealTimeStreaming:
         await self.websocket.send_text(event_str)
         return True
 
-    def _cache_session_configuration_request(self, transformed_message: str) -> None:
+    def _cache_session_configuration_request(self, transformed_message: RealtimeMessage) -> None:
         """Store setup payload once sent to backend.
 
         Updates the cached setup on every successful setup send so follow-up
@@ -588,11 +591,13 @@ class RealTimeStreaming:
         the cache used by downstream readers (``transform_session_created_event``,
         ``return_new_content_delta_events`` modality lookup, ...).
         """
+        if isinstance(transformed_message, bytes):
+            return
         try:
             message_obj = json.loads(transformed_message)
             if "setup" in message_obj:
                 self.session_configuration_request = transformed_message
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
             return
 
     def _make_disable_auto_response_message(self) -> str:
@@ -972,13 +977,6 @@ class RealTimeStreaming:
                 except TypeError:
                     raw_response = await self.backend_ws.recv()  # type: ignore[union-attr, assignment]
 
-                if isinstance(raw_response, bytes):
-                    try:
-                        raw_response = raw_response.decode("utf-8")
-                    except UnicodeDecodeError:
-                        verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
-                        continue
-
                 if self.provider_config:
                     try:
                         await self._handle_provider_config_message(raw_response)
@@ -986,6 +984,13 @@ class RealTimeStreaming:
                         verbose_logger.exception(f"Error processing backend message, skipping: {e}")
                         continue
                 else:
+                    if isinstance(raw_response, bytes):
+                        try:
+                            raw_response = raw_response.decode("utf-8")
+                        except UnicodeDecodeError:
+                            verbose_logger.warning("Received non-UTF-8 binary frame from backend, skipping.")
+                            continue
+
                     event = self._parse_backend_event(raw_response)
                     if event is None:
                         await self.websocket.send_text(raw_response)

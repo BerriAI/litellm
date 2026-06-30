@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict  # noqa: F401 – re-exported
+from typing_extensions import TypedDict
 
 from .llms.openai import (
     OpenAIRealtimeEvents,
@@ -10,10 +10,11 @@ from .llms.openai import (
 )
 
 ALL_DELTA_TYPES = Literal["text", "audio"]
+RealtimeMessage = Union[str, bytes]
 
 
 class RealtimeResponseTransformInput(TypedDict):
-    session_configuration_request: Optional[str]
+    session_configuration_request: Optional[RealtimeMessage]
     current_output_item_id: Optional[
         str
     ]  # used to check if this is a new content.delta or a continuation of a previous content.delta
@@ -34,7 +35,7 @@ class RealtimeResponseTypedDict(TypedDict):
     current_conversation_id: Optional[str]
     current_item_chunks: Optional[List[OpenAIRealtimeOutputItemDone]]
     current_delta_type: Optional[ALL_DELTA_TYPES]
-    session_configuration_request: Optional[str]
+    session_configuration_request: Optional[RealtimeMessage]
 
 
 class RealtimeModalityResponseTransformOutput(TypedDict):

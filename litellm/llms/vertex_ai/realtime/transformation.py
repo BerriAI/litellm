@@ -15,6 +15,7 @@ import json
 from typing import List, Optional
 
 from litellm import verbose_logger
+from litellm.llms.base_llm.realtime.transformation import RealtimeMessage
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
 
@@ -191,7 +192,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
         self,
         message: str,
         model: str,
-        session_configuration_request: Optional[str] = None,
+        session_configuration_request: Optional[RealtimeMessage] = None,
     ) -> List[str]:
         """
         Translate OpenAI realtime client messages to Vertex AI format.
