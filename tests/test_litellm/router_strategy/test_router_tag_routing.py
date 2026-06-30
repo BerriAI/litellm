@@ -56,10 +56,7 @@ async def test_router_free_paid_tier():
             mock_response="Tell me a joke.",
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "very-cheap-model"
 
@@ -72,10 +69,7 @@ async def test_router_free_paid_tier():
             mock_response="Tell me a joke.",
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "very-expensive-model"
 
@@ -131,10 +125,7 @@ async def test_router_free_paid_tier_embeddings():
             mock_response=[1, 2, 3],
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "very-cheap-model"
 
@@ -147,10 +138,7 @@ async def test_router_free_paid_tier_embeddings():
             mock_response=[1, 2, 3],
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "very-expensive-model"
 
@@ -202,10 +190,7 @@ async def test_default_tagged_deployments():
             mock_response="Tell me a joke.",
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "default-model"
 
@@ -218,10 +203,7 @@ async def test_default_tagged_deployments():
             mock_response="Tell me a joke.",
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "default-model"
 
@@ -234,10 +216,7 @@ async def test_default_tagged_deployments():
             mock_response="Tell me a joke.",
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "default-model"
 
@@ -292,7 +271,6 @@ async def test_error_from_tag_routing():
         from litellm.types.router import RouterErrors
 
         assert RouterErrors.no_deployments_with_tag_routing.value in str(e)
-        print("got expected exception = ", e)
         pass
 
 
@@ -399,10 +377,7 @@ async def test_router_free_paid_tier_with_responses_api():
             mock_response="Tell me a joke.",
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "very-cheap-model"
 
@@ -415,10 +390,7 @@ async def test_router_free_paid_tier_with_responses_api():
             mock_response="Tell me a joke.",
         )
 
-        print("Response: ", response)
-
         response_extra_info = response._hidden_params
-        print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "very-expensive-model"
 
