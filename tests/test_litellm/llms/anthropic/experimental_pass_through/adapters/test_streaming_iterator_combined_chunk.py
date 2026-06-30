@@ -24,6 +24,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
 )
@@ -86,6 +87,59 @@ def test_fake_stream_usage_preserved():
     )
     assert message_delta["usage"]["output_tokens"] == 5
     assert message_delta["usage"]["input_tokens"] == 10
+
+
+def test_delayed_usage_chunk_preserves_cache_tokens():
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=5,
+        total_tokens=125,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=30,
+            cache_creation_tokens=20,
+        ),
+    )
+    chunks = [
+        ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Two."),
+                    finish_reason=None,
+                )
+            ],
+        ),
+        ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(),
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(),
+                    finish_reason=None,
+                )
+            ],
+            usage=usage,
+        ),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="gpt-4o")
+    events = list(wrapper)
+
+    message_delta = next(
+        event for event in events if event.get("type") == "message_delta"
+    )
+
+    assert message_delta["usage"]["input_tokens"] == 70
+    assert message_delta["usage"]["output_tokens"] == 5
+    assert message_delta["usage"]["cache_read_input_tokens"] == 30
+    assert message_delta["usage"]["cache_creation_input_tokens"] == 20
 
 
 def test_splitter_passes_through_non_combined_chunks():

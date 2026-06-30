@@ -47,8 +47,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
             Unmodified data (audio files don't need text guardrails)
         """
         verbose_proxy_logger.debug(
-            "OpenAI Audio Transcription: Input processing not applicable "
-            "(input is audio file, not text)"
+            "OpenAI Audio Transcription: Input processing not applicable (input is audio file, not text)"
         )
         return data
 
@@ -73,9 +72,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
             Modified response with guardrails applied to transcribed text
         """
         if not hasattr(response, "text") or response.text is None:
-            verbose_proxy_logger.debug(
-                "OpenAI Audio Transcription: No text in response to process"
-            )
+            verbose_proxy_logger.debug("OpenAI Audio Transcription: No text in response to process")
             return response
 
         if isinstance(response.text, str):
@@ -90,9 +87,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
 
             # Add user API key metadata with prefixed keys
             if "litellm_metadata" not in request_data:
-                user_metadata = self.transform_user_api_key_dict_to_metadata(
-                    user_api_key_dict
-                )
+                user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
                 if user_metadata:
                     request_data["litellm_metadata"] = user_metadata
 

@@ -194,18 +194,12 @@ class RoutingPrismaWrapper:
         if self._reader.iam_token_db_auth:
             new_reader_url = self._reader.get_rds_iam_token()
             if not new_reader_url:
-                raise RuntimeError(
-                    "Failed to generate fresh IAM token for read replica"
-                )
-            await self._reader.recreate_prisma_client(
-                new_reader_url, http_client=http_client
-            )
+                raise RuntimeError("Failed to generate fresh IAM token for read replica")
+            await self._reader.recreate_prisma_client(new_reader_url, http_client=http_client)
             return
         reader_url = os.getenv("DATABASE_URL_READ_REPLICA", "")
         if not reader_url:
-            raise RuntimeError(
-                "DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client"
-            )
+            raise RuntimeError("DATABASE_URL_READ_REPLICA not set; cannot recreate read replica client")
         await self._reader.recreate_prisma_client(reader_url, http_client=http_client)
 
     def __getattr__(self, name: str) -> Any:
@@ -216,11 +210,7 @@ class RoutingPrismaWrapper:
         # Per-model action accessors are non-callable instances that expose
         # both `find_many` and `create`. Methods like execute_raw / batch_ /
         # tx are callables and stay on the writer untouched.
-        if (
-            not callable(writer_attr)
-            and hasattr(writer_attr, "find_many")
-            and hasattr(writer_attr, "create")
-        ):
+        if not callable(writer_attr) and hasattr(writer_attr, "find_many") and hasattr(writer_attr, "create"):
             try:
                 reader_attr = getattr(self._reader, name)
             except AttributeError:
