@@ -332,15 +332,20 @@ async def acompletion_with_mcp(
                         )
 
                         if is_final:
-                            # This is the final chunk, mark stream as exhausted
                             self.stream_exhausted = True
-                            # Process tool calls after we've collected all chunks
                             await self._process_tool_calls()
-                            # Apply MCP metadata (tool_calls and tool_results) to final chunk
                             chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
-                            # If we have tool results, prepare follow-up call immediately
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
+                            # Drain inner stream so CustomStreamWrapper fires its
+                            # end-of-stream handler (dispatch_success_handlers →
+                            # _ProxyDBLogger → LiteLLM_SpendLogs).  The CSW may
+                            # yield one usage chunk before raising StopAsyncIteration.
+                            try:
+                                while True:
+                                    await self._stream_iterator.__anext__()
+                            except StopAsyncIteration:
+                                pass
 
                         return chunk
                     except StopAsyncIteration:
