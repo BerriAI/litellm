@@ -1568,10 +1568,13 @@ if MCP_AVAILABLE:
                 await _prefetch_oauth_creds_for_user(user_api_key_auth) if _has_oauth2_server else {}
             )
 
-            # A single explicitly targeted server surfaces its upstream-auth error so the client
-            # runs the OAuth flow; across the aggregate, one unauthenticated server must not empty
-            # every other server's tools, so its error is absorbed in the fetch below.
-            is_single_server_listing = len(allowed_mcp_servers) == 1
+            # Surface vs absorb is a route decision, not a count: a single-server route
+            # (/<server>/mcp) surfaces its upstream-auth error so the client runs the OAuth flow,
+            # while the aggregate route (/mcp) absorbs it so one unauthenticated server does not
+            # empty the others' tools. _mcp_gateway_server_name is the path-derived single-server
+            # scope set by _gateway_initialize_instructions_request_scope (never client-supplied);
+            # it is None on the aggregate route, including when the key can access only one server.
+            is_single_server_listing = _mcp_gateway_server_name.get() is not None
 
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
