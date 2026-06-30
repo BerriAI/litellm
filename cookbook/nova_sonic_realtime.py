@@ -1,3 +1,4 @@
+# ruff: noqa: T201
 """
 Client script to test Nova Sonic realtime API through LiteLLM proxy.
 
@@ -281,7 +282,7 @@ async def main():
 if __name__ == "__main__":
     print("\nMake sure:")
     print("1. LiteLLM proxy is running on port 4000")
-    print("2. Bedrock is configured in proxy_server_config.yaml")
+    print("2. Bedrock is configured in docker/proxy_server_config.yaml")
     print("3. AWS credentials are set")
     print()
 
