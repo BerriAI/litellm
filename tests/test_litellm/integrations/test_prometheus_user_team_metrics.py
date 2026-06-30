@@ -191,6 +191,39 @@ class TestPrometheusUserTeamCountMetrics:
         prometheus_logger._initialize_api_key_budget_metrics.assert_called_once()
         prometheus_logger._initialize_user_and_team_count_metrics.assert_called_once()
 
+    def test_active_users_metric_initialized(self, prometheus_logger):
+        """litellm_active_users gauge must exist alongside litellm_total_users."""
+        assert hasattr(prometheus_logger, "litellm_active_users_metric")
+        assert prometheus_logger.litellm_active_users_metric is not None
+
+    @pytest.mark.asyncio
+    async def test_initialize_counts_total_and_active_users(self, prometheus_logger):
+        """litellm_total_users counts every row; litellm_active_users counts only
+        billable (non SCIM-deactivated) users."""
+        import sys
+
+        prometheus_logger.litellm_total_users_metric = MagicMock()
+        prometheus_logger.litellm_active_users_metric = MagicMock()
+        prometheus_logger.litellm_teams_count_metric = MagicMock()
+
+        async def _user_count(*args, where=None, **kwargs):
+            # 10 rows, 2 of them SCIM-deactivated -> 8 billable
+            return 2 if where is not None else 10
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_usertable.count = _user_count
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=4)
+
+        mock_proxy_server = MagicMock()
+        mock_proxy_server.prisma_client = mock_prisma
+
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+            await prometheus_logger._initialize_user_and_team_count_metrics()
+
+        prometheus_logger.litellm_total_users_metric.set.assert_called_once_with(10)
+        prometheus_logger.litellm_active_users_metric.set.assert_called_once_with(8)
+        prometheus_logger.litellm_teams_count_metric.set.assert_called_once_with(4)
+
     def test_metrics_have_correct_type(self, prometheus_logger):
         """Test that metrics are Gauge type (not Counter or Histogram)"""
         from prometheus_client import Gauge

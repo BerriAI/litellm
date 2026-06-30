@@ -1184,6 +1184,26 @@ class ProxyBaseLLMRequestProcessing:
             model_id = model_info.get("id", "") or ""
         return model_id
 
+    @staticmethod
+    def _response_cost_from_logging_obj(
+        *,
+        response: Any,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> float | str:
+        """
+        Recover the response cost when the response never recorded one in its
+        ``_hidden_params``: Anthropic /v1/messages returns a TypedDict that cannot
+        hold the attribute at all, and Google :generateContent carries
+        ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
+        cases the cost is read back from the logging object instead, recomputing from
+        the same calculator only when it has not been stored yet.
+        """
+        stored_cost = logging_obj.model_call_details.get("response_cost")
+        if isinstance(stored_cost, (int, float)):
+            return float(stored_cost)
+        recomputed_cost = logging_obj._response_cost_calculator(result=response)
+        return recomputed_cost if isinstance(recomputed_cost, (int, float)) else ""
+
     def _debug_log_request_payload(self) -> None:
         """Log request payload at DEBUG level, truncating if too large."""
         if not verbose_proxy_logger.isEnabledFor(logging.DEBUG):
@@ -1687,6 +1707,13 @@ class ProxyBaseLLMRequestProcessing:
         hidden_params = getattr(response, "_hidden_params", {}) or {}  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
+        recover_response_cost = not response_cost and hidden_params.get("response_cost") is None
+        response_cost_for_headers = (
+            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
+            if recover_response_cost
+            else response_cost
+        )
+
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
@@ -1695,7 +1722,7 @@ class ProxyBaseLLMRequestProcessing:
                 cache_key=cache_key,
                 api_base=api_base,
                 version=version,
-                response_cost=response_cost,
+                response_cost=response_cost_for_headers,
                 model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                 fastest_response_batch_completion=fastest_response_batch_completion,
                 request_data=self.data,
