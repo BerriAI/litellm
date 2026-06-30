@@ -673,7 +673,9 @@ class LiteLLMAnthropicMessagesAdapter:
         Returns:
             Dict with either 'thinking' or 'reasoning_effort' key
         """
-        if LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model):
+        if LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(
+            model
+        ) or LiteLLMAnthropicMessagesAdapter.is_bedrock_arn_model(model):
             return {"thinking": thinking}
         else:
             reasoning_effort = LiteLLMAnthropicMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
@@ -965,7 +967,7 @@ class LiteLLMAnthropicMessagesAdapter:
             return
 
         model = new_kwargs.get("model", "")
-        if self.is_anthropic_claude_model(model):
+        if self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model):
             new_kwargs["thinking"] = thinking  # type: ignore
             return
 

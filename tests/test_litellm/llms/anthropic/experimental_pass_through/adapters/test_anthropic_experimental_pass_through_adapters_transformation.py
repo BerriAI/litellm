@@ -1508,6 +1508,44 @@ def test_cache_control_fix_does_not_broaden_claude_detection():
     )
 
 
+def test_thinking_preserved_for_bedrock_arn_inference_profile():
+    """
+    Regression: opaque Bedrock Application Inference Profile ARNs hide the underlying
+    Claude model name, so on /v1/messages a `thinking` param must be preserved as
+    `thinking` (not rewritten to `reasoning_effort`). Otherwise `additional_drop_params:
+    ["thinking"]` runs after the rewrite and has nothing left to drop, and the Bedrock
+    Converse body re-expands reasoning_effort back into additionalModelRequestFields.thinking.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+
+    new_kwargs = {"model": CACHE_CONTROL_BEDROCK_ARN_MODEL}
+    adapter._translate_thinking_to_openai(cast(Any, {"thinking": thinking}), cast(Any, new_kwargs))
+
+    assert new_kwargs["thinking"] == thinking
+    assert "reasoning_effort" not in new_kwargs
+
+    assert LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(thinking, CACHE_CONTROL_BEDROCK_ARN_MODEL) == {
+        "thinking": thinking
+    }
+
+
+def test_thinking_still_translated_to_reasoning_effort_for_non_claude_model():
+    """
+    The bedrock-ARN gate must not broaden to every model: a genuine non-Claude model
+    still has `thinking` converted to `reasoning_effort` so it does not hit an
+    UnsupportedParamsError downstream.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+
+    new_kwargs = {"model": CACHE_CONTROL_NON_ANTHROPIC_MODEL}
+    adapter._translate_thinking_to_openai(cast(Any, {"thinking": thinking}), cast(Any, new_kwargs))
+
+    assert "thinking" not in new_kwargs
+    assert new_kwargs["reasoning_effort"] == "low"
+
+
 def test_cache_control_preserved_in_image_content_for_claude():
     """Cache control should be preserved in image content for Claude models."""
     anthropic_messages = [

@@ -645,6 +645,85 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
 
 
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_drops_top_level_and_nested_params():
+    """
+    Regression for LIT-3988 / GitHub #25931: on the /v1/messages path,
+    additional_drop_params must strip plain top-level keys (e.g. `thinking`,
+    `context_management`) before the provider transform runs, not only nested
+    dotted paths. Bedrock rejects these fields, so leaving them in produces a 400.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+
+    captured = {}
+
+    def capture_transform(*args, **kwargs):
+        captured["optional_params"] = kwargs["anthropic_messages_optional_request_params"]
+        return {"model": "claude-opus-4-7", "messages": []}
+
+    mock_config.transform_anthropic_messages_request = capture_transform
+
+    mock_client = AsyncMock()
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "claude-opus-4-7",
+        "stop_reason": "end_turn",
+    }
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    optional_params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+        "metadata": {"user_id": "u1", "drop_me": "x"},
+    }
+
+    with patch(
+        "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
+    ) as mock_provider_headers:
+        mock_provider_headers.return_value = None
+        try:
+            await handler.async_anthropic_messages_handler(
+                model="claude-opus-4-7",
+                messages=[{"role": "user", "content": "Hello"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params=optional_params,
+                custom_llm_provider="bedrock",
+                litellm_params=GenericLiteLLMParams(
+                    additional_drop_params=[
+                        "thinking",
+                        "context_management",
+                        "metadata.drop_me",
+                    ]
+                ),
+                logging_obj=mock_logging_obj,
+                client=mock_client,
+            )
+        except Exception:
+            pass  # drop runs before the mocked sign_request; the capture is what we assert on
+
+    transformed = captured["optional_params"]
+    assert "thinking" not in transformed
+    assert "context_management" not in transformed
+    assert transformed["max_tokens"] == 1024
+    assert transformed["metadata"] == {"user_id": "u1"}
+
+
 def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():
     logging_obj = Mock()
     logging_obj.get_router_model_id = Mock(return_value="router-model-id")
