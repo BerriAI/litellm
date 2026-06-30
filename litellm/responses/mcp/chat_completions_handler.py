@@ -115,6 +115,7 @@ async def acompletion_with_mcp(
 
     # Extract user_api_key_auth from metadata or kwargs
     user_api_key_auth = kwargs.get("user_api_key_auth") or ((kwargs.get("metadata", {}) or {}).get("user_api_key_auth"))
+    request_tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs)
 
     # Extract MCP auth headers before fetching tools (needed for dynamic auth)
     (
@@ -137,6 +138,7 @@ async def acompletion_with_mcp(
         litellm_trace_id=kwargs.get("litellm_trace_id"),
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
+        request_tags=request_tags,
     )
 
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
@@ -218,6 +220,7 @@ async def acompletion_with_mcp(
                 litellm_trace_id,
                 openai_tools,
                 base_call_args,
+                request_tags,
             ):
                 self.stream_wrapper = stream_wrapper
                 self.messages = messages
@@ -231,6 +234,7 @@ async def acompletion_with_mcp(
                 self.litellm_trace_id = litellm_trace_id
                 self.openai_tools = openai_tools
                 self.base_call_args = base_call_args
+                self.request_tags = request_tags
                 self.collected_chunks: List[ModelResponseStream] = []
                 self.tool_calls: Optional[List] = None
                 self.tool_results: Optional[List] = None
@@ -431,6 +435,7 @@ async def acompletion_with_mcp(
                             raw_headers=self.raw_headers,
                             litellm_call_id=self.litellm_call_id,
                             litellm_trace_id=self.litellm_trace_id,
+                            request_tags=self.request_tags,
                         )
 
             async def _prepare_follow_up_call(self):
@@ -490,6 +495,7 @@ async def acompletion_with_mcp(
             litellm_trace_id=kwargs.get("litellm_trace_id"),
             openai_tools=openai_tools,
             base_call_args=base_call_args,
+            request_tags=request_tags,
         )
 
         # Create a wrapper class that delegates to our custom iterator
@@ -601,6 +607,7 @@ async def acompletion_with_mcp(
         raw_headers=raw_headers,
         litellm_call_id=kwargs.get("litellm_call_id"),
         litellm_trace_id=kwargs.get("litellm_trace_id"),
+        request_tags=request_tags,
     )
 
     if not tool_results:

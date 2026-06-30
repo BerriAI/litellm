@@ -1472,6 +1472,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        request_tags: Optional[List[str]] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1514,6 +1515,7 @@ if MCP_AVAILABLE:
                 "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
+                    **({"tags": request_tags} if request_tags else {}),
                 },
                 # Provide a small input payload for standard logging
                 "input": [

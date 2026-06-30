@@ -61,6 +61,19 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
+    def _get_parent_request_tags(kwargs: Optional[dict]) -> List[str]:
+        """Tags from the parent LLM request, using the same extraction logic as standard logging (incl. User-Agent)."""
+        if not kwargs:
+            return []
+        from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+        proxy_server_request = kwargs.get("proxy_server_request") or {}
+        return StandardLoggingPayloadSetup._get_request_tags(
+            litellm_params=kwargs,
+            proxy_server_request=proxy_server_request,
+        )
+
+    @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
         Returns True if any MCP tool should be handled via the litellm proxy MCP gateway.
@@ -163,6 +176,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: Optional[str] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        request_tags: Optional[List[str]] = None,
     ) -> tuple[List[MCPTool], List[str]]:
         """
         Get available tools from the MCP server manager.
@@ -251,6 +265,7 @@ class LiteLLM_Proxy_MCP_Handler:
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
+            request_tags=request_tags,
         )
 
         allowed_mcp_server_ids = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -352,6 +367,7 @@ class LiteLLM_Proxy_MCP_Handler:
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: List[ToolParam],
         litellm_trace_id: Optional[str] = None,
+        request_tags: Optional[List[str]] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Centralized method to process MCP tools through the complete pipeline.
@@ -372,6 +388,7 @@ class LiteLLM_Proxy_MCP_Handler:
             user_api_key_auth,
             mcp_tools_with_litellm_proxy,
             litellm_trace_id=litellm_trace_id,
+            request_tags=request_tags,
         )
 
         openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(deduplicated_mcp_tools)
@@ -385,6 +402,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: Optional[str] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        request_tags: Optional[List[str]] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -412,6 +430,7 @@ class LiteLLM_Proxy_MCP_Handler:
             litellm_trace_id=litellm_trace_id,
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
+            request_tags=request_tags,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
@@ -598,6 +617,7 @@ class LiteLLM_Proxy_MCP_Handler:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        request_tags: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -673,6 +693,8 @@ class LiteLLM_Proxy_MCP_Handler:
                 }
                 if litellm_trace_id:
                     logging_request_data["litellm_trace_id"] = litellm_trace_id
+                if request_tags:
+                    logging_request_data["metadata"]["tags"] = request_tags
                 if user_api_key_auth is not None:
                     LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
                         data=logging_request_data,
