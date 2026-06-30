@@ -219,37 +219,30 @@ async def maybe_run_chat_completion_agentic_loop(
         if not isinstance(callback, CustomLogger):
             continue
 
-        uses_chat_completion_hooks = _chat_completion_gate_overridden(callback)
-        uses_unified_hooks = not uses_chat_completion_hooks and _gate_overridden(callback)
-        if not uses_chat_completion_hooks and not uses_unified_hooks:
+        use_chat_hooks = _chat_completion_gate_overridden(callback)
+        if not use_chat_hooks and not _gate_overridden(callback):
             continue
 
-        gate_kwargs = {
+        hook_kwargs = {
             **kwargs,
             "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
             "custom_llm_provider": custom_llm_provider,
         }
         try:
-            if uses_chat_completion_hooks:
-                should_run, tool_calls = await callback.async_should_run_chat_completion_agentic_loop(
-                    response=response,
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    stream=stream,
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=gate_kwargs,
-                )
-            else:
-                should_run, tool_calls = await callback.async_should_run_agentic_loop(
-                    response=response,
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    stream=stream,
-                    custom_llm_provider=custom_llm_provider,
-                    kwargs=gate_kwargs,
-                )
+            gate = (
+                callback.async_should_run_chat_completion_agentic_loop
+                if use_chat_hooks
+                else callback.async_should_run_agentic_loop
+            )
+            should_run, tool_calls = await gate(
+                response=response,
+                model=model,
+                messages=messages,
+                tools=tools,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=hook_kwargs,
+            )
         except Exception as e:
             verbose_logger.exception(
                 "LiteLLM.AgenticHookError: Exception in chat completion agentic gate: %s",
@@ -269,12 +262,7 @@ async def maybe_run_chat_completion_agentic_loop(
         )
 
         try:
-            plan_kwargs = {
-                **kwargs,
-                "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
-                "custom_llm_provider": custom_llm_provider,
-            }
-            if uses_chat_completion_hooks and not _chat_completion_build_plan_overridden(callback):
+            if use_chat_hooks and not _chat_completion_build_plan_overridden(callback):
                 return await callback.async_run_chat_completion_agentic_loop(
                     tools=tool_calls,
                     model=model,
@@ -283,10 +271,10 @@ async def maybe_run_chat_completion_agentic_loop(
                     optional_params=optional_params,
                     logging_obj=logging_obj,
                     stream=stream,
-                    kwargs=plan_kwargs,
+                    kwargs=hook_kwargs,
                 )
 
-            if uses_chat_completion_hooks:
+            if use_chat_hooks:
                 plan = await callback.async_build_chat_completion_agentic_loop_plan(
                     tools=tool_calls,
                     model=model,
@@ -295,7 +283,7 @@ async def maybe_run_chat_completion_agentic_loop(
                     optional_params=optional_params,
                     logging_obj=logging_obj,
                     stream=stream,
-                    kwargs=plan_kwargs,
+                    kwargs=hook_kwargs,
                 )
             else:
                 plan = await callback.async_build_agentic_loop_plan(
@@ -307,7 +295,7 @@ async def maybe_run_chat_completion_agentic_loop(
                     anthropic_messages_optional_request_params=optional_params,
                     logging_obj=logging_obj,
                     stream=stream,
-                    kwargs=plan_kwargs,
+                    kwargs=hook_kwargs,
                 )
 
             if plan.response_override is not None:
