@@ -667,3 +667,35 @@ async def test_apply_guardrail_sends_model_from_request_data_when_no_config_mode
     call_kwargs = mock_post.call_args
     sent_payload = call_kwargs.kwargs.get("json") or call_kwargs.args[1]
     assert sent_payload.get("model") == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_async_should_run_agentic_loop_detects_anthropic_content_block_format(
+    guardrail: HeadroomGuardrail,
+):
+    retrieve_tool_def = [{"type": "function", "function": {"name": HEADROOM_RETRIEVE_TOOL_NAME}}]
+
+    response = MagicMock()
+    response.choices = None
+    response.content = [
+        {
+            "type": "tool_use",
+            "id": "toolu_abc",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "input": {"hash": "b573993006976af767214fac"},
+        }
+    ]
+
+    should_run, ctx = await guardrail.async_should_run_agentic_loop(
+        response=response,
+        model="claude-sonnet-4-6",
+        messages=[],
+        tools=retrieve_tool_def,
+        stream=False,
+        custom_llm_provider="anthropic",
+        kwargs={},
+    )
+
+    assert should_run is True
+    assert len(ctx["tool_calls"]) == 1
+    assert ctx["tool_calls"][0]["arguments"]["hash"] == "b573993006976af767214fac"
