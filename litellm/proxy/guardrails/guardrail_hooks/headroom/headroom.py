@@ -300,9 +300,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 headers=self._request_headers(),
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
-            verbose_proxy_logger.warning(
-                "Headroom: retrieve failed for hash=%s: %s", hash_value, e
-            )
+            verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)
             return f"[Headroom: retrieval failed for hash={hash_value}]"
 
         if raw_response is None or raw_response.status_code == 404:
@@ -414,9 +412,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 hash_value=str(hash_value),
                 query=str(query) if query else None,
             )
-            verbose_proxy_logger.debug(
-                "Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content)
-            )
+            verbose_proxy_logger.debug("Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content))
             tool_results.append(
                 {
                     "role": "tool",
@@ -428,21 +424,16 @@ class HeadroomGuardrail(CustomGuardrail):
         assistant_message = _build_assistant_message_from_response(response)
         follow_up_messages = list(messages) + [assistant_message] + tool_results
 
-        max_tokens: Optional[int] = (
-            anthropic_messages_optional_request_params.get("max_tokens")
-            or kwargs.get("max_tokens")
+        max_tokens: Optional[int] = anthropic_messages_optional_request_params.get("max_tokens") or kwargs.get(
+            "max_tokens"
         )
         optional_params_without_max_tokens = {
-            k: v
-            for k, v in anthropic_messages_optional_request_params.items()
-            if k != "max_tokens"
+            k: v for k, v in anthropic_messages_optional_request_params.items() if k != "max_tokens"
         }
 
         full_model_name = model
         if logging_obj is not None:
-            agentic_params = getattr(logging_obj, "model_call_details", {}).get(
-                "agentic_loop_params", {}
-            )
+            agentic_params = getattr(logging_obj, "model_call_details", {}).get("agentic_loop_params", {})
             candidate = agentic_params.get("model", model)
             if isinstance(candidate, str) and candidate:
                 full_model_name = candidate
@@ -455,9 +446,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 max_tokens=max_tokens,
                 optional_params=optional_params_without_max_tokens,
                 kwargs={
-                    k: v
-                    for k, v in kwargs.items()
-                    if not k.startswith("_headroom") and k != "litellm_logging_obj"
+                    k: v for k, v in kwargs.items() if not k.startswith("_headroom") and k != "litellm_logging_obj"
                 },
             ),
             metadata={"tool_type": "headroom_ccr"},
