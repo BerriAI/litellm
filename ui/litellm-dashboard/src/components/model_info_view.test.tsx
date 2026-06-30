@@ -382,6 +382,36 @@ describe("ModelInfoView", () => {
     });
   });
 
+  it("should display copy-safe pricing labels when model costs are absent", async () => {
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [
+          {
+            ...defaultModelData,
+            litellm_params: {
+              ...defaultModelData.litellm_params,
+              input_cost_per_token: null,
+              output_cost_per_token: undefined,
+            },
+            model_info: {
+              ...defaultModelData.model_info,
+              input_cost_per_token: null,
+              output_cost_per_token: undefined,
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Estimate unavailable")).toHaveLength(3);
+    });
+  });
+
   it("should display edit settings button when user can edit model", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {

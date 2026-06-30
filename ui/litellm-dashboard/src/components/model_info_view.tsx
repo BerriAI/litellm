@@ -43,6 +43,7 @@ import { getProviderLogoAndName } from "./provider_info_helpers";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
+import { formatModelCostEstimate } from "./model_cost_display_helpers";
 
 interface ModelInfoViewProps {
   modelId: string;
@@ -104,6 +105,11 @@ export default function ModelInfoView({
 
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
+  const inputCostPerToken = localModelData?.litellm_params?.input_cost_per_token ?? localModelData?.model_info?.input_cost_per_token;
+  const outputCostPerToken =
+    localModelData?.litellm_params?.output_cost_per_token ?? localModelData?.model_info?.output_cost_per_token;
+  const displayInputCost = formatModelCostEstimate(inputCostPerToken, { precision: 2 });
+  const displayOutputCost = formatModelCostEstimate(outputCostPerToken, { precision: 2 });
 
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
@@ -597,8 +603,8 @@ export default function ModelInfoView({
               <Card>
                 <Text>Pricing</Text>
                 <div className="mt-2">
-                  <Text>Input: ${modelData.input_cost}/1M tokens</Text>
-                  <Text>Output: ${modelData.output_cost}/1M tokens</Text>
+                  <Text>Input: ${displayInputCost}/1M tokens</Text>
+                  <Text>Output: ${displayOutputCost}/1M tokens</Text>
                 </div>
               </Card>
             </Grid>
@@ -757,11 +763,7 @@ export default function ModelInfoView({
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded">
-                            {localModelData?.litellm_params?.input_cost_per_token
-                              ? (localModelData.litellm_params?.input_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.input_cost_per_token
-                                ? (localModelData.model_info.input_cost_per_token * 1_000_000).toFixed(4)
-                                : "Not Set"}
+                            {formatModelCostEstimate(inputCostPerToken)}
                           </div>
                         )}
                       </div>
@@ -774,11 +776,7 @@ export default function ModelInfoView({
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded">
-                            {localModelData?.litellm_params?.output_cost_per_token
-                              ? (localModelData.litellm_params.output_cost_per_token * 1_000_000).toFixed(4)
-                              : localModelData?.model_info?.output_cost_per_token
-                                ? (localModelData.model_info.output_cost_per_token * 1_000_000).toFixed(4)
-                                : "Not Set"}
+                            {formatModelCostEstimate(outputCostPerToken)}
                           </div>
                         )}
                       </div>
