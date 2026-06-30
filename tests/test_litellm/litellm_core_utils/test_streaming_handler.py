@@ -3059,3 +3059,70 @@ async def test_stream_chunk_builder_raise_and_usage_recovery_failure_does_not_cr
             chunks = [c async for c in response]
 
     assert len(chunks) > 0
+
+
+@pytest.mark.asyncio
+async def test_usage_strip_does_not_call_model_dump():
+    """Regression: the _has_usage branch in __anext__ must not call model_dump().
+
+    Before the fix, usage was stripped by round-tripping through model_dump() -> dict
+    -> model_response_creator(). model_dump() on a ModelResponseStream whose Pydantic
+    serializer hasn't been built yet (MockValSer cold-start) raises PydanticUserError /
+    TypeError depending on pydantic version, causing MidStreamFallbackError and
+    premature stream termination.
+
+    The fix strips usage via direct attribute assignment. This test poisons model_dump()
+    on the processed_chunk to raise, verifying the _has_usage branch never calls it.
+    """
+    usage_chunk = ModelResponseStream(
+        id="test-usage",
+        created=1000,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="", role="assistant"),
+            )
+        ],
+        usage=Usage(completion_tokens=5, prompt_tokens=3, total_tokens=8),
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=[usage_chunk]),
+        model="test-model",
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="mockvalser-regression",
+            function_id="1",
+        ),
+    )
+
+    # Poison model_dump() on whatever model_response_creator returns so that if the
+    # _has_usage branch calls it, the stream raises instead of completing.
+    original_creator = wrapper.model_response_creator
+
+    def poisoned_creator(chunk=None, hidden_params=None):
+        result = original_creator(chunk=chunk, hidden_params=hidden_params)
+
+        def boom(**kwargs):
+            raise RuntimeError(
+                "model_dump() called on processed_chunk — MockValSer crash path re-introduced"
+            )
+
+        result.model_dump = boom  # type: ignore[method-assign]
+        return result
+
+    wrapper.model_response_creator = poisoned_creator  # type: ignore[method-assign]
+
+    yielded = [c async for c in wrapper]
+
+    assert all(
+        getattr(c, "usage", None) is None for c in yielded
+    ), "usage must be stripped from all yielded chunks"

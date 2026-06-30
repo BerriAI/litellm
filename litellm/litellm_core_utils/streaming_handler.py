@@ -1741,17 +1741,18 @@ class CustomStreamWrapper:
                     # hasattr(response, "usage") is always True — must check
                     # `is not None` to avoid running this path on every chunk.
                     if getattr(response, "usage", None) is not None:
-                        obj_dict = response.model_dump()
+                        # self.chunks already holds the full response (appended above).
+                        # When include_usage is NOT requested, strip usage in-place
+                        # rather than round-tripping through model_dump(), which fails
+                        # when Pydantic's lazy schema compiler hasn't run yet
+                        # (MockValSer not yet replaced).
+                        if self.stream_options is None:
+                            response.usage = None
+                            ## check if empty
+                            is_empty = is_model_response_stream_empty(model_response=cast(ModelResponseStream, response))
 
-                        if "usage" in obj_dict:
-                            del obj_dict["usage"]
-
-                        response = self.model_response_creator(chunk=obj_dict, hidden_params=response._hidden_params)
-                        ## check if empty
-                        is_empty = is_model_response_stream_empty(model_response=cast(ModelResponseStream, response))
-
-                        if is_empty:
-                            continue
+                            if is_empty:
+                                continue
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
@@ -1919,19 +1920,17 @@ class CustomStreamWrapper:
                         # directly to avoid expensive model_copy() per chunk.
                         self.chunks.append(processed_chunk.model_copy())
 
-                        # Strip usage from the outgoing chunk so it's not sent twice
-                        # (once in the chunk, once in _hidden_params).
-                        obj_dict = processed_chunk.model_dump()
-                        if "usage" in obj_dict:
-                            del obj_dict["usage"]
-                        processed_chunk = self.model_response_creator(
-                            chunk=obj_dict, hidden_params=processed_chunk._hidden_params
-                        )
-                        is_empty = is_model_response_stream_empty(
-                            model_response=cast(ModelResponseStream, processed_chunk)
-                        )
-                        if is_empty:
-                            continue
+                        # When include_usage is NOT requested, strip usage in-place
+                        # rather than round-tripping through model_dump(), which fails
+                        # when Pydantic's lazy schema compiler hasn't run yet
+                        # (MockValSer not yet replaced).
+                        if self.stream_options is None:
+                            processed_chunk.usage = None
+                            is_empty = is_model_response_stream_empty(
+                                model_response=cast(ModelResponseStream, processed_chunk)
+                            )
+                            if is_empty:
+                                continue
                     else:
                         # No usage data — safe to store directly without copying
                         self.chunks.append(processed_chunk)
