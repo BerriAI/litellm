@@ -772,6 +772,7 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "qiniu",
     "pinstripes",  # Pinstripes - JSON-configured provider
     "darkbloom",
 ]

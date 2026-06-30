@@ -651,6 +651,7 @@ gigachat_models: Set = set()
 llamagate_models: Set = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
+qiniu_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -927,6 +928,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
+        elif value.get("litellm_provider") == "qiniu":
+            qiniu_models.add(key)
 
 
 add_known_models()
@@ -1043,6 +1046,7 @@ model_list = list(
     | docker_model_runner_models
     | reducto_models
     | bedrock_mantle_models
+    | qiniu_models
     | set(clarifai_models)
 )
 
@@ -1155,6 +1159,7 @@ models_by_provider: dict = {
     "llamagate": llamagate_models,
     "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
+    "qiniu": qiniu_models,
 }
 
 # mapping for those models which have larger equivalents
