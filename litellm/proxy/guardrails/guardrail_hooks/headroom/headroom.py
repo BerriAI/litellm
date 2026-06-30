@@ -84,7 +84,7 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
     }
 
 
-def _remember_issued_hashes(cache: "OrderedDict[str, None]", hashes: list[str]) -> None:
+def _remember_issued_hashes(cache: OrderedDict[str, None], hashes: list[str]) -> None:
     """Record hashes actually returned by Headroom's /v1/compress.
 
     The CCR retrieval loop validates tool-call hashes against this cache so an
@@ -275,7 +275,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
-        self._issued_hashes: "OrderedDict[str, None]" = OrderedDict()
+        self._issued_hashes: OrderedDict[str, None] = OrderedDict()
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             guardrail_name=guardrail_name,
             event_hook=event_hook,
