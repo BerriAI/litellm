@@ -5195,7 +5195,7 @@ class ProxyUpdateSpend:
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
-                            batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
+                            batch_with_dates = [prisma_client.jsonify_object(_strip_null_bytes(entry)) for entry in batch]
                             await _create_spend_logs_with_poison_isolation(
                                 SpendLogsRepository(prisma_client),
                                 batch_with_dates,
@@ -5523,6 +5523,21 @@ async def _create_spend_logs_with_poison_isolation(
         mid = len(rows) // 2
         remaining = await _create_spend_logs_with_poison_isolation(repo, rows[:mid], attempts_left - 1)
         return await _create_spend_logs_with_poison_isolation(repo, rows[mid:], remaining)
+
+
+def _strip_null_bytes_from_value(v: object) -> object:
+    if isinstance(v, str):
+        return v.replace("\x00", "")
+    if isinstance(v, dict):
+        return {dk: dv.replace("\x00", "") if isinstance(dv, str) else dv for dk, dv in v.items()}
+    if isinstance(v, list):
+        return [item.replace("\x00", "") if isinstance(item, str) else item for item in v]
+    return v
+
+
+def _strip_null_bytes(payload: dict[str, object]) -> dict[str, object]:
+    return {k: _strip_null_bytes_from_value(v) for k, v in payload.items()}
+
 
 
 def _raise_failed_update_spend_exception(e: Exception, start_time: float, proxy_logging_obj: ProxyLogging):

@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from litellm.proxy.utils import ProxyUpdateSpend
+from litellm.proxy.utils import ProxyUpdateSpend, _strip_null_bytes
 
 
 class _AsyncCM:
@@ -216,9 +216,7 @@ async def test_update_spend_logs_failure_raises_after_retries(
 
     monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
 
-    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
-        side_effect=httpx.ReadError("network blip")
-    )
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=httpx.ReadError("network blip"))
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     with pytest.raises(httpx.ReadError):
@@ -345,15 +343,11 @@ def test_disable_spend_updates_reflects_general_settings(
     """
     import litellm.proxy.proxy_server as proxy_server_mod
 
-    monkeypatch.setattr(
-        proxy_server_mod, "general_settings", {"disable_spend_updates": True}
-    )
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {"disable_spend_updates": True})
     pinned = {
         "with_flag_true": ProxyUpdateSpend.disable_spend_updates(),
         "type_is_bool": isinstance(ProxyUpdateSpend.disable_spend_updates(), bool),
-        "method_is_static": isinstance(
-            ProxyUpdateSpend.__dict__["disable_spend_updates"], staticmethod
-        ),
+        "method_is_static": isinstance(ProxyUpdateSpend.__dict__["disable_spend_updates"], staticmethod),
     }
     assert pinned == {
         "with_flag_true": True,
@@ -379,3 +373,80 @@ def test_disable_spend_updates_error_when_general_settings_unavailable(
     monkeypatch.delattr(proxy_server_mod, "general_settings", raising=False)
     with pytest.raises(ImportError):
         ProxyUpdateSpend.disable_spend_updates()
+
+
+class TestStripNullBytes:
+    def test_strips_null_bytes_from_flat_string_values(self) -> None:
+        payload = {
+            "request_id": "r1",
+            "messages": "hello\x00world",
+            "model": "gpt-4o",
+        }
+        result = _strip_null_bytes(payload)
+        assert result == {
+            "request_id": "r1",
+            "messages": "helloworld",
+            "model": "gpt-4o",
+        }
+
+    def test_strips_null_bytes_from_nested_dict(self) -> None:
+        payload = {
+            "metadata": {"trace": "XSLoader.pm line 93.\x00"},
+        }
+        result = _strip_null_bytes(payload)
+        assert result == {
+            "metadata": {"trace": "XSLoader.pm line 93."},
+        }
+
+    def test_strips_null_bytes_from_list_values(self) -> None:
+        payload = {
+            "tags": ["clean", "has\x00null", "also\x00bad"],
+        }
+        result = _strip_null_bytes(payload)
+        assert result == {"tags": ["clean", "hasnull", "alsobad"]}
+
+    def test_preserves_non_string_values(self) -> None:
+        payload = {
+            "spend": 0.01,
+            "total_tokens": 100,
+            "model": None,
+            "active": True,
+        }
+        assert _strip_null_bytes(payload) == payload
+
+    def test_does_not_mutate_original(self) -> None:
+        original = {"messages": "hello\x00world"}
+        _strip_null_bytes(original)
+        assert original["messages"] == "hello\x00world"
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_strips_null_bytes_before_db_write(
+    mock_prisma_client: Any, make_spend_log_row: Any
+) -> None:
+    """Regression: null bytes in spend log string fields caused PostgreSQL
+    error 22P05 and a permanent retry loop (pre-fix). Verify that null bytes
+    are stripped from all string values before the Prisma create_many call.
+    """
+    perl_trace = "DynaLoader.pm line 193.\n\x00some binary garbage\x00"
+    logs = [
+        make_spend_log_row(
+            request_id="null-byte-req",
+            model="text-embedding-3-large\x00",
+            metadata={"input": perl_trace},
+        ),
+    ]
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=0,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=logs,
+    )
+    written_data = mock_prisma_client.db.litellm_spendlogs.create_many.await_args.kwargs["data"]
+    written_row = written_data[0]
+    assert "\x00" not in written_row["model"]
+    assert "\x00" not in written_row["metadata"]
