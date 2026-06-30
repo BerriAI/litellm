@@ -11,6 +11,7 @@ import json
 import os
 import pytest
 import asyncio
+import requests
 
 # Path to your service account JSON file
 SERVICE_ACCOUNT_FILE = "path/to/your/service-account.json"
@@ -68,8 +69,6 @@ async def get_tracked_spend() -> float:
     "today" so a UTC date rollover mid-test can't hide a freshly billed call, and
     treats an unreachable endpoint as "nothing recorded yet" (0.0).
     """
-    import requests
-
     url = f"http://0.0.0.0:4000/global/spend/logs?api_key={SPEND_LOG_API_KEY}"
     response = requests.get(url, headers={"Authorization": "Bearer sk-1234"})
     if response.status_code != 200:
@@ -83,64 +82,90 @@ async def get_tracked_spend() -> float:
 
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
+VERTEX_PROJECT = "litellm-ci-cd"
+VERTEX_MODEL = "gemini-3.1-flash-lite"
+VERTEX_GENERATE_CONTENT_URL = (
+    f"{LITE_LLM_ENDPOINT}/vertex_ai/v1/projects/{VERTEX_PROJECT}"
+    f"/locations/global/publishers/google/models/{VERTEX_MODEL}:generateContent"
+)
 
-def _is_vertex_quota_error(exc: Exception) -> bool:
-    message = str(exc)
-    return (
-        "429" in message
-        or "Too Many Requests" in message
-        or "RESOURCE_EXHAUSTED" in message
+
+def _vertex_access_token() -> str:
+    import google.auth
+    import google.auth.transport.requests
+
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
     )
+    credentials.refresh(google.auth.transport.requests.Request())
+    return credentials.token
+
+
+def _spend_log_for_request(call_id: str) -> dict | None:
+    response = requests.get(
+        f"{LITE_LLM_ENDPOINT}/spend/logs?request_id={call_id}",
+        headers={"Authorization": "Bearer sk-1234"},
+        timeout=30,
+    )
+    if response.status_code != 200:
+        return None
+    rows = response.json()
+    return rows[0] if rows else None
+
+
+def _is_vertex_quota_error(response: requests.Response) -> bool:
+    return response.status_code == 429 or "RESOURCE_EXHAUSTED" in response.text
 
 
 @pytest.mark.asyncio()
 async def test_basic_vertex_ai_pass_through_with_spendlog():
-
     load_vertex_ai_credentials()
+    access_token = _vertex_access_token()
 
-    vertexai.init(
-        project="litellm-ci-cd",
-        location="global",
-        api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
-        api_transport="rest",
-    )
-
-    model = GenerativeModel(model_name="gemini-3.1-flash-lite")
-
-    spend_before = await get_tracked_spend()
-
-    # Pass-through spend logging is best-effort: the success handler runs on a
-    # background worker that can drop or time out an individual event under CI load
-    # and never retries it, so one billed call occasionally never reaches
-    # LiteLLM_SpendLogs. Waiting longer can't recover a dropped event; only re-billing
-    # can. Require at least one of a few billed calls to be tracked. This still fails
-    # hard if cost tracking is genuinely broken, since then every call records nothing.
-    max_attempts = 5
-    per_attempt_wait = 45  # seconds to wait for a single call's spend to land
+    # Drive the pass-through over HTTP instead of the vertexai SDK: the SDK intermittently
+    # routes generateContent to the public Vertex endpoint rather than the proxy override,
+    # so the call never reaches LiteLLM and no spend is logged. A direct request always
+    # hits the proxy. Spend logging then runs on a best-effort background worker that can
+    # drop a single event, so retry a few billed calls and assert that one specific call's
+    # spend log lands. Failing every attempt still fails hard, which is the signal we want
+    # if cost tracking is broken.
+    max_attempts = 3
+    poll_seconds = 60
     poll_interval = 5
 
-    spend_after = spend_before
     for attempt in range(1, max_attempts + 1):
-        try:
-            model.generate_content("hi")
-        except Exception as exc:
-            if _is_vertex_quota_error(exc):
-                pytest.skip("Vertex AI quota exhausted")
-            raise
+        response = requests.post(
+            VERTEX_GENERATE_CONTENT_URL,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+            json={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
+            timeout=60,
+        )
+        if _is_vertex_quota_error(response):
+            pytest.skip("Vertex AI quota exhausted")
+        assert (
+            response.status_code == 200
+        ), f"vertex pass-through call failed: {response.status_code} {response.text}"
 
-        for _ in range(per_attempt_wait // poll_interval):
+        call_id = response.headers.get("x-litellm-call-id")
+        assert call_id, "proxy response missing x-litellm-call-id header"
+
+        for _ in range(poll_seconds // poll_interval):
             await asyncio.sleep(poll_interval)
-            spend_after = await get_tracked_spend()
-            if spend_after > spend_before:
-                print(f"spend tracked on attempt {attempt}: {spend_before} -> {spend_after}")
+            row = _spend_log_for_request(call_id)
+            if row is not None and float(row.get("spend") or 0) > 0:
+                assert "gemini" in row["model"], f"unexpected model in spend log: {row}"
+                assert (
+                    row["custom_llm_provider"] == "vertex_ai"
+                ), f"unexpected provider in spend log: {row}"
                 return
 
-        print(f"attempt {attempt}: spend not tracked yet (spend_after={spend_after}), re-billing")
+        print(f"attempt {attempt}: spend log for call {call_id} not found yet, re-billing")
 
     pytest.fail(
-        "Vertex pass-through spend never recorded after {} billed calls. spend_before: {}, spend_after: {}".format(
-            max_attempts, spend_before, spend_after
-        )
+        f"Vertex pass-through spend never recorded after {max_attempts} billed calls"
     )
 
 
