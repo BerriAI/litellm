@@ -13,9 +13,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import litellm
 from litellm import Router
 from litellm.utils import _get_excluded_filtered_deployments
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for _get_excluded_filtered_deployments
@@ -98,6 +98,63 @@ def test_set_failed_deployment_id_on_exception():
     assert getattr(exc, "failed_deployment_id", None) == "dep-a"
     router._set_failed_deployment_id_on_exception(exc, _make_dep("dep-b"))
     assert exc.failed_deployment_id == "dep-a"
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_stamps_failed_deployment_id_on_failure():
+    """The /v1/messages (generic) path must stamp failed_deployment_id on a
+    deployment failure, like /chat/completions does. Without it weighted
+    failover has nothing to exclude and the request escapes to a cross-group
+    fallback instead of trying a healthy sibling in the same group."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+        routing_strategy="simple-shuffle",
+        enable_weighted_failover=True,
+    )
+
+    async def failing_call(**kwargs):
+        raise litellm.RateLimitError(
+            message="boom", llm_provider="openai", model="gpt-4o"
+        )
+
+    with pytest.raises(litellm.RateLimitError) as exc_info:
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="test-model",
+            original_generic_function=failing_call,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert getattr(exc_info.value, "failed_deployment_id", None) == "dep-a"
+
+
+@pytest.mark.asyncio
+async def test_ageneric_api_call_no_stamp_when_deployment_selection_fails():
+    """When no deployment was selected, the helper re-raises without a
+    failed_deployment_id and without a NameError on the unbound deployment."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="does-not-exist",
+            original_generic_function=AsyncMock(),
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert getattr(exc_info.value, "failed_deployment_id", None) is None
 
 
 @pytest.mark.asyncio
