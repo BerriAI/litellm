@@ -131,9 +131,10 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     [sortBy, sortOrder, handleSortChange],
   );
 
+  const requestIdSearchTerm = filters[FILTER_KEYS.REQUEST_ID];
+
   const filteredData = useMemo(() => {
     const searchedLogs = filteredLogs.data.filter((log) => {
-      const requestIdSearchTerm = filters[FILTER_KEYS.REQUEST_ID];
       const matchesSearch = !requestIdSearchTerm || log.request_id.includes(requestIdSearchTerm);
 
       return matchesSearch;
@@ -195,7 +196,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
         })
     );
-  }, [filteredLogs.data, filters]);
+  }, [filteredLogs.data, requestIdSearchTerm]);
 
   // Keep the Fetch button busy until the table has actually committed the new
   // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
@@ -259,7 +260,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                 />
                 <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
                   <LogsTableToolbar
-                    searchTerm={filters[FILTER_KEYS.REQUEST_ID]}
+                    searchTerm={requestIdSearchTerm}
                     onSearchChange={(value) => handleFilterChange({ [FILTER_KEYS.REQUEST_ID]: value })}
                     startTime={startTime}
                     onStartTimeChange={setStartTime}
