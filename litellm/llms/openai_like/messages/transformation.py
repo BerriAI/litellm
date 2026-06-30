@@ -3,7 +3,6 @@ from typing import Any, Optional
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
-from litellm.types.router import GenericLiteLLMParams
 
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
 
@@ -38,7 +37,11 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
             **({"anthropic-version": DEFAULT_ANTHROPIC_API_VERSION} if "anthropic-version" not in present else {}),
             **({"content-type": "application/json"} if "content-type" not in present else {}),
         }
-        return {**headers, **defaults}, api_base
+        merged = self._update_headers_with_anthropic_beta(
+            headers={**headers, **defaults},
+            optional_params=optional_params,
+        )
+        return merged, api_base
 
     def get_complete_url(
         self,
@@ -57,19 +60,3 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         if base.endswith("/v1"):
             base = base[: -len("/v1")]
         return f"{base}/v1/messages"
-
-    def transform_anthropic_messages_request(
-        self,
-        model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
-        if anthropic_messages_optional_request_params.get("max_tokens") is None:
-            raise ValueError("max_tokens is required for the Anthropic /v1/messages API")
-        return {
-            "model": model,
-            "messages": messages,
-            **anthropic_messages_optional_request_params,
-        }

@@ -1,5 +1,6 @@
 import pytest
 
+from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.openai_like.messages.transformation import (
     OpenAILikeAnthropicMessagesConfig,
 )
@@ -94,7 +95,7 @@ def test_request_stays_in_anthropic_shape(config):
 
 
 def test_request_requires_max_tokens(config):
-    with pytest.raises(ValueError, match="max_tokens is required"):
+    with pytest.raises(AnthropicError, match="max_tokens is required"):
         config.transform_anthropic_messages_request(
             model="some-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -171,3 +172,95 @@ def test_validate_environment_honors_x_api_key_when_present(config):
     )
     assert "authorization" not in {key.lower() for key in headers}
     assert headers["X-Api-Key"] == "caller-key"
+
+
+def test_validate_environment_injects_anthropic_beta_for_context_management(config):
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="some-model",
+        messages=[],
+        optional_params={
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]},
+        },
+        litellm_params={},
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+    assert "context-management-2025-06-27" in headers["anthropic-beta"].split(",")
+
+
+def test_validate_environment_injects_anthropic_beta_for_fast_mode(config):
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="some-model",
+        messages=[],
+        optional_params={"speed": "fast"},
+        litellm_params={},
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+    assert "fast-mode-2026-02-01" in headers["anthropic-beta"].split(",")
+
+
+def test_validate_environment_merges_existing_anthropic_beta(config):
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={"anthropic-beta": "caller-flag"},
+        model="some-model",
+        messages=[],
+        optional_params={"speed": "fast"},
+        litellm_params={},
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+    beta_values = set(headers["anthropic-beta"].split(","))
+    assert "caller-flag" in beta_values
+    assert "fast-mode-2026-02-01" in beta_values
+
+
+def test_request_strips_advisor_blocks_when_advisor_tool_absent(config):
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "thinking out loud"},
+                {"type": "server_tool_use", "id": "advisor_1", "name": "advisor", "input": {}},
+                {"type": "advisor_tool_result", "tool_use_id": "advisor_1", "content": "stale"},
+            ],
+        },
+    ]
+
+    payload = config.transform_anthropic_messages_request(
+        model="some-model",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    flattened_types = [
+        block.get("type")
+        for message in payload["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict)
+    ]
+    assert "advisor_tool_result" not in flattened_types
+    assert "server_tool_use" not in flattened_types
+
+
+def test_request_maps_reasoning_effort_to_thinking(config):
+    payload = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "reasoning_effort": "medium",
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in payload
+    assert isinstance(payload.get("thinking"), dict)
+    assert payload["thinking"].get("type") == "enabled"
