@@ -59,6 +59,20 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         records = await self.table.find_many(where={"teams": {"has": team_id}})
         return self._to_model_list(records)
 
+    async def count_billable_users(self) -> int:
+        """Number of users that count toward the license seat limit.
+
+        Every user is billable except those SCIM-deactivated
+        (metadata.scim_active == false). Rows where scim_active is absent,
+        null, or true all count, so seats are counted as total users minus
+        the deactivated ones.
+        """
+        from prisma import Json  # pyright: ignore[reportUnknownVariableType]
+
+        total = await self.count()
+        deactivated = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
+        return max(0, total - deactivated)
+
     async def create_user(
         self,
         user_id: str,
