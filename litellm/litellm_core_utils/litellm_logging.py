@@ -1496,7 +1496,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 logging_obj=self,
                 raw_response=httpx.Response(status_code=200, headers={}),
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - cost normalization must never break the response path
             verbose_logger.debug(f"generate_content response cost normalization failed: {e}")
             return None
 
