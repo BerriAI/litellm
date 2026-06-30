@@ -2853,3 +2853,42 @@ def test_streaming_function_call_tool_id_for_degenerate_call_id():
 
     assert stream_tool_id("fc_unique_abc123", "call_0") == "fc_unique_abc123"
     assert stream_tool_id("fc_2", "call_tokyo") == "call_tokyo"
+
+def test_none_content_in_assistant_message_produces_empty_string_text():
+    """
+    Regression test for issue #31696.
+
+    When a provider (e.g. Gemini via Vertex AI) returns an assistant message with
+    tool_calls but content=None, the back-translation to Responses API should emit
+    text="" (empty string), not text=None. The OpenAI Responses API spec defines
+    ResponseOutputText.text as a required, non-nullable str field.
+    """
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+    from litellm.types.utils import Message
+
+    # Simulate a Gemini assistant message: content is None, tool_calls present
+    message = Message(
+        role="assistant",
+        content=None,
+        tool_calls=[
+            {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"location": "Paris"}',
+                },
+            }
+        ],
+    )
+
+    result = LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
+        message
+    )
+
+    assert result.text is not None, "text should not be None"
+    assert result.text == "", "text should be empty string when content is None"
+    assert result.type == "output_text"
+

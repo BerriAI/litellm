@@ -1933,7 +1933,7 @@ class LiteLLMCompletionResponsesConfig:
 
         return OutputText(
             type="output_text",
-            text=message.content,
+            text=message.content if message.content is not None else "",
             annotations=transformed_annotations,
         )
 
