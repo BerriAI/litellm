@@ -1,12 +1,13 @@
+import asyncio
 import json
 import ssl
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -14,6 +15,7 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx  # type: ignore
 from openai.types.file_deleted import FileDeleted
@@ -42,7 +44,10 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
-from litellm.llms.base_llm.files.transformation import BaseFilesConfig
+from litellm.llms.base_llm.files.transformation import (
+    BaseFilesConfig,
+    BaseFileUploadStream,
+)
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
@@ -81,7 +86,7 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
-from litellm.types.files import TwoStepFileUploadConfig
+from litellm.types.files import StreamingMediaUploadConfig, TwoStepFileUploadConfig
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
@@ -103,6 +108,7 @@ from litellm.types.llms.openai import (
     ResponseInputParam,
     ResponsesAPIResponse,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.rerank import RerankResponse
 from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.router import GenericLiteLLMParams
@@ -128,7 +134,6 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
-from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
@@ -3238,6 +3243,20 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
+        elif isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request:
+            media_cfg = cast(StreamingMediaUploadConfig, transformed_request["streaming_media_upload"])
+            try:
+                upload_response = self._upload_media(
+                    client=sync_httpx_client,
+                    url=api_base,
+                    base_headers=headers,
+                    body_stream=cast(BaseFileUploadStream, media_cfg["body_stream"]),
+                    content_type=media_cfg.get("content_type") or "application/octet-stream",
+                    timeout=timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"Error creating file: {e}")
+                raise self._handle_error(e=e, provider_config=provider_config)
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -3319,7 +3338,14 @@ class BaseLLMHTTPHandler:
             input="",
             api_key="",
             additional_args={
-                "complete_input_dict": transformed_request,
+                # A streaming upload config holds a reference to the (potentially
+                # huge) upload payload; logging deep-copies additional_args, so log
+                # a placeholder instead of re-materializing the payload.
+                "complete_input_dict": (
+                    "<streaming media upload>"
+                    if isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request
+                    else transformed_request
+                ),
                 "api_base": api_base,
                 "headers": headers,
             },
@@ -3396,6 +3422,20 @@ class BaseLLMHTTPHandler:
                 data=presigned_request["data"],
                 timeout=timeout,
             )
+        elif isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request:
+            media_cfg = cast(StreamingMediaUploadConfig, transformed_request["streaming_media_upload"])
+            try:
+                upload_response = await self._aupload_media(
+                    client=async_httpx_client,
+                    url=api_base,
+                    base_headers=headers,
+                    body_stream=cast(BaseFileUploadStream, media_cfg["body_stream"]),
+                    content_type=media_cfg.get("content_type") or "application/octet-stream",
+                    timeout=timeout,
+                )
+            except Exception as e:
+                verbose_logger.exception(f"Error creating file: {e}")
+                raise self._handle_error(e=e, provider_config=provider_config)
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
         ):
@@ -3438,6 +3478,83 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    # The fine-grained transform stream (one piece per JSONL row) is regrouped
+    # into blocks of this size before upload, so the request yields a manageable
+    # number of chunks; never more than one block is buffered.
+    _MEDIA_UPLOAD_BLOCK_SIZE = 4 * 1024 * 1024
+
+    @staticmethod
+    def _iter_in_blocks(byte_iter: Iterator[bytes], block_size: int) -> Iterator[bytes]:
+        buf = bytearray()
+        for piece in byte_iter:
+            buf.extend(piece)
+            while len(buf) >= block_size:
+                yield bytes(buf[:block_size])
+                del buf[:block_size]
+        if buf:
+            yield bytes(buf)
+
+    def _check_media_upload_response(self, resp: httpx.Response) -> None:
+        if resp.status_code not in (200, 201):
+            resp.raise_for_status()
+            raise ValueError(f"media upload: unexpected status {resp.status_code}")
+
+    def _upload_media(
+        self,
+        *,
+        client: HTTPHandler,
+        url: str,
+        base_headers: Dict[str, str],
+        body_stream: BaseFileUploadStream,
+        content_type: str,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        headers = {**base_headers, "Content-Type": content_type}
+        kwargs: Dict[str, Any] = {
+            "headers": headers,
+            "content": self._iter_in_blocks(body_stream.iter_bytes(), self._MEDIA_UPLOAD_BLOCK_SIZE),
+        }
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        resp = client.client.post(url, **kwargs)
+        self._check_media_upload_response(resp)
+        return resp
+
+    async def _aupload_media(
+        self,
+        *,
+        client: AsyncHTTPHandler,
+        url: str,
+        base_headers: Dict[str, str],
+        body_stream: BaseFileUploadStream,
+        content_type: str,
+        timeout: Optional[Union[float, httpx.Timeout]],
+    ) -> httpx.Response:
+        """Stream the transformed body straight to a single media upload. Each
+        block is produced on a worker thread (the transform never runs on the
+        event loop) and sent with chunked transfer-encoding, so the body is
+        neither buffered in memory nor staged to disk, and the upload is one
+        continuous request rather than the many sequential round-trips of the
+        resumable path that overran client/LB timeouts."""
+        headers = {**base_headers, "Content-Type": content_type}
+        block_iter = iter(self._iter_in_blocks(body_stream.iter_bytes(), self._MEDIA_UPLOAD_BLOCK_SIZE))
+        done = object()
+
+        async def _abody() -> AsyncIterator[bytes]:
+            while True:
+                block = await asyncio.to_thread(next, block_iter, done)
+                if block is done:
+                    break
+                yield cast(bytes, block)
+
+        kwargs: Dict[str, Any] = {"headers": headers, "content": _abody()}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        resp = await client.client.post(url, **kwargs)
+        await resp.aread()
+        self._check_media_upload_response(resp)
+        return resp
 
     def create_batch(
         self,
