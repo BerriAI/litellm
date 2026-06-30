@@ -81,9 +81,7 @@ def _make_retrieve_response(original_content: str, status: int = 200) -> MagicMo
     return mock
 
 
-def _make_openai_response_with_tool_call(
-    tool_name: str, arguments: dict, tool_id: str = "call_abc123"
-) -> MagicMock:
+def _make_openai_response_with_tool_call(tool_name: str, arguments: dict, tool_id: str = "call_abc123") -> MagicMock:
     fn = MagicMock()
     fn.name = tool_name
     fn.arguments = json.dumps(arguments)
@@ -215,10 +213,7 @@ async def test_apply_guardrail_preserves_existing_tools_when_injecting(
     tools = result.get("tools")
     assert tools is not None
     assert isinstance(tools, list)
-    assert any(
-        isinstance(t, dict) and t.get("function", {}).get("name") == "my_tool"
-        for t in tools
-    )
+    assert any(isinstance(t, dict) and t.get("function", {}).get("name") == "my_tool" for t in tools)
     assert has_headroom_retrieve_tool(tools)
 
 
@@ -339,9 +334,7 @@ async def test_async_build_agentic_loop_plan_calls_retrieve_and_builds_messages(
     follow_up = plan.request_patch.messages
     assert follow_up is not None
 
-    tool_result_message = next(
-        (m for m in follow_up if m.get("role") == "tool"), None
-    )
+    tool_result_message = next((m for m in follow_up if m.get("role") == "tool"), None)
     assert tool_result_message is not None
     assert tool_result_message["content"] == original_content
     assert tool_result_message["tool_call_id"] == "call_abc123"
@@ -435,9 +428,7 @@ async def test_apply_guardrail_bypass_header_skips_compression(
     )
     request_data = {"proxy_server_request": {"headers": {"x-headroom-bypass": "true"}}}
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data=request_data,
@@ -457,9 +448,7 @@ async def test_apply_guardrail_response_type_passthrough(
         structured_messages=ORIGINAL_MESSAGES,
     )
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data={},
@@ -476,9 +465,7 @@ async def test_apply_guardrail_empty_structured_messages_passthrough(
 ):
     inputs = GenericGuardrailAPIInputs(texts=["hello"])
 
-    with patch.object(
-        guardrail.async_handler, "post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
         result = await guardrail.apply_guardrail(
             inputs=inputs,
             request_data={},
@@ -615,9 +602,7 @@ def test_bypass_header_case_insensitive():
     guardrail = _make_guardrail()
 
     for header_value in ("true", "True", "TRUE"):
-        data = {
-            "proxy_server_request": {"headers": {"x-headroom-bypass": header_value}}
-        }
+        data = {"proxy_server_request": {"headers": {"x-headroom-bypass": header_value}}}
         assert guardrail._should_bypass(data) is True
 
     data = {"proxy_server_request": {"headers": {"x-headroom-bypass": "false"}}}
