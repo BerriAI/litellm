@@ -3950,6 +3950,8 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     server.authorization_url = "https://idp/authorize"
     server.token_url = "https://idp/token"
     server.registration_url = "https://idp/register"
+    server.token_exchange_endpoint = "https://idp/token-exchange"
+    server.audience = "https://upstream/api"
 
     sanitized = _sanitize_mcp_server_for_non_admin(server)
 
@@ -3964,6 +3966,9 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     assert sanitized.authorization_url is None
     assert sanitized.token_url is None
     assert sanitized.registration_url is None
+    # The token-exchange IdP endpoint is as sensitive as token_url; audience names the upstream.
+    assert sanitized.token_exchange_endpoint is None
+    assert sanitized.audience is None
 
     # Identity / metadata fields are preserved so the UI can list the
     # server without exposing secrets.
@@ -4015,6 +4020,23 @@ def test_sanitize_virtual_key_drops_all_env_vars():
 
     # The original object must not be mutated.
     assert server.env_vars[0].value == "super-secret"
+
+
+def test_sanitize_virtual_key_clears_token_exchange_endpoint_and_audience():
+    """Virtual-key callers must not receive the token-exchange IdP endpoint or audience,
+    matching how token_url is scrubbed for the same view."""
+    import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
+
+    server = generate_mock_mcp_server_db_record()
+    server.token_url = "https://idp/token"
+    server.token_exchange_endpoint = "https://idp/token-exchange"
+    server.audience = "https://upstream/api"
+
+    sanitized = mgmt._sanitize_mcp_server_for_virtual_key(server)
+
+    assert sanitized.token_url is None
+    assert sanitized.token_exchange_endpoint is None
+    assert sanitized.audience is None
 
 
 def _server_with_env_vars(server_id: str = "srv-env"):

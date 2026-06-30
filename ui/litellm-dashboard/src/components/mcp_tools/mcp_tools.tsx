@@ -36,13 +36,13 @@ const MCPToolsViewer = ({
   const [showHeaderInput, setShowHeaderInput] = useState(false);
 
   // PKCE passthrough holds a browser-side session token (sessionStorage) and
-  // gates tool listing behind it. OBO uses a backend-stored per-user token that
-  // the user must establish once via an interactive login; we gate on whether
-  // that DB credential exists. M2M uses the backend's own service token and
-  // needs no gate.
+  // gates tool listing behind it. authorization_code uses a backend-stored
+  // per-user token that the user must establish once via an interactive login;
+  // we gate on whether that DB credential exists. M2M uses the backend's own
+  // service token and needs no gate.
   const oauthMode = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream });
   const isPassthrough = oauthMode === "passthrough";
-  const isObo = oauthMode === "obo";
+  const isAuthorizationCode = oauthMode === "authorization_code";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
     isPassthrough && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
   );
@@ -79,7 +79,7 @@ const MCPToolsViewer = ({
   } = useQuery({
     queryKey: ["mcpOauthUserCredStatus", serverId, userID],
     queryFn: () => getMCPOAuthUserCredentialStatus(accessToken ?? "", serverId),
-    enabled: !!accessToken && isObo,
+    enabled: !!accessToken && isAuthorizationCode,
     staleTime: 30000,
   });
 
@@ -90,8 +90,8 @@ const MCPToolsViewer = ({
   // Authorize gate rather than a silent empty tool list; re-authorizing only
   // overwrites the user's own row, so it is safe when a credential did exist.
   const hasOboCred = !!oboCredStatus?.has_credential;
-  const oboNeedsAuth = isObo && !isLoadingOboCred && (isOboCredError || (!!oboCredStatus && !hasOboCred));
-  const oboStatusLoading = isObo && isLoadingOboCred;
+  const oboNeedsAuth = isAuthorizationCode && !isLoadingOboCred && (isOboCredError || (!!oboCredStatus && !hasOboCred));
+  const oboStatusLoading = isAuthorizationCode && isLoadingOboCred;
 
   // Check if this server has extra headers configured
   const hasExtraHeaders = extraHeaders && extraHeaders.length > 0;
@@ -160,7 +160,7 @@ const MCPToolsViewer = ({
     },
     // Passthrough blocks until a browser session token exists; OBO blocks until
     // the user has a valid DB credential (else the backend returns no tools).
-    enabled: !!accessToken && (isPassthrough ? oauthToken !== null : isObo ? hasOboCred : true),
+    enabled: !!accessToken && (isPassthrough ? oauthToken !== null : isAuthorizationCode ? hasOboCred : true),
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate

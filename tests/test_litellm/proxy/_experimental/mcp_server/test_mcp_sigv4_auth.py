@@ -856,6 +856,9 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
         table_record.instructions = None
         table_record.source_url = None
 
@@ -915,6 +918,9 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.token_exchange_endpoint = None
+        table_record.audience = None
+        table_record.subject_token_type = None
         table_record.instructions = None
         table_record.source_url = None
 

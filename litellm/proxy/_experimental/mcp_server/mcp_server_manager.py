@@ -1283,7 +1283,8 @@ class MCPServerManager:
             (auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url)
             or self._obo_needs_endpoint_discovery(
                 auth_type,
-                credentials_dict.get("token_exchange_endpoint") if credentials_dict else None,
+                mcp_server.token_exchange_endpoint
+                or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
                 mcp_server.token_url,
             )
         )
@@ -1349,10 +1350,13 @@ class MCPServerManager:
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
             instructions=mcp_server.instructions,
-            # Token Exchange (OBO) fields — read from credentials JSON blob
-            token_exchange_endpoint=(credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
-            audience=(credentials_dict.get("audience") if credentials_dict else None),
-            subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
+            # Token exchange (OBO) fields: dedicated columns, with the credentials blob as a
+            # back-compat fallback for servers persisted before the columns existed.
+            token_exchange_endpoint=mcp_server.token_exchange_endpoint
+            or (credentials_dict.get("token_exchange_endpoint") if credentials_dict else None),
+            audience=mcp_server.audience or (credentials_dict.get("audience") if credentials_dict else None),
+            subject_token_type=mcp_server.subject_token_type
+            or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or "urn:ietf:params:oauth:token-type:access_token",
             token_exchange_profile=(credentials_dict.get("token_exchange_profile") if credentials_dict else None)
             or "rfc8693",
@@ -4630,6 +4634,9 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             oauth2_flow=server.oauth2_flow,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
@@ -4734,6 +4741,9 @@ class MCPServerManager:
             token_url=server.token_url,
             registration_url=server.registration_url,
             oauth2_flow=server.oauth2_flow,
+            token_exchange_endpoint=server.token_exchange_endpoint,
+            audience=server.audience,
+            subject_token_type=server.subject_token_type,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
