@@ -6,7 +6,9 @@ import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../..")
+)  # Adds the parent directory to the system path
 import logging
 import os
 
@@ -247,7 +249,6 @@ async def test_error_from_tag_routing():
     """
     import logging
 
-
     verbose_logger.setLevel(logging.DEBUG)
     router = litellm.Router(
         model_list=[
@@ -319,10 +320,16 @@ def test_tag_routing_with_list_of_tags_match_all():
     from litellm.router_strategy.tag_based_routing import is_valid_deployment_tag
 
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA"], match_any=False)
-    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamB"], match_any=False)
-    assert not is_valid_deployment_tag(["teamA", "teamB", "teamC"], ["teamA", "teamD"], match_any=False)
+    assert is_valid_deployment_tag(
+        ["teamA", "teamB"], ["teamA", "teamB"], match_any=False
+    )
+    assert not is_valid_deployment_tag(
+        ["teamA", "teamB", "teamC"], ["teamA", "teamD"], match_any=False
+    )
     assert not is_valid_deployment_tag(["teamA"], ["teamA", "teamB"], match_any=False)
-    assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"], match_any=False)
+    assert not is_valid_deployment_tag(
+        ["teamA", "teamB"], ["teamA", "teamC"], match_any=False
+    )
     assert not is_valid_deployment_tag(["teamA", "teamB"], [], match_any=False)
     assert not is_valid_deployment_tag(["default"], ["teamA"], match_any=False)
 
@@ -436,7 +443,9 @@ def test_get_tags_from_request_kwargs_various_inputs():
     assert _get_tags_from_request_kwargs({"metadata": None}) == []
 
     # Indirect via "litellm_params" - metadata inside
-    assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": {"tags": ["paid"]}}}) == ["paid"]
+    assert _get_tags_from_request_kwargs(
+        {"litellm_params": {"metadata": {"tags": ["paid"]}}}
+    ) == ["paid"]
     assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
     assert _get_tags_from_request_kwargs({"litellm_params": {}}) == []
 
@@ -470,25 +479,24 @@ def test_split_tags_negation_only():
 
     positive, excluded = _split_tags(["!provider:anthropic"])
     assert positive == []
-    assert len(excluded) == 1
-    assert excluded[0].search("provider:anthropic") is not None
-    assert excluded[0].search("provider:openai") is None
+    assert excluded == ["provider:anthropic"]
 
 
 def test_split_tags_mixed():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(["paid", "!provider:anthropic", "!inference:cerebras"])
+    positive, excluded = _split_tags(
+        ["paid", "!provider:anthropic", "!inference:cerebras"]
+    )
     assert positive == ["paid"]
     assert len(excluded) == 2
 
 
-def test_split_tags_invalid_regex_skipped(caplog):
+def test_split_tags_bare_bang_skipped():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        positive, excluded = _split_tags(["paid", "!provider:[invalid"])
-
+    # A bare "!" with nothing after it is not a valid negation tag; skip it
+    positive, excluded = _split_tags(["paid", "!"])
     assert positive == ["paid"]
     assert excluded == []
 
@@ -541,7 +549,7 @@ async def test_negation_excludes_matching_deployments():
 
 
 @pytest.mark.asyncio()
-async def test_negation_regex_alternation():
+async def test_negation_multiple_tags_exclude_multiple_providers():
     router = litellm.Router(
         model_list=[
             {
@@ -579,7 +587,7 @@ async def test_negation_regex_alternation():
         response = await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "hi"}],
-            metadata={"tags": ["!provider:(anthropic|openai)"]},
+            metadata={"tags": ["!provider:anthropic", "!provider:openai"]},
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "vertex-model"
@@ -696,13 +704,22 @@ async def test_negation_untagged_deployment_kept():
 
 
 @pytest.mark.asyncio()
-async def test_negation_invalid_regex_doesnt_fail_request():
+async def test_negation_literal_only_no_partial_match():
     router = litellm.Router(
         model_list=[
             {
                 "model_name": "gpt-4",
                 "litellm_params": {
                     "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic-haiku"],
+                },
+                "model_info": {"id": "anthropic-haiku-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
                     "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
                     "tags": ["provider:openai"],
                 },
@@ -712,13 +729,18 @@ async def test_negation_invalid_regex_doesnt_fail_request():
         enable_tag_filtering=True,
     )
 
-    response = await router.acompletion(
-        model="gpt-4",
-        messages=[{"role": "user", "content": "hi"}],
-        metadata={"tags": ["!provider:[invalid"]},
-        mock_response="hi",
-    )
-    assert response._hidden_params["model_id"] == "openai-model"
+    # "!provider:anthropic" should NOT match "provider:anthropic-haiku" — exact tag match only
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] in (
+            "anthropic-haiku-model",
+            "openai-model",
+        )
 
 
 @pytest.mark.asyncio()

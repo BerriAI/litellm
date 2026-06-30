@@ -118,25 +118,10 @@ def _match_deployment(
     return None
 
 
-def _compile_negation_pattern(pattern_str: str) -> Optional[re.Pattern[str]]:
-    try:
-        return re.compile(pattern_str)
-    except re.error:
-        verbose_logger.warning(
-            "tag negation: invalid regex pattern %r — skipping", pattern_str
-        )
-        return None
-
-
-def _split_tags(tags: List[str]) -> Tuple[List[str], List[re.Pattern[str]]]:
+def _split_tags(tags: List[str]) -> Tuple[List[str], List[str]]:
     positive = [t for t in tags if not t.startswith("!")]
-    excluded_patterns = [
-        p
-        for tag in tags
-        if tag.startswith("!")
-        if (p := _compile_negation_pattern(tag[1:])) is not None
-    ]
-    return positive, excluded_patterns
+    excluded = [tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1]
+    return positive, excluded
 
 
 async def get_deployments_for_tag(
@@ -189,17 +174,16 @@ async def get_deployments_for_tag(
 
         positive_tags, excluded_patterns = _split_tags(request_tags or [])
 
+        excluded_set = frozenset(excluded_patterns)
         candidates: List[Any] = (
             [
                 d
                 for d in healthy_deployments
-                if not any(
-                    p.search(dt)
-                    for dt in (d.get("litellm_params", {}).get("tags") or [])
-                    for p in excluded_patterns
+                if not excluded_set.intersection(
+                    d.get("litellm_params", {}).get("tags") or []
                 )
             ]
-            if excluded_patterns
+            if excluded_set
             else list(healthy_deployments)
         )
 
@@ -210,7 +194,7 @@ async def get_deployments_for_tag(
             bool(header_strings) and has_regex_deployments
         )
 
-        if excluded_patterns and not has_tag_filter:
+        if excluded_set and not has_tag_filter:
             if not candidates:
                 raise ValueError(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
