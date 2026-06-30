@@ -466,6 +466,61 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
+    def test_update_sso_settings_audits_when_env_cleanup_fails(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            side_effect=ValueError("cleanup failed")
+        )
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        create_config_audit_log = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.create_config_audit_log",
+            create_config_audit_log,
+        )
+
+        response = client.patch(
+            "/update/sso_settings",
+            json={"google_client_id": "new_google_client_id"},
+        )
+
+        assert response.status_code == 500
+        assert mock_prisma.db.litellm_ssoconfig.upsert.called
+        create_config_audit_log.assert_awaited_once()
+        audit_log_kwargs = create_config_audit_log.await_args.kwargs
+        assert audit_log_kwargs["param_name"] == "sso_config"
+        assert (
+            audit_log_kwargs["after_value"]["google_client_id"]
+            == "new_google_client_id"
+        )
+        assert (
+            json.loads(
+                mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"][
+                    "create"
+                ]["sso_settings"]
+            )["google_client_id"]
+            == "new_google_client_id"
+        )
+
     def test_update_sso_settings_with_null_values_clears_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):

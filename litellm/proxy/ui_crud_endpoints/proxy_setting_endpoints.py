@@ -877,6 +877,15 @@ async def update_sso_settings(
         },
     )
 
+    await create_config_audit_log(
+        param_name="sso_config",
+        action="updated",
+        before_value=None,
+        after_value=sso_data,
+        user_api_key_dict=user_api_key_dict,
+        table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
+    )
+
     # Remove SSO-related env vars from config.environment_variables
     try:
         env_var_entry = await ConfigRepository(prisma_client).table.find_unique(
@@ -909,15 +918,6 @@ async def update_sso_settings(
             status_code=500,
             detail={"error": f"Error updating environment_variables: {str(e)}"},
         )
-
-    await create_config_audit_log(
-        param_name="sso_config",
-        action="updated",
-        before_value=None,
-        after_value=sso_data,
-        user_api_key_dict=user_api_key_dict,
-        table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
-    )
 
     return {
         "message": "SSO settings updated successfully",
