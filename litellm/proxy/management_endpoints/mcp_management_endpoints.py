@@ -132,6 +132,7 @@ if MCP_AVAILABLE:
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _raise_if_not_oauth2,
         authorize_with_server,
         exchange_token_with_server,
         get_request_base_url,
@@ -1623,6 +1624,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = None,
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
+        _raise_if_not_oauth2(mcp_server)
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
@@ -1667,6 +1669,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = Form(None),
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
+        _raise_if_not_oauth2(mcp_server)
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
             raise HTTPException(

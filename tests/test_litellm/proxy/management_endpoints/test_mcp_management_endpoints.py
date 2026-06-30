@@ -2068,6 +2068,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         authorize_response = MagicMock()
         admin_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -2111,6 +2112,91 @@ class TestTemporaryMCPSessionEndpoints:
         )
 
     @pytest.mark.asyncio
+    async def test_mcp_authorize_rejects_non_oauth2_server(self):
+        """mcp_authorize must reject a none-auth server with an accurate 'does not use OAuth'
+        400 before the client_id check, never delegating to authorize_with_server."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_authorize,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="none-server")
+        server.auth_type = MCPAuth.none
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.authorize_with_server",
+                AsyncMock(),
+            ) as authorize_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_authorize(
+                    request=MagicMock(),
+                    server_id="none-server",
+                    user_api_key_dict=admin_auth,
+                    client_id=None,
+                    redirect_uri="https://example.com/callback",
+                    state="state123",
+                )
+
+        assert exc_info.value.status_code == 400
+        detail_text = str(exc_info.value.detail)
+        assert "does not use OAuth" in detail_text
+        assert "missing_client_id" not in detail_text
+        authorize_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_mcp_token_rejects_non_oauth2_server(self):
+        """mcp_token must reject a none-auth server with 'does not use OAuth' 400 before the
+        client_id check, never delegating to exchange_token_with_server."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_token,
+        )
+
+        server = generate_mock_mcp_server_config_record(server_id="none-server")
+        server.auth_type = MCPAuth.none
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.exchange_token_with_server",
+                AsyncMock(),
+            ) as exchange_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await mcp_token(
+                    request=MagicMock(),
+                    server_id="none-server",
+                    user_api_key_dict=admin_auth,
+                    grant_type="authorization_code",
+                    code="code-123",
+                    redirect_uri="https://example.com/callback",
+                    client_id=None,
+                    client_secret=None,
+                    code_verifier="verifier",
+                    refresh_token=None,
+                    scope=None,
+                )
+
+        assert exc_info.value.status_code == 400
+        detail_text = str(exc_info.value.detail)
+        assert "does not use OAuth" in detail_text
+        assert "missing_client_id" not in detail_text
+        exchange_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_mcp_token_proxies_to_exchange_endpoint(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             mcp_token,
@@ -2118,6 +2204,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         exchange_response = {"access_token": "token"}
         admin_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -2170,6 +2257,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         exchange_response = {"access_token": "new-token", "refresh_token": "new-rt"}
         admin_auth = generate_mock_user_api_key_auth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -2222,6 +2310,7 @@ class TestTemporaryMCPSessionEndpoints:
 
         request = MagicMock()
         server = generate_mock_mcp_server_config_record(server_id="server-1")
+        server.auth_type = MCPAuth.oauth2
         register_response = {"client_id": "generated"}
         request_body = {
             "client_name": "LiteLLM",

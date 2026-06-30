@@ -390,6 +390,41 @@ async def _store_per_user_token_server_side(
     )
 
 
+def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
+    """Reject a non-oauth2 server from the gateway's OAuth authorize/token/register flow."""
+    if mcp_server.auth_type == MCPAuth.oauth2:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "server_not_oauth2",
+            "message": (
+                f"MCP server '{mcp_server.server_name or mcp_server.name}' does not use OAuth "
+                f"(auth_type={mcp_server.auth_type}). Access to this server is governed by its access "
+                "groups rather than a per-user OAuth credential, so it has no client_id, authorize, "
+                "token, or registration flow"
+            ),
+        },
+    )
+
+
+def _raise_if_discovery_server_not_oauth2(
+    mcp_server: Optional[MCPServer],
+    mcp_server_name: Optional[str],
+    description: str,
+) -> None:
+    """404 a discovery request for a named server that is not an oauth2 authorization server.
+
+    Pass-through servers are resolved by the caller before this guard runs.
+    """
+    if mcp_server is None or mcp_server.auth_type == MCPAuth.oauth2:
+        return
+    raise HTTPException(
+        status_code=404,
+        detail=f"MCP server '{mcp_server_name}' is {description}",
+    )
+
+
 async def authorize_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -457,6 +492,7 @@ async def exchange_token_with_server(
     refresh_token: Optional[str] = None,
     scope: Optional[str] = None,
 ):
+    _raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
         raise HTTPException(status_code=400, detail="Unsupported grant_type")
 
@@ -582,6 +618,7 @@ async def register_client_with_server(
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
 ):
+    _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
@@ -655,6 +692,7 @@ async def authorize(
         mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
+    _raise_if_not_oauth2(mcp_server)
     # Use server's stored client_id when caller doesn't supply one.
     # Raise a clear error instead of passing an empty string — an empty
     # client_id would silently produce a broken authorization URL.
@@ -1063,6 +1101,8 @@ async def _build_oauth_protected_resource_response(
             detail=(f"Upstream oauth-protected-resource metadata unavailable for MCP server {mcp_server.name!r}"),
         )
 
+    _raise_if_discovery_server_not_oauth2(mcp_server, mcp_server_name, "not an OAuth-protected resource")
+
     return {
         "authorization_servers": [
             (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
@@ -1148,6 +1188,8 @@ def _build_oauth_authorization_server_response(
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
+
+    _raise_if_discovery_server_not_oauth2(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
     return {
         "issuer": request_base_url,  # point to your proxy
