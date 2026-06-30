@@ -103,6 +103,17 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return headers, None
 
+    def should_filter_anthropic_beta_headers(self) -> bool:
+        """
+        Whether ``anthropic-beta`` header values should be filtered down to the
+        ones the routed provider supports before the upstream request.
+
+        Cross-provider translation paths (bedrock, vertex_ai, ...) need this so
+        unsupported betas are dropped. Configs that forward natively to an
+        Anthropic-compatible endpoint return False to pass betas through verbatim.
+        """
+        return True
+
     def get_async_streaming_response_iterator(
         self,
         model: str,
