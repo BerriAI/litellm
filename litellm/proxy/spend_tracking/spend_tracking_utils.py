@@ -418,9 +418,8 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             completion_tokens=usage.get("completion_tokens", standard_logging_completion_tokens),
             request_tags=request_tags,
             end_user=end_user_id or "",
-            api_base=litellm_params.get("api_base", "") or (
-                standard_logging_payload.get("api_base", "") if standard_logging_payload is not None else ""
-            ),
+            api_base=litellm_params.get("api_base", "")
+            or (standard_logging_payload.get("api_base", "") if standard_logging_payload is not None else ""),
             model_group=_model_group,
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,

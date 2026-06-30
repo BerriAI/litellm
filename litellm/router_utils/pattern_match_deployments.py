@@ -81,10 +81,7 @@ class PatternMatchRouter:
             model_id: the deployment's model_info.id to remove
         """
         for regex in list(self.patterns.keys()):
-            self.patterns[regex] = [
-                d for d in self.patterns[regex]
-                if d.get("model_info", {}).get("id") != model_id
-            ]
+            self.patterns[regex] = [d for d in self.patterns[regex] if d.get("model_info", {}).get("id") != model_id]
             if not self.patterns[regex]:
                 del self.patterns[regex]
 
