@@ -778,3 +778,79 @@ async def test_positive_tags_unchanged_by_negation():
             mock_response="hi",
         )
         assert response._hidden_params["model_id"] == "free-model"
+
+
+@pytest.mark.asyncio()
+async def test_negation_skips_banned_group_and_uses_fallback():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-primary"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai"],
+                },
+                "model_info": {"id": "openai-fallback"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        enable_tag_filtering=True,
+    )
+
+    response = await router.acompletion(
+        model="primary",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["!provider:anthropic"]},
+        mock_response="hi",
+    )
+    assert response._hidden_params["model_id"] == "openai-fallback"
+
+
+@pytest.mark.asyncio()
+async def test_negation_exhausts_entire_fallback_chain():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-primary"},
+            },
+            {
+                "model_name": "fallback",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-fallback"},
+            },
+        ],
+        fallbacks=[{"primary": ["fallback"]}],
+        enable_tag_filtering=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="primary",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
