@@ -178,9 +178,7 @@ def _group_tokens_into_cues(
                 cues.append(
                     {
                         "start_ms": current_start,
-                        "end_ms": (
-                            current_end if current_end is not None else current_start
-                        ),
+                        "end_ms": (current_end if current_end is not None else current_start),
                         "text": text,
                     }
                 )
@@ -209,11 +207,7 @@ def _group_tokens_into_cues(
         should_break = False
         if len(current_tokens) >= _CUE_MAX_TOKENS:
             should_break = True
-        elif (
-            current_start is not None
-            and start_ms is not None
-            and (start_ms - current_start) >= _CUE_MAX_DURATION_MS
-        ):
+        elif current_start is not None and start_ms is not None and (start_ms - current_start) >= _CUE_MAX_DURATION_MS:
             should_break = True
 
         if should_break:

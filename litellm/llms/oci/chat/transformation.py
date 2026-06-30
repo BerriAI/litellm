@@ -154,9 +154,7 @@ def _normalize_tool_choice(selected_params: Dict) -> None:
             "required": {"type": "REQUIRED"},
             "any": {"type": "REQUIRED"},
         }
-        selected_params["toolChoice"] = tc_map.get(
-            tc.lower(), {"type": "FUNCTION", "name": tc}
-        )
+        selected_params["toolChoice"] = tc_map.get(tc.lower(), {"type": "FUNCTION", "name": tc})
         return
     if isinstance(tc, dict):
         raw_type = tc.get("type")
@@ -188,10 +186,7 @@ def _normalize_tool_choice(selected_params: Dict) -> None:
         return
     raise OCIError(
         status_code=400,
-        message=(
-            f"Invalid tool_choice for OCI: expected str or dict, got "
-            f"{type(tc).__name__}"
-        ),
+        message=(f"Invalid tool_choice for OCI: expected str or dict, got {type(tc).__name__}"),
     )
 
 
@@ -239,9 +234,7 @@ def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> Non
         return
 
     fmt = rf_type.upper()
-    selected_params["responseFormat"] = {
-        "type": "JSON_OBJECT" if fmt == "JSON" else fmt
-    }
+    selected_params["responseFormat"] = {"type": "JSON_OBJECT" if fmt == "JSON" else fmt}
 
 
 def get_vendor_from_model(model: str) -> OCIVendors:
@@ -305,8 +298,7 @@ class OCIChatConfig(BaseConfig):
         # ``map_openai_params`` either drops them (under drop_params) or raises
         # a clear error, rather than silently passing them through.
         self.openai_to_oci_cohere_param_map = {
-            k: ("stopSequences" if k == "stop" else v)
-            for k, v in self.openai_to_oci_generic_param_map.items()
+            k: ("stopSequences" if k == "stop" else v) for k, v in self.openai_to_oci_generic_param_map.items()
         }
         self.openai_to_oci_cohere_param_map["tool_choice"] = False
         self.openai_to_oci_cohere_param_map["n"] = False
@@ -350,9 +342,7 @@ class OCIChatConfig(BaseConfig):
         adapted_params = {}
         vendor = get_vendor_from_model(model)
         param_map = (
-            self.openai_to_oci_cohere_param_map
-            if vendor == OCIVendors.COHERE
-            else self.openai_to_oci_generic_param_map
+            self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
         )
 
         for key, value in {**non_default_params, **optional_params}.items():
@@ -464,13 +454,9 @@ class OCIChatConfig(BaseConfig):
         base = get_oci_base_url(optional_params, api_base or litellm.api_base)
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
-    def _get_optional_params(
-        self, vendor: OCIVendors, optional_params: dict, model: str = ""
-    ) -> Dict:
+    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict, model: str = "") -> Dict:
         param_map = (
-            self.openai_to_oci_cohere_param_map
-            if vendor == OCIVendors.COHERE
-            else self.openai_to_oci_generic_param_map
+            self.openai_to_oci_cohere_param_map if vendor == OCIVendors.COHERE else self.openai_to_oci_generic_param_map
         )
         selected_params: Dict = {}
 
@@ -480,9 +466,7 @@ class OCIChatConfig(BaseConfig):
         # endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
         max_tokens_key = (
             "maxCompletionTokens"
-            if vendor != OCIVendors.COHERE
-            and model
-            and _model_uses_max_completion_tokens(model)
+            if vendor != OCIVendors.COHERE and model and _model_uses_max_completion_tokens(model)
             else "maxTokens"
         )
 
@@ -589,18 +573,14 @@ class OCIChatConfig(BaseConfig):
             system_messages = [m for m in messages if m.get("role") == "system"]
             preamble_override = None
             if system_messages:
-                preamble = "\n".join(
-                    _extract_text_content(m["content"]) for m in system_messages
-                )
+                preamble = "\n".join(_extract_text_content(m["content"]) for m in system_messages)
                 if preamble:
                     preamble_override = preamble
 
             chat_request = CohereChatRequest(
                 apiFormat="COHERE",
                 message=_extract_text_content(user_messages[-1]["content"]),
-                chatHistory=adapt_messages_to_cohere_standard(
-                    [m for m in messages if m.get("role") != "system"]
-                ),
+                chatHistory=adapt_messages_to_cohere_standard([m for m in messages if m.get("role") != "system"]),
                 preambleOverride=preamble_override,
                 **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
             )
@@ -652,13 +632,9 @@ class OCIChatConfig(BaseConfig):
 
         vendor = get_vendor_from_model(model)
         if vendor == OCIVendors.COHERE:
-            model_response = handle_cohere_response(
-                response_json, model, model_response, raw_response
-            )
+            model_response = handle_cohere_response(response_json, model, model_response, raw_response)
         else:
-            model_response = handle_generic_response(
-                response_json, model, model_response, raw_response
-            )
+            model_response = handle_generic_response(response_json, model, model_response, raw_response)
 
         model_response._hidden_params["additional_headers"] = raw_response.headers
         return model_response
@@ -684,11 +660,7 @@ class OCIChatConfig(BaseConfig):
             response = client.post(
                 api_base,
                 headers=headers,
-                data=(
-                    signed_json_body
-                    if signed_json_body is not None
-                    else json.dumps(data)
-                ),
+                data=(signed_json_body if signed_json_body is not None else json.dumps(data)),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,
@@ -727,11 +699,7 @@ class OCIChatConfig(BaseConfig):
             response = await client.post(
                 api_base,
                 headers=headers,
-                data=(
-                    signed_json_body
-                    if signed_json_body is not None
-                    else json.dumps(data)
-                ),
+                data=(signed_json_body if signed_json_body is not None else json.dumps(data)),
                 stream=True,
                 logging_obj=logging_obj,
                 timeout=STREAMING_TIMEOUT,

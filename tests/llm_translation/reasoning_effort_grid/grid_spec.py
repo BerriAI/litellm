@@ -1,6 +1,16 @@
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
+from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
+
 OMIT = object()
 
 
@@ -44,12 +54,15 @@ EFFORTS: Tuple[str, ...] = (
 )
 
 _BUDGET_TOKENS: Dict[str, int] = {
-    "minimal": 1024,
-    "low": 1024,
-    "medium": 2048,
-    "high": 4096,
-    "xhigh": 8192,
-    "max": 16384,
+    "minimal": max(
+        DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+        ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+    ),
+    "low": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    "medium": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    "high": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    "xhigh": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    "max": DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
 }
 
 _ADAPTIVE_EFFORT_LABEL: Dict[str, str] = {
@@ -71,6 +84,10 @@ _EFFORT_RANK: Dict[str, int] = {
 
 _BAD_REQUEST_EFFORTS: FrozenSet[str] = frozenset({"disabled", "invalid", ""})
 
+# Live providers reject ``max_tokens <= thinking.budget_tokens``, so a budget-mode
+# request must leave room above the largest 200-expected tier (``high``).
+BUDGET_MODE_MAX_TOKENS: int = DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET * 2
+
 
 def _bedrock_clamps_effort(model: "ModelEntry", effort: str) -> bool:
     """Whether Bedrock will clamp ``effort`` down to ``bedrock_effort_ceiling``.
@@ -89,7 +106,9 @@ def _bedrock_clamps_effort(model: "ModelEntry", effort: str) -> bool:
 def expected(model: ModelEntry, effort: str) -> CellExpectation:
     if effort in ("__omit__", "none"):
         if model.mode == "budget":
-            return CellExpectation(status=200, thinking_type=OMIT, max_tokens=8192)
+            return CellExpectation(
+                status=200, thinking_type=OMIT, max_tokens=BUDGET_MODE_MAX_TOKENS
+            )
         return CellExpectation(status=200, thinking_type=OMIT)
 
     if effort in _BAD_REQUEST_EFFORTS:
@@ -117,7 +136,7 @@ def expected(model: ModelEntry, effort: str) -> CellExpectation:
         status=200,
         thinking_type="enabled",
         thinking_budget_tokens=_BUDGET_TOKENS[effort],
-        max_tokens=8192,
+        max_tokens=BUDGET_MODE_MAX_TOKENS,
     )
 
 

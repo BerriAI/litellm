@@ -109,14 +109,10 @@ class GigaChatConfig(BaseConfig):
         Set up headers with OAuth token.
         """
         # Get access token
-        credentials = (
-            api_key
-            or get_secret_str("GIGACHAT_CREDENTIALS")
-            or get_secret_str("GIGACHAT_API_KEY")
-        )
-        access_token = get_access_token(
-            credentials=credentials, litellm_params=litellm_params
-        )
+        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
+        access_token = get_access_token(credentials=credentials)
+        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
+        access_token = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Store credentials for image uploads
         self._current_credentials = credentials
@@ -216,9 +212,7 @@ class GigaChatConfig(BaseConfig):
                 )
         return functions
 
-    def _map_tool_choice(
-        self, tool_choice: Union[str, dict]
-    ) -> Union[str, dict] | None:
+    def _map_tool_choice(self, tool_choice: Union[str, dict]) -> Union[str, dict] | None:
         """
         Map OpenAI tool_choice to GigaChat function_call format.
 

@@ -30,9 +30,7 @@ def keys():
     default=True,
     help="Return the full key object",
 )
-@click.option(
-    "--include-team-keys", is_flag=True, help="Include team keys in the response"
-)
+@click.option("--include-team-keys", is_flag=True, help="Include team keys in the response")
 @click.option(
     "--format",
     "output_format",
@@ -72,9 +70,7 @@ def list(
     if output_format == "json":
         rich.print_json(data=response)
     else:
-        rich.print(
-            f"Showing {len(response.get('keys', []))} keys out of {response.get('total_count', 0)}"
-        )
+        rich.print(f"Showing {len(response.get('keys', []))} keys out of {response.get('total_count', 0)}")
         table = Table(title="API Keys")
         table.add_column("Key Hash", style="cyan")
         table.add_column("Alias", style="green")
@@ -105,9 +101,7 @@ def list(
 @click.option("--team-id", type=str, help="Team ID to associate the key with")
 @click.option("--user-id", type=str, help="User ID to associate the key with")
 @click.option("--budget-id", type=str, help="Budget ID to associate the key with")
-@click.option(
-    "--config", type=str, help="JSON string of additional configuration parameters"
-)
+@click.option("--config", type=str, help="JSON string of additional configuration parameters")
 @click.pass_context
 def generate(
     ctx: click.Context,
@@ -154,9 +148,7 @@ def generate(
 
 @keys.command()
 @click.option("--keys", type=str, help="Comma-separated list of API keys to delete")
-@click.option(
-    "--key-aliases", type=str, help="Comma-separated list of key aliases to delete"
-)
+@click.option("--key-aliases", type=str, help="Comma-separated list of key aliases to delete")
 @click.pass_context
 def delete(ctx: click.Context, keys: Optional[str], key_aliases: Optional[str]):
     """Delete API keys by key or alias"""
@@ -195,9 +187,7 @@ def _parse_created_since_filter(created_since: Optional[str]) -> Optional[dateti
         raise click.Abort()
 
 
-def _fetch_all_keys_with_pagination(
-    source_client: KeysManagementClient, source_base_url: str
-) -> List[Dict[str, Any]]:
+def _fetch_all_keys_with_pagination(source_client: KeysManagementClient, source_base_url: str) -> List[Dict[str, Any]]:
     """Fetch all keys from source instance using pagination."""
     click.echo(f"Fetching keys from source server: {source_base_url}")
     source_keys = []
@@ -205,9 +195,7 @@ def _fetch_all_keys_with_pagination(
     page_size = 100  # Use a larger page size to minimize API calls
 
     while True:
-        source_response = source_client.list(
-            return_full_object=True, page=page, size=page_size
-        )
+        source_response = source_client.list(return_full_object=True, page=page, size=page_size)
         # source_client.list() returns Dict[str, Any] when return_request is False (default)
         assert isinstance(source_response, dict), "Expected dict response from list API"
         page_keys = source_response.get("keys", [])
@@ -243,9 +231,7 @@ def _filter_keys_by_created_since(
             # Parse the key's created_at timestamp
             if isinstance(key_created_at, str):
                 if "T" in key_created_at:
-                    key_dt = datetime.fromisoformat(
-                        key_created_at.replace("Z", "+00:00")
-                    )
+                    key_dt = datetime.fromisoformat(key_created_at.replace("Z", "+00:00"))
                 else:
                     key_dt = datetime.fromisoformat(key_created_at)
 
@@ -256,9 +242,7 @@ def _filter_keys_by_created_since(
                 if key_dt >= created_since_dt:
                     filtered_keys.append(key)
 
-    click.echo(
-        f"Filtered {len(source_keys)} keys to {len(filtered_keys)} keys created since {created_since}"
-    )
+    click.echo(f"Filtered {len(source_keys)} keys to {len(filtered_keys)} keys created since {created_since}")
     return filtered_keys
 
 
@@ -281,9 +265,7 @@ def _display_dry_run_table(source_keys: List[Dict[str, Any]]) -> None:
                     dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     created_at = dt.strftime("%Y-%m-%d %H:%M")
 
-        table.add_row(
-            str(key.get("key_alias", "")), str(key.get("user_id", "")), str(created_at)
-        )
+        table.add_row(str(key.get("key_alias", "")), str(key.get("user_id", "")), str(created_at))
     rich.print(table)
 
 
@@ -343,9 +325,7 @@ def _import_keys_to_destination(
     required=True,
     help="Base URL of the source LiteLLM proxy server to import keys from",
 )
-@click.option(
-    "--source-api-key", help="API key for authentication to the source server"
-)
+@click.option("--source-api-key", help="API key for authentication to the source server")
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -377,9 +357,7 @@ def import_keys(
 
         # Filter keys by created_since if specified
         if created_since:
-            source_keys = _filter_keys_by_created_since(
-                source_keys, created_since_dt, created_since
-            )
+            source_keys = _filter_keys_by_created_since(source_keys, created_since_dt, created_since)
 
         if not source_keys:
             click.echo("No keys found in source instance.")
@@ -392,9 +370,7 @@ def import_keys(
             return
 
         # Import each key
-        imported_count, failed_count = _import_keys_to_destination(
-            source_keys, dest_client
-        )
+        imported_count, failed_count = _import_keys_to_destination(source_keys, dest_client)
 
         # Summary
         click.echo("\nImport completed:")

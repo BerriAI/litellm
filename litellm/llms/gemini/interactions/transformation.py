@@ -114,9 +114,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         api_key = GeminiModelInfo.get_api_key(litellm_params.get("api_key"))
 
         if not api_key:
-            raise ValueError(
-                "Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable."
-            )
+            raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY environment variable.")
 
         if stream:
             return f"{api_base}/{self.api_version}/interactions?alt=sse"
@@ -189,10 +187,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
             if (
                 response_mime_type
                 and not isinstance(response_format, list)
-                and (
-                    not isinstance(response_format, dict)
-                    or "mime_type" not in response_format
-                )
+                and (not isinstance(response_format, dict) or "mime_type" not in response_format)
             ):
                 # Wrap the legacy schema into the new polymorphic format.
                 new_rf: Dict[str, Any] = {
@@ -207,15 +202,11 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 request_body["response_format"] = response_format
 
             # image_config moves out of generation_config into response_format.
-            generation_config: Optional[Dict[str, Any]] = optional_params.get(
-                "generation_config"
-            )
+            generation_config: Optional[Dict[str, Any]] = optional_params.get("generation_config")
             if generation_config is not None:
                 image_config = None
                 if isinstance(generation_config, dict):
-                    generation_config = dict(
-                        generation_config
-                    )  # avoid mutating the caller's dict
+                    generation_config = dict(generation_config)  # avoid mutating the caller's dict
                     image_config = generation_config.pop("image_config", None)
                     if not generation_config:
                         generation_config = None
@@ -261,9 +252,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
         response = InteractionsAPIResponse(**raw_json)
         response._hidden_params["headers"] = dict(raw_response.headers)
-        response._hidden_params["additional_headers"] = process_response_headers(
-            dict(raw_response.headers)
-        )
+        response._hidden_params["additional_headers"] = process_response_headers(dict(raw_response.headers))
 
         return response
 
@@ -290,9 +279,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        encoded_interaction_id = encode_url_path_segment(
-            interaction_id, field_name="interaction_id"
-        )
+        encoded_interaction_id = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
             f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
             {},
@@ -326,9 +313,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        encoded_interaction_id = encode_url_path_segment(
-            interaction_id, field_name="interaction_id"
-        )
+        encoded_interaction_id = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
             f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}",
             {},
@@ -359,9 +344,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         resolved_api_base = GeminiModelInfo.get_api_base(api_base)
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
-        encoded_interaction_id = encode_url_path_segment(
-            interaction_id, field_name="interaction_id"
-        )
+        encoded_interaction_id = encode_url_path_segment(interaction_id, field_name="interaction_id")
         return (
             f"{resolved_api_base}/{self.api_version}/interactions/{encoded_interaction_id}:cancel",
             {},

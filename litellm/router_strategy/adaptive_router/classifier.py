@@ -102,9 +102,7 @@ _RULES: List[Tuple[Pattern[str], RequestType]] = [
         RequestType.WRITING,
     ),
     (
-        re.compile(
-            r"^\s*(who|what|when|where|which)\s+(?:is|was|were|are)\b", re.IGNORECASE
-        ),
+        re.compile(r"^\s*(who|what|when|where|which)\s+(?:is|was|were|are)\b", re.IGNORECASE),
         RequestType.FACTUAL_LOOKUP,
     ),
     (

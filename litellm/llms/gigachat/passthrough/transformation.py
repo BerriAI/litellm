@@ -60,9 +60,7 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         Set up headers with OAuth token.
         """
         # Get access token
-        access_token = get_access_token(
-            credentials=api_key, litellm_params=litellm_params
-        )
+        access_token = get_access_token(credentials=api_key, litellm_params=litellm_params)
 
         headers["Authorization"] = f"Bearer {access_token}"
         headers["Content-Type"] = "application/json"
@@ -93,45 +91,39 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             if provider_chat_config is None:
                 raise ValueError(f"No provider config found for model: {model}")
 
-            litellm_model_response: ModelResponse = (
-                provider_chat_config.transform_response(
-                    model=model,
-                    messages=request_data.get("messages", []),
-                    raw_response=httpx_response,
-                    model_response=ModelResponse(),
-                    logging_obj=logging_obj,
-                    optional_params={},
-                    litellm_params={},
-                    api_key="",
-                    request_data=request_data,
-                    encoding=encoding,
-                )
+            litellm_model_response: ModelResponse = provider_chat_config.transform_response(
+                model=model,
+                messages=request_data.get("messages", []),
+                raw_response=httpx_response,
+                model_response=ModelResponse(),
+                logging_obj=logging_obj,
+                optional_params={},
+                litellm_params={},
+                api_key="",
+                request_data=request_data,
+                encoding=encoding,
             )
 
             return litellm_model_response
 
         if "embeddings" in endpoint:
-            provider_embedding_config = (
-                ProviderConfigManager.get_provider_embedding_config(
-                    provider=LlmProviders(custom_llm_provider),
-                    model=model,
-                )
+            provider_embedding_config = ProviderConfigManager.get_provider_embedding_config(
+                provider=LlmProviders(custom_llm_provider),
+                model=model,
             )
 
             if provider_embedding_config is None:
                 raise ValueError(f"No provider config found for model: {model}")
 
-            litellm_embedding_response: EmbeddingResponse = (
-                provider_embedding_config.transform_embedding_response(
-                    model=model,
-                    raw_response=httpx_response,
-                    model_response=EmbeddingResponse(),
-                    logging_obj=logging_obj,
-                    optional_params={},
-                    api_key="",
-                    request_data=request_data,
-                    litellm_params={},
-                )
+            litellm_embedding_response: EmbeddingResponse = provider_embedding_config.transform_embedding_response(
+                model=model,
+                raw_response=httpx_response,
+                model_response=EmbeddingResponse(),
+                logging_obj=logging_obj,
+                optional_params={},
+                api_key="",
+                request_data=request_data,
+                litellm_params={},
             )
 
             return litellm_embedding_response
@@ -186,9 +178,9 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
             )
             translated_chunk = gigachat_iterator.chunk_parser(chunk=message)
 
-            if isinstance(
-                translated_chunk, dict
-            ) and generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
+            if isinstance(translated_chunk, dict) and generic_chunk_has_all_required_fields(
+                cast(dict, translated_chunk)
+            ):
                 chunk_obj = convert_generic_chunk_to_model_response_stream(
                     cast(GenericStreamingChunk, translated_chunk)
                 )
@@ -221,7 +213,5 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
     def get_base_model(model: str) -> str | None:
         return model
 
-    def get_models(
-        self, api_key: str | None = None, api_base: str | None = None
-    ) -> list[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         return super().get_models(api_key, api_base)

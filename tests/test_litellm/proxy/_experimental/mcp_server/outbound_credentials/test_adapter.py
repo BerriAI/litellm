@@ -7,17 +7,20 @@ maps each CredError onto its HTTP status. These pin the parity-critical mapping 
 
 import base64
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     raise_public,
+    raise_user_oauth_challenge,
     to_server_spec,
     to_subject,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     ApiKeyConfig,
+    AuthorizationCodeConfig,
     CredError,
     NoneConfig,
     SharedKey,
@@ -72,11 +75,26 @@ def test_basic_scheme_base64_encodes_the_token():
 
 
 @pytest.mark.parametrize(
+    "oauth2_flow",
+    [None, "authorization_code"],
+)
+def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
+    # oauth2 without client_credentials is the per-user authorization_code mode.
+    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2, oauth2_flow=oauth2_flow))
+    assert spec is not None and isinstance(spec.config, AuthorizationCodeConfig)
+
+
+@pytest.mark.parametrize(
     "server",
     [
         _server(auth_type=MCPAuth.api_key),  # no token configured
         _server(auth_type=MCPAuth.bearer_token),  # no token configured
-        _server(auth_type=MCPAuth.oauth2),
+        _server(
+            auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials"
+        ),  # M2M -> v1
+        _server(
+            auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
+        ),  # delegated upstream OAuth -> v1
         _server(auth_type=MCPAuth.oauth2_token_exchange),
         _server(auth_type=MCPAuth.aws_sigv4),
         _server(
@@ -139,3 +157,66 @@ def test_raise_public_maps_each_error_to_its_status(error, status):
     with pytest.raises(HTTPException) as exc_info:
         raise_public(error)
     assert exc_info.value.status_code == status
+
+
+def test_raise_public_emits_unauthorized_challenge():
+    body = {"error": "byok_auth_required", "server_id": "s1"}
+    error = CredError.of_unauthorized(
+        "needs key", www_authenticate='Bearer resource_metadata="/x"', body=body
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        raise_public(error)
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert exc.detail == body
+    assert exc.headers is not None
+    assert exc.headers["WWW-Authenticate"] == 'Bearer resource_metadata="/x"'
+
+
+def test_raise_public_plain_unauthorized_has_no_challenge():
+    with pytest.raises(HTTPException) as exc_info:
+        raise_public(CredError.of_unauthorized("nope"))
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert exc.detail == "unauthorized: nope"
+    assert exc.headers is None
+
+
+_ROOT_PATH = "litellm.proxy.utils.get_server_root_path"
+
+
+def test_raise_user_oauth_challenge_points_at_per_server_prm():
+    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(alias="my-srv"))
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert (
+        exc.headers["WWW-Authenticate"]
+        == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/my-srv"'
+    )
+
+
+def test_raise_user_oauth_challenge_includes_server_root_path():
+    with (
+        patch(_ROOT_PATH, return_value="/api/v1"),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        raise_user_oauth_challenge(_server(alias="my-srv"))
+    assert (
+        exc_info.value.headers["WWW-Authenticate"]
+        == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"'
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected_name",
+    [
+        ({"alias": "a", "server_name": "sn"}, "a"),  # alias wins
+        ({"server_name": "sn"}, "sn"),  # then server_name
+        ({}, "n"),  # then the name field (server_id is the last fallback)
+    ],
+)
+def test_raise_user_oauth_challenge_name_fallback(kwargs, expected_name):
+    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(**kwargs))
+    assert f'/mcp/{expected_name}"' in exc_info.value.headers["WWW-Authenticate"]

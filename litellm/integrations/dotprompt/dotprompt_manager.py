@@ -69,11 +69,7 @@ class DotpromptManager(CustomPromptManagement):
     def prompt_manager(self) -> PromptManager:
         """Lazy-load the prompt manager."""
         if self._prompt_manager is None:
-            if (
-                self.prompt_directory is None
-                and not self.prompt_data
-                and not self.prompt_file
-            ):
+            if self.prompt_directory is None and not self.prompt_data and not self.prompt_file:
                 raise ValueError(
                     "Either prompt_directory or prompt_data must be set before using dotprompt manager. "
                     "Set litellm.global_prompt_directory, initialize with prompt_directory parameter, or provide prompt_data."
@@ -129,14 +125,10 @@ class DotpromptManager(CustomPromptManagement):
 
         try:
             # Get the prompt template (versioned or base)
-            template = self.prompt_manager.get_prompt(
-                prompt_id=prompt_id, version=prompt_version
-            )
+            template = self.prompt_manager.get_prompt(prompt_id=prompt_id, version=prompt_version)
             if template is None:
                 version_str = f" (version {prompt_version})" if prompt_version else ""
-                raise ValueError(
-                    f"Prompt '{prompt_id}'{version_str} not found in prompt directory"
-                )
+                raise ValueError(f"Prompt '{prompt_id}'{version_str} not found in prompt directory")
 
             # Render the template with variables (pass version for proper lookup)
             rendered_content = self.prompt_manager.render(
@@ -282,29 +274,17 @@ class DotpromptManager(CustomPromptManagement):
             # Check for role prefixes
             if line.startswith("System:"):
                 if current_role and current_content:
-                    messages.append(
-                        self._create_message(
-                            current_role, "\n".join(current_content).strip()
-                        )
-                    )
+                    messages.append(self._create_message(current_role, "\n".join(current_content).strip()))
                 current_role = "system"
                 current_content = [line[7:].strip()]  # Remove "System:" prefix
             elif line.startswith("User:"):
                 if current_role and current_content:
-                    messages.append(
-                        self._create_message(
-                            current_role, "\n".join(current_content).strip()
-                        )
-                    )
+                    messages.append(self._create_message(current_role, "\n".join(current_content).strip()))
                 current_role = "user"
                 current_content = [line[5:].strip()]  # Remove "User:" prefix
             elif line.startswith("Assistant:"):
                 if current_role and current_content:
-                    messages.append(
-                        self._create_message(
-                            current_role, "\n".join(current_content).strip()
-                        )
-                    )
+                    messages.append(self._create_message(current_role, "\n".join(current_content).strip()))
                 current_role = "assistant"
                 current_content = [line[10:].strip()]  # Remove "Assistant:" prefix
             else:

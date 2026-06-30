@@ -69,9 +69,7 @@ def log_db_metrics(func):
                 args is not None and len(args) > 1 and isinstance(args[1], dict)
             ):
                 passed_kwargs = args[1]
-                parent_otel_span = _get_parent_otel_span_from_kwargs(
-                    kwargs=passed_kwargs
-                )
+                parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs=passed_kwargs)
                 if parent_otel_span is not None:
                     # No metadata dump: identity rides on Baggage, and the full
                     # request metadata (auth blob, response headers, tokens) must

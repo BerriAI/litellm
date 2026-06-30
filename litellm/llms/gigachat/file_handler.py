@@ -112,9 +112,7 @@ def upload_file_sync(
         filename = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = get_access_token(
-            credentials=credentials, litellm_params=litellm_params
-        )
+        access_token = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
         base_url = get_api_base(api_base)
@@ -180,9 +178,7 @@ async def upload_file_async(
         filename = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = await get_access_token_async(
-            credentials=credentials, litellm_params=litellm_params
-        )
+        access_token = await get_access_token_async(credentials=credentials, litellm_params=litellm_params)
 
         # Upload to GigaChat
         base_url = get_api_base(api_base)

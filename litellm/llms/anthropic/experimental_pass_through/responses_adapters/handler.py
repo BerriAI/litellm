@@ -163,9 +163,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         result = await litellm.aresponses(**responses_kwargs)
 
         if stream:
-            wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=result, model=model
-            )
+            wrapper = AnthropicResponsesStreamWrapper(responses_stream=result, model=model)
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
@@ -199,26 +197,24 @@ class LiteLLMMessagesToResponsesAPIHandler:
         Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
     ]:
         if _is_async:
-            return (
-                LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
-                    max_tokens=max_tokens,
-                    messages=messages,
-                    model=model,
-                    context_management=context_management,
-                    metadata=metadata,
-                    output_config=output_config,
-                    stop_sequences=stop_sequences,
-                    stream=stream,
-                    system=system,
-                    temperature=temperature,
-                    thinking=thinking,
-                    tool_choice=tool_choice,
-                    tools=tools,
-                    top_k=top_k,
-                    top_p=top_p,
-                    output_format=output_format,
-                    **kwargs,
-                )
+            return LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+                max_tokens=max_tokens,
+                messages=messages,
+                model=model,
+                context_management=context_management,
+                metadata=metadata,
+                output_config=output_config,
+                stop_sequences=stop_sequences,
+                stream=stream,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                tools=tools,
+                top_k=top_k,
+                top_p=top_p,
+                output_format=output_format,
+                **kwargs,
             )
 
         # Sync path
@@ -245,9 +241,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         result = litellm.responses(**responses_kwargs)
 
         if stream:
-            wrapper = AnthropicResponsesStreamWrapper(
-                responses_stream=result, model=model
-            )
+            wrapper = AnthropicResponsesStreamWrapper(responses_stream=result, model=model)
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):

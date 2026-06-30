@@ -56,9 +56,7 @@ class WatsonxOrchestrateHandler:
         return hashlib.sha256(material.encode()).hexdigest()
 
     @staticmethod
-    def _cp4d_token_ttl_seconds(
-        expiration: Any, now_wall: Optional[float] = None
-    ) -> int:
+    def _cp4d_token_ttl_seconds(expiration: Any, now_wall: Optional[float] = None) -> int:
         # CP4D returns expiration as absolute Unix epoch seconds, not a duration.
         expires_at = int(expiration)
         wall = now_wall if now_wall is not None else time.time()
@@ -72,9 +70,7 @@ class WatsonxOrchestrateHandler:
         username: Optional[str] = None,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> str:
-        cache_key = WatsonxOrchestrateHandler._token_cache_key(
-            auth_mode, cp4d_host, api_key, username
-        )
+        cache_key = WatsonxOrchestrateHandler._token_cache_key(auth_mode, cp4d_host, api_key, username)
         now = time.monotonic()
         cached = _token_cache.get(cache_key)
         if cached and cached[1] > now:
@@ -98,9 +94,7 @@ class WatsonxOrchestrateHandler:
             ttl_s = int(payload.get("expires_in", 3600))
         else:
             if not username:
-                raise ValueError(
-                    "'username' is required in litellm_params when auth_mode='cp4d'"
-                )
+                raise ValueError("'username' is required in litellm_params when auth_mode='cp4d'")
             token_url = f"{cp4d_host.rstrip('/')}/icp4d-api/v1/authorize"
             response = await client.post(
                 token_url,
@@ -140,15 +134,12 @@ class WatsonxOrchestrateHandler:
             response.raise_for_status()
             result: Dict[str, Any] = response.json()
             status = result.get("status", "")
-            verbose_logger.debug(
-                f"WXO: Poll {attempt + 1}/{max_attempts} run='{run_id}' status='{status}'"
-            )
+            verbose_logger.debug(f"WXO: Poll {attempt + 1}/{max_attempts} run='{run_id}' status='{status}'")
             if status in WatsonxOrchestrateTransformation.TERMINAL_STATES:
                 return result
 
         raise asyncio.TimeoutError(
-            f"WXO run '{run_id}' did not reach a terminal state after "
-            f"{max_attempts * interval_s:.0f}s"
+            f"WXO run '{run_id}' did not reach a terminal state after {max_attempts * interval_s:.0f}s"
         )
 
     @staticmethod
@@ -172,9 +163,7 @@ class WatsonxOrchestrateHandler:
             status = run_data.get("status", "")
 
         if status not in WatsonxOrchestrateTransformation.SUCCESS_STATES:
-            raise RuntimeError(
-                f"WXO run ended with non-success status '{status}': {run_data}"
-            )
+            raise RuntimeError(f"WXO run ended with non-success status '{status}': {run_data}")
 
         return run_data
 
@@ -191,9 +180,7 @@ class WatsonxOrchestrateHandler:
                 event = json.loads(data_str)
             except json.JSONDecodeError:
                 continue
-            chunk_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(
-                event
-            )
+            chunk_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(event)
             if chunk_text:
                 accumulated_text += chunk_text
         return accumulated_text
@@ -208,13 +195,9 @@ class WatsonxOrchestrateHandler:
         if not cp4d_host:
             raise ValueError("'cp4d_host' is required in litellm_params for WXO agents")
         if not instance_id:
-            raise ValueError(
-                "'instance_id' is required in litellm_params for WXO agents"
-            )
+            raise ValueError("'instance_id' is required in litellm_params for WXO agents")
         if not wxo_agent_id:
-            raise ValueError(
-                "'wxo_agent_id' is required in litellm_params for WXO agents"
-            )
+            raise ValueError("'wxo_agent_id' is required in litellm_params for WXO agents")
         if not api_key:
             raise ValueError("'api_key' is required in litellm_params for WXO agents")
 
@@ -244,9 +227,7 @@ class WatsonxOrchestrateHandler:
             username=wxo.username,
             client=client,
         )
-        base_url = WatsonxOrchestrateTransformation.get_api_base_url(
-            wxo.cp4d_host, wxo.instance_id
-        )
+        base_url = WatsonxOrchestrateTransformation.get_api_base_url(wxo.cp4d_host, wxo.instance_id)
         auth_headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -273,12 +254,8 @@ class WatsonxOrchestrateHandler:
             client=client,
         )
 
-        response_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(
-            run_data
-        )
-        return WatsonxOrchestrateTransformation.build_a2a_message_response(
-            request_id=request_id, text=response_text
-        )
+        response_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(run_data)
+        return WatsonxOrchestrateTransformation.build_a2a_message_response(request_id=request_id, text=response_text)
 
     @staticmethod
     async def handle_streaming(
@@ -298,9 +275,7 @@ class WatsonxOrchestrateHandler:
             username=wxo.username,
             client=client,
         )
-        base_url = WatsonxOrchestrateTransformation.get_api_base_url(
-            wxo.cp4d_host, wxo.instance_id
-        )
+        base_url = WatsonxOrchestrateTransformation.get_api_base_url(wxo.cp4d_host, wxo.instance_id)
         auth_headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -330,14 +305,8 @@ class WatsonxOrchestrateHandler:
                 params=params,
                 litellm_params=litellm_params,
             )
-            response_text = (
-                WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(
-                    result
-                )
-            )
-            async for (
-                chunk
-            ) in WatsonxOrchestrateTransformation.fake_streaming_from_text(
+            response_text = WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(result)
+            async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(
                 text=response_text,
                 request_id=request_id,
                 chunk_size=chunk_size,
@@ -356,13 +325,9 @@ class WatsonxOrchestrateHandler:
                 auth_headers=auth_headers,
                 client=client,
             )
-            accumulated_text = (
-                WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result)
-            )
+            accumulated_text = WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result)
         else:
-            accumulated_text = await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(
-                response
-            )
+            accumulated_text = await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response)
 
         async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(
             text=accumulated_text,

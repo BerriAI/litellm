@@ -92,29 +92,20 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         BaseAWSLLM.__init__(self)
 
         # Use vector_store_id as unified param (maps to knowledge_base_id)
-        self.knowledge_base_id = self.vector_store_config.get(
-            "vector_store_id"
-        ) or self.vector_store_config.get("knowledge_base_id")
+        self.knowledge_base_id = self.vector_store_config.get("vector_store_id") or self.vector_store_config.get(
+            "knowledge_base_id"
+        )
 
         # Optional config
         self._data_source_id = self.vector_store_config.get("data_source_id")
         self._s3_bucket = self.vector_store_config.get("s3_bucket")
         self._s3_prefix: Optional[str] = (
-            str(self.vector_store_config.get("s3_prefix"))
-            if self.vector_store_config.get("s3_prefix")
-            else None
+            str(self.vector_store_config.get("s3_prefix")) if self.vector_store_config.get("s3_prefix") else None
         )
-        self.embedding_model = (
-            self.vector_store_config.get("embedding_model")
-            or "amazon.titan-embed-text-v2:0"
-        )
+        self.embedding_model = self.vector_store_config.get("embedding_model") or "amazon.titan-embed-text-v2:0"
 
-        self.wait_for_ingestion = self.vector_store_config.get(
-            "wait_for_ingestion", False
-        )
-        self.ingestion_timeout: int = _get_int(
-            self.vector_store_config.get("ingestion_timeout"), 300
-        )
+        self.wait_for_ingestion = self.vector_store_config.get("wait_for_ingestion", False)
+        self.ingestion_timeout: int = _get_int(self.vector_store_config.get("ingestion_timeout"), 300)
 
         # Get AWS region using BaseAWSLLM method
         _aws_region = self.vector_store_config.get("aws_region_name")
@@ -147,16 +138,12 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
     def _auto_detect_config(self):
         """Auto-detect data source ID and S3 bucket from existing Knowledge Base."""
-        verbose_logger.debug(
-            f"Auto-detecting data source and S3 bucket for KB={self.knowledge_base_id}"
-        )
+        verbose_logger.debug(f"Auto-detecting data source and S3 bucket for KB={self.knowledge_base_id}")
 
         bedrock_agent = self._get_boto3_client("bedrock-agent")
 
         # List data sources for this KB
-        ds_response = bedrock_agent.list_data_sources(
-            knowledgeBaseId=self.knowledge_base_id
-        )
+        ds_response = bedrock_agent.list_data_sources(knowledgeBaseId=self.knowledge_base_id)
         data_sources = ds_response.get("dataSourceSummaries", [])
 
         if not data_sources:
@@ -178,11 +165,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             dataSourceId=self.data_source_id,
         )
 
-        s3_config = (
-            ds_details.get("dataSource", {})
-            .get("dataSourceConfiguration", {})
-            .get("s3Configuration", {})
-        )
+        s3_config = ds_details.get("dataSource", {}).get("dataSourceConfiguration", {}).get("s3Configuration", {})
 
         bucket_arn = s3_config.get("bucketArn", "")
         if bucket_arn:
@@ -220,22 +203,16 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         self.s3_bucket = self._s3_bucket or self._create_s3_bucket(unique_id)
 
         # Step 2: Create OpenSearch Serverless collection
-        collection_name, collection_arn = await self._create_opensearch_collection(
-            unique_id, account_id, caller_arn
-        )
+        collection_name, collection_arn = await self._create_opensearch_collection(unique_id, account_id, caller_arn)
 
         # Step 3: Create OpenSearch index
         await self._create_opensearch_index(collection_name)
 
         # Step 4: Create IAM role for Bedrock
-        role_arn = await self._create_bedrock_role(
-            unique_id, account_id, collection_arn
-        )
+        role_arn = await self._create_bedrock_role(unique_id, account_id, collection_arn)
 
         # Step 5: Create Knowledge Base
-        self.knowledge_base_id = await self._create_knowledge_base(
-            kb_name, role_arn, collection_arn
-        )
+        self.knowledge_base_id = await self._create_knowledge_base(kb_name, role_arn, collection_arn)
 
         # Step 6: Create Data Source
         self.data_source_id = self._create_data_source(kb_name)
@@ -254,9 +231,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         create_params: Dict[str, Any] = {"Bucket": bucket_name}
         if self.aws_region_name != "us-east-1":
-            create_params["CreateBucketConfiguration"] = {
-                "LocationConstraint": self.aws_region_name
-            }
+            create_params["CreateBucketConfiguration"] = {"LocationConstraint": self.aws_region_name}
 
         s3.create_bucket(**create_params)
         self._created_resources["s3_bucket"] = bucket_name
@@ -264,16 +239,12 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.info(f"Created S3 bucket: {bucket_name}")
         return bucket_name
 
-    async def _create_opensearch_collection(
-        self, unique_id: str, account_id: str, caller_arn: str
-    ) -> Tuple[str, str]:
+    async def _create_opensearch_collection(self, unique_id: str, account_id: str, caller_arn: str) -> Tuple[str, str]:
         """Create OpenSearch Serverless collection for vector storage."""
         oss = self._get_boto3_client("opensearchserverless")
         collection_name = f"litellm-kb-{unique_id}"
 
-        verbose_logger.debug(
-            f"Creating OpenSearch Serverless collection: {collection_name}"
-        )
+        verbose_logger.debug(f"Creating OpenSearch Serverless collection: {collection_name}")
 
         # Create encryption policy
         oss.create_security_policy(
@@ -319,9 +290,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # This ensures the credentials being used have access to the collection
         # Normalize the caller ARN (convert assumed-role ARN to IAM role ARN if needed)
         normalized_caller_arn = _normalize_principal_arn(caller_arn, account_id)
-        verbose_logger.debug(
-            f"Caller ARN: {caller_arn}, Normalized: {normalized_caller_arn}"
-        )
+        verbose_logger.debug(f"Caller ARN: {caller_arn}, Normalized: {normalized_caller_arn}")
 
         principals = [f"arn:aws:iam::{account_id}:root", normalized_caller_arn]
         # Deduplicate in case caller is root
@@ -387,15 +356,9 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Get credentials for signing
         credentials = self.get_credentials(
-            aws_access_key_id=_get_str_or_none(
-                self.vector_store_config.get("aws_access_key_id")
-            ),
-            aws_secret_access_key=_get_str_or_none(
-                self.vector_store_config.get("aws_secret_access_key")
-            ),
-            aws_session_token=_get_str_or_none(
-                self.vector_store_config.get("aws_session_token")
-            ),
+            aws_access_key_id=_get_str_or_none(self.vector_store_config.get("aws_access_key_id")),
+            aws_secret_access_key=_get_str_or_none(self.vector_store_config.get("aws_secret_access_key")),
+            aws_session_token=_get_str_or_none(self.vector_store_config.get("aws_session_token")),
             aws_region_name=self.aws_region_name,
         )
 
@@ -454,10 +417,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             except Exception as e:
                 last_error = e
                 error_str = str(e)
-                if (
-                    "authorization_exception" in error_str.lower()
-                    or "security_exception" in error_str.lower()
-                ):
+                if "authorization_exception" in error_str.lower() or "security_exception" in error_str.lower():
                     verbose_logger.warning(
                         f"OpenSearch index creation attempt {attempt + 1}/{max_retries} failed due to authorization. "
                         f"Waiting {retry_delay}s for policy propagation..."
@@ -473,9 +433,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             f"Data access policy may not have propagated. Last error: {last_error}"
         )
 
-    async def _create_bedrock_role(
-        self, unique_id: str, account_id: str, collection_arn: str
-    ) -> str:
+    async def _create_bedrock_role(self, unique_id: str, account_id: str, collection_arn: str) -> str:
         """Create IAM role for Bedrock KB."""
         iam = self._get_boto3_client("iam")
         role_name = f"litellm-bedrock-kb-{unique_id}"
@@ -513,9 +471,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 {
                     "Effect": "Allow",
                     "Action": ["bedrock:InvokeModel"],
-                    "Resource": [
-                        f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}"
-                    ],
+                    "Resource": [f"arn:aws:bedrock:{self.aws_region_name}::foundation-model/{self.embedding_model}"],
                 },
                 {
                     "Effect": "Allow",
@@ -545,9 +501,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.info(f"Created IAM role: {role_arn}")
         return role_arn
 
-    async def _create_knowledge_base(
-        self, kb_name: str, role_arn: str, collection_arn: str
-    ) -> str:
+    async def _create_knowledge_base(self, kb_name: str, role_arn: str, collection_arn: str) -> str:
         """Create Bedrock Knowledge Base."""
         bedrock_agent = self._get_boto3_client("bedrock-agent")
 
@@ -620,40 +574,20 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         try:
             import boto3
         except ImportError:
-            raise ImportError(
-                "boto3 is required for Bedrock ingestion. Install with: pip install boto3"
-            )
+            raise ImportError("boto3 is required for Bedrock ingestion. Install with: pip install boto3")
 
         # Get credentials using BaseAWSLLM's get_credentials method
         credentials = self.get_credentials(
-            aws_access_key_id=_get_str_or_none(
-                self.vector_store_config.get("aws_access_key_id")
-            ),
-            aws_secret_access_key=_get_str_or_none(
-                self.vector_store_config.get("aws_secret_access_key")
-            ),
-            aws_session_token=_get_str_or_none(
-                self.vector_store_config.get("aws_session_token")
-            ),
+            aws_access_key_id=_get_str_or_none(self.vector_store_config.get("aws_access_key_id")),
+            aws_secret_access_key=_get_str_or_none(self.vector_store_config.get("aws_secret_access_key")),
+            aws_session_token=_get_str_or_none(self.vector_store_config.get("aws_session_token")),
             aws_region_name=self.aws_region_name,
-            aws_session_name=_get_str_or_none(
-                self.vector_store_config.get("aws_session_name")
-            ),
-            aws_profile_name=_get_str_or_none(
-                self.vector_store_config.get("aws_profile_name")
-            ),
-            aws_role_name=_get_str_or_none(
-                self.vector_store_config.get("aws_role_name")
-            ),
-            aws_web_identity_token=_get_str_or_none(
-                self.vector_store_config.get("aws_web_identity_token")
-            ),
-            aws_sts_endpoint=_get_str_or_none(
-                self.vector_store_config.get("aws_sts_endpoint")
-            ),
-            aws_external_id=_get_str_or_none(
-                self.vector_store_config.get("aws_external_id")
-            ),
+            aws_session_name=_get_str_or_none(self.vector_store_config.get("aws_session_name")),
+            aws_profile_name=_get_str_or_none(self.vector_store_config.get("aws_profile_name")),
+            aws_role_name=_get_str_or_none(self.vector_store_config.get("aws_role_name")),
+            aws_web_identity_token=_get_str_or_none(self.vector_store_config.get("aws_web_identity_token")),
+            aws_sts_endpoint=_get_str_or_none(self.vector_store_config.get("aws_sts_endpoint")),
+            aws_external_id=_get_str_or_none(self.vector_store_config.get("aws_external_id")),
         )
 
         # Create session with credentials
@@ -711,9 +645,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         await self._ensure_config_initialized()
 
         if not file_content or not filename:
-            verbose_logger.warning(
-                "No file content or filename provided for Bedrock ingestion"
-            )
+            verbose_logger.warning("No file content or filename provided for Bedrock ingestion")
             return _get_str_or_none(self.knowledge_base_id), None
 
         # Step 1: Upload file to S3
@@ -732,9 +664,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Step 2: Start ingestion job
         bedrock_agent = self._get_boto3_client("bedrock-agent")
 
-        verbose_logger.debug(
-            f"Starting ingestion job for KB={self.knowledge_base_id}, DS={self.data_source_id}"
-        )
+        verbose_logger.debug(f"Starting ingestion job for KB={self.knowledge_base_id}, DS={self.data_source_id}")
         ingestion_response = bedrock_agent.start_ingestion_job(
             knowledgeBaseId=self.knowledge_base_id,
             dataSourceId=self.data_source_id,
@@ -763,9 +693,7 @@ class BedrockRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                     )
                     break
                 elif status == "FAILED":
-                    failure_reasons = job_status["ingestionJob"].get(
-                        "failureReasons", []
-                    )
+                    failure_reasons = job_status["ingestionJob"].get("failureReasons", [])
                     verbose_logger.error(f"Ingestion failed: {failure_reasons}")
                     break
                 elif status in ("STARTING", "IN_PROGRESS"):

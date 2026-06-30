@@ -90,9 +90,7 @@ async def acreate_fine_tuning_job(
     Async: Creates and executes a batch from an uploaded file of request
 
     """
-    verbose_logger.debug(
-        "inside acreate_fine_tuning_job model=%s and kwargs=%s", model, kwargs
-    )
+    verbose_logger.debug("inside acreate_fine_tuning_job model=%s and kwargs=%s", model, kwargs)
     try:
         loop = asyncio.get_event_loop()
         kwargs["acreate_fine_tuning_job"] = True
@@ -126,9 +124,7 @@ async def acreate_fine_tuning_job(
         raise e
 
 
-def _build_fine_tuning_job_data(
-    model, training_file, hyperparameters, suffix, validation_file, integrations, seed
-):
+def _build_fine_tuning_job_data(model, training_file, hyperparameters, suffix, validation_file, integrations, seed):
     return FineTuningJobCreate(
         model=model,
         training_file=training_file,
@@ -245,17 +241,9 @@ def create_fine_tuning_job(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("AZURE_API_BASE")
-            )  # type: ignore
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
 
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
+            api_version = optional_params.api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")  # type: ignore
 
             api_key = (
                 optional_params.api_key
@@ -272,9 +260,7 @@ def create_fine_tuning_job(
                 get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
             # Prepare Azure-specific parameters for extra_body
-            extra_body = _prepare_azure_extra_body(
-                extra_body, kwargs, azure_specific_hyperparams
-            )
+            extra_body = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
 
             create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
                 model,
@@ -303,18 +289,12 @@ def create_fine_tuning_job(
         elif custom_llm_provider == "vertex_ai":
             api_base = optional_params.api_base or ""
             vertex_ai_project = (
-                optional_params.vertex_project
-                or litellm.vertex_project
-                or get_secret_str("VERTEXAI_PROJECT")
+                optional_params.vertex_project or litellm.vertex_project or get_secret_str("VERTEXAI_PROJECT")
             )
             vertex_ai_location = (
-                optional_params.vertex_location
-                or litellm.vertex_location
-                or get_secret_str("VERTEXAI_LOCATION")
+                optional_params.vertex_location or litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
             )
-            vertex_credentials = optional_params.vertex_credentials or get_secret_str(
-                "VERTEXAI_CREDENTIALS"
-            )
+            vertex_credentials = optional_params.vertex_credentials or get_secret_str("VERTEXAI_CREDENTIALS")
             response = vertex_fine_tuning_apis_instance.create_fine_tuning_job(
                 _is_async=_is_async,
                 create_fine_tuning_job_data=_build_fine_tuning_job_data(
@@ -344,9 +324,7 @@ def create_fine_tuning_job(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(
-                        method="create_thread", url="https://github.com/BerriAI/litellm"
-                    ),  # type: ignore
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
         return response
@@ -464,17 +442,9 @@ def cancel_fine_tuning_job(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret("AZURE_API_BASE")
-            )  # type: ignore
+            api_base = optional_params.api_base or litellm.api_base or get_secret("AZURE_API_BASE")  # type: ignore
 
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
+            api_version = optional_params.api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")  # type: ignore
 
             api_key = (
                 optional_params.api_key
@@ -510,9 +480,7 @@ def cancel_fine_tuning_job(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(
-                        method="create_thread", url="https://github.com/BerriAI/litellm"
-                    ),  # type: ignore
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
         return response
@@ -633,17 +601,9 @@ def list_fine_tuning_jobs(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("AZURE_API_BASE")
-            )  # type: ignore
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
 
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
+            api_version = optional_params.api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")  # type: ignore
 
             api_key = (
                 optional_params.api_key
@@ -680,9 +640,7 @@ def list_fine_tuning_jobs(
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(
-                        method="create_thread", url="https://github.com/BerriAI/litellm"
-                    ),  # type: ignore
+                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
                 ),
             )
         return response
@@ -769,17 +727,9 @@ def retrieve_fine_tuning_job(
                 or "https://api.openai.com/v1"
             )
             organization = (
-                optional_params.organization
-                or litellm.organization
-                or os.getenv("OPENAI_ORGANIZATION", None)
-                or None
+                optional_params.organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None
             )
-            api_key = (
-                optional_params.api_key
-                or litellm.api_key
-                or litellm.openai_key
-                or os.getenv("OPENAI_API_KEY")
-            )
+            api_key = optional_params.api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
 
             response = openai_fine_tuning_apis_instance.retrieve_fine_tuning_job(
                 api_base=api_base,
@@ -794,17 +744,9 @@ def retrieve_fine_tuning_job(
             )
         # Azure OpenAI
         elif custom_llm_provider == "azure":
-            api_base = (
-                optional_params.api_base
-                or litellm.api_base
-                or get_secret_str("AZURE_API_BASE")
-            )  # type: ignore
+            api_base = optional_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")  # type: ignore
 
-            api_version = (
-                optional_params.api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )  # type: ignore
+            api_version = optional_params.api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")  # type: ignore
 
             api_key = (
                 optional_params.api_key

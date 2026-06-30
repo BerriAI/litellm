@@ -148,6 +148,34 @@ def test_model_id_in_required_metrics():
         print(f"✅ {metric_name} contains model_id label")
 
 
+def test_requested_model_in_spend_and_requests_metrics():
+    """
+    Regression test for LIT-3796.
+
+    litellm_spend_metric and litellm_requests_metric must expose the
+    requested_model label so spend and request counts can be grouped by the
+    model alias the caller asked for, not just the backend deployment that
+    served the request. The sibling token metrics (input/output/total)
+    already carry this label; spend and requests were the odd ones out, even
+    though both are emitted side-by-side from the same call site.
+    """
+    requested_model_label = UserAPIKeyLabelNames.REQUESTED_MODEL.value
+
+    metrics_with_requested_model = [
+        "litellm_spend_metric",
+        "litellm_requests_metric",
+        "litellm_input_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_total_tokens_metric",
+    ]
+
+    for metric_name in metrics_with_requested_model:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert requested_model_label in labels, (
+            f"Metric {metric_name} should contain requested_model label"
+        )
+
+
 def test_route_normalization_for_responses_api():
     """
     Test that route normalization prevents high cardinality in Prometheus metrics

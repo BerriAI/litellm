@@ -30,10 +30,7 @@ from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
 FloatArray = Any
 
 
-_INSTALL_HINT = (
-    "Install Riva STT extras to enable automatic audio resampling: "
-    "`pip install 'litellm[stt-nvidia-riva]'`"
-)
+_INSTALL_HINT = "Install Riva STT extras to enable automatic audio resampling: `pip install 'litellm[stt-nvidia-riva]'`"
 
 
 @dataclass
@@ -69,9 +66,7 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
     samples_float = np.asarray(samples_float, dtype=np.float32).ravel()
 
     if source_rate != RIVA_TARGET_SAMPLE_RATE_HZ:
-        samples_float = _resample(
-            samples_float, source_rate, RIVA_TARGET_SAMPLE_RATE_HZ
-        )
+        samples_float = _resample(samples_float, source_rate, RIVA_TARGET_SAMPLE_RATE_HZ)
 
     # Clip + convert float [-1, 1] to int16 little-endian PCM.
     np.clip(samples_float, -1.0, 1.0, out=samples_float)
@@ -167,9 +162,7 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["FloatArray", int]:
             pass
 
 
-def _resample(
-    samples: "FloatArray", source_rate: int, target_rate: int
-) -> "FloatArray":
+def _resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "FloatArray":
     """
     Resample mono float32 ``samples`` from ``source_rate`` to ``target_rate``.
 
@@ -189,9 +182,7 @@ def _resample(
 
         return cast(
             "FloatArray",
-            np.asarray(
-                soxr.resample(samples, source_rate, target_rate), dtype=np.float32
-            ),
+            np.asarray(soxr.resample(samples, source_rate, target_rate), dtype=np.float32),
         )
     except ImportError:
         pass
@@ -204,18 +195,14 @@ def _resample(
         g = gcd(int(source_rate), int(target_rate))
         up = int(target_rate) // g
         down = int(source_rate) // g
-        return cast(
-            "FloatArray", np.asarray(resample_poly(samples, up, down), dtype=np.float32)
-        )
+        return cast("FloatArray", np.asarray(resample_poly(samples, up, down), dtype=np.float32))
     except ImportError:
         pass
 
     return _linear_resample(samples, source_rate, target_rate)
 
 
-def _linear_resample(
-    samples: "FloatArray", source_rate: int, target_rate: int
-) -> "FloatArray":
+def _linear_resample(samples: "FloatArray", source_rate: int, target_rate: int) -> "FloatArray":
     """Linear-interpolation fallback. See :func:`_resample` for caveats."""
     import numpy as np  # type: ignore
 

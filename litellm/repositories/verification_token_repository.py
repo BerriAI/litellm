@@ -54,14 +54,10 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
 
         return LiteLLM_VerificationToken(**data)
 
-    async def find_by_id(
-        self, token: str, id_field: str = "token"
-    ) -> Optional[LiteLLM_VerificationToken]:
+    async def find_by_id(self, token: str, id_field: str = "token") -> Optional[LiteLLM_VerificationToken]:
         return await super().find_by_id(token, id_field)
 
-    async def find_by_alias(
-        self, key_alias: str
-    ) -> Optional[LiteLLM_VerificationToken]:
+    async def find_by_alias(self, key_alias: str) -> Optional[LiteLLM_VerificationToken]:
         """Find a token by key alias."""
         records = await self.table.find_many(where={"key_alias": key_alias})
         if records:
@@ -78,9 +74,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         records = await self.table.find_many(where={"team_id": team_id})
         return self._to_model_list(records)
 
-    async def find_by_project_id(
-        self, project_id: str
-    ) -> List[LiteLLM_VerificationToken]:
+    async def find_by_project_id(self, project_id: str) -> List[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a project."""
         records = await self.table.find_many(where={"project_id": project_id})
         return self._to_model_list(records)
@@ -342,32 +336,22 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
                 data[field] = json.dumps(data[field])
         return data
 
-    async def update_spend(
-        self, token: str, spend: float
-    ) -> Optional[LiteLLM_VerificationToken]:
+    async def update_spend(self, token: str, spend: float) -> Optional[LiteLLM_VerificationToken]:
         """Update token spend."""
         return await self.update(token, {"spend": spend}, id_field="token")
 
-    async def update_last_active(
-        self, token: str
-    ) -> Optional[LiteLLM_VerificationToken]:
+    async def update_last_active(self, token: str) -> Optional[LiteLLM_VerificationToken]:
         """Update the last_active timestamp."""
-        return await self.update(
-            token, {"last_active": datetime.utcnow()}, id_field="token"
-        )
+        return await self.update(token, {"last_active": datetime.utcnow()}, id_field="token")
 
-    async def block_token(
-        self, token: str, updated_by: Optional[str] = None
-    ) -> Optional[LiteLLM_VerificationToken]:
+    async def block_token(self, token: str, updated_by: Optional[str] = None) -> Optional[LiteLLM_VerificationToken]:
         """Block a token."""
         data: Dict[str, Any] = {"blocked": True}
         if updated_by is not None:
             data["updated_by"] = updated_by
         return await self.update(token, data, id_field="token")
 
-    async def unblock_token(
-        self, token: str, updated_by: Optional[str] = None
-    ) -> Optional[LiteLLM_VerificationToken]:
+    async def unblock_token(self, token: str, updated_by: Optional[str] = None) -> Optional[LiteLLM_VerificationToken]:
         """Unblock a token."""
         data: Dict[str, Any] = {"blocked": False}
         if updated_by is not None:

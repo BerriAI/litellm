@@ -2733,3 +2733,281 @@ async def test_token_exchange_passes_through_upstream_expires_in():
         {"access_token": "tok", "token_type": "Bearer", "expires_in": 43200}
     )
     assert body["expires_in"] == 43200
+
+
+def _token_request(headers):
+    """A real Starlette request with case-insensitive headers (matches production)."""
+    from starlette.requests import Request
+
+    raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    return Request({"type": "http", "method": "POST", "path": "/token", "headers": raw, "query_string": b""})
+
+
+@pytest.fixture
+def proxy_globals():
+    """Inject the cache/prisma the OAuth token endpoint resolves identity through, and restore
+    them afterward. These module globals are the proxy's real wiring points, so setting them is
+    dependency injection rather than monkeypatching a class."""
+    import litellm.proxy.proxy_server as ps
+
+    saved = (ps.user_api_key_cache, ps.prisma_client)
+    try:
+        yield ps
+    finally:
+        ps.user_api_key_cache, ps.prisma_client = saved
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_reads_x_litellm_api_key_header(proxy_globals):
+    """The LiteLLM key arrives on x-litellm-api-key (what Claude Desktop/Code send), not
+    Authorization. Reading only Authorization dropped the identity, so the per-user token was
+    never stored and the egress 401'd forever. Resolution must honor x-litellm-api-key."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-alice-key"
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        hash_token(key),
+        UserAPIKeyAuth(token=hash_token(key), user_id="alice"),
+        model_type=UserAPIKeyAuth,
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"x-litellm-api-key": f"Bearer {key}"})
+    assert await _extract_user_id_from_request(request) == "alice"
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals):
+    """Cross-replica, async_get_cache hands back a serialized dict, not a UserAPIKeyAuth.
+    Resolution must rehydrate it; the old getattr(cached, "user_id") returned None on a dict,
+    which is exactly why a multi-replica gateway never found the stored token."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-alice-key"
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache(hash_token(key), {"token": hash_token(key), "user_id": "alice"})
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"Authorization": f"Bearer {key}"})
+    assert await _extract_user_id_from_request(request) == "alice"
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
+    """A cache miss must read the key from the DB rather than returning None; the old code did a
+    cache-only peek and skipped the DB, so any replica that hadn't just authenticated the key
+    failed to store the token."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-bob-key"
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="db-bob")
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": key})
+    assert await _extract_user_id_from_request(request) == "db-bob"
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_none_without_litellm_key(proxy_globals):
+    """No LiteLLM key on the request resolves to None without consulting the resolver."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"content-type": "application/json"})
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rejects_blocked_key(proxy_globals):
+    """A blocked LiteLLM key must not resolve an identity. get_key_object returns the DB row without
+    checking blocked/expiry (the main auth pipeline does, and the public token endpoint bypasses it),
+    so a revoked key could otherwise overwrite the stored per-user OAuth token for its user."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="blocked-user", blocked=True)
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-blocked-key"})
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rejects_expired_key(proxy_globals):
+    """An expired LiteLLM key must not resolve an identity, for the same reason as a blocked key."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="expired-user", expires=expired)
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-expired-key"})
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_uses_client_secret_basic_when_configured():
+    """LIT-4091: a server with token_endpoint_auth_method=client_secret_basic must send the
+    credentials as an HTTP Basic Authorization header and omit client_secret from the body;
+    providers requiring Basic rejected body credentials with invalid_client."""
+    import base64
+    from unittest.mock import AsyncMock
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        token_endpoint,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="basic_mcp",
+        name="basic_mcp",
+        server_name="basic_mcp",
+        alias="basic_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="basic-client",
+        client_secret="basic-secret",
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/oauth2/token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "at",
+        "token_type": "Bearer",
+        "expires_in": 3599,
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_async_client = MagicMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_async_client
+
+        await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="basic-client",
+            mcp_server_name="basic_mcp",
+            client_secret="basic-secret",
+            code_verifier="verifier",
+        )
+
+    call_args = mock_async_client.post.call_args
+    expected = "Basic " + base64.b64encode(b"basic-client:basic-secret").decode()
+    assert call_args[1]["headers"]["Authorization"] == expected
+    assert "client_secret" not in call_args[1]["data"]
+    assert "client_id" not in call_args[1]["data"]
+    assert call_args[1]["data"]["grant_type"] == "authorization_code"
+    assert call_args[1]["data"]["code"] == "auth-code"
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_client_secret_basic_without_secret_returns_400():
+    """A server configured client_secret_basic but missing its secret is a misconfiguration; the
+    inbound /token endpoint surfaces it as a 400 rather than silently posting a downgraded request."""
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        token_endpoint,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="basic_no_secret",
+        name="basic_no_secret",
+        server_name="basic_no_secret",
+        alias="basic_no_secret",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="basic-client",
+        client_secret=None,
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/oauth2/token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="basic-client",
+            mcp_server_name="basic_no_secret",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert exc_info.value.status_code == 400

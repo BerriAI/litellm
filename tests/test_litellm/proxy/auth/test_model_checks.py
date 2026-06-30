@@ -552,7 +552,8 @@ def test_get_key_models_all_team_models_recursive_team():
     from litellm.proxy._types import SpecialModelNames
 
     user_api_key_dict = type(
-        "obj", (object,),
+        "obj",
+        (object,),
         {
             "models": [SpecialModelNames.all_team_models.value],
             "team_id": "team-1",
@@ -617,3 +618,71 @@ def test_get_team_models_all_team_models_expands_with_access_groups():
     assert "model-b" in result
     assert "group-1" in result
     assert "group-2" in result
+
+
+def test_expand_wildcard_deployments_non_wildcard_passthrough():
+    """Non-wildcard deployments must be returned unchanged."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    assert result == [deployment]
+
+
+def test_expand_wildcard_deployments_openai_wildcard():
+    """openai/* should expand into ≥1 known openai model entries."""
+    from unittest.mock import patch
+
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    fake_models = ["openai/gpt-4o", "openai/gpt-4o-mini"]
+    deployment = {
+        "model_name": "openai/*",
+        "litellm_params": {"model": "openai/*"},
+    }
+    with patch(
+        "litellm.proxy.auth.model_checks.get_known_models_from_wildcard",
+        return_value=fake_models,
+    ):
+        result = expand_wildcard_deployments_for_model_info([deployment])
+
+    assert len(result) == 2
+    assert all(r["model_name"] in fake_models for r in result)
+    assert all(r["litellm_params"]["model"] in fake_models for r in result)
+
+
+def test_expand_wildcard_concrete_model_name_with_wildcard_litellm_params():
+    """Concrete model_name must not be overwritten when only litellm_params.model is wildcard."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {
+        "model_name": "my-custom-alias",
+        "litellm_params": {"model": "openai/*"},
+    }
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    # model_name is not a wildcard, so the deployment passes through unchanged
+    assert result == [deployment]
+
+
+def test_expand_wildcard_invalid_litellm_params_passthrough():
+    """Deployments with invalid litellm_params must pass through unchanged (no 500)."""
+    from litellm.proxy.auth.model_checks import (
+        expand_wildcard_deployments_for_model_info,
+    )
+
+    deployment = {
+        "model_name": "openai/*",
+        "litellm_params": {
+            "model": "openai/*",
+            "max_retries": "not-an-int-field-that-breaks",
+        },
+    }
+    # Even if LiteLLM_Params construction fails the deployment should survive
+    result = expand_wildcard_deployments_for_model_info([deployment])
+    assert result == [deployment]

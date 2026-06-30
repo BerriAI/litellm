@@ -98,9 +98,7 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         )
 
 
-class GoogleGenAIGenerateContentStreamingIterator(
-    BaseGoogleGenAIGenerateContentStreamingIterator
-):
+class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
     """
     Streaming iterator specifically for Google GenAI generate content API.
     """
@@ -148,14 +146,10 @@ class GoogleGenAIGenerateContentStreamingIterator(
     async def __anext__(self):
         # This should not be used for sync responses
         # If you need async iteration, use AsyncGoogleGenAIGenerateContentStreamingIterator
-        raise NotImplementedError(
-            "Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration"
-        )
+        raise NotImplementedError("Use AsyncGoogleGenAIGenerateContentStreamingIterator for async iteration")
 
 
-class AsyncGoogleGenAIGenerateContentStreamingIterator(
-    BaseGoogleGenAIGenerateContentStreamingIterator
-):
+class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
     """
     Async streaming iterator specifically for Google GenAI generate content API.
     """

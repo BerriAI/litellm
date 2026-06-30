@@ -52,11 +52,7 @@ def display_teams_table(teams: List[Dict[str, Any]]) -> None:
 
         # Try to determine role (this might vary based on API response structure)
         role = "Member"  # Default role
-        if (
-            isinstance(team, dict)
-            and "members_with_roles" in team
-            and team["members_with_roles"]
-        ):
+        if isinstance(team, dict) and "members_with_roles" in team and team["members_with_roles"]:
             # This would need to be implemented based on actual API response structure
             pass
 

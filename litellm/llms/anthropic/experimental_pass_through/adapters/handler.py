@@ -107,9 +107,7 @@ async def _prepare_context_managed_request(
             messages=cast(List[Dict[str, Any]], messages),
             system=system,
         )
-        working_messages = (
-            history_result.messages if history_result is not None else messages
-        )
+        working_messages = history_result.messages if history_result is not None else messages
         working_system = history_result.system if history_result is not None else system
 
     polyfill_result = await _run_polyfill_if_enabled(
@@ -165,10 +163,7 @@ def _polyfill_will_run(
         COMPACT_EDIT_TYPE,
     )
 
-    return any(
-        isinstance(edit, dict) and edit.get("type") == COMPACT_EDIT_TYPE
-        for edit in edits
-    )
+    return any(isinstance(edit, dict) and edit.get("type") == COMPACT_EDIT_TYPE for edit in edits)
 
 
 def _spec_has_non_compact_edits(
@@ -195,9 +190,7 @@ def _spec_has_non_compact_edits(
     )
 
     return any(
-        isinstance(edit, dict)
-        and isinstance(edit.get("type"), str)
-        and edit.get("type") != COMPACT_EDIT_TYPE
+        isinstance(edit, dict) and isinstance(edit.get("type"), str) and edit.get("type") != COMPACT_EDIT_TYPE
         for edit in edits
     )
 
@@ -215,9 +208,7 @@ def _normalize_spec_edits(
     if not context_management_spec:
         return None
 
-    effective_drop_params = (
-        drop_params if drop_params is not None else litellm.drop_params
-    )
+    effective_drop_params = drop_params if drop_params is not None else litellm.drop_params
     if effective_drop_params:
         return None
 
@@ -253,9 +244,7 @@ async def _run_polyfill_if_enabled(
     if not context_management_spec:
         return None
 
-    effective_drop_params = (
-        drop_params if drop_params is not None else litellm.drop_params
-    )
+    effective_drop_params = drop_params if drop_params is not None else litellm.drop_params
     if effective_drop_params:
         return None
 
@@ -275,9 +264,7 @@ async def _run_polyfill_if_enabled(
         # 400. Other exception types fall into the best-effort branch below.
         raise
     except Exception as e:
-        verbose_logger.exception(
-            "context_management polyfill: skipping edits due to error: %s", e
-        )
+        verbose_logger.exception("context_management polyfill: skipping edits due to error: %s", e)
         # Best-effort swallow is only safe for compact-only specs, where the
         # caller's compaction-block-slicing safety net produces a correct
         # (if degraded) result. When the spec also requested non-compact
@@ -338,9 +325,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         model = completion_kwargs.get("model")
         try:
-            model_info = get_model_info(
-                model=cast(str, model), custom_llm_provider=custom_llm_provider
-            )
+            model_info = get_model_info(model=cast(str, model), custom_llm_provider=custom_llm_provider)
             if model_info and model_info.get("supports_reasoning") is False:
                 # Model doesn't support reasoning/responses API, don't route
                 return
@@ -363,13 +348,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 reasoning_dict["summary"] = "detailed"
             completion_kwargs["reasoning_effort"] = reasoning_dict
         elif isinstance(reasoning_effort, dict):
-            if (
-                "summary" not in reasoning_effort
-                and "generate_summary" not in reasoning_effort
-            ):
-                effective_summary = (
-                    summary if summary else ("detailed" if auto_summary else None)
-                )
+            if "summary" not in reasoning_effort and "generate_summary" not in reasoning_effort:
+                effective_summary = summary if summary else ("detailed" if auto_summary else None)
                 if effective_summary:
                     updated_reasoning_effort = dict(reasoning_effort)
                     updated_reasoning_effort["summary"] = effective_summary
@@ -404,9 +384,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 completion_kwargs["reasoning_effort"] = normalized
         elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
             effort = reasoning_effort["effort"]
-            normalized = normalize_reasoning_effort_value(
-                effort, model=model, custom_llm_provider=custom_llm_provider
-            )
+            normalized = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
             if normalized != effort:
                 completion_kwargs["reasoning_effort"] = {
                     **reasoning_effort,
@@ -483,9 +461,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         (
             openai_request,
             tool_name_mapping,
-        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
-            request_data
-        )
+        ) = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(request_data)
 
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
@@ -516,31 +492,19 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         # NOTE: extra_kwargs was already coerced from None to {} at the top of
         # this method (line ~220). It is guaranteed to be a dict here.
         for key, value in extra_kwargs.items():
-            if (
-                key == "litellm_logging_obj"
-                and value is not None
-                and isinstance(value, LiteLLMLoggingObject)
-            ):
+            if key == "litellm_logging_obj" and value is not None and isinstance(value, LiteLLMLoggingObject):
                 from litellm.types.utils import CallTypes
 
                 setattr(value, "call_type", CallTypes.anthropic_messages.value)
-                setattr(
-                    value, "stream_options", completion_kwargs.get("stream_options")
-                )
-            if (
-                key not in excluded_keys
-                and key not in completion_kwargs
-                and value is not None
-            ):
+                setattr(value, "stream_options", completion_kwargs.get("stream_options"))
+            if key not in excluded_keys and key not in completion_kwargs and value is not None:
                 completion_kwargs[key] = value
 
         # Normalize reasoning_effort based on model capabilities
         # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
         # Must run BEFORE _route_openai_thinking, which prepends "responses/"
         # to the model name and would break get_model_info() lookups.
-        LiteLLMMessagesToCompletionTransformationHandler._normalize_reasoning_effort(
-            completion_kwargs
-        )
+        LiteLLMMessagesToCompletionTransformationHandler._normalize_reasoning_effort(completion_kwargs)
 
         LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
             completion_kwargs,
@@ -581,9 +545,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         proxy_litellm_metadata = _extract_proxy_litellm_metadata(kwargs)
         user_api_key_auth = (
-            proxy_litellm_metadata.get("user_api_key_auth")
-            if proxy_litellm_metadata is not None
-            else None
+            proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
         )
 
         polyfill_result = await _prepare_context_managed_request(
@@ -598,12 +560,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             user_api_key_auth=user_api_key_auth,
         )
 
-        effective_messages = (
-            polyfill_result.messages if polyfill_result is not None else messages
-        )
-        effective_system = (
-            polyfill_result.system if polyfill_result is not None else system
-        )
+        effective_messages = polyfill_result.messages if polyfill_result is not None else messages
+        effective_system = polyfill_result.system if polyfill_result is not None else system
 
         (
             completion_kwargs,
@@ -629,14 +587,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         completion_response = await litellm.acompletion(**completion_kwargs)
 
         if stream:
-            transformed_stream = (
-                ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                    completion_response,
-                    model=model,
-                    tool_name_mapping=tool_name_mapping,
-                    polyfill_result=polyfill_result,
-                    is_async=True,
-                )
+            transformed_stream = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
+                completion_response,
+                model=model,
+                tool_name_mapping=tool_name_mapping,
+                polyfill_result=polyfill_result,
+                is_async=True,
             )
             if transformed_stream is not None:
                 return transformed_stream
@@ -730,9 +686,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         else:
             proxy_litellm_metadata = _extract_proxy_litellm_metadata(kwargs)
             user_api_key_auth = (
-                proxy_litellm_metadata.get("user_api_key_auth")
-                if proxy_litellm_metadata is not None
-                else None
+                proxy_litellm_metadata.get("user_api_key_auth") if proxy_litellm_metadata is not None else None
             )
             polyfill_result = run_async_function(
                 _prepare_context_managed_request,
@@ -747,12 +701,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 user_api_key_auth=user_api_key_auth,
             )
 
-        effective_messages = (
-            polyfill_result.messages if polyfill_result is not None else messages
-        )
-        effective_system = (
-            polyfill_result.system if polyfill_result is not None else system
-        )
+        effective_messages = polyfill_result.messages if polyfill_result is not None else messages
+        effective_system = polyfill_result.system if polyfill_result is not None else system
 
         (
             completion_kwargs,
@@ -778,14 +728,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         completion_response = litellm.completion(**completion_kwargs)
 
         if stream:
-            transformed_stream = (
-                ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
-                    completion_response,
-                    model=model,
-                    tool_name_mapping=tool_name_mapping,
-                    polyfill_result=polyfill_result,
-                    is_async=False,
-                )
+            transformed_stream = ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
+                completion_response,
+                model=model,
+                tool_name_mapping=tool_name_mapping,
+                polyfill_result=polyfill_result,
+                is_async=False,
             )
             if transformed_stream is not None:
                 return transformed_stream

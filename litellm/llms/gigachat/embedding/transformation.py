@@ -192,9 +192,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         Set up headers with OAuth token for GigaChat.
         """
         # Get access token via OAuth
-        access_token = get_access_token(
-            credentials=api_key, litellm_params=litellm_params
-        )
+        access_token = get_access_token(credentials=api_key, litellm_params=litellm_params)
 
         default_headers = {
             "Content-Type": "application/json",

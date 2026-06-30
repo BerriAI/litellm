@@ -57,9 +57,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
         self.upload_url = f"https://api.{self.dd_site}/api/v2/cost/custom_costs"
 
-        self.async_client = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
         # Initialize lock and start periodic flush task
         self.flush_lock = asyncio.Lock()
@@ -73,9 +71,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object", None)
 
             if standard_logging_object is None:
                 return
@@ -88,9 +84,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                     await self.async_send_batch()
 
         except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Cost Management: Error in async_log_success_event: {str(e)}"
-            )
+            verbose_logger.exception(f"Datadog Cost Management: Error in async_log_success_event: {str(e)}")
 
     async def async_send_batch(self):
         if not self.log_queue:
@@ -103,28 +97,21 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             aggregated_entries = self._aggregate_costs(batch_to_send)
             if not aggregated_entries:
                 verbose_logger.debug(
-                    "Datadog Cost Management: batch produced no aggregable entries; "
-                    "dropping %d log(s) from queue.",
+                    "Datadog Cost Management: batch produced no aggregable entries; dropping %d log(s) from queue.",
                     len(batch_to_send),
                 )
                 return
             await self._upload_to_datadog(aggregated_entries)
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
-            verbose_logger.exception(
-                f"Datadog Cost Management: Error in async_send_batch: {str(e)}"
-            )
+            verbose_logger.exception(f"Datadog Cost Management: Error in async_send_batch: {str(e)}")
 
-    def _aggregate_costs(
-        self, logs: List[StandardLoggingPayload]
-    ) -> List[DatadogFOCUSCostEntry]:
+    def _aggregate_costs(self, logs: List[StandardLoggingPayload]) -> List[DatadogFOCUSCostEntry]:
         """
         Aggregates costs by Provider, Model, and Date.
         Returns a list of DatadogFOCUSCostEntry.
         """
-        aggregator: Dict[
-            Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry
-        ] = {}
+        aggregator: Dict[Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry] = {}
 
         for log in logs:
             try:
@@ -172,9 +159,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 aggregator[key]["BilledCost"] += cost
 
             except Exception as e:
-                verbose_logger.warning(
-                    f"Error processing log for cost aggregation: {e}"
-                )
+                verbose_logger.warning(f"Error processing log for cost aggregation: {e}")
                 continue
 
         return list(aggregator.values())
@@ -229,11 +214,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 nested = metadata.get(nested_key)
                 if isinstance(nested, dict):
                     for k, v in nested.items():
-                        if (
-                            k in allow
-                            and v is not None
-                            and not isinstance(v, (dict, list))
-                        ):
+                        if k in allow and v is not None and not isinstance(v, (dict, list)):
                             self._set_custom_tag(tags, k, str(v))
 
         return tags
@@ -268,9 +249,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         # The API endpoint expects a list of objects directly in the body (file content behavior)
         data_json = safe_dumps(payload)
 
-        response = await self.async_client.put(
-            self.upload_url, content=data_json, headers=headers
-        )
+        response = await self.async_client.put(self.upload_url, content=data_json, headers=headers)
 
         response.raise_for_status()
 

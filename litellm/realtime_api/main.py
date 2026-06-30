@@ -43,11 +43,7 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 def _build_litellm_metadata(kwargs: dict) -> dict:
     """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
     metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
-    guardrails = (
-        (kwargs.get("metadata") or {}).get("guardrails")
-        or kwargs.get("guardrails")
-        or []
-    )
+    guardrails = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:
         metadata["guardrails"] = guardrails
     return metadata
@@ -87,11 +83,7 @@ def _get_realtime_http_provider_config(
         # Fallback for providers without a dedicated HTTP config (treated as OpenAI-compatible).
         resolved_api_base = raw_api_base or litellm.api_base or "https://api.openai.com"
         resolved_api_key = (
-            raw_api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-            or ""
+            raw_api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY") or ""
         )
 
     return provider_config, resolved_api_base.rstrip("/"), resolved_api_key
@@ -110,11 +102,7 @@ async def acreate_realtime_client_secret(
         session=RealtimeSessionConfig(**session) if session else None,
         expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
-    model_name = (
-        (req.session.model if req.session is not None else None)
-        or req.model
-        or "gpt-4o-realtime-preview"
-    )
+    model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
     litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_params = GenericLiteLLMParams(**kwargs)
 
@@ -358,19 +346,9 @@ async def _arealtime(
             query_params=query_params,
         )
     elif _custom_llm_provider == "azure":
-        api_base = (
-            dynamic_api_base
-            or litellm_params.api_base
-            or litellm.api_base
-            or get_secret_str("AZURE_API_BASE")
-        )
+        api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
         # set API KEY
-        api_key = (
-            dynamic_api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("AZURE_API_KEY")
-        )
+        api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("AZURE_API_KEY")
 
         api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
 
@@ -379,10 +357,7 @@ async def _arealtime(
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
         )
-        if (
-            realtime_protocol is None
-            and (query_params or {}).get("intent") == "transcription"
-        ):
+        if realtime_protocol is None and (query_params or {}).get("intent") == "transcription":
             realtime_protocol = "GA"
         realtime_protocol = realtime_protocol or "beta"
         await azure_realtime.async_realtime(
@@ -401,19 +376,9 @@ async def _arealtime(
             litellm_metadata=_build_litellm_metadata(kwargs),
         )
     elif _custom_llm_provider == "openai":
-        api_base = (
-            dynamic_api_base
-            or litellm_params.api_base
-            or litellm.api_base
-            or "https://api.openai.com/"
-        )
+        api_base = dynamic_api_base or litellm_params.api_base or litellm.api_base or "https://api.openai.com/"
         # set API KEY
-        api_key = (
-            dynamic_api_key
-            or litellm.api_key
-            or litellm.openai_key
-            or get_secret_str("OPENAI_API_KEY")
-        )
+        api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
         await openai_realtime.async_realtime(
             model=model,
@@ -462,15 +427,10 @@ async def _arealtime(
         )
     elif _custom_llm_provider == "xai":
         api_base = (
-            dynamic_api_base
-            or litellm_params.api_base
-            or get_secret_str("XAI_API_BASE")
-            or "https://api.x.ai/v1"
+            dynamic_api_base or litellm_params.api_base or get_secret_str("XAI_API_BASE") or "https://api.x.ai/v1"
         )
         # set API KEY
-        api_key = XAIModelInfo.get_api_key(
-            dynamic_api_key, legacy_generic_before_env=True
-        )
+        api_key = XAIModelInfo.get_api_key(dynamic_api_key, legacy_generic_before_env=True)
 
         await xai_realtime.async_realtime(
             model=model,
@@ -503,9 +463,7 @@ async def _arealtime(
             or get_secret_str("VERTEXAI_LOCATION")
         )
 
-        resolved_location = vertex_llm_base.get_vertex_region(
-            vertex_region=vertex_location, model=model
-        )
+        resolved_location = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)
 
         (
             access_token,
@@ -580,14 +538,10 @@ async def _realtime_health_check(
             query_params={"model": model},
         )
     elif custom_llm_provider == "xai":
-        url = xai_realtime._construct_url(
-            api_base=api_base or "https://api.x.ai/v1", query_params={"model": model}
-        )
+        url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
     elif custom_llm_provider == "vertex_ai":
         vertex_location = litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
-        resolved_location = vertex_llm_base.get_vertex_region(
-            vertex_region=vertex_location, model=model
-        )
+        resolved_location = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)
         (
             access_token,
             resolved_project,
@@ -603,9 +557,7 @@ async def _realtime_health_check(
         )
         url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
         ssl_context = get_shared_realtime_ssl_context()
-        headers = vertex_realtime_config.validate_environment(
-            headers={}, model=model, api_key=None
-        )
+        headers = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
         async with websockets.connect(  # type: ignore
             url,
             additional_headers=headers,

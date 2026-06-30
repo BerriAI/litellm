@@ -87,9 +87,7 @@ class AiPolicySuggester:
 
             valid_ids = {t["id"] for t in templates}
             result["selected_templates"] = [
-                s
-                for s in result.get("selected_templates", [])
-                if s.get("template_id") in valid_ids
+                s for s in result.get("selected_templates", []) if s.get("template_id") in valid_ids
             ]
 
             return result

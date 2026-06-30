@@ -48,7 +48,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --frozen
+          uv sync --frozen --group proxy-dev
+
+      # basedpyright resolves Prisma's generated client (litellm/proxy/schema.prisma)
+      # only after `prisma generate` writes prisma/client.py et al. Without this the
+      # DB wrappers typed against the generated client would degrade to Unknown.
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Check ruff format
         env:
@@ -59,7 +68,7 @@ jobs:
             echo "No changed litellm Python files to check with ruff format."
             exit 0
           fi
-          xargs uv run --no-sync ruff format --check --line-length 88 --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
+          xargs uv run --no-sync ruff format --check --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
 
       - name: Debug - Check file state
         run: |

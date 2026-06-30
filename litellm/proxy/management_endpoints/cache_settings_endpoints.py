@@ -68,9 +68,7 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
         return
     exc = task.exception()
     if exc is not None:
-        verbose_proxy_logger.warning(
-            "Failed to write cache-settings audit log: %s", exc
-        )
+        verbose_proxy_logger.warning("Failed to write cache-settings audit log: %s", exc)
 
 
 async def _emit_cache_settings_audit_log(
@@ -102,19 +100,13 @@ async def _emit_cache_settings_audit_log(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
                 updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by
-                or user_api_key_dict.user_id
-                or litellm_proxy_admin_name,
+                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
                 changed_by_api_key=user_api_key_dict.api_key,
                 table_name=LitellmTableNames.CACHE_CONFIG_TABLE_NAME,
                 object_id="cache_config",
                 action=action,
-                updated_values=json.dumps(
-                    {"settings": _redact_settings(after_settings)}, default=str
-                ),
-                before_value=json.dumps(
-                    {"settings": _redact_settings(before_settings)}, default=str
-                ),
+                updated_values=json.dumps({"settings": _redact_settings(after_settings)}, default=str),
+                before_value=json.dumps({"settings": _redact_settings(before_settings)}, default=str),
             )
         )
     )
@@ -163,9 +155,7 @@ class CacheSettingsManager:
         try:
             cache_config = await call_with_db_reconnect_retry(
                 prisma_client,
-                lambda: CacheConfigRepository(prisma_client).table.find_unique(
-                    where={"id": "cache_config"}
-                ),
+                lambda: CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"}),
                 reason="init_cache_settings_in_db_lookup_failure",
             )
             if cache_config is not None and cache_config.cache_settings:
@@ -177,26 +167,17 @@ class CacheSettingsManager:
                     cache_settings_dict = cache_settings_json
 
                 # Decrypt cache settings
-                decrypted_settings = proxy_config._decrypt_db_variables(
-                    variables_dict=cache_settings_dict
-                )
+                decrypted_settings = proxy_config._decrypt_db_variables(variables_dict=cache_settings_dict)
 
                 # Remove redis_type if present (UI-only field, not a Cache parameter)
                 # We derive it for UI in get_cache_settings endpoint
-                cache_params = {
-                    k: v for k, v in decrypted_settings.items() if k != "redis_type"
-                }
+                cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
 
                 # Check if cache params have changed
-                if (
-                    CacheSettingsManager._last_cache_params is not None
-                    and CacheSettingsManager._cache_params_equal(
-                        CacheSettingsManager._last_cache_params, cache_params
-                    )
+                if CacheSettingsManager._last_cache_params is not None and CacheSettingsManager._cache_params_equal(
+                    CacheSettingsManager._last_cache_params, cache_params
                 ):
-                    verbose_proxy_logger.debug(
-                        "Cache settings unchanged, skipping reinitialization"
-                    )
+                    verbose_proxy_logger.debug("Cache settings unchanged, skipping reinitialization")
                     return
 
                 # Initialize cache only if params changed or cache not initialized
@@ -226,29 +207,19 @@ class CacheSettingsManager:
 
 
 class CacheSettingsResponse(BaseModel):
-    fields: List[CacheSettingsField] = Field(
-        description="List of all configurable cache settings with metadata"
-    )
-    current_values: Dict[str, Any] = Field(
-        description="Current values of cache settings"
-    )
-    redis_type_descriptions: Dict[str, str] = Field(
-        description="Descriptions for each Redis type option"
-    )
+    fields: List[CacheSettingsField] = Field(description="List of all configurable cache settings with metadata")
+    current_values: Dict[str, Any] = Field(description="Current values of cache settings")
+    redis_type_descriptions: Dict[str, str] = Field(description="Descriptions for each Redis type option")
 
 
 class CacheTestRequest(BaseModel):
-    cache_settings: Dict[str, Any] = Field(
-        description="Cache settings to test connection with"
-    )
+    cache_settings: Dict[str, Any] = Field(description="Cache settings to test connection with")
 
 
 class CacheTestResponse(BaseModel):
     status: str = Field(description="Connection status: 'success' or 'failed'")
     message: str = Field(description="Connection result message")
-    error: Optional[str] = Field(
-        default=None, description="Error message if connection failed"
-    )
+    error: Optional[str] = Field(default=None, description="Error message if connection failed")
 
 
 class CacheSettingsUpdateRequest(BaseModel):
@@ -280,9 +251,7 @@ async def get_cache_settings(
         # Try to get cache settings from database
         current_values = {}
         if prisma_client is not None:
-            cache_config = await CacheConfigRepository(prisma_client).table.find_unique(
-                where={"id": "cache_config"}
-            )
+            cache_config = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
             if cache_config is not None and cache_config.cache_settings:
                 # Decrypt cache settings
                 cache_settings_json = cache_config.cache_settings
@@ -292,9 +261,7 @@ async def get_cache_settings(
                     cache_settings_dict = cache_settings_json
 
                 # Decrypt environment variables
-                decrypted_settings = proxy_config._decrypt_db_variables(
-                    variables_dict=cache_settings_dict
-                )
+                decrypted_settings = proxy_config._decrypt_db_variables(variables_dict=cache_settings_dict)
 
                 # Derive redis_type for UI based on settings
                 # UI uses redis_type to show/hide fields, backend only stores 'type'
@@ -308,9 +275,7 @@ async def get_cache_settings(
 
                 # Mask credential fields so the GET response never carries
                 # plaintext Redis / Sentinel passwords off the server.
-                current_values = mask_sensitive_keys(
-                    decrypted_settings, _CACHE_SENSITIVE_FIELDS
-                )
+                current_values = mask_sensitive_keys(decrypted_settings, _CACHE_SENSITIVE_FIELDS)
 
         # Update field values with current values
         for field in cache_fields:
@@ -324,9 +289,7 @@ async def get_cache_settings(
         )
     except Exception as e:
         verbose_proxy_logger.error(f"Error fetching cache settings: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Error fetching cache settings: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error fetching cache settings: {str(e)}")
 
 
 @router.post(
@@ -349,9 +312,7 @@ async def test_cache_connection(
 
     try:
         cache_settings = request.cache_settings.copy()
-        verbose_proxy_logger.debug(
-            "Testing cache connection with settings: %s", cache_settings
-        )
+        verbose_proxy_logger.debug("Testing cache connection with settings: %s", cache_settings)
 
         # Only support Redis for now
         if cache_settings.get("type") != "redis":
@@ -413,9 +374,7 @@ async def update_cache_settings(
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     try:
@@ -423,9 +382,7 @@ async def update_cache_settings(
 
         # Snapshot the prior settings (key set only — values get redacted in
         # the audit row) so the audit-log entry shows which fields changed.
-        existing_row = await CacheConfigRepository(prisma_client).table.find_unique(
-            where={"id": "cache_config"}
-        )
+        existing_row = await CacheConfigRepository(prisma_client).table.find_unique(where={"id": "cache_config"})
         before_settings: Optional[Dict[str, Any]] = None
         if existing_row is not None and existing_row.cache_settings:
             try:
@@ -435,9 +392,7 @@ async def update_cache_settings(
         action: AUDIT_ACTIONS = "updated" if existing_row is not None else "created"
 
         # Encrypt sensitive fields (keep redis_type for storage)
-        encrypted_settings = proxy_config._encrypt_env_variables(
-            environment_variables=cache_settings
-        )
+        encrypted_settings = proxy_config._encrypt_env_variables(environment_variables=cache_settings)
 
         # Save to database
         await CacheConfigRepository(prisma_client).table.upsert(
@@ -455,14 +410,10 @@ async def update_cache_settings(
 
         # Reinitialize cache with new settings
         # Decrypt for initialization
-        decrypted_settings = proxy_config._decrypt_db_variables(
-            variables_dict=encrypted_settings
-        )
+        decrypted_settings = proxy_config._decrypt_db_variables(variables_dict=encrypted_settings)
 
         # Remove redis_type if present (UI-only field, not a Cache parameter)
-        cache_params = {
-            k: v for k, v in decrypted_settings.items() if k != "redis_type"
-        }
+        cache_params = {k: v for k, v in decrypted_settings.items() if k != "redis_type"}
 
         # Initialize cache (frontend sends type="redis", not redis_type)
         proxy_config._init_cache(cache_params=cache_params)
@@ -492,6 +443,4 @@ async def update_cache_settings(
         }
     except Exception as e:
         verbose_proxy_logger.error(f"Error updating cache settings: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Error updating cache settings: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Error updating cache settings: {str(e)}")

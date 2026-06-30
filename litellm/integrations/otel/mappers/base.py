@@ -14,9 +14,7 @@ from litellm.integrations.otel.model.payloads import (
 AttrScalar = str | bool | int | float
 # Mirrors ``opentelemetry.util.types.AttributeValue`` (homogeneous sequences)
 # without importing the SDK, so mappers stay OTel-free.
-AttrValue = (
-    AttrScalar | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]
-)
+AttrValue = AttrScalar | Sequence[str] | Sequence[bool] | Sequence[int] | Sequence[float]
 AttributeMap = dict[str, AttrValue]
 
 # The closed set of span-data types the engine routes through the mapper chain.

@@ -58,9 +58,7 @@ class BedrockImageEdit(BaseAWSLLM):
     def get_config_class(cls, model: str | None):
         if BedrockStabilityImageEditConfig._is_stability_edit_model(model):
             return BedrockStabilityImageEditConfig
-        if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(
-            model
-        ):
+        if BedrockAmazonNovaCanvasImageEditConfig._is_nova_canvas_image_edit_model(model):
             return BedrockAmazonNovaCanvasImageEditConfig
         raise ValueError(
             f"Unsupported Bedrock image-edit model: {model!r}. "
@@ -102,11 +100,7 @@ class BedrockImageEdit(BaseAWSLLM):
                 logging_obj=logging_obj,
                 prompt=prompt,
                 model_response=model_response,
-                client=(
-                    client
-                    if client is not None and isinstance(client, AsyncHTTPHandler)
-                    else None
-                ),
+                client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
             )
 
         if client is None or not isinstance(client, HTTPHandler):
@@ -204,9 +198,7 @@ class BedrockImageEdit(BaseAWSLLM):
         Returns:
             BedrockImageEditPreparedRequest: The prepared request object
         """
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params, model
-        )
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params, model)
 
         # Use the existing ARN-aware provider detection method
         bedrock_provider = self.get_bedrock_invoke_provider(model)

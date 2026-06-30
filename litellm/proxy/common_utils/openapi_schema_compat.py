@@ -49,9 +49,7 @@ def get_openapi_schema_with_compat(
             obj_module = getattr(obj, "__module__", "")
 
             if (obj_module == "openai" and "Timeout" in obj_str) or (
-                hasattr(obj, "__name__")
-                and obj.__name__ == "Timeout"
-                and obj_module == "openai"
+                hasattr(obj, "__name__") and obj.__name__ == "Timeout" and obj_module == "openai"
             ):
                 # Return a simple string schema for Timeout types
                 return core_schema.str_schema()
@@ -76,17 +74,13 @@ def get_openapi_schema_with_compat(
             )
         finally:
             # Restore original method
-            setattr(
-                GenerateSchema, "_unknown_type_schema", original_unknown_type_schema
-            )
+            setattr(GenerateSchema, "_unknown_type_schema", original_unknown_type_schema)
 
         return openapi_schema
 
     except (ImportError, AttributeError) as e:
         # If patching fails, try normal generation with error handling
-        verbose_proxy_logger.debug(
-            f"Could not patch Pydantic schema generation: {e}. Trying normal generation."
-        )
+        verbose_proxy_logger.debug(f"Could not patch Pydantic schema generation: {e}. Trying normal generation.")
         try:
             return get_openapi_func(
                 title=title,
@@ -98,9 +92,8 @@ def get_openapi_schema_with_compat(
             # Check if it's a PydanticSchemaGenerationError by checking the error type name
             # This avoids import issues if PydanticSchemaGenerationError is not available
             error_type_name = type(pydantic_error).__name__
-            if (
-                error_type_name == "PydanticSchemaGenerationError"
-                or "PydanticSchemaGenerationError" in str(type(pydantic_error))
+            if error_type_name == "PydanticSchemaGenerationError" or "PydanticSchemaGenerationError" in str(
+                type(pydantic_error)
             ):
                 # If we still get the error, log it and return minimal schema
                 verbose_proxy_logger.warning(

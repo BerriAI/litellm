@@ -266,6 +266,73 @@ def test_validate_environment_always_refreshes_token_ignoring_stale_bearer():
         assert api_base == "https://mock-vertex-url"
 
 
+def test_validate_environment_appends_stream_raw_predict_with_custom_api_base():
+    """Regression: a custom api_base on /v1/messages must still get the endpoint
+    suffix appended. The old `if api_base is None` guard skipped
+    get_complete_vertex_url entirely, leaving the api_base without
+    `:streamRawPredict`."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-central1",
+    }
+
+    with (
+        patch.object(
+            config,
+            "get_complete_vertex_url",
+            wraps=config.get_complete_vertex_url,
+        ) as spy_get_url,
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+    ):
+        _, api_base = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={"stream": True},
+            litellm_params=litellm_params,
+            api_base="https://my-proxy.example.com",
+        )
+
+    spy_get_url.assert_called_once()
+    assert api_base is not None
+    assert ":streamRawPredict" in api_base
+
+
+def test_validate_environment_appends_raw_predict_with_custom_api_base():
+    """Regression: non-streaming custom api_base must end with `:rawPredict`."""
+    config = VertexAIPartnerModelsAnthropicMessagesConfig()
+    litellm_params = {
+        "vertex_ai_project": "test-project",
+        "vertex_ai_location": "us-central1",
+    }
+
+    with (
+        patch.object(
+            config,
+            "get_complete_vertex_url",
+            wraps=config.get_complete_vertex_url,
+        ) as spy_get_url,
+        patch.object(
+            config, "_ensure_access_token", return_value=("token", "test-project")
+        ),
+    ):
+        _, api_base = config.validate_anthropic_messages_environment(
+            headers={},
+            model="claude-sonnet-4",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+            api_base="https://my-proxy.example.com",
+        )
+
+    spy_get_url.assert_called_once()
+    assert api_base is not None
+    assert api_base.endswith(":rawPredict")
+
+
 def test_transform_anthropic_messages_request_removes_scope_from_cache_control():
     """Ensure scope field is removed from cache_control for Vertex AI (not supported)."""
     config = VertexAIPartnerModelsAnthropicMessagesConfig()

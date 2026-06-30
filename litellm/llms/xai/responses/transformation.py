@@ -51,9 +51,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return supported_params
 
-    def _transform_web_search_tool(
-        self, tool: Dict[str, Any]
-    ) -> Union[XAIWebSearchTool, Dict[str, Any]]:
+    def _transform_web_search_tool(self, tool: Dict[str, Any]) -> Union[XAIWebSearchTool, Dict[str, Any]]:
         """
         Transform web_search tool to XAI format.
 
@@ -92,9 +90,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return xai_tool
 
-    def _transform_x_search_tool(
-        self, tool: Dict[str, Any]
-    ) -> Union[XAIXSearchTool, Dict[str, Any]]:
+    def _transform_x_search_tool(self, tool: Dict[str, Any]) -> Union[XAIXSearchTool, Dict[str, Any]]:
         """
         Transform x_search tool to XAI format.
 
@@ -154,15 +150,11 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Drop instructions parameter (not supported by XAI)
         if "instructions" in params:
-            verbose_logger.debug(
-                "XAI Responses API does not support 'instructions' parameter. Dropping it."
-            )
+            verbose_logger.debug("XAI Responses API does not support 'instructions' parameter. Dropping it.")
             params.pop("instructions")
 
         if "metadata" in params:
-            verbose_logger.debug(
-                "XAI Responses API does not support 'metadata' parameter. Dropping it."
-            )
+            verbose_logger.debug("XAI Responses API does not support 'metadata' parameter. Dropping it.")
             params.pop("metadata")
 
         # Transform tools
@@ -179,23 +171,17 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
                     if tool_type == "code_interpreter":
                         # XAI supports code_interpreter but doesn't use the container field
-                        verbose_logger.debug(
-                            "XAI: Transforming code_interpreter tool, removing container field"
-                        )
+                        verbose_logger.debug("XAI: Transforming code_interpreter tool, removing container field")
                         transformed_tools.append({"type": "code_interpreter"})
 
                     elif tool_type == "web_search":
                         # Transform web_search to XAI format
-                        verbose_logger.debug(
-                            "XAI: Transforming web_search tool to XAI format"
-                        )
+                        verbose_logger.debug("XAI: Transforming web_search tool to XAI format")
                         transformed_tools.append(self._transform_web_search_tool(tool))
 
                     elif tool_type == "x_search":
                         # Transform x_search to XAI format
-                        verbose_logger.debug(
-                            "XAI: Transforming x_search tool to XAI format"
-                        )
+                        verbose_logger.debug("XAI: Transforming x_search tool to XAI format")
                         transformed_tools.append(self._transform_x_search_tool(tool))
 
                     else:
@@ -208,18 +194,14 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return params
 
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate environment and set up headers for XAI API.
 
         Uses the shared xAI key resolver with Responses API legacy precedence.
         """
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = XAIModelInfo.get_api_key(
-            litellm_params.api_key, legacy_generic_before_env=True
-        )
+        api_key = XAIModelInfo.get_api_key(litellm_params.api_key, legacy_generic_before_env=True)
 
         if not api_key:
             from litellm.llms.xai.oauth import (
@@ -264,18 +246,11 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
-        api_key = XAIModelInfo.get_api_key(
-            litellm_params.get("api_key"), legacy_generic_before_env=True
-        )
+        api_key = XAIModelInfo.get_api_key(litellm_params.get("api_key"), legacy_generic_before_env=True)
         if should_use_xai_oauth(litellm_params) and not api_key:
             api_base = XAIOAuthAuthenticator().get_api_base()
         else:
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("XAI_API_BASE")
-                or XAI_API_BASE
-            )
+            api_base = api_base or litellm.api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")

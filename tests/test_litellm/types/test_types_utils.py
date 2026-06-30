@@ -371,3 +371,48 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When neither is present, reasoning_content is not set (OpenAI spec)
     delta4 = Delta(content="hello")
     assert not hasattr(delta4, "reasoning_content")
+
+
+def test_message_accepts_thinking_block_with_null_signature():
+    """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
+    without an Anthropic-style signature. Message must accept signature=None so the
+    success-logging handler can build the StandardLoggingObject instead of silently
+    dropping the log record. Regression for LIT-4007.
+    """
+    from litellm.types.utils import Choices, Message
+
+    thinking_blocks = [
+        {"type": "thinking", "thinking": "step by step reasoning", "signature": None}
+    ]
+
+    message = Message(
+        content="the answer is 4", role="assistant", thinking_blocks=thinking_blocks
+    )
+    assert message.thinking_blocks is not None
+    assert message.thinking_blocks[0]["signature"] is None
+    assert message.thinking_blocks[0]["thinking"] == "step by step reasoning"
+
+    validated = Message.model_validate(
+        {
+            "role": "assistant",
+            "content": "the answer is 4",
+            "thinking_blocks": thinking_blocks,
+        }
+    )
+    dumped = validated.model_dump()
+    assert dumped["thinking_blocks"][0]["signature"] is None
+    assert dumped["thinking_blocks"][0]["thinking"] == "step by step reasoning"
+
+    choice = Choices.model_validate(
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "the answer is 4",
+                "thinking_blocks": thinking_blocks,
+            },
+        }
+    )
+    assert choice.message.thinking_blocks is not None
+    assert choice.message.thinking_blocks[0]["signature"] is None

@@ -43,14 +43,8 @@ class AgentRequestHandler:
         """
         try:
             allowed_agents: List[str] = []
-            allowed_agents_for_key = (
-                await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
-            )
-            allowed_agents_for_team = (
-                await AgentRequestHandler._get_allowed_agents_for_team(
-                    user_api_key_auth
-                )
-            )
+            allowed_agents_for_key = await AgentRequestHandler._get_allowed_agents_for_key(user_api_key_auth)
+            allowed_agents_for_team = await AgentRequestHandler._get_allowed_agents_for_team(user_api_key_auth)
 
             # If team has agent restrictions, handle inheritance and intersection logic
             if len(allowed_agents_for_team) > 0:
@@ -161,18 +155,14 @@ class AgentRequestHandler:
             all_agents: List[str] = []
 
             # 1. Get agents from object_permission (native permissions)
-            key_object_permission = AgentRequestHandler._get_key_object_permission(
-                user_api_key_auth
-            )
+            key_object_permission = AgentRequestHandler._get_key_object_permission(user_api_key_auth)
             if key_object_permission is not None:
                 # Get direct agents
                 direct_agents = key_object_permission.agents or []
 
                 # Get agents from access groups
-                access_group_agents = (
-                    await AgentRequestHandler._get_agents_from_access_groups(
-                        key_object_permission.agent_access_groups or []
-                    )
+                access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
+                    key_object_permission.agent_access_groups or []
                 )
 
                 all_agents = direct_agents + access_group_agents
@@ -244,10 +234,8 @@ class AgentRequestHandler:
                 direct_agents = object_permissions.agents or []
 
                 # Get agents from access groups
-                access_group_agents = (
-                    await AgentRequestHandler._get_agents_from_access_groups(
-                        object_permissions.agent_access_groups or []
-                    )
+                access_group_agents = await AgentRequestHandler._get_agents_from_access_groups(
+                    object_permissions.agent_access_groups or []
                 )
 
                 all_agents = direct_agents + access_group_agents
@@ -269,15 +257,11 @@ class AgentRequestHandler:
             # litellm-dashboard is the default UI team and will never have agents;
             # skip noisy warnings for it.
             if user_api_key_auth.team_id != UI_TEAM_ID:
-                verbose_logger.warning(
-                    f"Failed to get allowed agents for team: {str(e)}"
-                )
+                verbose_logger.warning(f"Failed to get allowed agents for team: {str(e)}")
             return []
 
     @staticmethod
-    def _get_config_agent_ids_for_access_groups(
-        config_agents: List, access_groups: List[str]
-    ) -> Set[str]:
+    def _get_config_agent_ids_for_access_groups(config_agents: List, access_groups: List[str]) -> Set[str]:
         """
         Helper to get agent_ids from config-loaded agents that match any of the given access groups.
         """
@@ -290,9 +274,7 @@ class AgentRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_db_agent_ids_for_access_groups(
-        prisma_client, access_groups: List[str]
-    ) -> Set[str]:
+    async def _get_db_agent_ids_for_access_groups(prisma_client, access_groups: List[str]) -> Set[str]:
         """
         Helper to get agent_ids from DB agents that match any of the given access groups.
         """
@@ -325,11 +307,7 @@ class AgentRequestHandler:
             )
 
             # Use the helper for DB agents
-            db_agent_ids = (
-                await AgentRequestHandler._get_db_agent_ids_for_access_groups(
-                    prisma_client, access_groups
-                )
-            )
+            db_agent_ids = await AgentRequestHandler._get_db_agent_ids_for_access_groups(prisma_client, access_groups)
             agent_ids.update(db_agent_ids)
 
             return list(agent_ids)
@@ -345,16 +323,8 @@ class AgentRequestHandler:
         Get list of agent access groups for the given user/key based on permissions.
         """
         access_groups: List[str] = []
-        access_groups_for_key = (
-            await AgentRequestHandler._get_agent_access_groups_for_key(
-                user_api_key_auth
-            )
-        )
-        access_groups_for_team = (
-            await AgentRequestHandler._get_agent_access_groups_for_team(
-                user_api_key_auth
-            )
-        )
+        access_groups_for_key = await AgentRequestHandler._get_agent_access_groups_for_key(user_api_key_auth)
+        access_groups_for_team = await AgentRequestHandler._get_agent_access_groups_for_team(user_api_key_auth)
 
         # If team has access groups, then key must have a subset of the team's access groups
         if len(access_groups_for_team) > 0:
@@ -401,9 +371,7 @@ class AgentRequestHandler:
 
             return key_object_permission.agent_access_groups or []
         except Exception as e:
-            verbose_logger.warning(
-                f"Failed to get agent access groups for key: {str(e)}"
-            )
+            verbose_logger.warning(f"Failed to get agent access groups for key: {str(e)}")
             return []
 
     @staticmethod
@@ -446,7 +414,5 @@ class AgentRequestHandler:
 
             return object_permissions.agent_access_groups or []
         except Exception as e:
-            verbose_logger.warning(
-                f"Failed to get agent access groups for team: {str(e)}"
-            )
+            verbose_logger.warning(f"Failed to get agent access groups for team: {str(e)}")
             return []

@@ -222,9 +222,7 @@ class BaseSearchConfig:
         Returns:
             Dict with request data
         """
-        raise NotImplementedError(
-            "transform_search_request must be implemented by provider"
-        )
+        raise NotImplementedError("transform_search_request must be implemented by provider")
 
     def transform_search_response(
         self,
@@ -236,9 +234,7 @@ class BaseSearchConfig:
         Transform provider-specific Search response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError(
-            "transform_search_response must be implemented by provider"
-        )
+        raise NotImplementedError("transform_search_response must be implemented by provider")
 
     def get_error_class(
         self,

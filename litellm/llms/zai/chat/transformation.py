@@ -48,9 +48,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         import litellm
 
         try:
-            if litellm.supports_reasoning(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ):
+            if litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider):
                 base_params.append("thinking")
         except Exception:
             pass

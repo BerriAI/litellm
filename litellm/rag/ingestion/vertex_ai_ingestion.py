@@ -95,10 +95,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             Tuple of (rag_corpus_id, file_id)
         """
         if not self.project_id:
-            raise ValueError(
-                "vertex_project is required for Vertex AI RAG ingestion. "
-                "Set it in vector_store config."
-            )
+            raise ValueError("vertex_project is required for Vertex AI RAG ingestion. Set it in vector_store config.")
 
         # Get or create RAG corpus
         rag_corpus_id = self.vector_store_config.get("vector_store_id")
@@ -148,10 +145,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
 
         # Construct URL using vertex base URL helper
         base_url = get_vertex_base_url(self.location)
-        url = (
-            f"{base_url}/v1beta1/"
-            f"projects/{self.project_id}/locations/{self.location}/ragCorpora"
-        )
+        url = f"{base_url}/v1beta1/projects/{self.project_id}/locations/{self.location}/ragCorpora"
 
         # Build request body with camelCase keys (Vertex AI API format)
         request_body: Dict[str, Any] = {
@@ -197,9 +191,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
             raise Exception(error_msg)
 
         response_data = response.json()
-        verbose_logger.debug(
-            f"Create corpus response: {json.dumps(response_data, indent=2)}"
-        )
+        verbose_logger.debug(f"Create corpus response: {json.dumps(response_data, indent=2)}")
 
         # The response is a long-running operation
         # Check if it's already done or if we need to poll
@@ -278,13 +270,9 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 if corpus_name:
                     return corpus_name
                 else:
-                    raise Exception(
-                        f"No corpus name in operation response: {operation_data}"
-                    )
+                    raise Exception(f"No corpus name in operation response: {operation_data}")
 
-            verbose_logger.debug(
-                f"Operation not done yet, attempt {attempt + 1}/{max_retries}"
-            )
+            verbose_logger.debug(f"Operation not done yet, attempt {attempt + 1}/{max_retries}")
             await asyncio.sleep(retry_delay)
 
         raise Exception(f"Operation timed out after {max_retries} attempts")
@@ -345,9 +333,9 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                     "rag_file_chunking_config": {"fixed_length_chunking": {}}
                 }
 
-                chunking_config = metadata["upload_rag_file_config"][
-                    "rag_file_transformation_config"
-                ]["rag_file_chunking_config"]["fixed_length_chunking"]
+                chunking_config = metadata["upload_rag_file_config"]["rag_file_transformation_config"][
+                    "rag_file_chunking_config"
+                ]["fixed_length_chunking"]
 
                 if chunk_size:
                     chunking_config["chunk_size"] = chunk_size
@@ -426,9 +414,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
         url = f"{base_url}/v1beta1/{rag_corpus_id}/ragFiles:import"
 
         # Build request body with camelCase keys (Vertex AI API format)
-        request_body: Dict[str, Any] = {
-            "importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}
-        }
+        request_body: Dict[str, Any] = {"importRagFilesConfig": {"gcsSource": {"uris": gcs_uris}}}
 
         # Add chunking configuration if provided
         chunking_strategy = self.chunking_strategy
@@ -443,13 +429,9 @@ class VertexAIRAGIngestion(BaseRAGIngestion, VertexBase):
                 }
 
         # Add max embedding requests per minute if specified
-        max_embedding_qpm = self.vector_store_config.get(
-            "max_embedding_requests_per_min"
-        )
+        max_embedding_qpm = self.vector_store_config.get("max_embedding_requests_per_min")
         if max_embedding_qpm:
-            request_body["importRagFilesConfig"]["maxEmbeddingRequestsPerMin"] = (
-                max_embedding_qpm
-            )
+            request_body["importRagFilesConfig"]["maxEmbeddingRequestsPerMin"] = max_embedding_qpm
 
         verbose_logger.debug(f"Importing files from GCS: {url}")
         verbose_logger.debug(f"Request body: {json.dumps(request_body, indent=2)}")

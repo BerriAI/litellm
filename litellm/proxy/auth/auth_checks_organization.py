@@ -65,9 +65,7 @@ def organization_role_based_access_check(
                 code=status.HTTP_401_UNAUTHORIZED,
             )
 
-        user_role: Optional[LitellmUserRoles] = _user_organization_role_mapping.get(
-            passed_organization_id
-        )
+        user_role: Optional[LitellmUserRoles] = _user_organization_role_mapping.get(passed_organization_id)
         if user_role is None:
             raise ProxyException(
                 message=f"You do not have a role within the selected organization. Passed organization_id: {passed_organization_id}. Please contact the organization admin to request access.",
@@ -89,10 +87,7 @@ def organization_role_based_access_check(
             _user_organizations,
             _user_organization_role_mapping,
         ) = get_user_organization_info(user_object)
-        if (
-            user_object.organization_memberships is not None
-            and len(user_object.organization_memberships) > 0
-        ):
+        if user_object.organization_memberships is not None and len(user_object.organization_memberships) > 0:
             if passed_organization_id is None:
                 raise ProxyException(
                     message=f"Passed organization_id is None, please specify the organization_id in your request. You are part of multiple organizations: {_user_organizations}",
@@ -101,9 +96,7 @@ def organization_role_based_access_check(
                     code=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            _user_role_in_passed_org = _user_organization_role_mapping.get(
-                passed_organization_id
-            )
+            _user_role_in_passed_org = _user_organization_role_mapping.get(passed_organization_id)
             if _user_role_in_passed_org != LitellmUserRoles.ORG_ADMIN.value:
                 raise ProxyException(
                     message=f"You do not have the required role to call {route}. Your role is {_user_role_in_passed_org} in Organization {passed_organization_id}",
@@ -134,9 +127,7 @@ def get_user_organization_info(
         for _membership in user_object.organization_memberships:
             if _membership.organization_id is not None:
                 _user_organizations.append(_membership.organization_id)
-                _user_organization_role_mapping[_membership.organization_id] = (
-                    _membership.user_role
-                )  # type: ignore
+                _user_organization_role_mapping[_membership.organization_id] = _membership.user_role  # type: ignore
 
     return _user_organizations, _user_organization_role_mapping
 
@@ -174,8 +165,7 @@ def _user_is_org_admin(
     admin_org_ids = {
         _membership.organization_id
         for _membership in user_object.organization_memberships
-        if _membership.user_role == LitellmUserRoles.ORG_ADMIN.value
-        and _membership.organization_id is not None
+        if _membership.user_role == LitellmUserRoles.ORG_ADMIN.value and _membership.organization_id is not None
     }
 
     # User must be admin of ALL requested orgs, not just any one

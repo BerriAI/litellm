@@ -23,9 +23,7 @@ class V0ChatConfig(OpenAILikeChatConfig):
     ) -> Tuple[Optional[str], Optional[str]]:
         # v0 is openai compatible, we just need to set the api_base
         api_base = (
-            api_base
-            or get_secret_str("V0_API_BASE")
-            or "https://api.v0.dev/v1"  # Default v0 API base URL
+            api_base or get_secret_str("V0_API_BASE") or "https://api.v0.dev/v1"  # Default v0 API base URL
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("V0_API_KEY")
         return api_base, dynamic_api_key

@@ -27,9 +27,7 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
     def __init__(self, streaming_response: Any, sync_stream: bool) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
 
-    def chunk_parser(
-        self, chunk: dict
-    ) -> Union[GenericStreamingChunk, ModelResponseStream]:
+    def chunk_parser(self, chunk: dict) -> Union[GenericStreamingChunk, ModelResponseStream]:
         """
         Parse a Vertex Agent Engine response chunk into ModelResponseStream.
 

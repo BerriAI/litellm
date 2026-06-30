@@ -174,10 +174,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
 
         # Pass through all other SearXNG-specific parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for GET request URL building

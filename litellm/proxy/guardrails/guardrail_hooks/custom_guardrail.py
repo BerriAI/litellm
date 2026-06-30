@@ -55,9 +55,7 @@ class myCustomGuardrail(CustomGuardrail):
                         _content = _content.replace("litellm", "********")
                         message["content"] = _content
 
-        verbose_proxy_logger.debug(
-            "async_pre_call_hook: Message after masking %s", _messages
-        )
+        verbose_proxy_logger.debug("async_pre_call_hook: Message after masking %s", _messages)
 
         return data
 

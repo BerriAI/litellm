@@ -59,11 +59,7 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
         if "ultra" in model_lower:
             return FalAIFluxProV11UltraConfig()
         return FalAIFluxProV11Config()
-    elif (
-        "flux/schnell" in model_lower
-        or "flux-schnell" in model_lower
-        or "schnell" in model_lower
-    ):
+    elif "flux/schnell" in model_lower or "flux-schnell" in model_lower or "schnell" in model_lower:
         return FalAIFluxSchnellConfig()
     elif "bytedance/seedream" in model_lower:
         return FalAIBytedanceSeedreamV3Config()

@@ -139,10 +139,7 @@ class A2ALocalhostURLError(A2AConnectionError):
         self.base_url = base_url
         self.original_error = original_error
 
-        message = (
-            f"Agent card contains localhost/internal URL '{localhost_url}'. "
-            f"Retrying with base URL '{base_url}'."
-        )
+        message = f"Agent card contains localhost/internal URL '{localhost_url}'. Retrying with base URL '{base_url}'."
         super().__init__(
             message=message,
             url=localhost_url,

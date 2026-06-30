@@ -38,14 +38,10 @@ _mocks_initialized = False
 
 # Default mock latency in seconds (simulates network round-trip)
 # Typical GCS API calls take 100-300ms for uploads, 50-150ms for GET/DELETE
-_MOCK_LATENCY_SECONDS = (
-    float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
-)
+_MOCK_LATENCY_SECONDS = float(__import__("os").getenv("GCS_MOCK_LATENCY_MS", "150")) / 1000.0
 
 
-async def _mock_async_handler_get(
-    self, url, params=None, headers=None, follow_redirects=None
-):
+async def _mock_async_handler_get(self, url, params=None, headers=None, follow_redirects=None):
     """Monkey-patched AsyncHTTPHandler.get that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
@@ -154,10 +150,7 @@ def create_mock_gcs_client():
 
     This function is idempotent - it only initializes mocks once, even if called multiple times.
     """
-    global \
-        _original_async_handler_get, \
-        _original_async_handler_delete, \
-        _mocks_initialized
+    global _original_async_handler_get, _original_async_handler_delete, _mocks_initialized
 
     # Use factory for POST handler
     _create_mock_gcs_post()
@@ -181,9 +174,7 @@ def create_mock_gcs_client():
         AsyncHTTPHandler.delete = _mock_async_handler_delete  # type: ignore
         verbose_logger.debug("[GCS MOCK] Patched AsyncHTTPHandler.delete")
 
-    verbose_logger.debug(
-        f"[GCS MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms"
-    )
+    verbose_logger.debug(f"[GCS MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms")
     verbose_logger.debug("[GCS MOCK] GCS mock client initialization complete")
 
     _mocks_initialized = True
@@ -205,29 +196,17 @@ def mock_vertex_auth_methods():
             "_original_ensure_access_token_async",
             VertexBase._ensure_access_token_async,
         )
-        setattr(
-            VertexBase, "_original_ensure_access_token", VertexBase._ensure_access_token
-        )
-        setattr(
-            VertexBase, "_original_get_token_and_url", VertexBase._get_token_and_url
-        )
+        setattr(VertexBase, "_original_ensure_access_token", VertexBase._ensure_access_token)
+        setattr(VertexBase, "_original_get_token_and_url", VertexBase._get_token_and_url)
 
-        async def _mock_ensure_access_token_async(
-            self, credentials, project_id, custom_llm_provider
-        ):
+        async def _mock_ensure_access_token_async(self, credentials, project_id, custom_llm_provider):
             """Mock async auth method - returns fake token."""
-            verbose_logger.debug(
-                "[GCS MOCK] Vertex AI auth: _ensure_access_token_async called"
-            )
+            verbose_logger.debug("[GCS MOCK] Vertex AI auth: _ensure_access_token_async called")
             return ("mock-gcs-token", "mock-project-id")
 
-        def _mock_ensure_access_token(
-            self, credentials, project_id, custom_llm_provider
-        ):
+        def _mock_ensure_access_token(self, credentials, project_id, custom_llm_provider):
             """Mock sync auth method - returns fake token."""
-            verbose_logger.debug(
-                "[GCS MOCK] Vertex AI auth: _ensure_access_token called"
-            )
+            verbose_logger.debug("[GCS MOCK] Vertex AI auth: _ensure_access_token called")
             return ("mock-gcs-token", "mock-project-id")
 
         def _mock_get_token_and_url(

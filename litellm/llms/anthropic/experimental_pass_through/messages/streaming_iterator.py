@@ -40,9 +40,7 @@ class BaseAnthropicMessagesStreamingIterator:
         # chunk rather than falling back to end_time in async_success_handler.
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
-            self.litellm_logging_obj.model_call_details["completion_start_time"] = (
-                self.completion_start_time
-            )
+            self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
@@ -95,9 +93,7 @@ class BaseAnthropicMessagesStreamingIterator:
 
     async def async_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[
-            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
-        ],
+        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
     ) -> AsyncIterator[bytes]:
         """
         Generic async SSE wrapper that converts streaming chunks to SSE format

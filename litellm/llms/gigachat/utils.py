@@ -16,9 +16,7 @@ def convert_usage(usage_data: dict[str, int]) -> Usage:
 
     prompt_tokens_details = None
     if precached_prompt_tokens > 0:
-        prompt_tokens_details = PromptTokensDetailsWrapper(
-            cached_tokens=precached_prompt_tokens
-        )
+        prompt_tokens_details = PromptTokensDetailsWrapper(cached_tokens=precached_prompt_tokens)
 
     return Usage(
         prompt_tokens=prompt_tokens,

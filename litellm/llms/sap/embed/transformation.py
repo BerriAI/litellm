@@ -27,9 +27,7 @@ class Usage(BaseModel):
 
 class EmbeddingItem(BaseModel):
     object: Literal["embedding"]
-    embedding: List[float] = Field(
-        ..., description="Vector of floats (length varies by model)."
-    )
+    embedding: List[float] = Field(..., description="Vector of floats (length varies by model).")
     index: int
 
 
@@ -102,20 +100,15 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
     def deployment_url(self) -> str:
         with httpx.Client(timeout=30) as client:
             valid_deployments = []
-            deployments = client.get(
-                self.base_url + "/lm/deployments", headers=self.headers
-            ).json()
+            deployments = client.get(self.base_url + "/lm/deployments", headers=self.headers).json()
             for deployment in deployments.get("resources", []):
                 if deployment["scenarioId"] == "orchestration":
                     config_details = client.get(
-                        self.base_url
-                        + f"/lm/configurations/{deployment['configurationId']}",
+                        self.base_url + f"/lm/configurations/{deployment['configurationId']}",
                         headers=self.headers,
                     ).json()
                     if config_details["executableId"] == "orchestration":
-                        valid_deployments.append(
-                            (deployment["deploymentUrl"], deployment["createdAt"])
-                        )
+                        valid_deployments.append((deployment["deploymentUrl"], deployment["createdAt"]))
             return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
     def get_error_class(self, error_message, status_code, headers):

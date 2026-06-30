@@ -29,11 +29,7 @@ class BaseTranslation(ABC):
             return {}
 
         # Convert to dict if it's a Pydantic object
-        user_dict = (
-            user_api_key_dict.model_dump()
-            if hasattr(user_api_key_dict, "model_dump")
-            else user_api_key_dict
-        )
+        user_dict = user_api_key_dict.model_dump() if hasattr(user_api_key_dict, "model_dump") else user_api_key_dict
 
         if not isinstance(user_dict, dict):
             return {}

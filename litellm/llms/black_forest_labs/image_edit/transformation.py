@@ -134,9 +134,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         BFL uses x-key header for authentication.
         """
         final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("BFL_API_KEY")
-            or get_secret_str("BLACK_FOREST_LABS_API_KEY")
+            api_key or get_secret_str("BFL_API_KEY") or get_secret_str("BLACK_FOREST_LABS_API_KEY")
         )
 
         if not final_api_key:
@@ -171,8 +169,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return IMAGE_EDIT_MODELS[model_name]
 
         raise ValueError(
-            f"Unknown BFL image edit model: {model_name}. "
-            f"Supported models: {list(IMAGE_EDIT_MODELS.keys())}"
+            f"Unknown BFL image edit model: {model_name}. Supported models: {list(IMAGE_EDIT_MODELS.keys())}"
         )
 
     def get_complete_url(
@@ -205,9 +202,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return image
         elif isinstance(image, list):
             # If it's a list, take the first image
-            return self._read_image_bytes(
-                image[0], depth=depth + 1, max_depth=max_depth
-            )
+            return self._read_image_bytes(image[0], depth=depth + 1, max_depth=max_depth)
         elif isinstance(image, str):
             if image.startswith(("http://", "https://")):
                 response = safe_get(litellm.module_level_client, image, timeout=60.0)
@@ -229,8 +224,7 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             return data
         else:
             raise ValueError(
-                f"Unsupported image type: {type(image)}. "
-                "Expected bytes, str (URL or file path), or file-like object."
+                f"Unsupported image type: {type(image)}. Expected bytes, str (URL or file path), or file-like object."
             )
 
     def transform_image_edit_request(

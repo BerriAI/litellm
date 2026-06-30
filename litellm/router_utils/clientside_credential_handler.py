@@ -28,11 +28,7 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
     """
     from litellm.types.router import CredentialLiteLLMParams
 
-    typed_fields = [
-        f
-        for f in CredentialLiteLLMParams.model_fields
-        if f not in clientside_credential_keys
-    ]
+    typed_fields = [f for f in CredentialLiteLLMParams.model_fields if f not in clientside_credential_keys]
     kwargs_only_fields = [
         # Caller-supplied via **kwargs, not declared on CredentialLiteLLMParams.
         "organization",
@@ -60,9 +56,7 @@ def _admin_config_fields_to_clear_on_base_override() -> List[str]:
     return typed_fields + kwargs_only_fields
 
 
-_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = (
-    _admin_config_fields_to_clear_on_base_override()
-)
+_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE = _admin_config_fields_to_clear_on_base_override()
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:

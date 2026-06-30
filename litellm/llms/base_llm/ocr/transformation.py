@@ -170,9 +170,7 @@ class BaseOCRConfig:
         Returns:
             OCRRequestData with data and files fields
         """
-        raise NotImplementedError(
-            "transform_ocr_request must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_request must be implemented by provider")
 
     async def async_transform_ocr_request(
         self,
@@ -218,9 +216,7 @@ class BaseOCRConfig:
         Transform provider-specific OCR response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError(
-            "transform_ocr_response must be implemented by provider"
-        )
+        raise NotImplementedError("transform_ocr_response must be implemented by provider")
 
     async def async_transform_ocr_response(
         self,

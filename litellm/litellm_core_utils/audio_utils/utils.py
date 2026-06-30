@@ -96,9 +96,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
                 raise ValueError(f"Unsupported content type in tuple: {type(content)}")
         else:
             raise ValueError("Tuple must have at least 2 elements: (filename, content)")
-    elif hasattr(audio_file, "read") and not isinstance(
-        audio_file, (str, bytes, bytearray, tuple, os.PathLike)
-    ):
+    elif hasattr(audio_file, "read") and not isinstance(audio_file, (str, bytes, bytearray, tuple, os.PathLike)):
         # File-like object (IO) - check this after all other types
         filename = getattr(audio_file, "name", "audio.wav")
         file_content = audio_file.read()  # type: ignore
@@ -122,9 +120,7 @@ def process_audio_file(audio_file: FileTypes) -> ProcessedAudioFile:
             # If extension is not recognized, fallback to audio/wav
             content_type = "audio/wav"
 
-    return ProcessedAudioFile(
-        file_content=file_content, filename=filename, content_type=content_type
-    )
+    return ProcessedAudioFile(file_content=file_content, filename=filename, content_type=content_type)
 
 
 def get_audio_file_name(file_obj: FileTypes) -> str:
@@ -184,11 +180,7 @@ def get_audio_file_content_hash(file_obj: FileTypes) -> str:
                 file_content = None
         elif hasattr(file_content_obj, "read"):
             try:
-                current_position = (
-                    file_content_obj.tell()
-                    if hasattr(file_content_obj, "tell")
-                    else None
-                )
+                current_position = file_content_obj.tell() if hasattr(file_content_obj, "tell") else None
                 if hasattr(file_content_obj, "seek"):
                     file_content_obj.seek(0)
                 file_content = file_content_obj.read()  # type: ignore
@@ -270,9 +262,7 @@ def calculate_request_duration(file: FileTypes) -> Optional[float]:
                 content = file[1]
                 if isinstance(content, bytes):
                     file_content = content
-                elif hasattr(content, "read") and not isinstance(
-                    content, (str, os.PathLike)
-                ):
+                elif hasattr(content, "read") and not isinstance(content, (str, os.PathLike)):
                     # File-like object in tuple
                     current_pos = getattr(content, "tell", lambda: None)()
                     # Seek to start to ensure we read the entire content

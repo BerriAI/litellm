@@ -100,9 +100,7 @@ def _update_request_data_with_managed_file_id(
 
                 # Get credentials for the model
                 if llm_router:
-                    credentials = llm_router.get_deployment_credentials_with_provider(
-                        model_id=routing_model
-                    )
+                    credentials = llm_router.get_deployment_credentials_with_provider(model_id=routing_model)
                     if credentials:
                         prepare_data_with_credentials(
                             data=data,
@@ -117,9 +115,7 @@ def _update_request_data_with_managed_file_id(
             # If we extracted the provider file ID but no routing, still use it
             if llm_output_file_id:
                 data["file_id"] = llm_output_file_id
-                verbose_logger.debug(
-                    f"Replaced unified file ID with provider file ID: {llm_output_file_id}"
-                )
+                verbose_logger.debug(f"Replaced unified file ID with provider file ID: {llm_output_file_id}")
                 return data, file_id  # Return original managed file ID
 
         return data, file_id if decoded_id else None
@@ -148,11 +144,7 @@ def _update_request_data_with_managed_file_id(
 
         verbose_logger.debug(
             f"Routing vector store file operation using model: {model_used}"
-            + (
-                f", file_id: {file_id} -> {original_file_id}"
-                if original_file_id
-                else ""
-            )
+            + (f", file_id: {file_id} -> {original_file_id}" if original_file_id else "")
         )
         return data, file_id  # Return original file ID for response replacement
 
@@ -231,13 +223,9 @@ async def _update_request_data_with_model_routing_hint(
     if data.get("api_key") is not None or data.get("api_base") is not None:
         return data
 
-    user_controlled_model_hint = request.query_params.get(
-        "model"
-    ) or request.headers.get("x-litellm-model")
+    user_controlled_model_hint = request.query_params.get("model") or request.headers.get("x-litellm-model")
     model_hint = data.get("model") or user_controlled_model_hint
-    should_authorize_model_hint = (
-        isinstance(model_hint, str) and model_hint == user_controlled_model_hint
-    )
+    should_authorize_model_hint = isinstance(model_hint, str) and model_hint == user_controlled_model_hint
 
     should_route = False
     credentials = None
@@ -249,9 +237,7 @@ async def _update_request_data_with_model_routing_hint(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-            credentials = llm_router.get_deployment_credentials_with_provider(
-                model_id=model_hint
-            )
+            credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_hint)
             should_route = credentials is not None
     else:
         if isinstance(model_hint, str) and should_authorize_model_hint:
@@ -299,9 +285,7 @@ async def _update_request_data_with_model_routing_hint(
 
     openai_credentials = None
     for model_name in model_names_to_check:
-        credentials = llm_router.get_deployment_credentials_with_provider(
-            model_id=model_name
-        )
+        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_name)
         if credentials is None:
             continue
 
@@ -396,9 +380,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
             if routing_model:
                 data["model"] = routing_model
-                verbose_logger.info(
-                    f"Routing vector store files operation to model: {routing_model}"
-                )
+                verbose_logger.info(f"Routing vector store files operation to model: {routing_model}")
 
             # Replace unified vector store ID with provider resource ID
             if provider_resource_id:
@@ -411,11 +393,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
 
     # Legacy path: Check vector store registry for non-managed vector stores.
     vector_store_to_run = managed_vector_store
-    if (
-        vector_store_to_run is None
-        and should_lookup_registry
-        and litellm.vector_store_registry is not None
-    ):
+    if vector_store_to_run is None and should_lookup_registry and litellm.vector_store_registry is not None:
         vector_store_to_run = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
             vector_store_id=vector_store_id
         )
@@ -424,9 +402,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
         if "custom_llm_provider" in vector_store_to_run:
             data["custom_llm_provider"] = vector_store_to_run.get("custom_llm_provider")
         if "litellm_credential_name" in vector_store_to_run:
-            data["litellm_credential_name"] = vector_store_to_run.get(
-                "litellm_credential_name"
-            )
+            data["litellm_credential_name"] = vector_store_to_run.get("litellm_credential_name")
         if "litellm_params" in vector_store_to_run:
             litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
             data.update(litellm_params)
@@ -468,9 +444,7 @@ def _maybe_check_permissions(
         return
     metadata = user_api_key_dict.metadata or {}
     team_metadata = user_api_key_dict.team_metadata or {}
-    if not metadata.get("allowed_vector_store_indexes") and not team_metadata.get(
-        "allowed_vector_store_indexes"
-    ):
+    if not metadata.get("allowed_vector_store_indexes") and not team_metadata.get("allowed_vector_store_indexes"):
         return
     is_allowed_to_call_vector_store_files_endpoint(
         provider=provider,

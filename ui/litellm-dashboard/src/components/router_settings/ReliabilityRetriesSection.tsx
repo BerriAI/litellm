@@ -25,7 +25,9 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
               param != "context_window_fallbacks" &&
               param != "routing_strategy_args" &&
               param != "routing_strategy" &&
-              param != "enable_tag_filtering",
+              param != "enable_tag_filtering" &&
+              param != "retry_policy" &&
+              param != "model_group_retry_policy",
           )
           .map(([param, value]) => (
             <div key={param} className="space-y-2">

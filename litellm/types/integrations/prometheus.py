@@ -215,6 +215,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
+    "litellm_team_members_metric",
     "litellm_remaining_org_budget_metric",
     "litellm_org_max_budget_metric",
     "litellm_org_budget_remaining_hours_metric",
@@ -409,6 +410,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
@@ -424,6 +426,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
@@ -531,6 +534,11 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
+    litellm_team_members_metric = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
     litellm_remaining_org_budget_metric = [
         UserAPIKeyLabelNames.ORG_ID.value,
         UserAPIKeyLabelNames.ORG_ALIAS.value,
@@ -553,9 +561,7 @@ class PrometheusMetricLabels:
 
     litellm_api_key_max_budget_metric = litellm_remaining_api_key_budget_metric
 
-    litellm_api_key_budget_remaining_hours_metric = (
-        litellm_remaining_api_key_budget_metric
-    )
+    litellm_api_key_budget_remaining_hours_metric = litellm_remaining_api_key_budget_metric
 
     litellm_remaining_user_budget_metric = [
         UserAPIKeyLabelNames.USER.value,
@@ -698,9 +704,7 @@ class PrometheusMetricLabels:
 
     litellm_managed_batch_created_total = _batch_user_labels
 
-    litellm_managed_file_size_bytes: List[
-        str
-    ] = []  # labels: purpose, file_type, model, api_provider, user (custom)
+    litellm_managed_file_size_bytes: List[str] = []  # labels: purpose, file_type, model, api_provider, user (custom)
 
     litellm_managed_batch_duration_seconds = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
@@ -709,9 +713,7 @@ class PrometheusMetricLabels:
 
     litellm_managed_file_created_total = _batch_user_labels
 
-    litellm_managed_file_deleted_total: List[
-        str
-    ] = []  # only "result" label, added at metric creation
+    litellm_managed_file_deleted_total: List[str] = []  # only "result" label, added at metric creation
 
     litellm_check_batch_cost_jobs_polled: List[str] = []
 
@@ -731,19 +733,11 @@ class PrometheusMetricLabels:
 
         # Add custom metadata labels
         custom_labels.extend(
-            [
-                _sanitize_prometheus_label_name(metric)
-                for metric in litellm.custom_prometheus_metadata_labels
-            ]
+            [_sanitize_prometheus_label_name(metric) for metric in litellm.custom_prometheus_metadata_labels]
         )
 
         # Add custom tags labels
-        custom_labels.extend(
-            [
-                _sanitize_prometheus_label_name(f"tag_{tag}")
-                for tag in litellm.custom_prometheus_tags
-            ]
-        )
+        custom_labels.extend([_sanitize_prometheus_label_name(f"tag_{tag}") for tag in litellm.custom_prometheus_tags])
 
         # Conditionally add stream label to litellm_proxy_total_requests_metric
         if (
@@ -758,18 +752,12 @@ class PrometheusMetricLabels:
         # historical label set is preserved across upgrade; enable via
         # ``litellm.prometheus_emit_rate_limit_labels`` once downstream
         # dashboards include the new labels in their matchers / aggregations.
-        if (
-            label_name == "litellm_proxy_failed_requests_metric"
-            and litellm.prometheus_emit_rate_limit_labels is True
-        ):
+        if label_name == "litellm_proxy_failed_requests_metric" and litellm.prometheus_emit_rate_limit_labels is True:
             for _rate_limit_label in (
                 UserAPIKeyLabelNames.RATE_LIMIT_CATEGORY.value,
                 UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
             ):
-                if (
-                    _rate_limit_label not in default_labels
-                    and _rate_limit_label not in custom_labels
-                ):
+                if _rate_limit_label not in default_labels and _rate_limit_label not in custom_labels:
                     custom_labels.append(_rate_limit_label)
 
         _user_budget_metrics = {
@@ -777,10 +765,7 @@ class PrometheusMetricLabels:
             "litellm_user_max_budget_metric",
             "litellm_user_budget_remaining_hours_metric",
         }
-        if (
-            label_name in _user_budget_metrics
-            and litellm.prometheus_user_budget_label_include_email_alias is True
-        ):
+        if label_name in _user_budget_metrics and litellm.prometheus_user_budget_label_include_email_alias is True:
             for label in [
                 UserAPIKeyLabelNames.USER_EMAIL.value,
                 UserAPIKeyLabelNames.USER_ALIAS.value,

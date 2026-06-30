@@ -55,13 +55,9 @@ class _CiscoAIDefenseMcpMixin:
         _PROVIDER_NAME: str
         guardrail_name: Optional[str]
 
-        def should_run_guardrail(
-            self, data: dict, event_type: GuardrailEventHooks
-        ) -> bool: ...
+        def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool: ...
 
-        async def _post_inspection(
-            self, url: str, payload: Dict[str, Any], surface: str
-        ) -> Dict[str, Any]: ...
+        async def _post_inspection(self, url: str, payload: Dict[str, Any], surface: str) -> Dict[str, Any]: ...
 
         def _handle_api_error(
             self,
@@ -131,18 +127,14 @@ class _CiscoAIDefenseMcpMixin:
             )
         ):
             verbose_proxy_logger.debug(
-                "Cisco AI Defense guardrail (%s): no MCP mode configured "
-                "— skipping MCP response scan.",
+                "Cisco AI Defense guardrail (%s): no MCP mode configured — skipping MCP response scan.",
                 self.guardrail_name,
             )
             return None
 
         mcp_tool_response = self._extract_mcp_tool_call_response(response_obj)
         if mcp_tool_response is None:
-            verbose_proxy_logger.debug(
-                "Cisco AI Defense guardrail: no MCP tool response payload "
-                "to scan, skipping"
-            )
+            verbose_proxy_logger.debug("Cisco AI Defense guardrail: no MCP tool response payload to scan, skipping")
             return None
 
         original_response = kwargs.get("original_response")
@@ -150,22 +142,14 @@ class _CiscoAIDefenseMcpMixin:
             await self._inspect_mcp_response(
                 request_data=request_data,
                 response=mcp_tool_response,
-                redact_response_obj=(
-                    original_response
-                    if original_response is not None
-                    else mcp_tool_response
-                ),
+                redact_response_obj=(original_response if original_response is not None else mcp_tool_response),
             )
         except HTTPException as exc:
-            blocking_response = self._build_blocking_mcp_response(
-                detail=exc.detail, original_response_obj=response_obj
-            )
+            blocking_response = self._build_blocking_mcp_response(detail=exc.detail, original_response_obj=response_obj)
             self._replace_mcp_tool_response(response_obj, blocking_response)
             if original_response is not None:
                 self._replace_mcp_tool_response(original_response, blocking_response)
-            add_guardrail_to_applied_guardrails_header(
-                request_data=request_data, guardrail_name=self.guardrail_name
-            )
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
             verbose_proxy_logger.warning(
                 "Cisco AI Defense guardrail (%s): MCP response blocked — "
                 "tool output replaced with synthesized violation message.",
@@ -173,9 +157,7 @@ class _CiscoAIDefenseMcpMixin:
             )
             return blocking_response
 
-        add_guardrail_to_applied_guardrails_header(
-            request_data=request_data, guardrail_name=self.guardrail_name
-        )
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
         return None
 
     def _build_blocking_mcp_response(
@@ -195,9 +177,7 @@ class _CiscoAIDefenseMcpMixin:
         else:
             payload = {
                 "error": "Blocked by Cisco AI Defense Guardrail",
-                "message": (
-                    str(detail) if detail else "Blocked by Cisco AI Defense Guardrail"
-                ),
+                "message": (str(detail) if detail else "Blocked by Cisco AI Defense Guardrail"),
                 "provider": self._PROVIDER_NAME,
                 "guardrail": self.guardrail_name,
                 "surface": "mcp",
@@ -210,32 +190,22 @@ class _CiscoAIDefenseMcpMixin:
             hidden_params: Any = original_hidden
         else:
             response_cost = getattr(original_hidden, "response_cost", None)
-            hidden_params = (
-                HiddenParams(response_cost=response_cost)
-                if response_cost is not None
-                else HiddenParams()
-            )
+            hidden_params = HiddenParams(response_cost=response_cost) if response_cost is not None else HiddenParams()
 
         return MCPPostCallResponseObject(
-            mcp_tool_call_response=[
-                TextContent(type="text", text=_json.dumps(payload))
-            ],
+            mcp_tool_call_response=[TextContent(type="text", text=_json.dumps(payload))],
             hidden_params=hidden_params,
         )
 
     @staticmethod
-    def _replace_mcp_tool_response(
-        response_obj: object, replacement_obj: object
-    ) -> bool:
+    def _replace_mcp_tool_response(response_obj: object, replacement_obj: object) -> bool:
         replacement = getattr(replacement_obj, "mcp_tool_call_response", None)
         if replacement is None:
             return False
 
         inner = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
-            if _CiscoAIDefenseMcpMixin._replace_mcp_tool_response(
-                inner, replacement_obj
-            ):
+            if _CiscoAIDefenseMcpMixin._replace_mcp_tool_response(inner, replacement_obj):
                 return True
             try:
                 setattr(response_obj, "mcp_tool_call_response", replacement)
@@ -246,9 +216,7 @@ class _CiscoAIDefenseMcpMixin:
         content = getattr(response_obj, "content", None)
         if isinstance(content, list):
             content[:] = replacement
-            structured_replacement = (
-                _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
-            )
+            structured_replacement = _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
             if hasattr(response_obj, "structuredContent"):
                 try:
                     setattr(response_obj, "structuredContent", structured_replacement)
@@ -269,16 +237,12 @@ class _CiscoAIDefenseMcpMixin:
             result = response_obj.get("result")
             if isinstance(result, dict):
                 result["content"] = replacement
-                result["structuredContent"] = (
-                    _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
-                )
+                result["structuredContent"] = _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
                 result["isError"] = True
                 return True
             response_obj["result"] = {
                 "content": replacement,
-                "structuredContent": _CiscoAIDefenseMcpMixin._replacement_structured_content(
-                    replacement
-                ),
+                "structuredContent": _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement),
                 "isError": True,
             }
             return True
@@ -292,11 +256,7 @@ class _CiscoAIDefenseMcpMixin:
         if not isinstance(replacement, list) or not replacement:
             return None
         first = replacement[0]
-        text = (
-            first.get("text")
-            if isinstance(first, dict)
-            else getattr(first, "text", None)
-        )
+        text = first.get("text") if isinstance(first, dict) else getattr(first, "text", None)
         return {"result": text} if isinstance(text, str) else None
 
     @staticmethod
@@ -320,16 +280,11 @@ class _CiscoAIDefenseMcpMixin:
         url = f"{self.api_base}{self.inspect_path}"
         payload = self._build_mcp_request_payload(data=data)
         if payload is None:
-            verbose_proxy_logger.debug(
-                "Cisco AI Defense guardrail: could not build MCP request "
-                "payload, skipping"
-            )
+            verbose_proxy_logger.debug("Cisco AI Defense guardrail: could not build MCP request payload, skipping")
             return {}
         start_time = datetime.now()
         try:
-            inspect_response = await self._post_inspection(
-                url=url, payload=payload, surface="mcp"
-            )
+            inspect_response = await self._post_inspection(url=url, payload=payload, surface="mcp")
         except HTTPException:
             raise
         except Exception as exc:
@@ -364,16 +319,11 @@ class _CiscoAIDefenseMcpMixin:
             response=response,
         )
         if payload is None:
-            verbose_proxy_logger.debug(
-                "Cisco AI Defense guardrail: could not build MCP response "
-                "payload, skipping"
-            )
+            verbose_proxy_logger.debug("Cisco AI Defense guardrail: could not build MCP response payload, skipping")
             return {}
         start_time = datetime.now()
         try:
-            inspect_response = await self._post_inspection(
-                url=url, payload=payload, surface="mcp"
-            )
+            inspect_response = await self._post_inspection(url=url, payload=payload, surface="mcp")
         except HTTPException:
             raise
         except Exception as exc:
@@ -392,9 +342,7 @@ class _CiscoAIDefenseMcpMixin:
             request_data=request_data,
             context=_ScanContext(surface="mcp", direction="output"),
             start_time=start_time,
-            response_obj=(
-                response if redact_response_obj is None else redact_response_obj
-            ),
+            response_obj=(response if redact_response_obj is None else redact_response_obj),
         )
 
     def _build_mcp_request_payload(
@@ -419,9 +367,7 @@ class _CiscoAIDefenseMcpMixin:
                 "params": data.get("params") or {},
             }
 
-        tool_name = (
-            data.get("mcp_tool_name") or data.get("tool_name") or data.get("name")
-        )
+        tool_name = data.get("mcp_tool_name") or data.get("tool_name") or data.get("name")
         if not tool_name:
             return None
 
@@ -471,9 +417,7 @@ class _CiscoAIDefenseMcpMixin:
     def _hydrate_mcp_tool_context(request_data: Dict[str, Any]) -> None:
         metadata = request_data.get("mcp_tool_call_metadata")
         if metadata is None:
-            nested = request_data.get("metadata") or request_data.get(
-                "litellm_metadata"
-            )
+            nested = request_data.get("metadata") or request_data.get("litellm_metadata")
             if isinstance(nested, dict):
                 metadata = nested.get("mcp_tool_call_metadata")
         if not isinstance(metadata, dict):
@@ -515,14 +459,11 @@ class _CiscoAIDefenseMcpMixin:
                 return {
                     "jsonrpc": "2.0",
                     "id": response.get("id") or "litellm-mcp",
-                    "result": _CiscoAIDefenseMcpMixin._build_mcp_result(
-                        content=content, source=response
-                    ),
+                    "result": _CiscoAIDefenseMcpMixin._build_mcp_result(content=content, source=response),
                 }
         if isinstance(response, list):
             if response and all(
-                isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
-                for item in response
+                isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in response
             ):
                 response_fields = dict(response)
                 inner_content = response_fields.get("content")
@@ -554,9 +495,7 @@ class _CiscoAIDefenseMcpMixin:
             return {
                 "jsonrpc": "2.0",
                 "id": "litellm-mcp",
-                "result": _CiscoAIDefenseMcpMixin._build_mcp_result(
-                    content=content, source=response
-                ),
+                "result": _CiscoAIDefenseMcpMixin._build_mcp_result(content=content, source=response),
             }
         return None
 
@@ -565,15 +504,9 @@ class _CiscoAIDefenseMcpMixin:
         content: List[Any],
         source: object = None,
     ) -> Dict[str, Any]:
-        result: Dict[str, Any] = {
-            "content": [_serialize_mcp_content_item(item) for item in content]
-        }
+        result: Dict[str, Any] = {"content": [_serialize_mcp_content_item(item) for item in content]}
         for key in ("structuredContent", "isError"):
-            value = (
-                source.get(key)
-                if isinstance(source, dict)
-                else getattr(source, key, None)
-            )
+            value = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
             if value is not None and (key != "isError" or isinstance(value, bool)):
                 result[key] = value
         return result
@@ -611,10 +544,7 @@ class _CiscoAIDefenseMcpMixin:
         if (
             isinstance(response_obj, list)
             and response_obj
-            and all(
-                isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
-                for item in response_obj
-            )
+            and all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in response_obj)
         ):
             for index, item in enumerate(response_obj):
                 if item[0] == "structuredContent":
@@ -628,9 +558,7 @@ class _CiscoAIDefenseMcpMixin:
                 pass
         elif isinstance(response_obj, dict):
             result = response_obj.get("result")
-            target: Dict[Any, Any] = (
-                result if isinstance(result, dict) else response_obj
-            )
+            target: Dict[Any, Any] = result if isinstance(result, dict) else response_obj
             if "structuredContent" in target:
                 target["structuredContent"] = replacement
                 replaced = True
@@ -650,8 +578,7 @@ class _CiscoAIDefenseMcpMixin:
             return content
         if isinstance(response_obj, list):
             if response_obj and all(
-                isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
-                for item in response_obj
+                isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in response_obj
             ):
                 inner_content = dict(response_obj).get("content")
                 if isinstance(inner_content, list):

@@ -72,9 +72,7 @@ def _prepare_ocr_request(
     litellm_call_id = cast(str | None, kwargs.get("litellm_call_id", None))
 
     if not isinstance(document, dict):
-        raise ValueError(
-            f"document must be a dict with 'type' and URL/file field, got {type(document)}"
-        )
+        raise ValueError(f"document must be a dict with 'type' and URL/file field, got {type(document)}")
 
     doc_type = document.get("type")
 
@@ -83,10 +81,7 @@ def _prepare_ocr_request(
         doc_type = document.get("type")
 
     if doc_type not in ["document_url", "image_url"]:
-        raise ValueError(
-            f"Invalid document type: {doc_type}. "
-            "Must be 'document_url', 'image_url', or 'file'"
-        )
+        raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
 
     (
         model,
@@ -226,9 +221,7 @@ def _prepare_rust_ocr_call(
         litellm_params=prepared_request.litellm_params,
     )
     rust_api_base = _rust_bridge_api_base(prepared_request, resolve_api_key)
-    rust_optional_params = _rust_bridge_optional_params(
-        prepared_request, resolve_api_key
-    )
+    rust_optional_params = _rust_bridge_optional_params(prepared_request, resolve_api_key)
     prepared_request.litellm_logging_obj.pre_call(
         input="OCR document processing",
         api_key=resolved_api_key,
@@ -392,9 +385,7 @@ async def aocr(
         )
         model = prepared.model
         custom_llm_provider = prepared.custom_llm_provider
-        completion_kwargs.update(
-            {"model": model, "custom_llm_provider": custom_llm_provider}
-        )
+        completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
         if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
             from litellm.secret_managers.main import get_secret_str
@@ -404,9 +395,7 @@ async def aocr(
                 resolve_api_key=get_secret_str,
             )
             if rust_response is None:
-                verbose_logger.debug(
-                    "Async Rust OCR bridge unavailable; falling back to Python path"
-                )
+                verbose_logger.debug("Async Rust OCR bridge unavailable; falling back to Python path")
             else:
                 return rust_response
 
@@ -429,9 +418,7 @@ async def aocr(
             response = await response
 
         if response is None:
-            raise ValueError(
-                f"Got an unexpected None response from the OCR API: {response}"
-            )
+            raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
 
         return response
     except Exception as e:
@@ -539,8 +526,7 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
             file_bytes = file_bytes.encode("utf-8")
     else:
         raise ValueError(
-            f"Unsupported file input type: {type(file_input)}. "
-            "Expected pathlib.Path, bytes, or a file-like object."
+            f"Unsupported file input type: {type(file_input)}. Expected pathlib.Path, bytes, or a file-like object."
         )
 
     if not file_bytes:
@@ -667,9 +653,7 @@ def ocr(
         )
         model = prepared.model
         custom_llm_provider = prepared.custom_llm_provider
-        completion_kwargs.update(
-            {"model": model, "custom_llm_provider": custom_llm_provider}
-        )
+        completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
         if _rust_ocr_supported(prepared) and rust_ocr_bridge.rust_ocr_enabled():
             from litellm.secret_managers.main import get_secret_str
@@ -679,9 +663,7 @@ def ocr(
                 resolve_api_key=get_secret_str,
             )
             if rust_response is None:
-                verbose_logger.debug(
-                    "Rust OCR bridge unavailable; falling back to Python path"
-                )
+                verbose_logger.debug("Rust OCR bridge unavailable; falling back to Python path")
             else:
                 return rust_response
 

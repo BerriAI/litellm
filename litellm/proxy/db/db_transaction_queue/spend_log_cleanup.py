@@ -44,17 +44,13 @@ class SpendLogCleanup:
 
         pod_lock_manager = proxy_logging_obj.db_spend_update_writer.pod_lock_manager
         self.pod_lock_manager = pod_lock_manager
-        verbose_proxy_logger.info(
-            f"SpendLogCleanup initialized with batch size: {self.batch_size}"
-        )
+        verbose_proxy_logger.info(f"SpendLogCleanup initialized with batch size: {self.batch_size}")
 
     def _should_delete_spend_logs(self) -> bool:
         """
         Determines if logs should be deleted based on the max retention period in settings.
         """
-        retention_setting = self.general_settings.get(
-            "maximum_spend_logs_retention_period"
-        )
+        retention_setting = self.general_settings.get("maximum_spend_logs_retention_period")
         verbose_proxy_logger.info(f"Checking retention setting: {retention_setting}")
 
         if retention_setting is None:
@@ -69,9 +65,7 @@ class SpendLogCleanup:
                 )
                 retention_setting = f"{retention_setting}d"
             self.retention_seconds = duration_in_seconds(retention_setting)
-            verbose_proxy_logger.info(
-                f"Retention period set to {self.retention_seconds} seconds"
-            )
+            verbose_proxy_logger.info(f"Retention period set to {self.retention_seconds} seconds")
             return True
         except ValueError as e:
             verbose_proxy_logger.warning(
@@ -79,9 +73,7 @@ class SpendLogCleanup:
             )
             return False
 
-    async def _delete_old_logs(
-        self, prisma_client: PrismaClient, cutoff_date: datetime
-    ) -> int:
+    async def _delete_old_logs(self, prisma_client: PrismaClient, cutoff_date: datetime) -> int:
         """
         Helper method to delete old logs in batches.
         Returns the total number of logs deleted.
@@ -91,9 +83,7 @@ class SpendLogCleanup:
         consecutive_failures = 0
         while True:
             if run_count > SPEND_LOG_RUN_LOOPS:
-                verbose_proxy_logger.info(
-                    "Max logs deleted - 1,00,000, rest of the logs will be deleted in next run"
-                )
+                verbose_proxy_logger.info("Max logs deleted - 1,00,000, rest of the logs will be deleted in next run")
                 break
             # Step 1: Find logs and delete them in one go without fetching to application
             # Delete in batches, limited by self.batch_size
@@ -126,10 +116,7 @@ class SpendLogCleanup:
                     type(batch_exc).__name__,
                     batch_exc,
                 )
-                if (
-                    consecutive_failures
-                    >= SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES
-                ):
+                if consecutive_failures >= SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES:
                     verbose_proxy_logger.error(
                         "Aborting spend log cleanup after %d consecutive batch "
                         "failures; total deleted before abort: %d",
@@ -155,9 +142,7 @@ class SpendLogCleanup:
             verbose_proxy_logger.info(f"Deleted {deleted_count} logs in this batch")
 
             if deleted_count == 0:
-                verbose_proxy_logger.info(
-                    f"No more logs to delete. Total deleted: {total_deleted}"
-                )
+                verbose_proxy_logger.info(f"No more logs to delete. Total deleted: {total_deleted}")
                 break
 
             total_deleted += deleted_count
@@ -182,9 +167,7 @@ class SpendLogCleanup:
                 return
 
             if self.retention_seconds is None:
-                verbose_proxy_logger.error(
-                    "Retention seconds is None, cannot proceed with cleanup"
-                )
+                verbose_proxy_logger.error("Retention seconds is None, cannot proceed with cleanup")
                 return
 
             # If we have a pod lock manager, try to acquire the lock
@@ -203,20 +186,14 @@ class SpendLogCleanup:
                     verbose_proxy_logger.info("Another pod is already running cleanup")
                     return
 
-            cutoff_date = datetime.now(timezone.utc) - timedelta(
-                seconds=float(self.retention_seconds)
-            )
-            verbose_proxy_logger.info(
-                f"Removing logs older than {cutoff_date.isoformat()}"
-            )
+            cutoff_date = datetime.now(timezone.utc) - timedelta(seconds=float(self.retention_seconds))
+            verbose_proxy_logger.info(f"Removing logs older than {cutoff_date.isoformat()}")
 
             if self.general_settings.get(
                 "use_spend_logs_partitioning", False
             ) and await self.partition_manager.is_partitioned(prisma_client):
                 await self.partition_manager.ensure_partitions(prisma_client)
-                dropped = await self.partition_manager.drop_partitions_older_than(
-                    prisma_client, cutoff_date
-                )
+                dropped = await self.partition_manager.drop_partitions_older_than(prisma_client, cutoff_date)
                 verbose_proxy_logger.info(
                     "Dropped %d expired spend-log partitions: %s",
                     len(dropped),
@@ -227,9 +204,7 @@ class SpendLogCleanup:
                 # or in a partition that spans the cutoff, so retention must
                 # also delete those stragglers row-wise.
                 total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
-                verbose_proxy_logger.info(
-                    f"Deleted {total_deleted} expired logs not covered by dropped partitions"
-                )
+                verbose_proxy_logger.info(f"Deleted {total_deleted} expired logs not covered by dropped partitions")
             else:
                 total_deleted = await self._delete_old_logs(prisma_client, cutoff_date)
                 verbose_proxy_logger.info(f"Deleted {total_deleted} logs")
@@ -245,12 +220,6 @@ class SpendLogCleanup:
             return  # Return after error handling
         finally:
             # Only release the lock if it was actually acquired
-            if (
-                lock_acquired
-                and self.pod_lock_manager
-                and self.pod_lock_manager.redis_cache
-            ):
-                await self.pod_lock_manager.release_lock(
-                    cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME
-                )
+            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+                await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
                 verbose_proxy_logger.info("Released cleanup lock")

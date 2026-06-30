@@ -158,9 +158,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         apply_fn = exec_globals["apply_guardrail"]
         if not callable(apply_fn):
-            raise CustomCodeCompilationError(
-                "'apply_guardrail' must be a callable function"
-            )
+            raise CustomCodeCompilationError("'apply_guardrail' must be a callable function")
 
         self._compiled_function = apply_fn
 
@@ -176,9 +174,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
             try:
                 self._do_compile()
-                verbose_proxy_logger.debug(
-                    f"Custom code guardrail '{self.guardrail_name}' compiled successfully"
-                )
+                verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}' compiled successfully")
 
             except SyntaxError as e:
                 self._compile_error = f"Syntax error in custom code: {e}"
@@ -225,9 +221,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         """
         if self._compiled_function is None:
             if self._compile_error:
-                raise CustomCodeExecutionError(
-                    f"Custom code guardrail not compiled: {self._compile_error}"
-                )
+                raise CustomCodeExecutionError(f"Custom code guardrail not compiled: {self._compile_error}")
             raise CustomCodeExecutionError("Custom code guardrail not compiled")
 
         try:
@@ -258,9 +252,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             # Pre-call block uses passthrough; must not wrap as execution error (500)
             raise
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Custom code guardrail '{self.guardrail_name}' execution error: {e}"
-            )
+            verbose_proxy_logger.error(f"Custom code guardrail '{self.guardrail_name}' execution error: {e}")
             raise CustomCodeExecutionError(
                 f"Custom code guardrail execution failed: {e}",
                 details={
@@ -322,9 +314,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         action = result.get("action", "allow")
 
         if action == "allow":
-            verbose_proxy_logger.debug(
-                f"Custom code guardrail '{self.guardrail_name}': Allowing {input_type}"
-            )
+            verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}': Allowing {input_type}")
             return inputs
 
         elif action == "block":
@@ -356,9 +346,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             )
 
         elif action == "modify":
-            verbose_proxy_logger.debug(
-                f"Custom code guardrail '{self.guardrail_name}': Modifying {input_type}"
-            )
+            verbose_proxy_logger.debug(f"Custom code guardrail '{self.guardrail_name}': Modifying {input_type}")
 
             # Apply modifications
             modified_inputs = dict(inputs)
@@ -376,8 +364,7 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         else:
             verbose_proxy_logger.warning(
-                f"Custom code guardrail '{self.guardrail_name}': "
-                f"Unknown action '{action}'. Treating as allow."
+                f"Custom code guardrail '{self.guardrail_name}': Unknown action '{action}'. Treating as allow."
             )
             return inputs
 
@@ -404,9 +391,7 @@ class CustomCodeGuardrail(CustomGuardrail):
             try:
                 self.custom_code = new_code
                 self._do_compile()
-                verbose_proxy_logger.info(
-                    f"Custom code guardrail '{self.guardrail_name}': Code updated successfully"
-                )
+                verbose_proxy_logger.info(f"Custom code guardrail '{self.guardrail_name}': Code updated successfully")
             except SyntaxError as e:
                 # Rollback on failure
                 self.custom_code = old_code

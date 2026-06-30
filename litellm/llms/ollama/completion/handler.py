@@ -46,15 +46,11 @@ def _process_ollama_embedding_response(
         if encoding is not None:
             input_tokens = len(encoding.encode("".join(prompts)))
             if logging_obj:
-                logging_obj.debug(
-                    "Ollama response missing prompt_eval_count; estimated with encoding."
-                )
+                logging_obj.debug("Ollama response missing prompt_eval_count; estimated with encoding.")
         else:
             input_tokens = 0
             if logging_obj:
-                logging_obj.warning(
-                    "Missing prompt_eval_count and no encoding provided; defaulted to 0."
-                )
+                logging_obj.warning("Missing prompt_eval_count and no encoding provided; defaulted to 0.")
 
     model_response.object = "list"
     model_response.data = output_data

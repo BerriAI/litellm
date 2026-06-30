@@ -43,9 +43,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = (
-            api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
-        )
+        complete_url: str = api_base or get_secret_str("FAL_AI_API_BASE") or self.DEFAULT_BASE_URL
 
         complete_url = complete_url.rstrip("/")
         if self.IMAGE_GENERATION_ENDPOINT:
@@ -124,9 +122,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
     Default Fal AI image generation configuration for generic models.
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for fal.ai image generation
         """

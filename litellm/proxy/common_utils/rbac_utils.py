@@ -64,9 +64,7 @@ async def check_feature_access_for_user(
 
     raise HTTPException(
         status_code=403,
-        detail={
-            "error": f"Access to {feature_name} is disabled for your role. Contact your proxy admin."
-        },
+        detail={"error": f"Access to {feature_name} is disabled for your role. Contact your proxy admin."},
     )
 
 
@@ -94,7 +92,5 @@ async def check_org_admin_can_generate_keys(
 
     raise HTTPException(
         status_code=403,
-        detail={
-            "error": "key generation is disabled for org admins. Contact your proxy admin."
-        },
+        detail={"error": "key generation is disabled for org admins. Contact your proxy admin."},
     )
