@@ -51,9 +51,14 @@ mcp_servers:
 general_settings:
   master_key: sk-1234
   store_model_in_db: false
+  alerting: ["email", "slack_budget_alerts", "slack"]
 
 # LiteLLM Settings
 litellm_settings:
+  callbacks: ["smtp_email"]
+  ui_theme_config:
+    logo_url: "https://www.reply.com/favicon.ico"
+    favicon_url: "https://www.reply.com/favicon.ico"
   # Enable MCP Semantic Tool Filter
   mcp_semantic_tool_filter:
     enabled: true
