@@ -5191,3 +5191,27 @@ def test_transform_request_reads_service_tier_from_responses_api_request() -> No
     )
 
     assert result["service_tier"] == "priority"
+
+
+def test_none_content_in_assistant_message_produces_empty_string_text() -> None:
+    message = Message(
+        role="assistant",
+        content=None,
+        tool_calls=[
+            {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "arguments": '{"location": "Paris"}',
+                },
+            }
+        ],
+    )
+
+    result = LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
+        message
+    )
+
+    assert result.text == ""
+    assert result.type == "output_text"
