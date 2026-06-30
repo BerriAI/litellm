@@ -949,3 +949,85 @@ async def test_negation_exhausts_entire_fallback_chain():
     from litellm.types.router import RouterErrors
 
     assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_tag_regex_survives_when_negation_removes_other_deployment():
+    # Negation removes a plain-tagged deployment; the surviving tag_regex deployment
+    # is still matched by User-Agent and selected.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tag_regex": ["^User-Agent: claude-code\\/"],
+                },
+                "model_info": {"id": "claude-code-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+        tag_filtering_match_any=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"], "user_agent": "claude-code/1.2.3"},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "claude-code-deployment"
+
+
+@pytest.mark.asyncio()
+async def test_negation_removes_tag_regex_deployment_falls_to_ban_only():
+    # When a negation tag removes the only tag_regex deployment, no regex deployments
+    # remain in the candidate pool. has_tag_filter becomes False, ban_only fires,
+    # and the remaining plain-tagged deployment is returned via the ban-only path.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tag_regex": ["^User-Agent: claude-code\\/"],
+                    "tags": ["group:claude"],
+                },
+                "model_info": {"id": "claude-code-deployment"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai"],
+                },
+                "model_info": {"id": "openai-deployment"},
+            },
+        ],
+        enable_tag_filtering=True,
+        tag_filtering_match_any=True,
+    )
+
+    # !group:claude removes the tag_regex deployment from candidates, so no regex
+    # deployments remain. The ban-only path fires and returns the openai deployment.
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!group:claude"], "user_agent": "claude-code/1.2.3"},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "openai-deployment"
