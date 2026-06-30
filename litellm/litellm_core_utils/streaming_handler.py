@@ -1743,6 +1743,7 @@ class CustomStreamWrapper:
                         # (MockValSer not yet replaced).
                         if self.stream_options is None:
                             response._hidden_params["usage"] = response.usage
+                            self.chunks[-1] = response.model_copy()
                             response.usage = None
                             ## check if empty
                             is_empty = is_model_response_stream_empty(model_response=cast(ModelResponseStream, response))
