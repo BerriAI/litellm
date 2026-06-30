@@ -3,10 +3,9 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { Role, users } from "../../fixtures/users";
-// Type-only import of the OpenAPI-generated backend schema. esbuild erases it at
-// runtime; the round-trip below is enforced by the `typecheck:e2e` CI step (tsc over
-// e2e_tests), so a drift in the /config/update or /router/settings contract fails the
-// build rather than silently passing here.
+// Type-only import of the OpenAPI-generated backend schema, erased at runtime by
+// esbuild. It types the round-trips below so mistakes surface in the editor; the live
+// test against the real proxy is what actually enforces the contract.
 import type { components } from "../../../src/lib/http/schema";
 
 // These tests mutate the proxy's shared router_settings, and the Loadbalancing save

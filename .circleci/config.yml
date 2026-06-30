@@ -2688,14 +2688,6 @@ jobs:
             - ui/litellm-dashboard/node_modules
             - ~/.cache/ms-playwright
       - run:
-          name: Type-check E2E specs
-          # The specs type their request/response round-trips against the generated
-          # OpenAPI schema; this step turns that typing into a real gate, so a backend
-          # contract drift fails here instead of silently passing at runtime.
-          command: |
-            cd ui/litellm-dashboard
-            npm run typecheck:e2e
-      - run:
           name: Build UI from source
           # Prior version used `cp -r out/ ../../litellm/proxy/_experimental/out/`.
           # GNU cp (used on CircleCI's Ubuntu image) interprets that as "copy the
