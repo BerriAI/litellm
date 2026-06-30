@@ -190,6 +190,8 @@ class LitellmTableNames(str, enum.Enum):
     CACHE_CONFIG_TABLE_NAME = "LiteLLM_CacheConfig"
     CONFIG_OVERRIDES_TABLE_NAME = "LiteLLM_ConfigOverrides"
     CONFIG_TABLE_NAME = "LiteLLM_Config"
+    SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
+    UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
 
 
 class Litellm_EntityType(enum.Enum):

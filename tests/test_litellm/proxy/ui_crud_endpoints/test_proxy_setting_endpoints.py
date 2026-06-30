@@ -466,6 +466,61 @@ class TestProxySettingEndpoints:
         create_sso_settings = json.loads(create_data["sso_settings"])
         assert create_sso_settings["google_client_id"] == "new_google_client_id"
 
+    def test_update_sso_settings_audits_when_env_cleanup_fails(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "test_salt_key")
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+        mock_prisma.db.litellm_config = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(
+            side_effect=ValueError("cleanup failed")
+        )
+        mock_prisma.db.litellm_config.update = AsyncMock()
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        from litellm.proxy.proxy_server import proxy_config
+
+        monkeypatch.setattr(
+            proxy_config,
+            "_encrypt_env_variables",
+            lambda environment_variables: environment_variables,
+        )
+
+        create_config_audit_log = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.create_config_audit_log",
+            create_config_audit_log,
+        )
+
+        response = client.patch(
+            "/update/sso_settings",
+            json={"google_client_id": "new_google_client_id"},
+        )
+
+        assert response.status_code == 500
+        assert mock_prisma.db.litellm_ssoconfig.upsert.called
+        create_config_audit_log.assert_awaited_once()
+        audit_log_kwargs = create_config_audit_log.await_args.kwargs
+        assert audit_log_kwargs["param_name"] == "sso_config"
+        assert (
+            audit_log_kwargs["after_value"]["google_client_id"]
+            == "new_google_client_id"
+        )
+        assert (
+            json.loads(
+                mock_prisma.db.litellm_ssoconfig.upsert.call_args.kwargs["data"][
+                    "create"
+                ]["sso_settings"]
+            )["google_client_id"]
+            == "new_google_client_id"
+        )
+
     def test_update_sso_settings_with_null_values_clears_env_vars(
         self, mock_proxy_config, mock_auth, monkeypatch
     ):
@@ -1958,5 +2013,261 @@ def test_update_internal_user_settings_returns_200_when_audit_write_raises(
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "success"
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_update_sso_settings_writes_redacted_audit_log(mock_proxy_config, monkeypatch):
+    """Updating SSO settings must write an audit row to the SSO config table
+    with the client secret redacted."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+    fake_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+    fake_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(
+        proxy_server_module.proxy_config,
+        "_encrypt_env_variables",
+        lambda environment_variables: environment_variables,
+    )
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/sso_settings",
+            json={
+                "google_client_id": "client-id-123",
+                "google_client_secret": "super-secret-xyz",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "sso_config"
+        assert written["table_name"] == "LiteLLM_SSOConfig"
+        assert written["changed_by"] == "audit-admin"
+
+        after = json.loads(written["updated_values"])
+        assert after["google_client_id"] == "client-id-123"
+        assert after["google_client_secret"] == "REDACTED"
+        assert "super-secret-xyz" not in written["updated_values"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_add_allowed_ip_writes_audit_log(mock_proxy_config, monkeypatch):
+    """Adding an allowed IP is a system-wide security setting change and must
+    be audited with the before and after IP list."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.post("/add/allowed_ip", json={"ip": "203.0.113.77"})
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "general_settings"
+        assert written["action"] == "updated"
+        assert written["changed_by"] == "audit-admin"
+
+        before = json.loads(written["before_value"])
+        after = json.loads(written["updated_values"])
+        assert "203.0.113.77" not in before["allowed_ips"]
+        assert "203.0.113.77" in after["allowed_ips"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_delete_allowed_ip_writes_deleted_audit_log(monkeypatch):
+    """Removing an allowed IP must be audited as a deletion, symmetric with the
+    add path."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+
+    config = {"general_settings": {"allowed_ips": ["203.0.113.77", "198.51.100.1"]}}
+
+    async def _get_config():
+        return config
+
+    async def _save_config(new_config=None):
+        nonlocal config
+        if new_config is not None:
+            config = new_config
+        return config
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(
+        proxy_server_module, "general_settings", {"allowed_ips": ["203.0.113.77"]}
+    )
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "get_config", _get_config)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "save_config", _save_config)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.post("/delete/allowed_ip", json={"ip": "203.0.113.77"})
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "general_settings"
+        assert written["action"] == "deleted"
+        before = json.loads(written["before_value"])
+        after = json.loads(written["updated_values"])
+        assert "203.0.113.77" in before["allowed_ips"]
+        assert "203.0.113.77" not in after["allowed_ips"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_update_ui_theme_settings_writes_audit_log(mock_proxy_config, monkeypatch):
+    """Updating the UI theme must be audited under ui_theme_config."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(
+        proxy_server_module.proxy_config,
+        "_encrypt_env_variables",
+        lambda environment_variables: environment_variables,
+    )
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/ui_theme_settings",
+            json={"logo_url": "https://example.com/logo.png"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "ui_theme_config"
+        assert written["action"] == "updated"
+        assert written["changed_by"] == "audit-admin"
+        after = json.loads(written["updated_values"])
+        assert after["logo_url"] == "https://example.com/logo.png"
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_update_ui_settings_writes_audit_log(monkeypatch):
+    """Updating UI settings must be audited under the UI settings table."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+    fake_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+    fake_prisma.db.litellm_uisettings.upsert = AsyncMock()
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/ui_settings", json={"disable_custom_api_keys": True}
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "ui_settings"
+        assert written["table_name"] == "LiteLLM_UISettings"
+        assert written["changed_by"] == "audit-admin"
+        after = json.loads(written["updated_values"])
+        assert after["disable_custom_api_keys"] is True
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
