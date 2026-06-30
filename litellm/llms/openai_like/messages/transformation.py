@@ -47,6 +47,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         )
         return merged, api_base
 
+    def should_filter_anthropic_beta_headers(self) -> bool:
+        return False
+
     def get_complete_url(
         self,
         api_base: Optional[str],

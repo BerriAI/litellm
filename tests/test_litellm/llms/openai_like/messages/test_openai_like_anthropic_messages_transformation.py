@@ -264,3 +264,38 @@ def test_request_maps_reasoning_effort_to_thinking(config):
     assert "reasoning_effort" not in payload
     assert isinstance(payload.get("thinking"), dict)
     assert payload["thinking"].get("type") == "enabled"
+
+
+def test_passthrough_disables_anthropic_beta_filtering(config):
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    assert config.should_filter_anthropic_beta_headers() is False
+    assert AnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
+
+
+def test_anthropic_beta_survives_provider_filter_on_passthrough_path(config):
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={"Anthropic-Beta": "caller-flag"},
+        model="some-model",
+        messages=[],
+        optional_params={"speed": "fast"},
+        litellm_params={},
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+
+    # The deployment routes as provider "openai", which has no beta mapping, so an
+    # unconditional filter would drop every anthropic-beta value. The handler must
+    # skip filtering for this config so the native upstream still receives them.
+    if config.should_filter_anthropic_beta_headers():
+        headers = update_headers_with_filtered_beta(headers=dict(headers), provider="openai")
+
+    survived = set(headers.get("anthropic-beta", "").split(","))
+    assert {"caller-flag", "fast-mode-2026-02-01"} <= survived
+
+    stripped = update_headers_with_filtered_beta(headers=dict(headers), provider="openai")
+    assert "anthropic-beta" not in stripped

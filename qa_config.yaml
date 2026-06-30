@@ -1,0 +1,11 @@
+model_list:
+  - model_name: deepseek-anthropic-passthrough
+    litellm_params:
+      model: openai/deepseek-chat
+      api_base: https://api.deepseek.com/anthropic
+      api_key: os.environ/DEEPSEEK_API_KEY
+    model_info:
+      supported_endpoints: ["/v1/chat/completions", "/v1/messages"]
+
+general_settings:
+  master_key: sk-1234
