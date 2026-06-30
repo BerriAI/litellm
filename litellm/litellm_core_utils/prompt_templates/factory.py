@@ -5027,6 +5027,12 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
             tool_block_list.append(tool)  # type: ignore
             continue
 
+        # Responses built-in tools (web_search, image_generation, namespace, tool_search,
+        # custom) carry neither an OpenAI "function" nor an Anthropic "input_schema" and have
+        # no Bedrock toolSpec equivalent; drop them instead of emitting an empty junk toolSpec.
+        if isinstance(tool, dict) and "function" not in tool and "input_schema" not in tool:
+            continue
+
         # OpenAI function tools, or Anthropic Messages / Claude Code ({name, input_schema, type, ...})
         if isinstance(tool, dict) and "input_schema" in tool and "function" not in tool:
             parameters = copy.deepcopy(tool.get("input_schema") or {"type": "object", "properties": {}})
