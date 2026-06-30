@@ -224,10 +224,17 @@ class TestBuildPlanAttachesBlocks:
 
         blocks = plan.metadata.get(WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY)
         assert isinstance(blocks, list)
-        assert len(blocks) == 1
-        assert blocks[0]["type"] == "web_search_tool_result"
-        assert blocks[0]["tool_use_id"] == "toolu_one"
-        assert blocks[0]["content"][0]["url"] == "https://docs.litellm.ai/"
+        # Each tool_call yields a paired server_tool_use + web_search_tool_result.
+        assert len(blocks) == 2
+        assert blocks[0]["type"] == "server_tool_use"
+        assert blocks[0]["id"] == "toolu_one"
+        assert blocks[0]["name"] == "web_search"
+        assert blocks[0]["input"] == {"query": "what is litellm"}
+        assert blocks[1]["type"] == "web_search_tool_result"
+        assert blocks[1]["tool_use_id"] == "toolu_one"
+        assert blocks[1]["content"][0]["url"] == "https://docs.litellm.ai/"
+        # server_tool_use.id must match web_search_tool_result.tool_use_id.
+        assert blocks[0]["id"] == blocks[1]["tool_use_id"]
 
     @pytest.mark.asyncio
     async def test_metadata_does_not_carry_blocks_when_flag_absent(self):
@@ -479,6 +486,9 @@ class TestLegacyPathMatchesNewPath:
                 kwargs={WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
             )
 
-        assert out["content"][0]["type"] == "web_search_tool_result"
-        assert out["content"][0]["tool_use_id"] == "toolu_legacy"
-        assert out["content"][1]["type"] == "text"
+        assert out["content"][0]["type"] == "server_tool_use"
+        assert out["content"][0]["id"] == "toolu_legacy"
+        assert out["content"][0]["input"] == {"query": "q"}
+        assert out["content"][1]["type"] == "web_search_tool_result"
+        assert out["content"][1]["tool_use_id"] == "toolu_legacy"
+        assert out["content"][2]["type"] == "text"

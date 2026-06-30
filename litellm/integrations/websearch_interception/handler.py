@@ -705,11 +705,25 @@ class WebSearchInterceptionLogger(CustomLogger):
         tool_calls: List[Dict],
         structured_results: List[Optional[SearchResponse]],
     ) -> List[Dict[str, Any]]:
-        """Build one ``web_search_tool_result`` block per tool_call."""
+        """Build a ``server_tool_use`` + ``web_search_tool_result`` pair per tool_call.
+
+        Native clients need both blocks (sharing a ``tool_use_id``) to render
+        web search citations.
+        """
         blocks: List[Dict[str, Any]] = []
         for i, tool_call in enumerate(tool_calls):
             tool_use_id = tool_call.get("id") or ""
+            tool_input = tool_call.get("input") or {}
+            query = tool_input.get("query") if isinstance(tool_input, dict) else None
             structured = structured_results[i] if i < len(structured_results) else None
+            blocks.append(
+                {
+                    "type": "server_tool_use",
+                    "id": tool_use_id,
+                    "name": "web_search",
+                    "input": {"query": query} if query is not None else {},
+                }
+            )
             blocks.append(
                 WebSearchTransformation.build_web_search_tool_result_block(
                     tool_use_id=tool_use_id,
