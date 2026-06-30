@@ -5683,6 +5683,12 @@ class BaseLLMHTTPHandler:
         parsed = urlparse(url)
         existing = dict(parse_qsl(parsed.query))
         extras = {k: v for k, v in query_params.items() if k not in existing}
+        # Gemini Live's BidiGenerateContent endpoint has no `model` query field (the
+        # model belongs in the setup message). Appending it makes Google close the
+        # socket with WS 1007 "Invalid JSON payload ... Unknown name \"model\":
+        # Cannot bind query parameter", so the realtime session yields zero events.
+        if "BidiGenerateContent" in url:
+            extras.pop("model", None)
         if not extras:
             return url
         new_query = parsed.query + ("&" if parsed.query else "") + urlencode(extras)
