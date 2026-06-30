@@ -873,11 +873,6 @@
       "count": 1
     }
   },
-  "src/components/claude_code_plugins/helpers.test.ts": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/components/claude_code_plugins/plugin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
