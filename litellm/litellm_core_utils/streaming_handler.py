@@ -39,9 +39,11 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
     LlmProviders,
     ModelResponse,
     ModelResponseStream,
+    PromptTokensDetailsWrapper,
     StreamingChoices,
     Usage,
 )
@@ -2224,24 +2226,44 @@ class CustomStreamWrapper:
         return chunk
 
 
+def _coerce_token_details(
+    raw: object,
+    cls: type,
+) -> object:
+    if isinstance(raw, cls):
+        return raw
+    if isinstance(raw, dict):
+        return cls(**raw)
+    return None
+
+
 def calculate_total_usage(chunks: List[ModelResponse]) -> Usage:
-    """Assume most recent usage chunk has total usage uptil then."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+    prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     for chunk in chunks:
-        if "usage" in chunk and chunk["usage"] is not None:
-            if "prompt_tokens" in chunk["usage"]:
-                prompt_tokens = chunk["usage"].get("prompt_tokens", 0) or 0
-            if "completion_tokens" in chunk["usage"]:
-                completion_tokens = chunk["usage"].get("completion_tokens", 0) or 0
+        if "usage" not in chunk or chunk["usage"] is None:
+            continue
+        usage = chunk["usage"]
+        if "prompt_tokens" in usage:
+            prompt_tokens = usage.get("prompt_tokens", 0) or 0
+        if "completion_tokens" in usage:
+            completion_tokens = usage.get("completion_tokens", 0) or 0
+        ctd = getattr(usage, "completion_tokens_details", None)
+        if ctd is not None:
+            completion_tokens_details = _coerce_token_details(ctd, CompletionTokensDetailsWrapper)  # type: ignore[assignment]
+        ptd = getattr(usage, "prompt_tokens_details", None)
+        if ptd is not None:
+            prompt_tokens_details = _coerce_token_details(ptd, PromptTokensDetailsWrapper)  # type: ignore[assignment]
 
-    returned_usage_chunk = Usage(
+    return Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        completion_tokens_details=completion_tokens_details,
+        prompt_tokens_details=prompt_tokens_details,
     )
-
-    return returned_usage_chunk
 
 
 def generic_chunk_has_all_required_fields(chunk: dict) -> bool:

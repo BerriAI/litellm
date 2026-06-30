@@ -458,6 +458,17 @@ class ChunkProcessor:
             id=id,
         )
 
+    @staticmethod
+    def _resolve_chunk_usage(
+        chunk: Union[Dict[str, Any], ModelResponse, ModelResponseStream],
+    ) -> Optional[Usage]:
+        if "usage" in chunk and chunk["usage"] is not None:
+            return chunk["usage"]  # type: ignore[return-value]
+        hidden: Optional[Dict[str, Any]] = getattr(chunk, "_hidden_params", None) or (
+            chunk.get("_hidden_params") if isinstance(chunk, dict) else None
+        )
+        return hidden.get("usage") if hidden else None
+
     def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
         prompt_tokens = 0
         completion_tokens = 0
@@ -542,13 +553,7 @@ class ChunkProcessor:
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         for chunk in chunks:
-            usage_chunk: Optional[Usage] = None
-            if "usage" in chunk:
-                usage_chunk = chunk["usage"]
-            elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
-                chunk, "_hidden_params"
-            ):
-                usage_chunk = chunk._hidden_params.get("usage", None)
+            usage_chunk: Optional[Usage] = self._resolve_chunk_usage(chunk)
 
             if usage_chunk is not None:
                 if isinstance(usage_chunk, dict):

@@ -450,10 +450,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._accumulated_provider_specific_fields[key] = val
 
     def create_litellm_model_response(self) -> Optional[ModelResponse]:
+        # Use the wrapper's internal chunks list (stored before usage-stripping) so
+        # that completion_tokens_details (including reasoning_tokens) is available.
+        # collected_chat_completion_chunks are snapshots of already-stripped yielded
+        # chunks and do not carry usage, so they cannot reconstruct reasoning_tokens.
+        chunks: list = self.litellm_custom_stream_wrapper.chunks or self.collected_chat_completion_chunks
         response = cast(
             Optional[ModelResponse],
             stream_chunk_builder(
-                chunks=self.collected_chat_completion_chunks,
+                chunks=chunks,
                 logging_obj=self.litellm_logging_obj,
             ),
         )
