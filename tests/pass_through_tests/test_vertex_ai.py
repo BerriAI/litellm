@@ -58,10 +58,12 @@ def load_vertex_ai_credentials():
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.abspath(temp_file.name)
 
 
+LITE_LLM_ENDPOINT = "http://localhost:4000"
+
 SPEND_LOG_API_KEY = "best-api-key-ever"
 
 
-async def get_tracked_spend() -> float:
+def get_tracked_spend() -> float:
     """
     Total spend recorded under the pass-through key in the global spend view.
 
@@ -69,7 +71,7 @@ async def get_tracked_spend() -> float:
     "today" so a UTC date rollover mid-test can't hide a freshly billed call, and
     treats an unreachable endpoint as "nothing recorded yet" (0.0).
     """
-    url = f"http://0.0.0.0:4000/global/spend/logs?api_key={SPEND_LOG_API_KEY}"
+    url = f"{LITE_LLM_ENDPOINT}/global/spend/logs?api_key={SPEND_LOG_API_KEY}"
     response = requests.get(url, headers={"Authorization": "Bearer sk-1234"})
     if response.status_code != 200:
         print(f"global spend logs endpoint returned {response.status_code}: {response.text}")
@@ -79,8 +81,6 @@ async def get_tracked_spend() -> float:
     print("global spend logs rows", rows)
     return sum(float(row.get("spend") or 0.0) for row in rows)
 
-
-LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 VERTEX_PROJECT = "litellm-ci-cd"
 VERTEX_MODEL = "gemini-3.1-flash-lite"
@@ -173,7 +173,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 @pytest.mark.skip(reason="skip flaky test - vertex pass through streaming is flaky")
 async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
 
-    spend_before = await get_tracked_spend()
+    spend_before = get_tracked_spend()
     print("spend_before", spend_before)
     load_vertex_ai_credentials()
 
@@ -193,7 +193,7 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
     print("response", response)
 
     await asyncio.sleep(20)
-    spend_after = await get_tracked_spend()
+    spend_after = get_tracked_spend()
     print("spend_after", spend_after)
     assert (
         spend_after > spend_before
