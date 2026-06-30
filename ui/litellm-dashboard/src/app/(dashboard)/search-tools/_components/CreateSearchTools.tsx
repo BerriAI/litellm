@@ -5,8 +5,8 @@ import { Button, TextInput } from "@tremor/react";
 import { Form, Input, Modal, Select, Tooltip, Typography } from "antd";
 import React, { useState } from "react";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import NotificationsManager from "../molecules/notifications_manager";
-import { createSearchTool, fetchAvailableSearchProviders } from "../networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { createSearchTool, fetchAvailableSearchProviders } from "@/components/networking";
 import SearchConnectionTest from "./SearchConnectionTest";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
