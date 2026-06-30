@@ -48,6 +48,8 @@ ui/litellm-dashboard/node_modules
 ui/litellm-dashboard/next-env.d.ts
 ui/litellm-dashboard/package.json
 ui/litellm-dashboard/package-lock.json
+ui/litellm-dashboard/pnpm-lock.yaml
+ui/litellm-dashboard/pnpm-workspace.yaml
 deploy/charts/litellm/*.tgz
 deploy/charts/litellm/charts/*
 deploy/charts/*.tgz
