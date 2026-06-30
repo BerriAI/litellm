@@ -400,24 +400,29 @@ def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
             "error": "server_not_oauth2",
             "message": (
                 f"MCP server '{mcp_server.server_name or mcp_server.name}' does not use OAuth "
-                f"(auth_type={mcp_server.auth_type}). Access to this server is governed by its access "
-                "groups rather than a per-user OAuth credential, so it has no client_id, authorize, "
-                "token, or registration flow"
+                f"(auth_type={mcp_server.auth_type}); the gateway only exposes the OAuth client_id, "
+                "authorize, token, and register flow for oauth2 servers. This server is reached using "
+                "its configured auth_type, so no OAuth client registration or authorization is required"
             ),
         },
     )
 
 
-def _raise_if_discovery_server_not_oauth2(
+def _raise_unless_oauth2_discovery_server(
     mcp_server: Optional[MCPServer],
     mcp_server_name: Optional[str],
     description: str,
 ) -> None:
-    """404 a discovery request for a named server that is not an oauth2 authorization server.
+    """404 a NAMED discovery request unless it resolves to an oauth2 server.
 
-    Pass-through servers are resolved by the caller before this guard runs.
+    A named server that is unknown (or hidden from the caller) and one that exists
+    but is non-oauth2 both return the same 404, so the well-known discovery paths
+    cannot be used to enumerate non-OAuth server names. Root discovery (no name) is
+    unaffected, and pass-through servers are resolved by the caller before this runs.
     """
-    if mcp_server is None or mcp_server.auth_type == MCPAuth.oauth2:
+    if mcp_server_name is None:
+        return
+    if mcp_server is not None and mcp_server.auth_type == MCPAuth.oauth2:
         return
     raise HTTPException(
         status_code=404,
@@ -1101,7 +1106,7 @@ async def _build_oauth_protected_resource_response(
             detail=(f"Upstream oauth-protected-resource metadata unavailable for MCP server {mcp_server.name!r}"),
         )
 
-    _raise_if_discovery_server_not_oauth2(mcp_server, mcp_server_name, "not an OAuth-protected resource")
+    _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
 
     return {
         "authorization_servers": [
@@ -1189,7 +1194,7 @@ def _build_oauth_authorization_server_response(
     if mcp_server_name:
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
 
-    _raise_if_discovery_server_not_oauth2(mcp_server, mcp_server_name, "not an OAuth authorization server")
+    _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth authorization server")
 
     return {
         "issuer": request_base_url,  # point to your proxy

@@ -3272,3 +3272,59 @@ async def test_oauth_protected_resource_passthrough_none_auth_not_404():
         assert response["resource"].endswith("/passthrough_server/mcp")
     finally:
         global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_404_for_unknown_server_name():
+    """A discovery request for an unknown server name returns the same 404 as a non-oauth2
+    server (not a 200 metadata doc with broken URLs), so the well-known paths cannot be used
+    to enumerate non-OAuth server names."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="does_not_exist",
+            use_standard_pattern=True,
+        )
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorization_server_404_for_unknown_server_name():
+    """A named authorization-server discovery request for an unknown server returns 404, not a
+    200 metadata document pointing at non-existent /{name}/authorize and /{name}/token."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="does_not_exist",
+        )
+    assert exc_info.value.status_code == 404
