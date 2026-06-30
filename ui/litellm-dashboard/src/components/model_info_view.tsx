@@ -533,15 +533,14 @@ export default function ModelInfoView({
           </div>
         </div>
         <div className="flex gap-2">
-          <TremorButton
-            variant="secondary"
-            icon={RefreshIcon}
+          <Button
+            icon={<RefreshIcon className="h-4 w-4" />}
             onClick={handleTestConnection}
             className="flex items-center gap-2"
             data-testid="test-connection-button"
           >
             Test Connection
-          </TremorButton>
+          </Button>
 
           <Button
             icon={<KeyIcon className="h-4 w-4" />}
@@ -553,26 +552,25 @@ export default function ModelInfoView({
             Update API Key
           </Button>
 
-          <TremorButton
-            icon={KeyIcon}
-            variant="secondary"
+          <Button
+            icon={<KeyIcon className="h-4 w-4" />}
             onClick={() => setIsCredentialModalOpen(true)}
             className="flex items-center"
             disabled={!isAdmin}
             data-testid="reuse-credentials-button"
           >
             Re-use Credentials
-          </TremorButton>
-          <TremorButton
-            icon={TrashIcon}
-            variant="secondary"
+          </Button>
+          <Button
+            danger
+            icon={<TrashIcon className="h-4 w-4" />}
             onClick={() => setIsDeleteModalOpen(true)}
-            className="flex items-center text-red-500 border-red-500 hover:text-red-700"
+            className="flex items-center"
             disabled={!canEditModel}
             data-testid="delete-model-button"
           >
             Delete Model
-          </TremorButton>
+          </Button>
         </div>
       </div>
 
