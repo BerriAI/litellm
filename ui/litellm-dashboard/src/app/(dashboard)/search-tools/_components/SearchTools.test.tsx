@@ -3,11 +3,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as networking from "../networking";
+import * as networking from "@/components/networking";
 import SearchTools from "./SearchTools";
 import { AvailableSearchProvider, SearchTool } from "./types";
 
-vi.mock("../networking", () => ({
+vi.mock("@/components/networking", () => ({
   fetchSearchTools: vi.fn(),
   updateSearchTool: vi.fn(),
   deleteSearchTool: vi.fn(),
@@ -46,7 +46,7 @@ vi.mock("./CreateSearchTools", () => {
   return { default: CreateSearchTools };
 });
 
-vi.mock("../common_components/DeleteResourceModal", () => {
+vi.mock("@/components/common_components/DeleteResourceModal", () => {
   const DeleteResourceModal = ({
     isOpen,
     onOk,

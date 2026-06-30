@@ -2,10 +2,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchToolTester } from "./SearchToolTester";
-import * as networking from "../networking";
-import NotificationsManager from "../molecules/notifications_manager";
+import * as networking from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
-vi.mock("../networking", () => ({
+vi.mock("@/components/networking", () => ({
   searchToolQueryCall: vi.fn(),
 }));
 

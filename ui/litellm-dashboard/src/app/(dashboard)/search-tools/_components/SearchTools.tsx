@@ -4,9 +4,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Button, Text, Title } from "@tremor/react";
 import { Form, Input, Modal, Select, Spin, Table } from "antd";
 import React, { useState } from "react";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import NotificationsManager from "../molecules/notifications_manager";
-import { deleteSearchTool, fetchAvailableSearchProviders, fetchSearchTools, updateSearchTool } from "../networking";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import {
+  deleteSearchTool,
+  fetchAvailableSearchProviders,
+  fetchSearchTools,
+  updateSearchTool,
+} from "@/components/networking";
 import CreateSearchTool from "./CreateSearchTools";
 import { searchToolColumns } from "./SearchToolColumn";
 import { SearchToolView } from "./SearchToolView";
