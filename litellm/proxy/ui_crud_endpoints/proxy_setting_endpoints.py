@@ -418,7 +418,7 @@ async def delete_allowed_ip(
 
     await create_config_audit_log(
         param_name="general_settings",
-        action="updated",
+        action="deleted",
         before_value={"allowed_ips": before_allowed_ips},
         after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
         user_api_key_dict=user_api_key_dict,
@@ -582,7 +582,7 @@ async def _update_litellm_setting(
     settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
     settings_key: str,
     success_message: str,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    user_api_key_dict: UserAPIKeyAuth,
 ):
     """
     Common utility function to update `litellm_settings` in both memory and config.
@@ -591,8 +591,7 @@ async def _update_litellm_setting(
         settings: The settings object to update
         settings_key: The key in litellm_settings to update
         success_message: Message to return on success
-        user_api_key_dict: The acting admin, used for the audit log. When omitted
-            (internal callers) no audit row is written.
+        user_api_key_dict: The acting admin, recorded as the audit-log actor.
     """
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
@@ -626,14 +625,13 @@ async def _update_litellm_setting(
     # Save the updated config
     await proxy_config.save_config(new_config=config)
 
-    if user_api_key_dict is not None:
-        await create_config_audit_log(
-            param_name=settings_key,
-            action="updated",
-            before_value=before_value,
-            after_value=in_memory_var,
-            user_api_key_dict=user_api_key_dict,
-        )
+    await create_config_audit_log(
+        param_name=settings_key,
+        action="updated",
+        before_value=before_value,
+        after_value=in_memory_var,
+        user_api_key_dict=user_api_key_dict,
+    )
 
     return {
         "message": success_message,
