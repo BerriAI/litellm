@@ -39,8 +39,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         }
         combined = {**headers, **defaults}
         normalized = {
-            ("anthropic-beta" if key.lower() == "anthropic-beta" else key): value
-            for key, value in combined.items()
+            ("anthropic-beta" if key.lower() == "anthropic-beta" else key): value for key, value in combined.items()
         }
         merged = self._update_headers_with_anthropic_beta(
             headers=normalized,
