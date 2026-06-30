@@ -2,6 +2,7 @@
 Singulr guardrail integration for LiteLLM.
 
 Calls the Singulr Guard API to scan messages.
+
 """
 
 import json
