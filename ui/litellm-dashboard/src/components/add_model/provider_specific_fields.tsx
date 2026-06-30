@@ -3,21 +3,17 @@ import { UploadOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
 import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
 import React from "react";
-import { CredentialItem, ProviderCreateInfo, ProviderCredentialFieldMetadata } from "../networking";
+import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
 const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
   uploadProps?: UploadProps;
-  // Field keys to NOT render — used when a parent form already owns these
-  // inputs (e.g. the model edit form has a dedicated "API Base" field) so we
-  // don't create a duplicate Form.Item bound to the same name.
-  excludeKeys?: string[];
-  // Drop the "required" validation rule from every rendered field. Used in the
-  // model edit context, where auth fields render blank ("leave blank to keep")
-  // — a required rule would block onFinish and prevent saving any unrelated
-  // edit unless the user re-enters the secret.
+  // Drop the "required" validation rule from every rendered field. Used by the
+  // credential-rotation modal, where every field renders blank ("leave blank to
+  // keep") — a required rule would block onFinish even when the user only wants
+  // to rotate one secret.
   disableRequired?: boolean;
 }
 
@@ -73,38 +69,6 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
   };
 };
 
-// Resolve the credential UI fields for a provider from fetched metadata.
-// Matches the component's resolution order (display-name enum or raw slug).
-const resolveProviderFields = (
-  providerMetadata: ProviderCreateInfo[] | undefined,
-  selectedProvider: Providers,
-): ProviderCredentialField[] => {
-  if (!providerMetadata) return [];
-  const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
-  const providerInfo = providerMetadata.find(
-    (p) =>
-      p.provider_display_name === selectedProviderEnum ||
-      p.provider === selectedProvider ||
-      p.litellm_provider === selectedProvider,
-  );
-  return providerInfo ? providerInfo.credential_fields.map(mapFieldMetadataToUiField) : [];
-};
-
-// The auth-field keys a parent form should harvest for this provider, minus
-// any keys the parent already owns (excludeKeys). Lets the parent collect the
-// right form values on submit without the child reporting them back upward.
-export const useProviderAuthFieldKeys = (selectedProvider: Providers, excludeKeys?: string[]): string[] => {
-  const { data: providerMetadata } = useProviderFields();
-  const excludeDep = (excludeKeys ?? []).join("\0");
-  return React.useMemo(() => {
-    const excludeSet = new Set(excludeKeys ?? []);
-    return resolveProviderFields(providerMetadata, selectedProvider)
-      .map((f) => f.key)
-      .filter((k) => !excludeSet.has(k));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerMetadata, selectedProvider, excludeDep]);
-};
-
 // In-memory cache of provider credential fields keyed by provider display name.
 // This lets us reuse the data across multiple mounts and also supports
 // non-React helpers like createCredentialFromModel.
@@ -148,7 +112,6 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
   selectedProvider,
   uploadProps,
-  excludeKeys,
   disableRequired,
 }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
@@ -225,14 +188,6 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const excludeKeySet = React.useMemo(() => new Set(excludeKeys ?? []), [(excludeKeys ?? []).join("\0")]);
-
-  const visibleFields = React.useMemo(
-    () => (excludeKeySet.size > 0 ? allFields.filter((f) => !excludeKeySet.has(f.key)) : allFields),
-    [allFields, excludeKeySet],
-  );
-
   const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
   const lastInferredApiVersionRef = React.useRef<string | null>(null);
 
@@ -266,23 +221,13 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
         reader.onload = (e) => {
           if (e.target) {
             const jsonStr = e.target.result as string;
-            console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
             form.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values after setting:", form.getFieldsValue());
           }
         };
         reader.readAsText(file);
       }
       // Prevent upload
       return false;
-    },
-    onChange(info: any) {
-      console.log("Upload onChange triggered in ProviderSpecificFields");
-      console.log("Current form values:", form.getFieldsValue());
-
-      if (info.file.status !== "uploading") {
-        console.log(info.file, info.fileList);
-      }
     },
   };
 
@@ -304,7 +249,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           </Col>
         </Row>
       )}
-      {visibleFields.map((field) => (
+      {allFields.map((field) => (
         <React.Fragment key={field.key}>
           <Form.Item
             label={field.label}
@@ -325,16 +270,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
               <Upload
                 {...handleUpload}
                 onChange={(info) => {
-                  // First call the original onChange
                   if (uploadProps?.onChange) {
                     uploadProps.onChange(info);
                   }
-
-                  // Check the field value after a short delay
-                  setTimeout(() => {
-                    const value = form.getFieldValue(field.key);
-                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
-                  }, 500);
                 }}
               >
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>

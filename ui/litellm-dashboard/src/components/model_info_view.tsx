@@ -1,5 +1,6 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useQueryClient } from "@tanstack/react-query";
 import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
@@ -40,7 +41,7 @@ import {
   testConnectionRequest,
 } from "./networking";
 import { getProviderLogoAndName, Providers } from "./provider_info_helpers";
-import ProviderSpecificFields, { useProviderAuthFieldKeys } from "./add_model/provider_specific_fields";
+import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
 import { getDisplayModelName } from "./view_model/model_name_display";
@@ -55,10 +56,17 @@ interface ModelInfoViewProps {
   modelAccessGroups: string[] | null;
 }
 
-// Auth fields the model edit form already renders as dedicated inputs — kept
-// out of the inline provider auth section so we don't bind two Form.Items to
-// the same name or submit a duplicate value.
-const AUTH_FIELD_EXCLUDE_KEYS = ["api_base", "organization", "custom_llm_provider"];
+// The /model/info response redacts secrets by masking them (e.g. "sk-1****2345"),
+// not by removing them. The edit form must never echo a masked value back on save:
+// the backend would encrypt the asterisks and overwrite the real secret. A run of
+// 2+ mask chars only appears in masker output (real config — incl. wildcard model
+// names like "openai/*" — carries at most a single "*"), so this reliably detects a
+// redacted value without a provider-metadata lookup. Credential rotation goes through
+// UpdateModelCredentialsModal instead, which sends only the fields the user types.
+const isMaskedSecret = (value: unknown): boolean => typeof value === "string" && /\*{2,}/.test(value);
+
+const stripMaskedSecrets = (params: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(params).filter(([, value]) => !isMaskedSecret(value)));
 
 export default function ModelInfoView({
   modelId,
@@ -70,10 +78,12 @@ export default function ModelInfoView({
   modelAccessGroups,
 }: ModelInfoViewProps) {
   const [form] = Form.useForm();
+  const queryClient = useQueryClient();
   const [localModelData, setLocalModelData] = useState<any>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [isCredentialModalOpen, setIsCredentialModalOpen] = useState(false);
+  const [isUpdateCredentialsModalOpen, setIsUpdateCredentialsModalOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -120,19 +130,10 @@ export default function ModelInfoView({
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
 
-  // Track the live credential dropdown so the Authentication section reacts to
-  // edits in this session (not just the server snapshot). When a named
-  // credential is selected the inline provider fields are hidden and never
-  // submitted, so we can't save a credential name and raw inline auth together.
-  const liveCredentialName = Form.useWatch("litellm_credential_name", form);
-  const isUsingCredentialInForm = isEditing ? !!liveCredentialName : usingExistingCredential;
-
-  // Provider auth-field keys, resolved from the same metadata
-  // ProviderSpecificFields renders, minus the fields the edit form already
-  // owns. The save handler harvests exactly these from the form values.
-  const authProvider = (localModelData?.litellm_params?.custom_llm_provider ||
+  // Provider used to render the credential-rotation modal's auth fields.
+  const modelProvider = (localModelData?.litellm_params?.custom_llm_provider ||
+    modelData?.litellm_params?.custom_llm_provider ||
     modelData?.provider) as Providers;
-  const authFieldKeys = useProviderAuthFieldKeys(authProvider, AUTH_FIELD_EXCLUDE_KEYS);
 
   // Initialize localModelData from modelData when available
   useEffect(() => {
@@ -261,26 +262,9 @@ export default function ModelInfoView({
         return;
       }
 
-      // Provider auth fields the user actually entered. Blank/null/undefined
-      // are omitted (never sent as "") so an untouched secret is preserved by
-      // the backend's merge instead of being overwritten. Mirrors the submit
-      // filter used by EditCredentialModal. Skipped entirely when a named
-      // credential is selected — that path owns auth, and sending both would
-      // leave conflicting config on the backend.
-      const authFieldUpdates = values.litellm_credential_name
-        ? {}
-        : authFieldKeys.reduce<Record<string, any>>((acc, key) => {
-            const v = values[key];
-            if (v !== "" && v !== undefined && v !== null) {
-              acc[key] = v;
-            }
-            return acc;
-          }, {});
-
       let updatedLitellmParams = {
         ...values.litellm_params,
         ...parsedExtraParams,
-        ...authFieldUpdates,
         model: values.litellm_model_name,
         api_base: values.api_base,
         custom_llm_provider: values.custom_llm_provider,
@@ -388,27 +372,25 @@ export default function ModelInfoView({
         return;
       }
 
+      // Final guard: never PATCH a redacted secret. The /model/info snapshot that
+      // seeds this form masks secrets, and any save re-sends the whole params blob;
+      // without this strip a masked value would be re-encrypted over the real secret.
+      // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
+      const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+
       const updateData = {
         model_name: values.model_name,
-        litellm_params: updatedLitellmParams,
+        litellm_params: safeLitellmParams,
         model_info: updatedModelInfo,
       };
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
 
-      // The secrets the user just typed were sent in the request and are now
-      // stored encrypted by the backend. Don't echo their plaintext into local
-      // display state — the read-only LiteLLM Params JSON would render it.
-      const displayLitellmParams = { ...updatedLitellmParams };
-      for (const key of Object.keys(authFieldUpdates)) {
-        delete displayLitellmParams[key];
-      }
-
       const updatedModelData = {
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: displayLitellmParams,
+        litellm_params: safeLitellmParams,
         model_info: updatedModelInfo,
       };
 
@@ -564,6 +546,17 @@ export default function ModelInfoView({
             data-testid="test-connection-button"
           >
             Test Connection
+          </TremorButton>
+
+          <TremorButton
+            icon={KeyIcon}
+            variant="secondary"
+            onClick={() => setIsUpdateCredentialsModalOpen(true)}
+            className="flex items-center"
+            disabled={!canEditModel}
+            data-testid="update-credentials-button"
+          >
+            Update Credentials
           </TremorButton>
 
           <TremorButton
@@ -760,7 +753,7 @@ export default function ModelInfoView({
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
                         Object.entries(localModelData.litellm_params || {}).filter(
-                          ([key]) => key !== "litellm_credential_name",
+                          ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
                         ),
                       ),
                       null,
@@ -1213,30 +1206,6 @@ export default function ModelInfoView({
                         )}
                       </div>
 
-                      {isEditing && (
-                        <div>
-                          <Text className="font-medium">Authentication</Text>
-                          {isUsingCredentialInForm ? (
-                            <div className="mt-1 p-2 bg-gray-50 rounded text-sm text-gray-600">
-                              This model uses the shared credential{" "}
-                              <span className="font-mono">{liveCredentialName}</span>. Update its keys from the LLM
-                              Credentials tab.
-                            </div>
-                          ) : (
-                            <div className="mt-2">
-                              <Text className="text-xs text-gray-500 mb-2">
-                                Leave a field blank to keep its current value. Enter a new value to rotate it.
-                              </Text>
-                              <ProviderSpecificFields
-                                selectedProvider={authProvider}
-                                excludeKeys={AUTH_FIELD_EXCLUDE_KEYS}
-                                disableRequired
-                              />
-                            </div>
-                          )}
-                        </div>
-                      )}
-
                       {isWildcardModel && (
                         <div>
                           <Text className="font-medium">Health Check Model</Text>
@@ -1442,6 +1411,19 @@ export default function ModelInfoView({
         >
           <Text>{modelData.litellm_params.litellm_credential_name}</Text>
         </Modal>
+      )}
+
+      {isUpdateCredentialsModalOpen && accessToken && (
+        <UpdateModelCredentialsModal
+          open={isUpdateCredentialsModalOpen}
+          onCancel={() => setIsUpdateCredentialsModalOpen(false)}
+          accessToken={accessToken}
+          modelId={modelId}
+          provider={modelProvider}
+          onUpdated={() => {
+            queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+          }}
+        />
       )}
 
       {/* Edit Auto Router Modal */}
