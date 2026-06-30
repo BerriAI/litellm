@@ -156,6 +156,20 @@ class LiteLLMCompletionResponsesConfig:
         return tool_choice
 
     @staticmethod
+    def _should_drop_derived_web_search_options(model: str, custom_llm_provider: Optional[str]) -> bool:
+        """
+        A Responses ``web_search`` built-in tool is derived into a ``web_search_options`` param.
+        Bedrock Anthropic models have no equivalent (only Nova maps it to a nova_grounding
+        systemTool), so the derived param must be dropped here rather than raising
+        UnsupportedParamsError downstream. Scoped to Bedrock so other providers are untouched.
+        """
+        if custom_llm_provider is None or not custom_llm_provider.startswith("bedrock"):
+            return False
+        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+        return "web_search_options" not in AmazonConverseConfig().get_supported_openai_params(model=model)
+
+    @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
         model: str,
         input: Union[str, ResponseInputParam],
@@ -174,6 +188,11 @@ class LiteLLMCompletionResponsesConfig:
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or []  # type: ignore
         )
+
+        if web_search_options is not None and LiteLLMCompletionResponsesConfig._should_drop_derived_web_search_options(
+            model=model, custom_llm_provider=custom_llm_provider
+        ):
+            web_search_options = None
 
         response_format = None
         text_param = responses_api_request.get("text")
