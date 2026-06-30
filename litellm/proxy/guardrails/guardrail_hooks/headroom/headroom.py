@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
 
 import httpx
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 BYPASS_HEADER = "x-headroom-bypass"
 HEADROOM_RETRIEVE_TOOL_NAME = "headroom_retrieve"
 _HASH_PATTERN = re.compile(r"hash=([a-f0-9]{24})")
+_MAX_ISSUED_HASHES = 5000
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -80,6 +82,20 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
             },
         },
     }
+
+
+def _remember_issued_hashes(cache: "OrderedDict[str, None]", hashes: list[str]) -> None:
+    """Record hashes actually returned by Headroom's /v1/compress.
+
+    The CCR retrieval loop validates tool-call hashes against this cache so an
+    attacker can't make the model retrieve content via a hash-shaped string
+    planted in message text that Headroom never issued.
+    """
+    for hash_value in hashes:
+        cache[hash_value] = None
+        cache.move_to_end(hash_value)
+    while len(cache) > _MAX_ISSUED_HASHES:
+        cache.popitem(last=False)
 
 
 def has_headroom_retrieve_tool(tools: object) -> bool:
@@ -143,9 +159,9 @@ def _extract_from_responses_api(response: object) -> list[dict[str, object]]:
             continue
         args_raw = item.get("arguments", "{}") if isinstance(item, dict) else getattr(item, "arguments", "{}")
         item_id = (
-            (item.get("id") or item.get("call_id"))
+            (item.get("call_id") or item.get("id"))
             if isinstance(item, dict)
-            else (getattr(item, "id", None) or getattr(item, "call_id", None))
+            else (getattr(item, "call_id", None) or getattr(item, "id", None))
         )
         result.append({"id": item_id, "type": "function", "name": item_name, "arguments": _parse_arguments(args_raw)})
     return result
@@ -210,6 +226,34 @@ def _build_assistant_message_from_response(response: object) -> dict[str, object
     return {"role": "assistant", "content": content, "tool_calls": raw_tool_calls}
 
 
+def _is_responses_api_response(response: object) -> bool:
+    return isinstance(getattr(response, "output", None), list)
+
+
+def _build_responses_followup_items(
+    retrieved: list[tuple[dict[str, object], str]],
+) -> list[dict[str, object]]:
+    """Build Responses API input items for a tool round-trip.
+
+    The Responses API does not accept chat-style assistant/tool messages as
+    follow-up input; it requires the model's function_call to be echoed back
+    paired with a function_call_output keyed by the same call_id.
+    """
+    items: list[dict[str, object]] = []
+    for tool_call, content in retrieved:
+        call_id = tool_call.get("id")
+        items.append(
+            {
+                "type": "function_call",
+                "call_id": call_id,
+                "name": tool_call.get("name"),
+                "arguments": json.dumps(tool_call.get("arguments", {})),
+            }
+        )
+        items.append({"type": "function_call_output", "call_id": call_id, "output": content})
+    return items
+
+
 class HeadroomGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -231,6 +275,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
+        self._issued_hashes: "OrderedDict[str, None]" = OrderedDict()
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             guardrail_name=guardrail_name,
             event_hook=event_hook,
@@ -411,6 +456,8 @@ class HeadroomGuardrail(CustomGuardrail):
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
+        _remember_issued_hashes(self._issued_hashes, hashes)
+
         existing_tools = inputs.get("tools")
         retrieve_tool = _build_headroom_retrieve_tool()
         if isinstance(existing_tools, list) and not has_headroom_retrieve_tool(existing_tools):
@@ -455,14 +502,19 @@ class HeadroomGuardrail(CustomGuardrail):
     ) -> AgenticLoopPlan:
         tool_calls: list[dict[str, object]] = tools.get("tool_calls", [])  # type: ignore[assignment]
 
-        valid_hashes = frozenset(extract_hashes_from_messages(messages))
+        message_hashes = frozenset(extract_hashes_from_messages(messages))
 
-        tool_results: list[dict[str, object]] = []
+        retrieved: list[tuple[dict[str, object], str]] = []
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
             hash_value = arguments.get("hash", "") if isinstance(arguments, dict) else ""
             query = arguments.get("query") if isinstance(arguments, dict) else None
-            if str(hash_value) not in valid_hashes:
+            # A hash is only honored if it was actually issued by a Headroom
+            # /v1/compress call (self._issued_hashes) AND appears in this
+            # request's own message history. Either check alone is forgeable:
+            # message text is attacker-controlled, and the issued-hash cache is
+            # shared across concurrent requests on this guardrail instance.
+            if str(hash_value) not in message_hashes or str(hash_value) not in self._issued_hashes:
                 verbose_proxy_logger.warning(
                     "Headroom CCR: rejecting hash=%s not produced by current request compression",
                     hash_value,
@@ -474,16 +526,16 @@ class HeadroomGuardrail(CustomGuardrail):
                     query=str(query) if query else None,
                 )
             verbose_proxy_logger.debug("Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content))
-            tool_results.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc.get("id"),
-                    "content": content,
-                }
-            )
+            retrieved.append((tc, content))
 
-        assistant_message = _build_assistant_message_from_response(response)
-        follow_up_messages = list(messages) + [assistant_message] + tool_results
+        if _is_responses_api_response(response):
+            follow_up_messages = list(messages) + _build_responses_followup_items(retrieved)
+        else:
+            assistant_message = _build_assistant_message_from_response(response)
+            tool_results = [
+                {"role": "tool", "tool_call_id": tc.get("id"), "content": content} for tc, content in retrieved
+            ]
+            follow_up_messages = list(messages) + [assistant_message] + tool_results
 
         max_tokens: Optional[int] = anthropic_messages_optional_request_params.get("max_tokens") or kwargs.get(
             "max_tokens"

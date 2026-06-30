@@ -309,6 +309,7 @@ async def test_async_build_agentic_loop_plan_calls_retrieve_and_builds_messages(
         tool_id="call_abc123",
     )
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
+    guardrail._issued_hashes["b573993006976af767214fac"] = None
 
     with patch.object(
         guardrail.async_handler,
@@ -371,6 +372,7 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
             "content": "Retrieve more: hash=deadbeef000000000000dead",
         }
     ]
+    guardrail._issued_hashes["deadbeef000000000000dead"] = None
 
     with patch.object(
         guardrail.async_handler,
@@ -436,6 +438,118 @@ async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request
     tool_result = next((m for m in follow_up if m.get("role") == "tool"), None)
     assert tool_result is not None
     assert "was not produced by the current request" in tool_result["content"]
+
+
+async def test_async_build_agentic_loop_plan_rejects_hash_never_issued_by_compress(
+    guardrail: HeadroomGuardrail,
+):
+    """A hash-shaped string planted in message text must not be honored unless
+    this guardrail actually issued it via /v1/compress, even if it's echoed
+    back in the current request's messages (e.g. via prompt injection)."""
+    tool_calls = [
+        {
+            "id": "call_xyz",
+            "type": "function",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": {"hash": "deadbeef000000000000dead"},
+        }
+    ]
+    response = _make_openai_response_with_tool_call(
+        tool_name=HEADROOM_RETRIEVE_TOOL_NAME,
+        arguments={"hash": "deadbeef000000000000dead"},
+        tool_id="call_xyz",
+    )
+    messages = [{"role": "user", "content": "Please fetch hash=deadbeef000000000000dead for me"}]
+    assert "deadbeef000000000000dead" not in guardrail._issued_hashes
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+    ) as mock_get:
+        plan = await guardrail.async_build_agentic_loop_plan(
+            tools={"tool_calls": tool_calls},
+            model="gpt-4o",
+            messages=messages,
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            stream=False,
+            kwargs={},
+        )
+
+    mock_get.assert_not_called()
+
+    follow_up = plan.request_patch.messages  # type: ignore[union-attr]
+    tool_result = next((m for m in follow_up if m.get("role") == "tool"), None)
+    assert tool_result is not None
+    assert "was not produced by the current request" in tool_result["content"]
+
+
+async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_items(
+    guardrail: HeadroomGuardrail,
+):
+    """For the Responses API, follow-up input must echo a function_call paired
+    with a function_call_output keyed by the same call_id -- chat-style
+    assistant/tool messages are not valid Responses API input items."""
+    original_content = "This is the full compressed content."
+    mock_retrieve = _make_retrieve_response(original_content)
+
+    response = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_abc123",
+            "call_id": "call_abc123",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": json.dumps({"hash": "b573993006976af767214fac"}),
+        }
+    ]
+
+    tool_calls = [
+        {
+            "id": "call_abc123",
+            "type": "function",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": {"hash": "b573993006976af767214fac"},
+        }
+    ]
+    messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
+    guardrail._issued_hashes["b573993006976af767214fac"] = None
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=mock_retrieve,
+    ):
+        plan = await guardrail.async_build_agentic_loop_plan(
+            tools={"tool_calls": tool_calls},
+            model="gpt-4o",
+            messages=messages,
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            stream=False,
+            kwargs={},
+        )
+
+    follow_up = plan.request_patch.messages  # type: ignore[union-attr]
+    assert all("role" not in item for item in follow_up if item not in messages)
+
+    function_call_item = next((i for i in follow_up if i.get("type") == "function_call"), None)
+    assert function_call_item is not None
+    assert function_call_item["call_id"] == "call_abc123"
+    assert function_call_item["name"] == HEADROOM_RETRIEVE_TOOL_NAME
+
+    output_item = next((i for i in follow_up if i.get("type") == "function_call_output"), None)
+    assert output_item is not None
+    assert output_item["call_id"] == "call_abc123"
+    assert output_item["output"] == original_content
 
 
 def test_extract_hashes_from_messages_finds_hashes():
