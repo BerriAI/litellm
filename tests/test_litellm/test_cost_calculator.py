@@ -1,5 +1,7 @@
 import os
 import sys
+from collections.abc import Mapping
+from typing import cast
 
 import pytest
 
@@ -21,6 +23,50 @@ from litellm.cost_calculator import (
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+OPEN_SOURCE_CACHE_READ_PROVIDERS = frozenset(
+    {
+        "deepinfra",
+        "deepseek",
+        "fireworks_ai",
+        "groq",
+        "minimax",
+        "moonshot",
+        "novita",
+        "openrouter",
+        "wandb",
+        "zai",
+    }
+)
+
+OPEN_SOURCE_CACHE_READ_MODEL_MARKERS = (
+    "deepseek",
+    "glm",
+    "gpt-oss",
+    "kimi",
+    "minimax",
+    "moonshot",
+    "qwen",
+    "z-ai",
+    "zai",
+)
+
+
+def _is_open_source_cache_read_model(
+    model_name: str, model_info: Mapping[str, object]
+) -> bool:
+    if not (
+        model_info.get("input_cost_per_token")
+        and model_info.get("output_cost_per_token")
+        and model_info.get("cache_read_input_token_cost")
+    ):
+        return False
+
+    provider = model_info.get("litellm_provider")
+    model_name_lower = model_name.lower()
+    return provider in OPEN_SOURCE_CACHE_READ_PROVIDERS and any(
+        marker in model_name_lower for marker in OPEN_SOURCE_CACHE_READ_MODEL_MARKERS
+    )
 
 
 def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
@@ -97,6 +143,85 @@ def test_completion_cost_uses_response_model_for_dynamic_routing():
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_open_source_cache_read_models_charge_cached_tokens_at_cache_read_rate():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    usage = Usage(
+        prompt_tokens=1000,
+        completion_tokens=100,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=800,
+            text_tokens=200,
+        ),
+    )
+    model_items = tuple(
+        (model_name, model_info)
+        for model_name, model_info in litellm.model_cost.items()
+        if _is_open_source_cache_read_model(model_name, model_info)
+    )
+
+    assert model_items
+
+    for model_name, model_info in model_items:
+        input_cost, output_cost = cost_per_token(
+            model=model_name,
+            custom_llm_provider=cast(str, model_info["litellm_provider"]),
+            usage_object=usage,
+        )
+
+        expected_input_cost = (
+            200 * float(model_info["input_cost_per_token"])
+            + 800 * float(model_info["cache_read_input_token_cost"])
+        )
+        expected_output_cost = 100 * float(model_info["output_cost_per_token"])
+
+        assert input_cost == pytest.approx(expected_input_cost), model_name
+        assert output_cost == pytest.approx(expected_output_cost), model_name
+
+
+def test_fireworks_custom_cached_model_uses_cache_read_cost_from_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "fireworks_ai/accounts/fireworks/models/glm-5p2"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "litellm_provider": "fireworks_ai",
+                "mode": "chat",
+                "input_cost_per_token": 0.0000014,
+                "output_cost_per_token": 0.0000044,
+                "cache_read_input_token_cost": 0.00000026,
+                "supports_prompt_caching": True,
+            }
+        }
+    )
+
+    response = ModelResponse(
+        model=model,
+        choices=[],
+        usage=Usage(
+            total_tokens=27498,
+            prompt_tokens=27147,
+            completion_tokens=351,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=27146),
+        ),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="fireworks_ai",
+    )
+
+    expected_input_cost = (1 * 0.0000014) + (27146 * 0.00000026)
+    expected_output_cost = 351 * 0.0000044
+
+    assert cost == pytest.approx(expected_input_cost + expected_output_cost)
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
