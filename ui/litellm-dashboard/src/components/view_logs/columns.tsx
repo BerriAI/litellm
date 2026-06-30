@@ -264,7 +264,6 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "Duration (s)",
     accessorKey: "request_duration_ms",
-    size: 90,
     cell: (info: any) => {
       const ms = info.getValue();
       if (ms == null) return <span>-</span>;
@@ -289,7 +288,6 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         )
       : "TTFT (s)",
     accessorKey: "completionStartTime",
-    size: 80,
     cell: (info: any) => {
       const row = info.row.original;
       const completionStartTime = info.getValue();
