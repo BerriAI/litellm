@@ -36102,7 +36102,7 @@
     "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-openai_models",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",

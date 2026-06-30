@@ -206,6 +206,27 @@ def test_gemma_maas_supports_vision():
         )
 
 
+def test_gemma_maas_local_cost_map_matches_google_model_card(monkeypatch):
+    """Guard the shipped cost-map entry against the official Vertex AI model card.
+
+    The Google model card lists a 262,144-token context window and a 128,000-token
+    max output at $0.15/1M input and $0.60/1M output. This loads the packaged local
+    cost map (not the remote one) so a regression in the JSON file is caught here,
+    including the earlier 256000 context-window approximation.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    local_cost_map = litellm.get_model_cost_map(url="")
+    entry = local_cost_map["vertex_ai/google/gemma-4-26b-a4b-it-maas"]
+
+    assert entry["max_input_tokens"] == 262144
+    assert entry["max_output_tokens"] == 128000
+    assert entry["max_tokens"] == 128000
+    assert entry["input_cost_per_token"] == 1.5e-07
+    assert entry["output_cost_per_token"] == 6e-07
+    assert entry["supports_function_calling"] is True
+    assert entry["supports_vision"] is True
+
+
 # ---------------------------------------------------------------------------
 # Integration tests: verify payloads reach the global OpenAI endpoint
 #
