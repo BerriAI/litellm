@@ -553,6 +553,7 @@ async def _update_litellm_setting(
     settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
     settings_key: str,
     success_message: str,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ):
     """
     Common utility function to update `litellm_settings` in both memory and config.
@@ -561,8 +562,15 @@ async def _update_litellm_setting(
         settings: The settings object to update
         settings_key: The key in litellm_settings to update
         success_message: Message to return on success
+        user_api_key_dict: The acting admin, recorded as the audit-log actor.
+            Optional today so callers that have not been wired for auditing
+            keep working; the audit row is only written when an actor is passed.
     """
-    from litellm.proxy.proxy_server import proxy_config, store_model_in_db
+    from litellm.proxy.proxy_server import (
+        create_config_audit_log,
+        proxy_config,
+        store_model_in_db,
+    )
 
     if store_model_in_db is not True:
         raise HTTPException(
@@ -576,6 +584,7 @@ async def _update_litellm_setting(
     # because get_config() may overwrite litellm.<key> with stale DB values
     # via LITELLM_SETTINGS_SAFE_DB_OVERRIDES.
     config = await proxy_config.get_config()
+    before_value = config.get("litellm_settings", {}).get(settings_key)
 
     # Update the in-memory settings (after get_config to avoid stale override)
     setattr(litellm, settings_key, in_memory_var)
@@ -588,6 +597,15 @@ async def _update_litellm_setting(
 
     # Save the updated config
     await proxy_config.save_config(new_config=config)
+
+    if user_api_key_dict is not None:
+        await create_config_audit_log(
+            param_name=settings_key,
+            action="updated",
+            before_value=before_value,
+            after_value=in_memory_var,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     return {
         "message": success_message,
@@ -619,6 +637,7 @@ async def update_internal_user_settings(
         settings=settings,
         settings_key="default_internal_user_params",
         success_message="Internal user settings updated successfully",
+        user_api_key_dict=user_api_key_dict,
     )
 
 

@@ -1869,3 +1869,56 @@ class TestProxySettingEndpoints:
         assert "field_schema" in data
         assert "properties" in data["field_schema"]
         assert "role_mappings" in data["field_schema"]["properties"]
+
+
+def test_update_internal_user_settings_writes_audit_log(mock_proxy_config, monkeypatch):
+    """Regression for the reported scenario: an admin changes Default User
+    Settings from the dashboard, which issues PATCH /update/internal_user_settings
+    (NOT /config/update). An audit row must record who changed it and what
+    changed."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/internal_user_settings",
+            json={"max_budget": 999.0, "models": ["gpt-4"]},
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "default_internal_user_params"
+        assert written["action"] == "updated"
+        assert written["table_name"] == "LiteLLM_Config"
+        assert written["changed_by"] == "audit-admin"
+        assert written["changed_by_api_key"] == "hashed-admin-key"
+
+        before = json.loads(written["before_value"])
+        after = json.loads(written["updated_values"])
+        assert before["max_budget"] == 100.0
+        assert after["max_budget"] == 999.0
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
