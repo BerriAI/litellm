@@ -37,8 +37,13 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
             **({"anthropic-version": DEFAULT_ANTHROPIC_API_VERSION} if "anthropic-version" not in present else {}),
             **({"content-type": "application/json"} if "content-type" not in present else {}),
         }
+        combined = {**headers, **defaults}
+        normalized = {
+            ("anthropic-beta" if key.lower() == "anthropic-beta" else key): value
+            for key, value in combined.items()
+        }
         merged = self._update_headers_with_anthropic_beta(
-            headers={**headers, **defaults},
+            headers=normalized,
             optional_params=optional_params,
         )
         return merged, api_base
