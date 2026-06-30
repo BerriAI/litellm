@@ -278,6 +278,12 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # NVIDIA Riva fields consumed by the audio-transcription handler
+    # via ``optional_params``. Banned for the same reason as the
+    # provider-specific entries above: a caller-supplied value retargets
+    # the request away from the admin's pinned configuration.
+    "nvcf_function_id",
+    "use_ssl",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     # Observability credentials, hosts, and project identifiers: derived
