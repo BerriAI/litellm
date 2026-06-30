@@ -555,7 +555,7 @@ class SlackAlerting(CustomBatchLogger):
             # Include threshold level in cache key so each configured threshold fires its own alert
             # rather than the first crossing suppressing all subsequent ones.
             _threshold_suffix = (
-                f":{int(user_info.budget_percentage_used * 100)}"
+                f":{round(user_info.budget_percentage_used * 100)}"
                 if user_info.budget_percentage_used is not None
                 else ""
             )
@@ -634,17 +634,15 @@ class SlackAlerting(CustomBatchLogger):
             if user_info.spend >= user_info.max_budget:
                 event = "budget_crossed"
                 event_message += f"Budget Crossed\n Total Budget:`{user_info.max_budget}`"
+            elif user_info.budget_percentage_used is not None:
+                event = "threshold_crossed"
+                event_message += f"{round(user_info.budget_percentage_used * 100)}% Threshold Crossed"
             elif percent_left <= SLACK_ALERTING_THRESHOLD_5_PERCENT:
                 event = "threshold_crossed"
                 event_message += "5% Threshold Crossed "
             elif percent_left <= SLACK_ALERTING_THRESHOLD_15_PERCENT:
                 event = "threshold_crossed"
                 event_message += "15% Threshold Crossed"
-            elif user_info.budget_percentage_used is not None:
-                # Caller specified the exact threshold crossed (e.g. from multi-threshold check
-                # functions). Use it to fire the event even when outside the fixed Slack buckets.
-                event = "threshold_crossed"
-                event_message += f"{int(user_info.budget_percentage_used * 100)}% Threshold Crossed"
 
         return event, event_message
 
@@ -1116,7 +1114,7 @@ Model Info:
             if response.status_code == 200:
                 any_success = True
             else:
-                verbose_proxy_logger.warning("Error sending webhook alert to %s: %s", url, response.text)
+                verbose_proxy_logger.warning("Error sending webhook alert: %s", response.text)
         return any_success
 
     async def _check_if_using_premium_email_feature(

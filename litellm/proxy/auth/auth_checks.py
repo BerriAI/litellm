@@ -656,11 +656,6 @@ async def common_checks(
                         message=f"ExceededBudget: User={user_object.user_id} over budget. Spend={user_spend}, Budget={user_budget}",
                     )
 
-        # Each scope reads a distinct counter key with no cross-scope ordering
-        # dependency, so the per-scope Redis-first reads run concurrently instead
-        # of one sequential await per scope. return_exceptions lets every scope
-        # settle, then the first error in scope-priority order propagates exactly
-        # as the sequential path raised.
         budget_check_coros = tuple(
             coro
             for coro in (
@@ -3690,11 +3685,13 @@ async def _virtual_key_max_budget_alert_check(
         )
         return
 
-    per_key_thresholds = (valid_token.metadata or {}).get("budget_alert_thresholds") if valid_token.metadata else None
-    effective_thresholds = (
-        per_key_thresholds
-        if per_key_thresholds is not None
-        else (thresholds if thresholds is not None else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE])
+    raw_key_thresholds = (
+        ((valid_token.metadata or {}).get("budget_alert_thresholds") if valid_token.metadata else None)
+        or thresholds
+        or [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
+    )
+    effective_thresholds = _sanitize_alert_thresholds(
+        raw_key_thresholds if isinstance(raw_key_thresholds, list) else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
     )
     for threshold in effective_thresholds:
         if valid_token.spend >= valid_token.max_budget * threshold and valid_token.spend < valid_token.max_budget:
@@ -3727,6 +3724,12 @@ async def _virtual_key_max_budget_alert_check(
             )
 
 
+def _sanitize_alert_thresholds(thresholds: List[float]) -> List[float]:
+    return list(
+        dict.fromkeys(t for t in thresholds[:10] if isinstance(t, float) and math.isfinite(t) and 0.0 < t < 1.0)
+    )
+
+
 async def _team_max_budget_alert_check(
     team_object: Optional[LiteLLM_TeamTable],
     valid_token: Optional[UserAPIKeyAuth],
@@ -3737,7 +3740,12 @@ async def _team_max_budget_alert_check(
     Fires a non-blocking budget alert for each configured threshold the team has crossed
     but not yet exceeded. Mirrors _virtual_key_max_budget_alert_check for teams.
     """
-    if team_object is None or team_object.max_budget is None or not math.isfinite(team_object.max_budget):
+    if (
+        team_object is None
+        or team_object.team_id is None
+        or team_object.max_budget is None
+        or not math.isfinite(team_object.max_budget)
+    ):
         return
 
     from litellm.proxy.proxy_server import get_current_spend
@@ -3748,13 +3756,13 @@ async def _team_max_budget_alert_check(
         max_budget=team_object.max_budget,
     )
 
-    per_team_thresholds = (
-        team_object.metadata.get("budget_alert_thresholds") if isinstance(team_object.metadata, dict) else None
+    raw_thresholds = (
+        (team_object.metadata.get("budget_alert_thresholds") if isinstance(team_object.metadata, dict) else None)
+        or thresholds
+        or [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
     )
-    effective_thresholds = (
-        per_team_thresholds
-        if per_team_thresholds is not None
-        else (thresholds if thresholds is not None else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE])
+    effective_thresholds = _sanitize_alert_thresholds(
+        raw_thresholds if isinstance(raw_thresholds, list) else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
     )
     for threshold in effective_thresholds:
         if spend >= team_object.max_budget * threshold and spend < team_object.max_budget:
@@ -3794,7 +3802,12 @@ async def _user_max_budget_alert_check(
     Fires a non-blocking budget alert for each configured threshold the user has crossed
     but not yet exceeded. Mirrors _virtual_key_max_budget_alert_check for users.
     """
-    if user_object is None or user_object.max_budget is None or not math.isfinite(user_object.max_budget):
+    if (
+        user_object is None
+        or user_object.user_id is None
+        or user_object.max_budget is None
+        or not math.isfinite(user_object.max_budget)
+    ):
         return
 
     from litellm.proxy.proxy_server import get_current_spend
@@ -3805,13 +3818,13 @@ async def _user_max_budget_alert_check(
         max_budget=user_object.max_budget,
     )
 
-    per_user_thresholds = (
-        user_object.metadata.get("budget_alert_thresholds") if isinstance(user_object.metadata, dict) else None
+    raw_thresholds = (
+        (user_object.metadata.get("budget_alert_thresholds") if isinstance(user_object.metadata, dict) else None)
+        or thresholds
+        or [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
     )
-    effective_thresholds = (
-        per_user_thresholds
-        if per_user_thresholds is not None
-        else (thresholds if thresholds is not None else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE])
+    effective_thresholds = _sanitize_alert_thresholds(
+        raw_thresholds if isinstance(raw_thresholds, list) else [EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE]
     )
     for threshold in effective_thresholds:
         if spend >= user_object.max_budget * threshold and spend < user_object.max_budget:
