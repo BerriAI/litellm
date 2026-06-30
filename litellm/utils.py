@@ -4238,6 +4238,13 @@ def get_optional_params(
             model=model,
             drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
         )
+    elif custom_llm_provider == "iflytek":
+        optional_params = litellm.IFlytekConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+        )
     elif custom_llm_provider == "nebius":
         optional_params = litellm.NebiusConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4726,6 +4733,9 @@ def get_api_key(llm_provider: str, dynamic_api_key: Optional[str]):
         api_key = (
             api_key or litellm.togetherai_api_key or get_secret("TOGETHERAI_API_KEY") or get_secret("TOGETHER_AI_TOKEN")
         )
+    # iflytek
+    elif llm_provider == "iflytek":
+        api_key = api_key or litellm.iflytek_key or get_secret("IFLYTEK_API_KEY")
     # nebius
     elif llm_provider == "nebius":
         api_key = api_key or litellm.nebius_key or get_secret("NEBIUS_API_KEY")
@@ -7653,6 +7663,7 @@ class ProviderConfigManager:
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
+            LlmProviders.IFLYTEK: (lambda: litellm.IFlytekConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
             LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
