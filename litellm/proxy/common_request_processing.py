@@ -255,6 +255,15 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
                     if 100 <= error_code <= 599:
                         # Standard HTTP status code
                         return error_code
+                    elif error_code < 100:
+                        # Integer code below the HTTP status range (e.g. 99).
+                        # Likely invalid or non-RFC data; keep the original
+                        # "invalid or non-convertible code" warning so this
+                        # edge case remains observable in logs.
+                        verbose_proxy_logger.warning(
+                            f"Error has invalid or non-convertible code: {error_code_raw}"
+                        )
+                        return None
                     elif error_code >= 600:
                         # Vendor-specific error codes outside the standard HTTP
                         # range (e.g., ZAI/ZhipuAI 1302 rate limit, DashScope

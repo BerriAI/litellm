@@ -1149,6 +1149,39 @@ class TestCommonRequestProcessingHelpers:
     async def test_parse_event_data_for_error(self, event_line, expected_code):
         assert await _parse_event_data_for_error(event_line) == expected_code
 
+    @pytest.mark.parametrize(
+        "below_range_code",
+        [0, 1, 50, 99],
+    )
+    async def test_parse_event_data_for_error_below_range_logs_warning(self, below_range_code):
+        """Integer codes < 100 should be treated as invalid (return None)
+        AND emit a warning so this edge case stays observable in logs.
+
+        Regression: PR #31291 restructured the if/elif and the new structure
+        would silently return None for codes < 100 without warning.
+        """
+        from litellm.proxy.common_request_processing import (
+            verbose_proxy_logger,
+        )
+
+        event_line = (
+            f'data: {{"error": {{"code": {below_range_code}, '
+            f'"message": "too low"}}}}'
+        )
+        with patch.object(verbose_proxy_logger, "warning") as mock_warning:
+            result = await _parse_event_data_for_error(event_line)
+
+        assert result is None
+        warning_messages = [
+            call.args[0] for call in mock_warning.call_args_list if call.args
+        ]
+        assert any(
+            "invalid or non-convertible" in msg for msg in warning_messages
+        ), (
+            f"Expected 'invalid or non-convertible' warning for code={below_range_code}, "
+            f"got: {warning_messages}"
+        )
+
     async def test_create_streaming_response_first_chunk_is_error(self):
         """
         Test that when the first chunk is an error, a JSON error response is returned
