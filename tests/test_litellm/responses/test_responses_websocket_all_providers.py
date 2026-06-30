@@ -2409,6 +2409,36 @@ class TestNativeWebSocketUrlConstruction:
             "2024-05-01"
         ], f"existing param lost: {captured_urls[0]}"
 
+    def test_gemini_live_ws_url_omits_model(self):
+        """Gemini Live's BidiGenerateContent endpoint rejects a `model` query
+        param (WS 1007), so _append_query_params must drop it there while keeping
+        other params — and keep `model` for non-Gemini realtime URLs."""
+        from urllib.parse import parse_qs, urlparse
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        gemini_url = (
+            "wss://generativelanguage.googleapis.com/ws/"
+            "google.ai.generativelanguage.v1beta.GenerativeService."
+            "BidiGenerateContent?key=test-key"
+        )
+        out = BaseLLMHTTPHandler._append_query_params(
+            gemini_url,
+            {"model": "gemini-2.5-flash-native-audio", "intent": "transcription"},
+        )
+        qs = parse_qs(urlparse(out).query)
+        assert "model" not in qs, f"model must be dropped for Gemini Live: {out}"
+        assert qs.get("key") == ["test-key"], f"existing param lost: {out}"
+        assert qs.get("intent") == ["transcription"], f"non-model param dropped: {out}"
+
+        # Non-Gemini realtime URLs keep the model param (OpenAI convention).
+        openai_out = BaseLLMHTTPHandler._append_query_params(
+            "wss://api.openai.com/v1/realtime", {"model": "gpt-4o-realtime-preview"}
+        )
+        assert parse_qs(urlparse(openai_out).query).get("model") == [
+            "gpt-4o-realtime-preview"
+        ], f"model must be preserved for non-Gemini: {openai_out}"
+
     @pytest.mark.asyncio
     async def test_ws_passes_litellm_params_to_get_websocket_url(self):
         """Deployment api_version must reach get_websocket_url (Azure WS URL)."""
