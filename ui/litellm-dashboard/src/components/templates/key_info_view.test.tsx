@@ -7,7 +7,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyUpdateCall } from "../networking";
+import { keyDeleteCall, keyUpdateCall } from "../networking";
+import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView from "./key_info_view";
 
 const editViewMocks = vi.hoisted(() => ({
@@ -785,6 +786,40 @@ describe("KeyInfoView", () => {
       await editViewMocks.onSubmit!({ key: keyData.token, token: keyData.token, policies: [] });
 
       expect(keyUpdateCall).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ policies: [] }));
+    });
+  });
+
+  describe("delete flow", () => {
+    it("invalidates the keys list query after a successful delete so active filters survive (LIT-4080)", async () => {
+      const invalidateSpy = vi.spyOn(QueryClient.prototype, "invalidateQueries");
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+
+      renderWithProviders(
+        <KeyInfoView
+          keyData={MOCK_KEY_DATA}
+          onClose={() => {}}
+          keyId="test-key-id"
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+
+      await userEvent.click(await screen.findByRole("button", { name: /delete key/i }));
+
+      const confirmInput = await screen.findByPlaceholderText(MOCK_KEY_DATA.key_alias);
+      await userEvent.type(confirmInput, MOCK_KEY_DATA.key_alias);
+      await userEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+
+      await waitFor(() => {
+        expect(keyDeleteCall).toHaveBeenCalledWith("test-token", MOCK_KEY_DATA.token);
+        expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["keys", "list"] });
+      });
+
+      invalidateSpy.mockRestore();
     });
   });
 });

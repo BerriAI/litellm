@@ -49,12 +49,16 @@ from litellm.proxy._types import (
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingGuardrailInformation,
+    StandardLoggingPayload,
+)
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -64,6 +68,8 @@ else:
 
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
+
+    _ADDITIVE_GUARDRAIL_MODES = frozenset((GuardrailEventHooks.pre_call.value, GuardrailEventHooks.post_call.value))
 
     @staticmethod
     def get_instance() -> Optional["PrometheusLogger"]:
@@ -343,6 +349,14 @@ class PrometheusLogger(CustomLogger):
                 buckets=self.latency_buckets,
             )
 
+            self.litellm_overhead_with_guardrails_latency_metric = self._histogram_factory(
+                "litellm_overhead_with_guardrails_latency_metric",
+                "Total internal latency (seconds) added by LiteLLM, including "
+                "pre/post-call guardrails (excludes the LLM API call)",
+                labelnames=self.get_labels_for_metric("litellm_overhead_with_guardrails_latency_metric"),
+                buckets=self.latency_buckets,
+            )
+
             # Request queue time metric
             self.litellm_request_queue_time_metric = self._histogram_factory(
                 "litellm_request_queue_time_seconds",
@@ -494,6 +508,12 @@ class PrometheusLogger(CustomLogger):
             self.litellm_total_users_metric = self._gauge_factory(
                 "litellm_total_users",
                 "Total number of users in LiteLLM",
+                labelnames=[],
+            )
+
+            self.litellm_active_users_metric = self._gauge_factory(
+                "litellm_active_users",
+                "Number of billable users in LiteLLM (excludes SCIM-deactivated users)",
                 labelnames=[],
             )
 
@@ -994,6 +1014,67 @@ class PrometheusLogger(CustomLogger):
 
         self._cached_metric_labels[metric_name] = filtered_labels
         return filtered_labels
+
+    @staticmethod
+    def _guardrail_is_additive(info: StandardLoggingGuardrailInformation) -> bool:
+        mode = info.get("guardrail_mode")
+        modes = mode if isinstance(mode, list) else [mode]
+        mode_values = frozenset(
+            m.value if isinstance(m, GuardrailEventHooks) else m for m in modes if isinstance(m, str)
+        )
+        return bool(mode_values) and mode_values <= PrometheusLogger._ADDITIVE_GUARDRAIL_MODES
+
+    @staticmethod
+    def _get_guardrail_overhead_seconds(
+        standard_logging_payload: StandardLoggingPayload,
+    ) -> float:
+        """Seconds of additive guardrail time (pre/post-call only) on the payload.
+
+        during_call guardrails run concurrently with the LLM call, so their
+        wall-clock overlaps the provider call and is not additive overhead;
+        logging_only and MCP modes never block the user-facing response. A
+        guardrail counts only when every mode it carries is pre/post-call, so a
+        mixed list such as ["pre_call", "during_call"] is excluded.
+
+        guardrail_information is typed as a list, but some guardrails assign a
+        single dict directly, so normalize that shape to a one-item list.
+        """
+        guardrail_information = standard_logging_payload.get("guardrail_information")
+        entries: list[StandardLoggingGuardrailInformation] = (
+            [cast("StandardLoggingGuardrailInformation", guardrail_information)]
+            if isinstance(guardrail_information, dict)
+            else guardrail_information or []
+        )
+        return sum(
+            (float(info.get("duration") or 0.0) for info in entries if PrometheusLogger._guardrail_is_additive(info)),
+            0.0,
+        )
+
+    def _set_overhead_with_guardrails_metric(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
+    ) -> None:
+        """Record litellm_overhead_with_guardrails_latency_metric (seconds): SDK overhead +
+        pre/post-call guardrail time. Recorded outside the SDK-overhead gate so
+        guardrail-only overhead is still captured when litellm_overhead_time_ms
+        is 0 or absent.
+        """
+        litellm_overhead_time_ms = standard_logging_payload["hidden_params"].get("litellm_overhead_time_ms")
+        guardrail_overhead_seconds = self._get_guardrail_overhead_seconds(standard_logging_payload)
+        if litellm_overhead_time_ms is None and guardrail_overhead_seconds <= 0:
+            return
+        labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_overhead_with_guardrails_latency_metric"
+            ),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        self.litellm_overhead_with_guardrails_latency_metric.labels(**labels).observe(
+            ((litellm_overhead_time_ms or 0.0) / 1000) + guardrail_overhead_seconds
+        )
 
     def _track_end_user_metric_series(
         self,
@@ -2340,6 +2421,12 @@ class PrometheusLogger(CustomLogger):
                     litellm_overhead_time_ms / 1000
                 )  # set as seconds
 
+            self._set_overhead_with_guardrails_metric(
+                standard_logging_payload=standard_logging_payload,
+                enum_values=enum_values,
+                label_context=label_context,
+            )
+
             if remaining_requests:
                 """
                 "model_group",
@@ -3033,6 +3120,7 @@ class PrometheusLogger(CustomLogger):
 
         Updates:
         - litellm_total_users: Total count of users in the database
+        - litellm_active_users: Count of billable users (excludes SCIM-deactivated)
         - litellm_teams_count: Total count of teams in the database
         """
         from litellm.proxy.proxy_server import prisma_client
@@ -3046,6 +3134,10 @@ class PrometheusLogger(CustomLogger):
             total_users = await UserRepository(prisma_client).table.count()
             self.litellm_total_users_metric.set(total_users)
             verbose_logger.debug(f"Prometheus: set litellm_total_users to {total_users}")
+
+            billable_users = await UserRepository(prisma_client).count_billable_users()
+            self.litellm_active_users_metric.set(billable_users)
+            verbose_logger.debug(f"Prometheus: set litellm_active_users to {billable_users}")
 
             # Get total team count
             total_teams = await TeamRepository(prisma_client).table.count()

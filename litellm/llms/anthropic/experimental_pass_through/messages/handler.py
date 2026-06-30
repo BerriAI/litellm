@@ -61,6 +61,19 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
 
+def _deployment_passes_through_anthropic_messages(model_info: object) -> bool:
+    """Whether the deployment opted into forwarding /v1/messages untranslated.
+
+    The opt-in is ``model_info.supported_endpoints`` containing ``"/v1/messages"``,
+    declared per deployment in config.yaml and plumbed here as ``kwargs["model_info"]``
+    by the router.
+    """
+    if not isinstance(model_info, dict):
+        return False
+    supported_endpoints = model_info.get("supported_endpoints")
+    return isinstance(supported_endpoints, (list, tuple)) and "/v1/messages" in supported_endpoints
+
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -456,6 +469,14 @@ def anthropic_messages_handler(
             model=model,
             provider=litellm.LlmProviders(custom_llm_provider),
         )
+    if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
+        kwargs.get("model_info")
+    ):
+        from litellm.llms.openai_like.messages.transformation import (
+            OpenAILikeAnthropicMessagesConfig,
+        )
+
+        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig()
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         _shared_kwargs = dict(

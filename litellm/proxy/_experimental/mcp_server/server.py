@@ -229,6 +229,56 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     return False
 
 
+def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[dict[str, str]]:
+    """The W3C trace context (``traceparent``/``tracestate``) the MCP client
+    propagated in the request's ``params._meta`` (SEP-414), or ``None``.
+
+    Per the OTel MCP semconv the MCP span parents to this propagated context rather
+    than to the HTTP/session transport (which is recorded as a link instead), so a
+    streamable-HTTP session that multiplexes many messages does not glue every
+    message under the session's first request. The client's W3C Baggage is
+    deliberately excluded: it is caller-controlled, and the otel baggage processor
+    stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,
+    ...) onto the span, so honoring remote baggage would let a client spoof a
+    span's identity attribution.
+    """
+    meta = getattr(req_ctx, "meta", None)
+    extra = getattr(meta, "model_extra", None)
+    if not isinstance(extra, dict):
+        return None
+    carrier = {key: extra[key] for key in ("traceparent", "tracestate") if isinstance(extra.get(key), str)}
+    return carrier or None
+
+
+def _otel_set_mcp_trace_carrier(carrier: Optional[dict[str, str]]) -> object:
+    """Stash ``carrier`` for the otel_v2 MCP span and return a reset token, or
+    ``None`` when otel_v2 is unavailable. Lazily imported so opentelemetry stays an
+    optional dependency."""
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            set_mcp_message_trace_carrier,
+        )
+
+        return set_mcp_message_trace_carrier(carrier)
+    except ImportError:
+        return None
+
+
+def _otel_reset_mcp_trace_carrier(token: object) -> None:
+    """Clear the per-message trace carrier so it never leaks to the next message on
+    the same session task. Paired with ``_otel_set_mcp_trace_carrier``."""
+    if token is None:
+        return
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            reset_mcp_message_trace_carrier,
+        )
+
+        reset_mcp_message_trace_carrier(token)
+    except ImportError:
+        return
+
+
 def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
     """Map a ``ProxyException`` to an ``HTTPException`` that preserves its real
     status code and headers.
@@ -595,8 +645,10 @@ if MCP_AVAILABLE:
         _session_reset_token = None
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _trace_token = None
 
         try:
+            _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
             # Get user authentication from context variable
             (
                 user_api_key_auth,
@@ -632,6 +684,7 @@ if MCP_AVAILABLE:
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
         finally:
+            _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
 
@@ -658,8 +711,10 @@ if MCP_AVAILABLE:
         _session_reset_token = None
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _trace_token = None
 
         try:
+            _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
             # Validate arguments
             (
                 user_api_key_auth,
@@ -778,6 +833,7 @@ if MCP_AVAILABLE:
 
             return response
         finally:
+            _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
 
@@ -1643,12 +1699,13 @@ if MCP_AVAILABLE:
                     )
                     return filtered_tools
                 except MCPUpstreamAuthError:
-                    # Surface upstream 401/403 to the outer handler so the
-                    # client receives a proper WWW-Authenticate challenge
-                    # instead of a silently empty tool list. Without this
-                    # re-raise the broad ``except Exception`` below would
-                    # swallow the auth error.
-                    raise
+                    # Absorb so one unauthenticated server does not empty every other server's
+                    # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
+                    # intentionally not done here: raising from this list handler cannot produce a
+                    # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
+                    # error), so that belongs in a request-scope preemptive check, tracked separately.
+                    verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
+                    return []
                 except Exception as e:
                     verbose_logger.exception(f"Error getting tools from server {server.name}: {str(e)}")
                     return []
