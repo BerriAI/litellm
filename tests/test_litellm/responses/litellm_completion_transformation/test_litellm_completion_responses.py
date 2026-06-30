@@ -1427,6 +1427,25 @@ class TestToolTransformation:
 
         assert "web_search_options" not in result
 
+    def test_bedrock_converse_provider_drops_derived_web_search_options(self):
+        """
+        Regression for the ``bedrock_converse`` alias: routing a Bedrock Converse model resolves
+        to custom_llm_provider='bedrock_converse' with model='bedrock/converse/...'. The derived
+        web_search_options must still be dropped on this route, not just the bare 'bedrock' one.
+        """
+        responses_api_request = {
+            "tools": [{"type": "web_search", "external_web_access": False}],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="bedrock_converse",
+        )
+
+        assert "web_search_options" not in result
+
     def test_bedrock_nova_keeps_derived_web_search_options(self):
         """Nova models map web_search_options to a nova_grounding systemTool, so keep it."""
         responses_api_request = {
