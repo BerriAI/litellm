@@ -1871,8 +1871,17 @@ class AmazonConverseConfig(BaseConfig):
         if "cacheReadInputTokens" in usage:
             cache_read_input_tokens = usage["cacheReadInputTokens"]
             input_tokens += cache_read_input_tokens
+        elif "cacheReadInputTokenCount" in usage:
+            # Bedrock Converse native field name (Count suffix); Anthropic-direct
+            # API uses cacheReadInputTokens (no Count suffix).
+            cache_read_input_tokens = usage["cacheReadInputTokenCount"]
+            input_tokens += cache_read_input_tokens
         if "cacheWriteInputTokens" in usage:
             cache_creation_input_tokens = usage["cacheWriteInputTokens"]
+            input_tokens += cache_creation_input_tokens
+        elif "cacheWriteInputTokenCount" in usage:
+            # Bedrock Converse native field name (Count suffix).
+            cache_creation_input_tokens = usage["cacheWriteInputTokenCount"]
             input_tokens += cache_creation_input_tokens
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
