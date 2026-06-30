@@ -4717,6 +4717,7 @@ class PrismaClient:
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
+                self._consecutive_reconnect_failures = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:

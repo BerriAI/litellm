@@ -513,3 +513,24 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     # The flag must STILL be True so the next attempt re-enters the heavy
     # branch instead of silently demoting to the lightweight path.
     assert client._engine_confirmed_dead is True
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_resets_failure_counter_on_successful_probe(
+    mock_proxy_logging,
+):
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client.db.query_raw = AsyncMock(return_value=[{"result": 1}])
+    client._consecutive_reconnect_failures = 3
+    client._db_health_watchdog_interval_seconds = 1
+    client._db_health_watchdog_probe_timeout_seconds = 0.2
+
+    with patch(
+        "litellm.proxy.utils.asyncio.sleep",
+        AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+    ):
+        await client._db_health_watchdog_loop()
+
+    assert client._consecutive_reconnect_failures == 0
