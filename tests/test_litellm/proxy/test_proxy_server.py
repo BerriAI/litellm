@@ -8688,7 +8688,7 @@ def test_dump_redacted_config_redacts_secret_leaves():
 async def test_create_config_audit_log_writes_redacted_entry(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy._types import LitellmTableNames
-    from litellm.proxy.proxy_server import _create_config_audit_log
+    from litellm.proxy.proxy_server import create_config_audit_log
 
     fake = _fake_prisma_with_config({})
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
@@ -8696,7 +8696,7 @@ async def test_create_config_audit_log_writes_redacted_entry(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", True)
 
     caller = UserAPIKeyAuth(api_key="hashed-key-abc", user_id="admin-7")
-    await _create_config_audit_log(
+    await create_config_audit_log(
         "router_settings",
         "updated",
         {"routing_strategy": "simple-shuffle", "api_key": "sk-old"},
@@ -8725,14 +8725,14 @@ async def test_create_config_audit_log_writes_redacted_entry(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_config_audit_log_noop_when_store_audit_logs_disabled(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
-    from litellm.proxy.proxy_server import _create_config_audit_log
+    from litellm.proxy.proxy_server import create_config_audit_log
 
     fake = _fake_prisma_with_config({})
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
     monkeypatch.setattr(proxy_server_module, "premium_user", True)
     monkeypatch.setattr(litellm, "store_audit_logs", False)
 
-    await _create_config_audit_log(
+    await create_config_audit_log(
         "router_settings",
         "updated",
         {},

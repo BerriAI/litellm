@@ -13948,7 +13948,7 @@ async def update_config(
                         existing["alerting"].append("slack")
                 existing[k] = v
             await _upsert_section("general_settings", existing)
-            await _create_config_audit_log(
+            await create_config_audit_log(
                 "general_settings", "updated", before_general_settings, existing, user_api_key_dict
             )
 
@@ -13964,7 +13964,7 @@ async def update_config(
                 proxy_config._encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
             )
             await _upsert_section("environment_variables", existing)
-            await _create_config_audit_log(
+            await create_config_audit_log(
                 "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
             )
 
@@ -14000,7 +14000,7 @@ async def update_config(
                     merged["success_callback"] = list(set(incoming_cb))
 
             await _upsert_section("litellm_settings", merged)
-            await _create_config_audit_log(
+            await create_config_audit_log(
                 "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
             )
 
@@ -14011,7 +14011,7 @@ async def update_config(
             updates = config_info.router_settings.dict(exclude_none=True)
             new_router_settings = {**existing, **updates}
             await _upsert_section("router_settings", new_router_settings)
-            await _create_config_audit_log(
+            await create_config_audit_log(
                 "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
             )
 
@@ -14166,7 +14166,7 @@ async def update_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
-    await _create_config_audit_log(
+    await create_config_audit_log(
         "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
     )
 
@@ -14237,12 +14237,13 @@ def _dump_redacted_config(value: Optional[JsonValue], *, redact_all_values: bool
     return json.dumps(_redact_secret_values_in_obj(value))
 
 
-async def _create_config_audit_log(
+async def create_config_audit_log(
     param_name: str,
     action: AUDIT_ACTIONS,
     before_value: Optional[JsonValue],
     after_value: Optional[JsonValue],
     user_api_key_dict: UserAPIKeyAuth,
+    table_name: LitellmTableNames = LitellmTableNames.CONFIG_TABLE_NAME,
 ) -> None:
     """Record a system-wide settings change in LiteLLM_AuditLog.
 
@@ -14256,11 +14257,11 @@ async def _create_config_audit_log(
     await create_object_audit_log(
         object_id=param_name,
         action=action,
-        table_name=LitellmTableNames.CONFIG_TABLE_NAME,
+        table_name=table_name,
         before_value=_dump_redacted_config(before_value, redact_all_values=redact_all_values),
         after_value=_dump_redacted_config(after_value, redact_all_values=redact_all_values),
         user_api_key_dict=user_api_key_dict,
-        litellm_changed_by=user_api_key_dict.user_id,
+        litellm_changed_by=None,
         litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
     )
 
@@ -14565,7 +14566,7 @@ async def delete_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
-    await _create_config_audit_log(
+    await create_config_audit_log(
         "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
     )
 
@@ -14634,7 +14635,7 @@ async def delete_callback(
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
 
-        await _create_config_audit_log(
+        await create_config_audit_log(
             "litellm_settings",
             "deleted",
             {"success_callback": before_success_callbacks},

@@ -1869,3 +1869,160 @@ class TestProxySettingEndpoints:
         assert "field_schema" in data
         assert "properties" in data["field_schema"]
         assert "role_mappings" in data["field_schema"]["properties"]
+
+
+def test_update_internal_user_settings_writes_audit_log(mock_proxy_config, monkeypatch):
+    """Regression for the reported scenario: an admin changes Default User
+    Settings from the dashboard, which issues PATCH /update/internal_user_settings
+    (NOT /config/update). An audit row must record who changed it and what
+    changed."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/internal_user_settings",
+            json={"max_budget": 999.0, "models": ["gpt-4"]},
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "default_internal_user_params"
+        assert written["action"] == "updated"
+        assert written["table_name"] == "LiteLLM_Config"
+        assert written["changed_by"] == "audit-admin"
+        assert written["changed_by_api_key"] == "hashed-admin-key"
+
+        before = json.loads(written["before_value"])
+        after = json.loads(written["updated_values"])
+        assert before["max_budget"] == 100.0
+        assert after["max_budget"] == 999.0
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_update_sso_settings_writes_redacted_audit_log(mock_proxy_config, monkeypatch):
+    """Updating SSO settings must write an audit row to the SSO config table
+    with the client secret redacted."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+    fake_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+    fake_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(
+        proxy_server_module.proxy_config,
+        "_encrypt_env_variables",
+        lambda environment_variables: environment_variables,
+    )
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/sso_settings",
+            json={
+                "google_client_id": "client-id-123",
+                "google_client_secret": "super-secret-xyz",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "sso_config"
+        assert written["table_name"] == "LiteLLM_SSOConfig"
+        assert written["changed_by"] == "audit-admin"
+
+        after = json.loads(written["updated_values"])
+        assert after["google_client_id"] == "client-id-123"
+        assert after["google_client_secret"] == "REDACTED"
+        assert "super-secret-xyz" not in written["updated_values"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_add_allowed_ip_writes_audit_log(mock_proxy_config, monkeypatch):
+    """Adding an allowed IP is a system-wide security setting change and must
+    be audited with the before and after IP list."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(proxy_server_module, "general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.post("/add/allowed_ip", json={"ip": "203.0.113.77"})
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        assert written["object_id"] == "general_settings"
+        assert written["action"] == "updated"
+        assert written["changed_by"] == "audit-admin"
+
+        before = json.loads(written["before_value"])
+        after = json.loads(written["updated_values"])
+        assert "203.0.113.77" not in before["allowed_ips"]
+        assert "203.0.113.77" in after["allowed_ips"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
