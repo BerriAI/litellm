@@ -4,7 +4,7 @@ model_list:
       model: gemini/gemini-2.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY
 
-  - model_name: vertex-gemini-2.5-flash-lite
+  - model_name: gemini-2.5-flash-lite
     litellm_params:
       model: vertex_ai/gemini-2.5-flash-lite
 

@@ -44,7 +44,7 @@ model_list:
       api_base: os.environ/AZURE_AI_API_BASE
 
   # Vertex AI models
-  - model_name: vertex-ai-claude-opus-4-6
+  - model_name: claude-opus-4-6
     litellm_params:
       model: "vertex_ai/claude-opus-4-6"
       vertex_ai_project: "pathrise-convert-1606954137718"

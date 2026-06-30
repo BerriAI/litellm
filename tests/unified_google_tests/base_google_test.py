@@ -28,6 +28,27 @@ def load_vertex_ai_credentials(model: str):
     # Define the path to the vertex_key.json file
     if "vertex_ai" not in model:
         return None
+
+    # If the shell already has working ADC, do not overwrite it.
+    existing_creds = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if existing_creds and os.path.isfile(existing_creds):
+        try:
+            with open(existing_creds, "r") as file:
+                existing_data = json.load(file)
+            cred_type = existing_data.get("type", "")
+            private_key = existing_data.get("private_key", "")
+            if cred_type == "authorized_user" or (
+                cred_type == "service_account" and "BEGIN PRIVATE KEY" in private_key
+            ):
+                print("Using existing GOOGLE_APPLICATION_CREDENTIALS for vertex ai tests")
+                return existing_creds
+        except Exception:
+            pass
+
+        # A stale temp file can linger in the environment from previous tests.
+        # Clear it so google-auth can fall back to the real ADC chain.
+        os.environ.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
+
     print("loading vertex ai credentials")
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/vertex_key.json"
@@ -50,9 +71,12 @@ def load_vertex_ai_credentials(model: str):
         # If the file doesn't exist, create an empty dictionary
         service_account_key_data = {}
 
-    # Update the service_account_key_data with environment variables
+    # Update the service_account_key_data with environment variables when present.
     private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
     private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+    if not (private_key_id and private_key):
+        return None
+
     private_key = private_key.replace("\\n", "\n")
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
@@ -165,11 +189,18 @@ class BaseGoogleGenAITest:
             f"Standard logging payload validation passed: prompt_tokens={slp['prompt_tokens']}, completion_tokens={slp['completion_tokens']}, total_tokens={slp['total_tokens']}, cost={slp['response_cost']}"
         )
 
+    def _skip_if_missing_gemini_api_key(self, model: str) -> None:
+        if model.startswith("gemini/") and not (
+            os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        ):
+            pytest.skip("GEMINI_API_KEY or GOOGLE_API_KEY not set")
+
     @pytest.mark.parametrize("is_async", [False, True])
     @pytest.mark.asyncio
     async def test_non_streaming_base(self, is_async: bool):
         """Base test for non-streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
+        self._skip_if_missing_gemini_api_key(request_params["model"])
         contents = ContentDict(
             parts=[PartDict(text="Hello, can you tell me a short joke?")],
             role="user",
@@ -204,6 +235,7 @@ class BaseGoogleGenAITest:
     async def test_streaming_base(self, is_async: bool):
         """Base test for streaming requests (parametrized for sync/async)"""
         request_params = self.model_config
+        self._skip_if_missing_gemini_api_key(request_params["model"])
         temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
         if temp_file_path:
             self._temp_files_to_cleanup.append(temp_file_path)
@@ -241,13 +273,13 @@ class BaseGoogleGenAITest:
     @pytest.mark.asyncio
     async def test_async_non_streaming_with_logging(self):
         """Test async non-streaming Google GenAI generate content with logging"""
+        request_params = self.model_config
+        self._skip_if_missing_gemini_api_key(request_params["model"])
         litellm._turn_on_debug()
         litellm.logging_callback_manager._reset_all_callbacks()
         litellm.set_verbose = True
         test_custom_logger = TestCustomLogger()
         litellm.callbacks = [test_custom_logger]
-
-        request_params = self.model_config
         temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
         if temp_file_path:
             self._temp_files_to_cleanup.append(temp_file_path)
@@ -280,13 +312,13 @@ class BaseGoogleGenAITest:
     @pytest.mark.asyncio
     async def test_async_streaming_with_logging(self):
         """Test async streaming Google GenAI generate content with logging"""
+        request_params = self.model_config
+        self._skip_if_missing_gemini_api_key(request_params["model"])
         litellm._turn_on_debug()
         litellm.set_verbose = True
         litellm.logging_callback_manager._reset_all_callbacks()
         test_custom_logger = TestCustomLogger()
         litellm.callbacks = [test_custom_logger]
-
-        request_params = self.model_config
         temp_file_path = load_vertex_ai_credentials(model=request_params["model"])
         if temp_file_path:
             self._temp_files_to_cleanup.append(temp_file_path)

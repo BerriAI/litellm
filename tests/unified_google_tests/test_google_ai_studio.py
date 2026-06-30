@@ -27,6 +27,10 @@ class TestGoogleGenAIStudio(BaseGoogleGenAITest, BaseGoogleGenAIProxySDKTest):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"),
+    reason="GEMINI_API_KEY or GOOGLE_API_KEY not set",
+)
 async def test_mock_stream_generate_content_with_tools():
     """Test streaming function call response parsing and validation"""
     from litellm.types.google_genai.main import ToolConfigDict
@@ -269,6 +273,10 @@ async def test_mock_stream_generate_content_with_tools():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    not os.getenv("GEMINI_API_KEY") and not os.getenv("GOOGLE_API_KEY"),
+    reason="GEMINI_API_KEY or GOOGLE_API_KEY not set",
+)
 async def test_validate_post_request_parameters():
     """
     Test that the correct parameters are sent in the POST request to Google GenAI API
