@@ -8,7 +8,7 @@ USER_INVITATION_EMAIL_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome to LiteLLM</title>
+    <title>Welcome to {brand_name}</title>
     <style>
         body, html {{
             margin: 0;
@@ -115,17 +115,17 @@ USER_INVITATION_EMAIL_TEMPLATE = """
 <body>
     <div class="container">
         <div class="logo">
-            <img src="{email_logo_url}" alt="LiteLLM Logo" style="height: 32px; width: auto;">
+            <img src="{email_logo_url}" alt="{brand_name} Logo" style="height: 32px; width: auto;">
         </div>
         <div class="content">
-            <h1>Welcome to LiteLLM</h1>
+            <h1>Welcome to {brand_name}</h1>
 
             <div class="greeting">
                 <p>Hi {recipient_email},</p>
             </div>
             
             <div class="intro-text">
-                <p>LiteLLM allows you to call 100+ LLM providers in the OpenAI API format. Get started by accepting your invitation.</p>
+                <p>{brand_name} allows you to call 100+ LLM providers in the OpenAI API format. Get started by accepting your invitation.</p>
             </div>
 
             <div class="btn-container">
@@ -152,7 +152,7 @@ USER_INVITATION_EMAIL_TEMPLATE = """
                 <span class="arrow"></span>
             </a>
             
-            <p>View all supported LLM endpoints on LiteLLM (/chat/completions, /embeddings, /responses etc.)</p>
+            <p>View all supported LLM endpoints on {brand_name} (/chat/completions, /embeddings, /responses etc.)</p>
             
             <div class="divider"></div>
             

@@ -4964,6 +4964,7 @@ async def send_email(
     receiver_email: Optional[str] = None,
     subject: Optional[str] = None,
     html: Optional[str] = None,
+    cc: Optional[str] = None,
 ):
     """
     smtp_host,
@@ -4994,13 +4995,22 @@ async def send_email(
     email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
-    verbose_proxy_logger.debug("sending email from %s to %s", sender_email, receiver_email)
+
+    cc_addresses = cc or os.getenv("EMAIL_CC", None)
+    if cc_addresses:
+        email_message["Cc"] = cc_addresses
+
+    verbose_proxy_logger.debug("sending email from %s to %s (cc: %s)", sender_email, receiver_email, cc_addresses)
 
     if smtp_host is None:
         raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
 
     # Attach the body to the email
     email_message.attach(MIMEText(html, "html"))
+
+    all_recipients = [receiver_email]
+    if cc_addresses:
+        all_recipients.extend(addr.strip() for addr in cc_addresses.split(",") if addr.strip())
 
     try:
         using_ssl = _should_use_smtp_ssl(smtp_port=smtp_port)
@@ -5022,7 +5032,7 @@ async def send_email(
             server.send_message(
                 msg=email_message,
                 from_addr=sender_email,
-                to_addrs=receiver_email,
+                to_addrs=all_recipients,
             )
 
     except Exception as e:

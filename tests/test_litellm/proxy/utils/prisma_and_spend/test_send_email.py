@@ -42,7 +42,7 @@ async def test_send_email_dispatches_via_smtp(in_memory_smtp: Any) -> None:
     }
     assert pinned == {
         "from_addr": "from@invalid",
-        "to_addrs": "to@invalid",
+        "to_addrs": ["to@invalid"],
         "subject": "Hello",
         "starttls": True,
         "login": ("u", "p"),
@@ -51,9 +51,7 @@ async def test_send_email_dispatches_via_smtp(in_memory_smtp: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_email_starttls_uses_ssl(
-    in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_send_email_starttls_uses_ssl(in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SMTP_USE_SSL", "True")
     await send_email(
         receiver_email="to@invalid",
@@ -82,9 +80,7 @@ async def test_send_email_error_missing_sender_email(
 ) -> None:
     monkeypatch.delenv("SMTP_SENDER_EMAIL", raising=False)
     with pytest.raises(ValueError, match="SMTP_SENDER_EMAIL"):
-        await send_email(
-            receiver_email="x@y", subject="s", html="<p>h</p>"
-        )
+        await send_email(receiver_email="x@y", subject="s", html="<p>h</p>")
 
 
 @pytest.mark.asyncio
@@ -113,7 +109,45 @@ async def test_send_email_smtp_failure_is_swallowed(
     does not raise so a failing email never blocks the proxy.
     """
     in_memory_smtp.raise_on_send = RuntimeError("smtp boom")
-    await send_email(
-        receiver_email="to@invalid", subject="Hi", html="<p>x</p>"
-    )
+    await send_email(receiver_email="to@invalid", subject="Hi", html="<p>x</p>")
     assert in_memory_smtp.sent == []
+
+
+@pytest.mark.asyncio
+async def test_send_email_cc_from_param(in_memory_smtp: Any) -> None:
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+        cc="cc1@invalid,cc2@invalid",
+    )
+    assert len(in_memory_smtp.sent) == 1
+    sent = in_memory_smtp.sent[0]
+    assert sent.to_addrs == ["to@invalid", "cc1@invalid", "cc2@invalid"]
+
+
+@pytest.mark.asyncio
+async def test_send_email_cc_from_env(in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMAIL_CC", "env-cc@invalid")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert len(in_memory_smtp.sent) == 1
+    sent = in_memory_smtp.sent[0]
+    assert sent.to_addrs == ["to@invalid", "env-cc@invalid"]
+
+
+@pytest.mark.asyncio
+async def test_send_email_cc_param_overrides_env(in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EMAIL_CC", "env-cc@invalid")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+        cc="param-cc@invalid",
+    )
+    assert len(in_memory_smtp.sent) == 1
+    sent = in_memory_smtp.sent[0]
+    assert sent.to_addrs == ["to@invalid", "param-cc@invalid"]
