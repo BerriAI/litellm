@@ -1986,7 +1986,8 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
         )
 
-        headers = update_headers_with_filtered_beta(headers=headers, provider=custom_llm_provider)
+        if anthropic_messages_provider_config.should_filter_anthropic_beta_headers():
+            headers = update_headers_with_filtered_beta(headers=headers, provider=custom_llm_provider)
 
         logging_obj.update_from_kwargs(
             kwargs=kwargs,
