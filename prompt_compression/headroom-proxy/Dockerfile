@@ -1,11 +1,13 @@
 FROM python:3.12-slim-bookworm
 
-RUN pip install --no-cache-dir "headroom-ai[proxy]==0.27.0"
+RUN pip install --no-cache-dir fastapi uvicorn pydantic
 
-RUN python -c "from headroom.proxy.server import run_server; print('import ok')"
+COPY server.py /app/server.py
+
+WORKDIR /app
 
 EXPOSE 8787
 
-ENV HEADROOM_TELEMETRY=off
+ENV PORT=8787
 
-CMD ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787", "--no-optimize"]
+CMD ["python", "server.py"]
