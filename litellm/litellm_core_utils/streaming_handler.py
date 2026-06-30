@@ -1747,6 +1747,7 @@ class CustomStreamWrapper:
                         # when Pydantic's lazy schema compiler hasn't run yet
                         # (MockValSer not yet replaced).
                         if self.stream_options is None:
+                            self.chunks[-1] = response.model_copy()
                             response.usage = None
                             ## check if empty
                             is_empty = is_model_response_stream_empty(model_response=cast(ModelResponseStream, response))
