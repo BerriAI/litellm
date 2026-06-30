@@ -61,7 +61,7 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
-    def _get_parent_request_tags(kwargs: Optional[dict]) -> List[str]:
+    def _get_parent_request_tags(kwargs: Optional[dict]) -> list[str]:
         """Tags from the parent LLM request, using the same extraction logic as standard logging (incl. User-Agent)."""
         if not kwargs:
             return []
@@ -176,7 +176,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: Optional[str] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
-        request_tags: Optional[List[str]] = None,
+        request_tags: Optional[list[str]] = None,
     ) -> tuple[List[MCPTool], List[str]]:
         """
         Get available tools from the MCP server manager.
@@ -367,7 +367,7 @@ class LiteLLM_Proxy_MCP_Handler:
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: List[ToolParam],
         litellm_trace_id: Optional[str] = None,
-        request_tags: Optional[List[str]] = None,
+        request_tags: Optional[list[str]] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Centralized method to process MCP tools through the complete pipeline.
@@ -402,7 +402,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_trace_id: Optional[str] = None,
         mcp_auth_header: Optional[str] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
-        request_tags: Optional[List[str]] = None,
+        request_tags: Optional[list[str]] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -617,7 +617,7 @@ class LiteLLM_Proxy_MCP_Handler:
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_call_id: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
-        request_tags: Optional[List[str]] = None,
+        request_tags: Optional[list[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException

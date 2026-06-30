@@ -1472,7 +1472,7 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
-        request_tags: Optional[List[str]] = None,
+        request_tags: Optional[list[str]] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.

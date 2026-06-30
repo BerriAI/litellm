@@ -3444,7 +3444,7 @@ async def _build_ui_spend_logs_response(
             )
             count_map = {r["session_id"]: r["_count"]["session_id"] for r in counts if r.get("session_id")}
 
-    mcp_spend_map: Dict[str, Dict[str, Union[int, float]]] = {}
+    mcp_spend_map: dict[str, dict[str, Union[int, float]]] = {}
     if enrich_session_counts and session_ids:
         try:
             # Collect api_keys already present in the authorized page rows so the
