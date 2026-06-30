@@ -25,7 +25,10 @@ staged_match() { printf '%s\n' "$staged" | grep -E "$1" || true; }
 litellm_py_files=$(staged_match '^litellm/.*\.py$')
 # ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
 fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' || true)
-spec_files=$(printf '%s\n' "$litellm_py_files" | grep -E '^litellm/(proxy|types)/' || true)
+# check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
+# (Prisma schema and configs included, not just Python) plus the generator and its
+# lockfiles, so match that whole trigger set rather than a Python subset.
+spec_files=$(staged_match '^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$')
 # CI's frontend-lint runs prettier over a wider extension set than eslint; keep that
 # split so the hook flags exactly what the job would.
 ui_prettier_files=$(staged_match '^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$')
