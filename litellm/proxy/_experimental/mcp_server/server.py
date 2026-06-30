@@ -1648,9 +1648,7 @@ if MCP_AVAILABLE:
                     # intentionally not done here: raising from this list handler cannot produce a
                     # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
                     # error), so that belongs in a request-scope preemptive check, tracked separately.
-                    verbose_logger.debug(
-                        f"MCP list_tools: omitting {server.name}; it needs upstream auth"
-                    )
+                    verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
                     return []
                 except Exception as e:
                     verbose_logger.exception(f"Error getting tools from server {server.name}: {str(e)}")
