@@ -89,7 +89,13 @@ fi
 
 if [ -n "$spec_files" ]; then
     echo "pre-commit: checking dashboard API types are in sync (npm run gen:api)"
-    if ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
+    # gen-api-types.mjs imports litellm.proxy.proxy_server, which needs an up-to-date
+    # Prisma client; check-ui-api-types.yml regenerates it before gen:api, so mirror that
+    # here or a stale local client can mask drift that CI will still flag.
+    if ! uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma; then
+        echo "✗ Could not regenerate Prisma client (prisma generate failed)." >&2
+        status=1
+    elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
         if ! git diff --quiet -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
             echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and recommit." >&2
             status=1
