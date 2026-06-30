@@ -14,7 +14,7 @@ import json
 import math
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -79,10 +79,10 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
-    _team_member_has_permission,
     _update_metadata_fields,
     _upsert_budget_and_membership,
     _user_has_admin_view,
+    _user_has_full_team_view,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
@@ -5349,14 +5349,13 @@ async def get_team_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     team_ids_list = team_ids.split(",") if team_ids else None
-    exclude_team_ids_list: Optional[List[str]] = None
+    exclude_team_ids_list: Optional[List[str]] = (
+        exclude_team_ids.split(",") if exclude_team_ids else None
+    )
 
-    if exclude_team_ids:
-        exclude_team_ids_list = (
-            exclude_team_ids.split(",") if exclude_team_ids else None
-        )
-
-    if not _user_has_admin_view(user_api_key_dict):
+    is_admin_view = _user_has_admin_view(user_api_key_dict)
+    member_team_ids: Set[str] = set()
+    if not is_admin_view:
         user_info = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
@@ -5374,20 +5373,22 @@ async def get_team_daily_activity(
                 },
             )
 
+        member_team_ids = set(user_info.teams or [])
         if team_ids_list is None:
-            team_ids_list = user_info.teams
+            team_ids_list = list(member_team_ids)
         else:
-            # check if all team_ids are in user_info.teams
-            for team_id in team_ids_list:
-                if team_id not in user_info.teams:
-                    raise HTTPException(
-                        status_code=404,
-                        detail={
-                            "error": "User does not belong to Team= {}. Call `/user/info` to see user's teams".format(
-                                team_id
-                            )
-                        },
-                    )
+            unauthorized_team = next(
+                (t for t in team_ids_list if t not in member_team_ids), None
+            )
+            if unauthorized_team is not None:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "error": "User does not belong to Team= {}. Call `/user/info` to see user's teams".format(
+                            unauthorized_team
+                        )
+                    },
+                )
 
     ## Fetch team aliases and check team admin status
     where_condition = {}
@@ -5400,43 +5401,30 @@ async def get_team_daily_activity(
         t.team_id: {"team_alias": t.team_alias} for t in team_aliases
     }
 
-    # Check if user is team admin or has /team/daily/activity permission
-    # If not, filter by user's API keys.
-    #
-    # Earlier this loop used `any-team admin -> set has_full_team_view=True
-    # for the entire request`, so an admin of one team that requested
-    # data for several teams would see API-key-level breakdowns for all
-    # of them. Require full view on EVERY requested team — if the caller
-    # only has admin/permission for a strict subset, fall back to
-    # filtering the entire response by their own API keys (they can re-
-    # request the admin-only teams separately to get the wider view).
+    # A non-admin caller sees a team's full activity only if they admin every
+    # requested team or that team granted the `/team/daily/activity` member
+    # permission; otherwise the whole response is scoped to their own keys.
+    # Membership comes from `member_team_ids` (the caller's own `teams` list,
+    # the same source the 404 gate above trusts), not `members_with_roles` —
+    # SSO/JWT sync leaves that unpopulated for teams other than the request's
+    # active one, which otherwise drops a permission-granting team's member to
+    # their own keys and shows zero team usage.
     user_api_keys: Optional[List[str]] = None
-    if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
-        has_full_team_view = True
-        for team_alias in team_aliases:
-            team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
-            is_admin = _is_user_team_admin(
-                user_api_key_dict=user_api_key_dict, team_obj=team_obj
-            )
-            has_perm = _team_member_has_permission(
+    if not is_admin_view and team_ids_list and team_aliases:
+        has_full_team_view = all(
+            _user_has_full_team_view(
                 user_api_key_dict=user_api_key_dict,
-                team_obj=team_obj,
+                team_obj=LiteLLM_TeamTable(**team_alias.model_dump()),
                 permission="/team/daily/activity",
+                is_confirmed_member=team_alias.team_id in member_team_ids,
             )
-            if not (is_admin or has_perm):
-                has_full_team_view = False
-                break
-
-        # If user does not have full team view, filter by their API keys
+            for team_alias in team_aliases
+        )
         if not has_full_team_view:
-            # Get all API keys for this user
             user_keys = await VerificationTokenRepository(
                 prisma_client
             ).table.find_many(where={"user_id": user_api_key_dict.user_id})
-            user_api_keys = [key.token for key in user_keys if key.token]
-            # If user has no API keys, return empty result
-            if not user_api_keys:
-                user_api_keys = [""]  # Use empty string to ensure no matches
+            user_api_keys = [key.token for key in user_keys if key.token] or [""]
 
     # If api_key parameter is provided, use it; otherwise use user_api_keys if set
     final_api_key_filter: Optional[Union[str, List[str]]] = api_key
