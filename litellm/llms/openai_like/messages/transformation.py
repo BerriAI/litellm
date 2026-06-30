@@ -23,21 +23,22 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> tuple[dict, Optional[str]]:
-        if api_key and "authorization" not in headers and "x-api-key" not in headers:
-            headers["authorization"] = f"Bearer {api_key}"
-        if "anthropic-version" not in headers:
-            headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
-        if "content-type" not in headers:
-            headers["content-type"] = "application/json"
-        return headers, api_base
+    ) -> tuple[dict[str, str], Optional[str]]:
+        present = {key.lower() for key in headers}
+        needs_auth = bool(api_key) and "authorization" not in present and "x-api-key" not in present
+        defaults: dict[str, str] = {
+            **({"authorization": f"Bearer {api_key}"} if needs_auth else {}),
+            **({"anthropic-version": DEFAULT_ANTHROPIC_API_VERSION} if "anthropic-version" not in present else {}),
+            **({"content-type": "application/json"} if "content-type" not in present else {}),
+        }
+        return {**headers, **defaults}, api_base
 
     def get_complete_url(
         self,

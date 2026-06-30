@@ -136,3 +136,38 @@ def test_validate_environment_does_not_overwrite_caller_headers(config):
     )
     assert headers["authorization"] == "Bearer caller-token"
     assert headers["anthropic-version"] == "2024-10-22"
+
+
+def test_validate_environment_preserves_standard_cased_caller_headers(config):
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={
+            "Authorization": "Bearer caller-token",
+            "Anthropic-Version": "2024-10-22",
+            "Content-Type": "application/json",
+        },
+        model="some-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+    lowercased = {key.lower() for key in headers}
+    assert len(lowercased) == len(headers)
+    assert headers["Authorization"] == "Bearer caller-token"
+    assert headers["Anthropic-Version"] == "2024-10-22"
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_validate_environment_honors_x_api_key_when_present(config):
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={"X-Api-Key": "caller-key"},
+        model="some-model",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="sk-test",
+        api_base="https://host/v1",
+    )
+    assert "authorization" not in {key.lower() for key in headers}
+    assert headers["X-Api-Key"] == "caller-key"
