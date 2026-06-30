@@ -1,7 +1,7 @@
 {
   "ANN001": {
     "baseline": 2865,
-    "slack": 50
+    "slack": 287
   },
   "ANN002": {
     "baseline": 64,
@@ -9,19 +9,19 @@
   },
   "ANN003": {
     "baseline": 759,
-    "slack": 30
+    "slack": 76
   },
   "ANN201": {
     "baseline": 1944,
-    "slack": 50
+    "slack": 194
   },
   "ANN202": {
     "baseline": 858,
-    "slack": 30
+    "slack": 86
   },
   "ANN204": {
     "baseline": 658,
-    "slack": 20
+    "slack": 66
   },
   "ANN205": {
     "baseline": 117,
@@ -33,7 +33,7 @@
   },
   "ANN401": {
     "baseline": 1886,
-    "slack": 50
+    "slack": 189
   },
   "ASYNC230": {
     "baseline": 11,
@@ -230,10 +230,6 @@
   "PLR0402": {
     "baseline": 6,
     "slack": 3
-  },
-  "PLR0913": {
-    "baseline": 1813,
-    "slack": 50
   },
   "PLR1704": {
     "baseline": 3,

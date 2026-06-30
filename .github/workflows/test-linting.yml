@@ -5,7 +5,7 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
@@ -48,13 +48,27 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --frozen
+          uv sync --frozen --group proxy-dev
 
-      - name: Check Black formatting
+      # basedpyright resolves Prisma's generated client (litellm/proxy/schema.prisma)
+      # only after `prisma generate` writes prisma/client.py et al. Without this the
+      # DB wrappers typed against the generated client would degrade to Unknown.
+      - name: Generate Prisma client
+        env:
+          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
         run: |
-          cd litellm
-          uv run --no-sync black --check --exclude '/enterprise/' .
-          cd ..
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Check ruff format
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff --name-only "$BASE_SHA"...HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
+            echo "No changed litellm Python files to check with ruff format."
+            exit 0
+          fi
+          xargs uv run --no-sync ruff format --check --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
 
       - name: Debug - Check file state
         run: |

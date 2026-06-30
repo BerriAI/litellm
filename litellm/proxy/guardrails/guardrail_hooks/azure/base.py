@@ -36,16 +36,12 @@ class AzureGuardrailBase:
         # (typically CustomGuardrail).
         super().__init__(**kwargs)
 
-        self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
-        )
+        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
         self.api_key = api_key
         self.api_base = api_base
         self.api_version: str = kwargs.get("api_version") or "2024-09-01"
 
-    async def _post_to_content_safety(
-        self, endpoint_path: str, request_body: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _post_to_content_safety(self, endpoint_path: str, request_body: Dict[str, Any]) -> Dict[str, Any]:
         """POST to an Azure Content Safety endpoint with standard auth headers.
 
         Args:
@@ -62,18 +58,14 @@ class AzureGuardrailBase:
             "Content-Type": "application/json",
         }
 
-        verbose_proxy_logger.debug(
-            "Azure Content Safety request [%s]: %s", endpoint_path, request_body
-        )
+        verbose_proxy_logger.debug("Azure Content Safety request [%s]: %s", endpoint_path, request_body)
         response = await self.async_handler.post(
             url=url,
             headers=headers,
             json=request_body,
         )
         response_json: Dict[str, Any] = response.json()
-        verbose_proxy_logger.debug(
-            "Azure Content Safety response [%s]: %s", endpoint_path, response_json
-        )
+        verbose_proxy_logger.debug("Azure Content Safety response [%s]: %s", endpoint_path, response_json)
         return response_json
 
     @staticmethod

@@ -1,3 +1,5 @@
+import { resolveLogoSrc } from "@/lib/assetPaths";
+
 export enum Providers {
   A2A_Agent = "A2A Agent",
   AI21 = "Ai21",
@@ -216,6 +218,8 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+
 const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
@@ -314,7 +318,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
   // Handle special case for "gemini" provider value
   if (providerValue.toLowerCase() === "gemini") {
     const displayName = Providers.Google_AI_Studio;
-    const logo = providerLogoMap[displayName];
+    const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
     return { logo, displayName };
   }
 
@@ -331,7 +335,7 @@ export const getProviderLogoAndName = (providerValue: string): { logo: string; d
 
   // Get the display name from Providers enum and logo from map
   const displayName = Providers[enumKey as keyof typeof Providers];
-  const logo = providerLogoMap[displayName as keyof typeof providerLogoMap];
+  const logo = resolveLogoSrc(providerLogoMap[displayName as keyof typeof providerLogoMap]) ?? "";
 
   return { logo, displayName };
 };
@@ -392,11 +396,13 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
     Object.entries(modelMap).forEach(([key, value]) => {
       if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
         const litellmProvider = (value as any)["litellm_provider"];
+        const isPrefixVariant =
+          typeof litellmProvider === "string" &&
+          (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
+            litellmProvider.startsWith(`${custom_llm_provider}-`));
         if (
           litellmProvider === custom_llm_provider ||
-          (typeof litellmProvider === "string" &&
-            (litellmProvider.startsWith(`${custom_llm_provider}_`) ||
-              litellmProvider.startsWith(`${custom_llm_provider}-`)))
+          (isPrefixVariant && !standaloneSubproviderSlugs.has(litellmProvider))
         ) {
           providerModels.push(key);
         }

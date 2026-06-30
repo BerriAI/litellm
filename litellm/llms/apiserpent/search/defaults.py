@@ -44,13 +44,9 @@ class APISerpentSearchParams:
         # num's deep-search floor (NUM_MIN_DEEP) is endpoint-specific and enforced
         # in the transform layer; here we only bound the absolute range.
         if not NUM_MIN <= self.num <= NUM_MAX:
-            raise ValueError(
-                f"num must be between {NUM_MIN} and {NUM_MAX}, got {self.num}"
-            )
+            raise ValueError(f"num must be between {NUM_MIN} and {NUM_MAX}, got {self.num}")
         if self.pages is not None and not PAGES_MIN <= self.pages <= PAGES_MAX:
-            raise ValueError(
-                f"pages must be between {PAGES_MIN} and {PAGES_MAX}, got {self.pages}"
-            )
+            raise ValueError(f"pages must be between {PAGES_MIN} and {PAGES_MAX}, got {self.pages}")
 
     def to_request_params(self) -> Dict:
         """Return non-None fields as request params, booleans lowercased."""
