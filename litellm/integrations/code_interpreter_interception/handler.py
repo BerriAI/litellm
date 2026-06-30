@@ -40,6 +40,7 @@ from litellm.types.utils import (
 LITELLM_CODE_EXECUTION_TOOL_NAME = "litellm_code_execution"
 _INTERCEPTION_ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
+_SESSION_SCOPED_KEY = "_code_interpreter_interception_session_scoped"
 _CONVERTED_STREAM_KEY = "_code_interpreter_interception_converted_stream"
 _LITELLM_METADATA_KEY = "litellm_metadata"
 _CACHE_TTL_SECONDS = 15 * 60
@@ -105,6 +106,16 @@ class ChatCompletionFunctionToolChoice(TypedDict):
 
 
 CodeExecutionFunctionToolChoice = ResponsesFunctionToolChoice | ChatCompletionFunctionToolChoice
+
+
+def _extract_session_id(kwargs: dict[str, Any]) -> str | None:
+    for meta_key in ("metadata", "litellm_metadata"):
+        meta = kwargs.get(meta_key)
+        if isinstance(meta, dict):
+            sid = meta.get("session_id")
+            if sid and isinstance(sid, str):
+                return sid
+    return None
 
 
 def _resolve_sandbox_tool(sandbox_tool_name: str | None) -> dict[str, Any] | None:
@@ -191,7 +202,12 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             return None
 
         kwargs[_INTERCEPTION_ACTIVE_KEY] = True
-        kwargs[_SANDBOX_KEY] = uuid.uuid4().hex
+        session_id = _extract_session_id(kwargs)
+        if session_id:
+            kwargs[_SANDBOX_KEY] = session_id
+            kwargs[_SESSION_SCOPED_KEY] = True
+        else:
+            kwargs[_SANDBOX_KEY] = uuid.uuid4().hex
         if kwargs.get("stream"):
             kwargs["stream"] = False
             kwargs[_CONVERTED_STREAM_KEY] = True
@@ -217,6 +233,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             if not is_interception_internal_key(key)
             and not key.startswith("_agentic_loop")
             and key != "max_agentic_loops"
+            and key != _SESSION_SCOPED_KEY
         }
         if filtered_metadata:
             kwargs[_LITELLM_METADATA_KEY] = filtered_metadata
@@ -227,7 +244,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
     def _write_interception_metadata(kwargs: dict[str, Any]) -> None:
         metadata = kwargs.get(_LITELLM_METADATA_KEY)
         metadata = dict(metadata) if isinstance(metadata, dict) else {}
-        for key in (_INTERCEPTION_ACTIVE_KEY, _SANDBOX_KEY, _CONVERTED_STREAM_KEY):
+        for key in (_INTERCEPTION_ACTIVE_KEY, _SANDBOX_KEY, _SESSION_SCOPED_KEY, _CONVERTED_STREAM_KEY):
             if key in kwargs:
                 metadata[key] = kwargs[key]
         kwargs[_LITELLM_METADATA_KEY] = metadata
@@ -404,6 +421,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             metadata={
                 "tool_type": "code_interpreter",
                 "sandbox_key": sandbox_key or "",
+                "is_session_scoped": bool(kwargs.get(_SESSION_SCOPED_KEY)),
                 "code_interpreter_calls": code_interpreter_calls,
             },
         )
@@ -455,6 +473,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             metadata={
                 "tool_type": "code_interpreter",
                 "sandbox_key": sandbox_key or "",
+                "is_session_scoped": bool(kwargs.get(_SESSION_SCOPED_KEY)),
                 "code_interpreter_calls": code_interpreter_calls,
                 "response_format": "openai",
             },
@@ -489,6 +508,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_agentic_loop_cleanup_hook(self, plan: AgenticLoopPlan, kwargs: dict) -> None:
         metadata = plan.metadata or {} if plan else {}
+        if metadata.get("is_session_scoped"):
+            return
         await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
 
     @staticmethod
@@ -520,7 +541,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
 
     async def async_post_agentic_loop_response_hook(self, response: Any, plan: AgenticLoopPlan, kwargs: dict) -> Any:
         metadata = plan.metadata or {} if plan else {}
-        await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
+        if not metadata.get("is_session_scoped"):
+            await self._delete_container_for_cache_key(metadata.get("sandbox_key"))
 
         calls = metadata.get("code_interpreter_calls")
         if not calls:
@@ -569,6 +591,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         if cache_key:
             cached = self._container_cache.get(cache_key)
             if cached is not None:
+                self._container_cache[cache_key] = (cached[0], cached[1], time.time())
                 return cached[0], cached[1]
 
         container, params = await self._create_container()

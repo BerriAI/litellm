@@ -3061,6 +3061,7 @@ agentic_loop_internal_litellm_params = [
     "max_agentic_loops",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
 ]
 
