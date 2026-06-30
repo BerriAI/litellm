@@ -1072,6 +1072,9 @@ def test_structured_output_with_constraints_uses_tool_workaround():
     assert "output_format" not in optional_params
     assert "tools" in optional_params
     assert "tool_choice" in optional_params
+    tool_schema = optional_params["tools"][0]["input_schema"]["properties"]
+    assert tool_schema["name"]["minLength"] == 1
+    assert tool_schema["age"]["minimum"] == 0
 
 
 # ============ Tool Search Tests ============
