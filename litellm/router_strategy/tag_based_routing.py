@@ -150,6 +150,18 @@ def _require_candidates(
     return candidates
 
 
+def _ban_only_base_pool(
+    deployments: Union[list[Any], dict[Any, Any]],
+) -> list[Any]:
+    # Mirrors untagged-request semantics so callers can't use !tags to escape the default pool.
+    defaults = [
+        d
+        for d in deployments
+        if "default" in (d.get("litellm_params", {}).get("tags") or [])
+    ]
+    return defaults if defaults else list(deployments)
+
+
 async def get_deployments_for_tag(
     llm_router_instance: LitellmRouter,
     model: str,  # used to raise the correct error
@@ -205,7 +217,10 @@ async def get_deployments_for_tag(
         ban_only = bool(excluded_set) and not has_tag_filter
 
         if ban_only:
-            return _require_candidates(candidates, model, request_tags)
+            pool = _exclude_deployments(
+                _ban_only_base_pool(healthy_deployments), excluded_set
+            )
+            return _require_candidates(pool, model, request_tags)
 
         new_healthy_deployments: list[Any] = []
         default_deployments: list[Any] = []

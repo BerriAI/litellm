@@ -639,6 +639,89 @@ async def test_negation_all_excluded_raises():
 
 
 @pytest.mark.asyncio()
+async def test_negation_ban_only_cannot_escape_default_pool():
+    # A ban-only request must not route to tagged deployments outside the default pool.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default"],
+                },
+                "model_info": {"id": "default-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid"],
+                },
+                "model_info": {"id": "paid-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    # Sending only "!default" must NOT route to the paid deployment.
+    # The base pool for ban-only is the default pool; banning the only
+    # default deployment should raise rather than falling through to paid.
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!default"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_negation_ban_only_respects_default_pool():
+    # A ban-only request stays within the default pool; non-default deployments
+    # remain unreachable even when the negation tag is unrelated to the default.
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default"],
+                },
+                "model_info": {"id": "default-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid"],
+                },
+                "model_info": {"id": "paid-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    # "!paid" bans the paid deployment, but the base pool for ban-only is
+    # already restricted to defaults; default-model must still be returned.
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!paid"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "default-model"
+
+
+@pytest.mark.asyncio()
 async def test_negation_untagged_deployment_kept():
     router = litellm.Router(
         model_list=[
