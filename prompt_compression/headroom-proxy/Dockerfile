@@ -10,5 +10,6 @@ RUN apt-get update \
 EXPOSE 8787
 
 ENV HEADROOM_TELEMETRY=off
+ENV HEADROOM_REQUIRE_RUST_CORE=false
 
 CMD ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787", "--no-optimize"]
