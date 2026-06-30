@@ -754,6 +754,7 @@ class MCPServerManager:
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
+                token_endpoint_auth_method=server_config.get("token_endpoint_auth_method", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=auth_type,
@@ -1127,6 +1128,9 @@ class MCPServerManager:
             authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
             token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
             registration_url=mcp_server.registration_url or getattr(mcp_oauth_metadata, "registration_url", None),
+            token_endpoint_auth_method=(
+                credentials_dict.get("token_endpoint_auth_method") if credentials_dict else None
+            ),
             command=getattr(mcp_server, "command", None),
             args=getattr(mcp_server, "args", None) or [],
             env=env_dict,

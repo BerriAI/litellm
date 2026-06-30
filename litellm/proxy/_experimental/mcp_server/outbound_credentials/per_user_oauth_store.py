@@ -92,7 +92,7 @@ async def _persist_credential(
     )
 
 
-async def _post_token_endpoint(url: str, form: dict[str, str]) -> dict[str, object] | None:
+async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
@@ -101,11 +101,11 @@ async def _post_token_endpoint(url: str, form: dict[str, str]) -> dict[str, obje
     # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
     # object and the refresher validates each field, so the untyped boundary is contained here.
     provider = httpxSpecialProvider.Oauth2Check
-    headers = {"Accept": "application/json"}
+    request_headers = {"Accept": "application/json", **headers}
     # A failed refresh is a miss, not a 500 (matches v1), so any error becomes None.
     try:
         client = get_async_httpx_client(llm_provider=provider)  # pyright: ignore
-        response = await client.post(url, headers=headers, data=form)  # pyright: ignore
+        response = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
         body: dict[str, object] = response.json()  # pyright: ignore
     except Exception as exc:  # noqa: BLE001

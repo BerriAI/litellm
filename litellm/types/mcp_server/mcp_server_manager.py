@@ -3,7 +3,12 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransportType
+from litellm.types.mcp import (
+    MCPAuth,
+    MCPAuthType,
+    MCPTokenEndpointAuthMethod,
+    MCPTransportType,
+)
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 MCPInfo = Dict[str, Any]
@@ -48,6 +53,10 @@ class MCPServer(BaseModel):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    # How the gateway authenticates to the upstream token endpoint. When
+    # "client_secret_basic" the credentials go in an HTTP Basic Authorization
+    # header (omitted from the body); None defaults to "client_secret_post".
+    token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod] = None
     # AWS SigV4 fields
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None

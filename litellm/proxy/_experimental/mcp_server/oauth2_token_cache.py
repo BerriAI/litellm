@@ -27,6 +27,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy._experimental.mcp_server.auth import token_exchange
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -103,10 +106,14 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"token_url={bool(server.token_url)}"
             )
 
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=server.token_endpoint_auth_method,
+            client_id=server.client_id,
+            client_secret=server.client_secret,
+        )
         data: Dict[str, str] = {
             "grant_type": "client_credentials",
-            "client_id": server.client_id,
-            "client_secret": server.client_secret,
+            **client_auth.body,
         }
         if server.scopes:
             data["scope"] = " ".join(server.scopes)
@@ -116,8 +123,9 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
         )
 
+        post_kwargs = {"data": data, **({"headers": client_auth.headers} if client_auth.headers else {})}
         try:
-            response = await client.post(server.token_url, data=data)
+            response = await client.post(server.token_url, **post_kwargs)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(

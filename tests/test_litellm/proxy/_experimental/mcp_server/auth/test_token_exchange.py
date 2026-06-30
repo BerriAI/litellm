@@ -509,3 +509,31 @@ async def test_database_loading_token_exchange_scopes_from_credentials():
     assert server.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
     assert server.audience == "api://db-mcp"
     assert server.scopes == ["db.read", "db.write"]
+
+
+@pytest.mark.asyncio
+async def test_exchange_token_uses_client_secret_basic_when_configured():
+    """LIT-4091: token exchange with token_endpoint_auth_method=client_secret_basic sends the
+    client credentials as HTTP Basic and omits client_secret from the body."""
+    import base64
+
+    handler = TokenExchangeHandler()
+    server = _obo_server(
+        server_id="srv-obo-basic", token_endpoint_auth_method="client_secret_basic"
+    )
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _exchange_response("scoped-basic")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.auth.token_exchange.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        result = await handler.exchange_token("user-jwt-basic", server)
+
+    assert result == "scoped-basic"
+    _, kwargs = mock_client.post.call_args
+    expected = "Basic " + base64.b64encode(b"litellm-client-id:litellm-client-secret").decode()
+    assert kwargs["headers"]["Authorization"] == expected
+    assert "client_secret" not in kwargs["data"]
+    assert "client_id" not in kwargs["data"]
+    assert kwargs["data"]["grant_type"] == TOKEN_EXCHANGE_GRANT_TYPE
