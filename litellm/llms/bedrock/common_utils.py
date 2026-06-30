@@ -7,9 +7,21 @@ Common utilities used across bedrock chat/embedding/image generation
 import functools
 import json
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    TypedDict,
+    Union,
+)
 
 if TYPE_CHECKING:
+    from botocore.model import Shape
+
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
@@ -419,11 +431,7 @@ def init_bedrock_client(
         config = boto3.session.Config()  # type: ignore
 
     ### CHECK STS ###
-    if (
-        aws_web_identity_token is not None
-        and aws_role_name is not None
-        and aws_session_name is not None
-    ):
+    if aws_web_identity_token is not None and aws_role_name is not None and aws_session_name is not None:
         oidc_token = get_secret(aws_web_identity_token)
 
         if oidc_token is None:
@@ -462,9 +470,7 @@ def init_bedrock_client(
             verify=ssl_verify,
         )
 
-        sts_response = sts_client.assume_role(
-            RoleArn=aws_role_name, RoleSessionName=aws_session_name
-        )
+        sts_response = sts_client.assume_role(RoleArn=aws_role_name, RoleSessionName=aws_session_name)
 
         client = boto3.client(
             service_name="bedrock-runtime",
@@ -511,9 +517,7 @@ def init_bedrock_client(
             verify=ssl_verify,
         )
     if extra_headers:
-        client.meta.events.register(
-            "before-sign.bedrock-runtime.*", add_custom_header(extra_headers)
-        )
+        client.meta.events.register("before-sign.bedrock-runtime.*", add_custom_header(extra_headers))
 
     return client
 
@@ -556,9 +560,7 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
     """
 
     if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
-        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[
-            response_tool_name
-        ]
+        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[response_tool_name]
     return response_tool_name
 
 
@@ -589,6 +591,15 @@ def extract_model_name_from_bedrock_arn(model: str) -> str:
     return model
 
 
+def is_bedrock_application_inference_profile_arn(model: str) -> bool:
+    """
+    An application inference profile ARN ends in an opaque id with no provider
+    substring, so the invoke path cannot resolve a provider from it. Such ARNs
+    must use the converse route, which needs no provider.
+    """
+    return ":application-inference-profile/" in model
+
+
 def strip_bedrock_routing_prefix(model: str) -> str:
     """Strip LiteLLM routing prefixes from model name."""
     for prefix in ["bedrock/", "converse/", "invoke/", "openai/", "nova-2/", "nova/"]:
@@ -608,6 +619,31 @@ def strip_bedrock_throughput_suffix(model: str) -> str:
     # e.g. "us.anthropic.claude-opus-4-6-v1[1m]" -> "us.anthropic.claude-opus-4-6-v1"
     model = re.sub(r"\[\w+\]$", "", model)
     return model
+
+
+MANTLE_MESSAGES_PATH = "/anthropic/v1/messages"
+
+
+def build_mantle_messages_url(
+    api_base: Optional[str],
+    aws_bedrock_runtime_endpoint: Optional[str],
+    region: str,
+) -> str:
+    """Build the bedrock-mantle Anthropic /messages URL.
+
+    Honors an explicit endpoint override (``api_base``, then
+    ``aws_bedrock_runtime_endpoint``) so private VPC / VPCE / GovCloud Mantle
+    endpoints are reachable; otherwise falls back to the public regional host.
+    The mantle messages path is appended unless the override already carries it,
+    so callers can pass either the host or the full messages URL.
+    """
+    override = api_base or aws_bedrock_runtime_endpoint
+    if override:
+        base = override.rstrip("/")
+        if base.endswith(MANTLE_MESSAGES_PATH):
+            return base
+        return f"{base}{MANTLE_MESSAGES_PATH}"
+    return f"https://bedrock-mantle.{region}.api.aws{MANTLE_MESSAGES_PATH}"
 
 
 def get_bedrock_base_model(model: str) -> str:
@@ -641,10 +677,7 @@ def get_bedrock_base_model(model: str) -> str:
 
     if potential_region in get_bedrock_cross_region_inference_regions():
         return model.split(".", 1)[1]
-    elif (
-        alt_potential_region in _get_all_bedrock_regions()
-        and len(model.split("/", 1)) > 1
-    ):
+    elif alt_potential_region in _get_all_bedrock_regions() and len(model.split("/", 1)) > 1:
         return model.split("/", 1)[1]
 
     return model
@@ -708,10 +741,7 @@ def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) 
     if ceiling is None:
         return
 
-    if (
-        _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort]
-        > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]
-    ):
+    if _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[effort] > _BEDROCK_OUTPUT_CONFIG_EFFORT_ORDER[ceiling]:
         output_config["effort"] = ceiling
 
 
@@ -775,9 +805,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> dict:
         return headers
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
         return []
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
@@ -867,24 +895,25 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "mantle/": "mantle",
         }
 
-        # Check explicit routes first
+        # Check explicit routes first. Match each prefix only as a leading path
+        # segment so the `bedrock_mantle/` provider prefix is never mistaken for
+        # the `mantle/` invoke route (which would mangle
+        # `bedrock_mantle/openai.gpt-5.5` into `bedrock_openai.gpt-5.5`).
         for prefix, route_type in route_mappings.items():
-            if prefix in model:
+            if BedrockModelInfo._model_has_route_prefix(model, prefix):
                 return route_type
 
         # Check for nova spec prefixes (nova/ and nova-2/)
         _model_after_bedrock = model.replace("bedrock/", "", 1)
-        if _model_after_bedrock.startswith(
-            "nova-2/"
-        ) or _model_after_bedrock.startswith("nova/"):
+        if _model_after_bedrock.startswith("nova-2/") or _model_after_bedrock.startswith("nova/"):
+            return "converse"
+
+        if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
         base_model = BedrockModelInfo.get_base_model(model)
         alt_model = BedrockModelInfo.get_non_litellm_routing_model_name(model=model)
-        if (
-            base_model in litellm.bedrock_converse_models
-            or alt_model in litellm.bedrock_converse_models
-        ):
+        if base_model in litellm.bedrock_converse_models or alt_model in litellm.bedrock_converse_models:
             return "converse"
         return "invoke"
 
@@ -893,14 +922,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit converse route.
         """
-        return "converse/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse/")
 
     @staticmethod
     def _explicit_claude_platform_route(model: str) -> bool:
         """
         Check if the model is an explicit Claude Platform on AWS route.
         """
-        return "claude_platform/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "claude_platform/")
 
     @staticmethod
     def get_claude_platform_model(model: str) -> str:
@@ -910,9 +939,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return model.replace("claude_platform/", "", 1)
 
     @staticmethod
-    def map_claude_platform_auth_params(
-        passed_params: dict, optional_params: dict
-    ) -> dict:
+    def map_claude_platform_auth_params(passed_params: dict, optional_params: dict) -> dict:
         """
         Map Claude Platform route auth params that are not OpenAI request params.
         """
@@ -930,42 +957,58 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
         Check if the model is an explicit invoke route.
         """
-        return "invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "invoke/")
 
     @staticmethod
     def _explicit_agent_route(model: str) -> bool:
         """
         Check if the model is an explicit agent route.
         """
-        return "agent/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agent/")
 
     @staticmethod
     def _explicit_agentcore_route(model: str) -> bool:
         """
         Check if the model is an explicit agentcore route.
         """
-        return "agentcore/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "agentcore/")
+
+    @staticmethod
+    def _model_has_route_prefix(model: str, prefix: str) -> bool:
+        """Whether a route prefix (e.g. ``mantle/``) appears as a leading path segment.
+
+        A route token is only valid at the start of the model id or immediately
+        after a ``/``. A plain substring check matches the ``bedrock_mantle/``
+        provider prefix against the ``mantle/`` route, so the body model gets
+        mangled to ``bedrock_openai.gpt-5.5``; anchoring to a segment boundary
+        keeps the bare model id intact.
+
+        ``f"/{prefix}" in model`` matches the token as a segment at any path
+        depth, not just the second segment; that is intentional and acceptable
+        for these short, unambiguous route tokens.
+        """
+        return model.startswith(prefix) or f"/{prefix}" in model
 
     @staticmethod
     def _explicit_mantle_route(model: str) -> bool:
         """
         Check if the model is an explicit mantle route (bedrock-mantle endpoint).
         """
-        return "mantle/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "mantle/")
 
     @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
         """
         Check if the model is an explicit converse like route.
         """
-        return "converse_like/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "converse_like/")
 
     @staticmethod
     def _explicit_async_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit async invoke route.
         """
-        return "async_invoke/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "async_invoke/")
 
     @staticmethod
     def _explicit_openai_route(model: str) -> bool:
@@ -973,7 +1016,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit openai route.
         Used for Bedrock imported models that use OpenAI Chat Completions format.
         """
-        return "openai/" in model
+        return BedrockModelInfo._model_has_route_prefix(model, "openai/")
 
     @staticmethod
     def get_bedrock_provider_config_for_messages_api(
@@ -1032,9 +1075,7 @@ def get_bedrock_chat_config(model: str):
         The appropriate Bedrock config class instance
     """
     bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(
-        model=model
-    )
+    bedrock_invoke_provider = litellm.BedrockLLM.get_bedrock_invoke_provider(model=model)
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
@@ -1067,10 +1108,7 @@ def get_bedrock_chat_config(model: str):
     if bedrock_invoke_provider == "amazon":
         return litellm.AmazonTitanConfig()
     elif bedrock_invoke_provider == "anthropic":
-        if (
-            base_model
-            in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
-        ):
+        if base_model in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names():
             return litellm.AmazonAnthropicConfig()
         else:
             return litellm.AmazonAnthropicClaudeConfig()
@@ -1132,6 +1170,37 @@ def get_bedrock_response_stream_shape():
     return _load_bedrock_response_stream_shape()
 
 
+class BedrockEventStreamResponseDict(TypedDict):
+    status_code: int
+    headers: Mapping[str, str]
+    body: bytes
+
+
+def build_bedrock_stream_error(
+    response_dict: BedrockEventStreamResponseDict,
+    response_stream_shape: Shape | None,
+) -> BedrockError:
+    """Build a BedrockError for a non-200 event-stream error event.
+
+    botocore hard-codes HTTP 400 on every mid-stream error event, so the modeled
+    ResponseStream member's httpStatusCode is the real status. Resolve it from the
+    shape and fall back to the raw status when the type is not modeled.
+    """
+    exception_type = response_dict["headers"].get(":exception-type")
+    decoded_body = response_dict["body"].decode()
+    message = f"{exception_type} {decoded_body}" if exception_type else decoded_body
+
+    status_code = response_dict["status_code"]
+    if exception_type is not None and response_stream_shape is not None:
+        member = response_stream_shape.members.get(exception_type)
+        if member is not None:
+            modeled_status = (member.metadata or {}).get("error", {}).get("httpStatusCode")
+            if modeled_status is not None:
+                status_code = int(modeled_status)
+
+    return BedrockError(status_code=status_code, message=message)
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
@@ -1156,23 +1225,7 @@ class BedrockEventStreamDecoderBase:
         parsed_response = self.parser.parse(response_dict, response_stream_shape)
 
         if response_dict["status_code"] != 200:
-            decoded_body = response_dict["body"].decode()
-            if isinstance(decoded_body, dict):
-                error_message = decoded_body.get("message")
-            elif isinstance(decoded_body, str):
-                error_message = decoded_body
-            else:
-                error_message = ""
-            exception_status = response_dict["headers"].get(":exception-type")
-            error_message = exception_status + " " + error_message
-            raise BedrockError(
-                status_code=response_dict["status_code"],
-                message=(
-                    json.dumps(error_message)
-                    if isinstance(error_message, dict)
-                    else error_message
-                ),
-            )
+            raise build_bedrock_stream_error(response_dict, response_stream_shape)
         if "chunk" in parsed_response:
             chunk = parsed_response.get("chunk")
             if not chunk:
@@ -1211,9 +1264,7 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     # Try to parse as JSON array first (e.g., '["interleaved-thinking-2025-05-14", "claude-code-20250219"]')
     if isinstance(anthropic_beta_header, str):
         anthropic_beta_header = anthropic_beta_header.strip()
-        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith(
-            "]"
-        ):
+        if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
             try:
                 parsed = json.loads(anthropic_beta_header)
                 if isinstance(parsed, list):
@@ -1275,9 +1326,7 @@ class CommonBatchFilesUtils:
 
         return s3_parts[0], s3_parts[1]  # bucket, key
 
-    def extract_model_from_s3_file_path(
-        self, s3_uri: str, optional_params: dict
-    ) -> str:
+    def extract_model_from_s3_file_path(self, s3_uri: str, optional_params: dict) -> str:
         """
         Extract model ID from S3 file path.
 
@@ -1286,9 +1335,7 @@ class CommonBatchFilesUtils:
         """
         # Check if model is provided in optional_params first
         if "model" in optional_params and optional_params["model"]:
-            return self.get_bedrock_model_id_from_litellm_model(
-                optional_params["model"]
-            )
+            return self.get_bedrock_model_id_from_litellm_model(optional_params["model"])
 
         # Extract model from S3 URI path
         # Expected format: s3://bucket/litellm-bedrock-files-{model}-{uuid}.jsonl
@@ -1341,9 +1388,7 @@ class CommonBatchFilesUtils:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         # Get AWS credentials using existing methods
-        aws_region_name = self._base_aws._get_aws_region_name(
-            optional_params=optional_params, model=""
-        )
+        aws_region_name = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
         credentials = self._base_aws.get_credentials(
             aws_access_key_id=optional_params.get("aws_access_key_id"),
             aws_secret_access_key=optional_params.get("aws_secret_access_key"),
@@ -1374,19 +1419,13 @@ class CommonBatchFilesUtils:
 
         # Create AWS request and sign it
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
-        request = AWSRequest(
-            method=method_upper, url=endpoint_url, data=request_data, headers=headers
-        )
+        request = AWSRequest(method=method_upper, url=endpoint_url, data=request_data, headers=headers)
         sigv4.add_auth(request)
         prepped = request.prepare()
 
         return (
             dict(prepped.headers),
-            (
-                request_data.encode("utf-8")
-                if isinstance(request_data, str)
-                else request_data
-            ),
+            (request_data.encode("utf-8") if isinstance(request_data, str) else request_data),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:
@@ -1435,14 +1474,10 @@ class CommonBatchFilesUtils:
 
         # Get bucket name
         bucket_name = (
-            litellm_params.get("s3_bucket_name")
-            or optional_params.get("s3_bucket_name")
-            or os.getenv(bucket_env_var)
+            litellm_params.get("s3_bucket_name") or optional_params.get("s3_bucket_name") or os.getenv(bucket_env_var)
         )
         if not bucket_name:
-            raise ValueError(
-                f"S3 bucket name is required. Set 's3_bucket_name' parameter or {bucket_env_var} env var"
-            )
+            raise ValueError(f"S3 bucket name is required. Set 's3_bucket_name' parameter or {bucket_env_var} env var")
 
         # Generate unique object key
         timestamp = int(time.time())
@@ -1457,6 +1492,4 @@ class CommonBatchFilesUtils:
         """
         Get Bedrock-specific error class.
         """
-        return BedrockError(
-            status_code=status_code, message=error_message, headers=headers
-        )
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)

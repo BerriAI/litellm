@@ -16,7 +16,7 @@ export interface GuardrailCardInfo {
   providerKey?: string;
 }
 
-const ASSET_PREFIX = "../ui/assets/logos/";
+const ASSET_PREFIX = "/ui/assets/logos/";
 
 export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
   {
@@ -431,6 +431,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     logo: `${ASSET_PREFIX}xecguard.svg`,
     tags: ["Security", "Policy", "Grounding", "RAG"],
     providerKey: "Xecguard",
+  },
+  {
+    id: "repelloai",
+    name: "RepelloAI Argus",
+    description:
+      "RepelloAI Argus scans prompts and responses against policies configured per asset in the Repello dashboard.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}repelloai.png`,
+    tags: ["Security", "Policy", "Prompt Injection"],
+    providerKey: "Repelloai",
   },
 ];
 

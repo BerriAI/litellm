@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 import os
@@ -12,6 +13,7 @@ sys.path.insert(
 
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -2409,6 +2411,177 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
     assert merged.total_tokens == 49
 
 
+def _midstream_rate_limit_error():
+    rate_limit_error = litellm.RateLimitError(
+        message="vertex_ai_betaException - Resource exhausted.",
+        model="gemini",
+        llm_provider="vertex_ai_beta",
+    )
+    midstream_error = MidStreamFallbackError(
+        message=str(rate_limit_error),
+        model="gemini",
+        llm_provider="vertex_ai_beta",
+        original_exception=rate_limit_error,
+        is_pre_first_chunk=True,
+    )
+    return rate_limit_error, midstream_error
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_surfaces_rate_limit_without_fallbacks():
+    """Regression for #26015: a mid-stream 429 with no fallbacks configured must
+    surface a clean RateLimitError, not leak the internal MidStreamFallbackError
+    wrapper to the client, and must terminate instead of hanging."""
+    rate_limit_error, midstream_error = _midstream_rate_limit_error()
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+
+    class _RaisingStream:
+        def __init__(self):
+            self.chunks = []
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise midstream_error
+
+    stream = _RaisingStream()
+    setattr(stream, "model", "gemini")
+    setattr(stream, "custom_llm_provider", "vertex_ai_beta")
+    setattr(stream, "logging_obj", MagicMock())
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(side_effect=midstream_error),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=stream,
+            messages=[{"role": "user", "content": "Hello"}],
+            initial_kwargs={"model": "gemini", "stream": True},
+        )
+
+        async def _consume():
+            async for _ in result:
+                pass
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await asyncio.wait_for(_consume(), timeout=10)
+
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value is rate_limit_error
+
+
+def test_completion_streaming_iterator_surfaces_rate_limit_without_fallbacks():
+    """Sync counterpart of
+    test_acompletion_streaming_iterator_surfaces_rate_limit_without_fallbacks."""
+    rate_limit_error, midstream_error = _midstream_rate_limit_error()
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+
+    class _RaisingSyncStream:
+        def __init__(self):
+            self.model = "gemini"
+            self.custom_llm_provider = "vertex_ai_beta"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise midstream_error
+
+    with patch.object(
+        router,
+        "function_with_fallbacks",
+        side_effect=midstream_error,
+    ):
+        result = router._completion_streaming_iterator(
+            model_response=_RaisingSyncStream(),
+            messages=[{"role": "user", "content": "Hello"}],
+            initial_kwargs={"model": "gemini", "stream": True},
+        )
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            list(result)
+
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value is rate_limit_error
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_surfaces_rate_limit_without_fallbacks():
+    """Responses-API counterpart of
+    test_acompletion_streaming_iterator_surfaces_rate_limit_without_fallbacks."""
+    rate_limit_error, midstream_error = _midstream_rate_limit_error()
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.0-flash",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        num_retries=0,
+    )
+    src = _make_responses_iterator(error=midstream_error, model="gemini")
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(side_effect=midstream_error),
+    ):
+        wrapped = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                "model": "gemini",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+
+        async def _consume():
+            async for _ in wrapped:
+                pass
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await asyncio.wait_for(_consume(), timeout=10)
+
+    assert not isinstance(exc_info.value, MidStreamFallbackError)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value is rate_limit_error
+
+
 @pytest.mark.asyncio
 async def test_async_function_with_fallbacks_common_utils():
     """Test the async_function_with_fallbacks_common_utils method"""
@@ -2495,6 +2668,74 @@ def test_should_include_deployment():
         model_name=model_name,
         team_id=team_id,
     )
+
+
+def test_pre_call_checks_skips_token_count_without_max_input_tokens(monkeypatch):
+    """
+    tiktoken token counting is the dominant on-loop cost for large prompts. When no
+    deployment in the group declares max_input_tokens, the count is never consumed, so
+    _pre_call_checks must not run it at all.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(router, "get_router_model_info", lambda **kwargs: {})
+
+    calls = []
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d2"}},
+    ]
+    result = router._pre_call_checks(
+        model="m",
+        healthy_deployments=deployments,
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert calls == []
+    assert len(result) == 2
+
+
+def test_pre_call_checks_counts_once_and_filters_on_max_input_tokens(monkeypatch):
+    """
+    When a deployment declares max_input_tokens the count must still run, be performed
+    at most once across the group (memoized), and filter deployments whose limit is
+    exceeded.
+    """
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "m", "litellm_params": {"model": "gpt-3.5-turbo"}},
+        ],
+        enable_pre_call_checks=True,
+    )
+    monkeypatch.setattr(
+        router, "get_router_model_info", lambda **kwargs: {"max_input_tokens": 5}
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        litellm, "token_counter", lambda *a, **k: calls.append(1) or 1000
+    )
+
+    deployments = [
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d1"}},
+        {"litellm_params": {"model": "gpt-3.5-turbo"}, "model_info": {"id": "d2"}},
+    ]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        router._pre_call_checks(
+            model="m",
+            healthy_deployments=deployments,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert calls == [1]
 
 
 def test_get_deployment_model_info_base_model_flow():
@@ -3027,6 +3268,34 @@ async def test_router_acompletion_with_unknown_model_and_no_fallback():
     assert "no healthy deployments for this model" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_router_unknown_model_error_message_renders_model_name_literally():
+    """
+    The unknown-model error message renders the caller-supplied model name
+    verbatim. A name containing Python format-field syntax must be treated as
+    literal text, not re-interpreted as a format template, which would distort
+    the message and balloon its length.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "azure/gpt-4o-real", "api_key": "fake-key"},
+            }
+        ]
+    )
+
+    weird_model = "ghost{:>200}model"
+    messages = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await router.acompletion(model=weird_model, messages=messages)
+
+    message = str(excinfo.value)
+    assert weird_model in message
+    assert "          " not in message  # no padding run from an expanded format field
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies
@@ -3060,6 +3329,36 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
     assert credentials["custom_llm_provider"] == "bedrock"
+
+
+def test_get_deployment_credentials_with_provider_includes_bucket_name():
+    """
+    Regression: bucket_name must survive the CredentialLiteLLMParams filter so
+    managed-files batch retrieval can resolve the GCS/S3 bucket. Previously it was
+    dropped, causing "GCS bucket_name is required" when fetching batch output files.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "my-batch-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(
+        model_id="vertex-gemini"
+    )
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "my-batch-bucket"
+    assert credentials["vertex_project"] == "my-project"
+    assert credentials["custom_llm_provider"] == "vertex_ai"
 
 
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
@@ -3745,6 +4044,151 @@ def test_combine_fallback_usage():
     assert chunk.usage.prompt_tokens == 10
     assert chunk.usage.completion_tokens == 5
     assert chunk.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_does_not_log_success_on_terminal_failure():
+    """A mid-stream failure with no successful fallback raises and is logged as
+    a failure, so the router must never dispatch it as a success. Partial-spend
+    recovery for the failure row happens in the streaming handler, not here, so
+    this guards only against reintroducing a success log for a failed stream.
+    """
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.utils import Delta, StreamingChoices, Usage
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key-1"},
+            },
+        ],
+        set_verbose=True,
+    )
+
+    error = MidStreamFallbackError(
+        message="Connection lost",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="The Roman Empire began when",
+    )
+
+    def _make_interrupted_model_response():
+        partial_chunk = litellm.ModelResponseStream(
+            id="chatcmpl-partial-1",
+            created=1742056047,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="The Roman Empire began when", role="assistant"
+                    ),
+                )
+            ],
+            usage=Usage(prompt_tokens=17, completion_tokens=9, total_tokens=26),
+        )
+
+        class _RaisingStream:
+            def __init__(self):
+                self.index = 0
+                self.chunks = [partial_chunk]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self.index == 0:
+                    self.index += 1
+                    return partial_chunk
+                raise error
+
+        stream = _RaisingStream()
+        logging_obj = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+        logging_obj.model_call_details = {}
+        setattr(stream, "model", "gpt-4")
+        setattr(stream, "custom_llm_provider", "openai")
+        setattr(stream, "logging_obj", logging_obj)
+        return stream, logging_obj
+
+    messages = [{"role": "user", "content": "Hello"}]
+    initial_kwargs = {"model": "gpt-4", "stream": True}
+
+    # Terminal path: no successful fallback -> the error propagates and the
+    # router never dispatches a success for the failed stream.
+    model_response, logging_obj = _make_interrupted_model_response()
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(side_effect=error),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=model_response,
+            messages=messages,
+            initial_kwargs=dict(initial_kwargs),
+        )
+        collected = []
+        with pytest.raises(MidStreamFallbackError):
+            async for chunk in result:
+                collected.append(chunk)
+
+    assert len(collected) == 1
+    logging_obj.dispatch_success_handlers.assert_not_called()
+
+    # Fallback success: the fallback stream owns success accounting via
+    # _combine_fallback_usage, so this iterator must not dispatch its own.
+    model_response, logging_obj = _make_interrupted_model_response()
+
+    class _FallbackStream:
+        def __init__(self, items):
+            self.items = items
+            self.index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self.index >= len(self.items):
+                raise StopAsyncIteration
+            item = self.items[self.index]
+            self.index += 1
+            return item
+
+    fallback_stream = _FallbackStream(
+        [
+            litellm.ModelResponseStream(
+                id="chatcmpl-fallback-1",
+                model="gpt-3.5-turbo",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content=" continued", role="assistant"),
+                    )
+                ],
+            )
+        ]
+    )
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        new=AsyncMock(return_value=fallback_stream),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=model_response,
+            messages=messages,
+            initial_kwargs=dict(initial_kwargs),
+        )
+        collected = []
+        async for chunk in result:
+            collected.append(chunk)
+
+    assert len(collected) == 2
+    logging_obj.dispatch_success_handlers.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -4756,3 +5200,107 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
         )
         is True
     )
+
+
+class TestRouterRequestTimeoutPropagation:
+    """litellm_settings.request_timeout must act as an independent per-attempt timeout.
+
+    Regression for LIT-2369: request_timeout was shadowed by router_settings.timeout,
+    so Bedrock (and other provider) calls fell back to the hardcoded 600s httpx
+    default instead of the configured value.
+    """
+
+    def _make_router(self, timeout=None, stream_timeout=None):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {
+                        "model": "openai/gpt-4",
+                        "api_key": "sk-test",
+                    },
+                }
+            ],
+            timeout=timeout,
+            stream_timeout=stream_timeout,
+        )
+
+    @pytest.fixture
+    def explicit_request_timeout(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        litellm.request_timeout = 300
+        litellm.request_timeout_explicitly_set = True
+        try:
+            yield 300
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_request_timeout_stored_independently_when_both_set(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert router.timeout == 330
+        assert router.request_timeout == 300
+
+    def test_request_timeout_none_when_not_explicitly_configured(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        litellm.request_timeout_explicitly_set = False
+        try:
+            router = self._make_router(timeout=330)
+            assert router.timeout == 330
+            assert router.request_timeout is None
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_non_stream_prefers_request_timeout_over_router_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert router._get_non_stream_timeout(kwargs={}, data={}) == 300
+
+    def test_stream_prefers_request_timeout_over_router_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        # stream=True resolves through _get_stream_timeout; request_timeout must win.
+        assert router._get_timeout(kwargs={"stream": True}, data={}) == 300
+
+    def test_explicit_stream_timeout_still_wins_over_request_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330, stream_timeout=45)
+        assert router._get_stream_timeout(kwargs={}, data={}) == 45
+
+    def test_non_stream_falls_through_to_router_timeout_without_request_timeout(self):
+        original_value = litellm.request_timeout
+        original_flag = litellm.request_timeout_explicitly_set
+        litellm.request_timeout = litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS
+        litellm.request_timeout_explicitly_set = False
+        try:
+            router = self._make_router(timeout=330)
+            assert router._get_non_stream_timeout(kwargs={}, data={}) == 330
+        finally:
+            litellm.request_timeout = original_value
+            litellm.request_timeout_explicitly_set = original_flag
+
+    def test_per_deployment_timeout_overrides_request_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert router._get_non_stream_timeout(kwargs={}, data={"timeout": 120}) == 120
+
+    def test_per_request_timeout_overrides_request_timeout(
+        self, explicit_request_timeout
+    ):
+        router = self._make_router(timeout=330)
+        assert (
+            router._get_non_stream_timeout(
+                kwargs={"timeout": 60}, data={"timeout": 120}
+            )
+            == 60
+        )

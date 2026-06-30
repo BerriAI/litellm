@@ -16,10 +16,14 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litellm._logging import verbose_logger
-from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import (
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+)
 from litellm.integrations.otel.plumbing.providers import register_exporter_factory
 
-_AGENTOPS_ENDPOINT = "https://otlp.agentops.cloud/v1/traces"
+_AGENTOPS_ENDPOINT = "https://otlp.agentops.ai/v1/traces"
 _AGENTOPS_AUTH_ENDPOINT = "https://api.agentops.ai/v3/auth/token"
 _AGENTOPS_EXPORTER_KIND = "agentops"
 
@@ -28,12 +32,8 @@ class _AgentOpsSettings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
     api_key: str | None = Field(default=None, validation_alias="AGENTOPS_API_KEY")
-    service_name: str = Field(
-        default="agentops", validation_alias="AGENTOPS_SERVICE_NAME"
-    )
-    environment: str | None = Field(
-        default=None, validation_alias="AGENTOPS_ENVIRONMENT"
-    )
+    service_name: str = Field(default="agentops", validation_alias="AGENTOPS_SERVICE_NAME")
+    environment: str | None = Field(default=None, validation_alias="AGENTOPS_ENVIRONMENT")
 
 
 def agentops_preset(
@@ -56,20 +56,15 @@ def agentops_preset(
                 ExporterSpec(
                     kind=_AGENTOPS_EXPORTER_KIND,
                     endpoint=_AGENTOPS_ENDPOINT,
-                    options=(
-                        {"api_key": settings.api_key} if settings.api_key else None
-                    ),
+                    options=({"api_key": settings.api_key} if settings.api_key else None),
+                    owner=ExporterOwner.AGENTOPS,
                 ),
             ],
             "resource_attributes": {
                 **base.resource_attributes,
                 "service.name": settings.service_name,
                 "telemetry.sdk.name": "agentops",
-                **(
-                    {"deployment.environment": settings.environment}
-                    if settings.environment
-                    else {}
-                ),
+                **({"deployment.environment": settings.environment} if settings.environment else {}),
             },
         }
     )
@@ -115,9 +110,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> Any:
             return super().export(spans)
 
     options = spec.options or {}
-    return _LazyAuthAgentOpsExporter(
-        endpoint=spec.endpoint, api_key=options.get("api_key")
-    )
+    return _LazyAuthAgentOpsExporter(endpoint=spec.endpoint, api_key=options.get("api_key"))
 
 
 def _fetch_agentops_jwt(api_key: str) -> dict[str, Any]:

@@ -515,6 +515,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Plugins
+         * @description Return registered plugins for authenticated UI callers.
+         *
+         *     plugin_key is never returned — the browser never needs it (the proxy injects
+         *     it server-side from the registry), and exposing it here would leak the
+         *     credential into React state and DevTools.  Admin key management goes through
+         *     the redacted /config/field/info path instead.
+         */
+        get: operations["list_plugins_api_plugins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/plugins/auth-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plugin Auth Token
+         * @description Issue a short-lived, audience-scoped plugin session claim.
+         *
+         *     The claim contains {user_id, user_role, plugin, exp}.  It does NOT
+         *     contain the caller's litellm bearer token — a compromised plugin can
+         *     only learn the caller's identity, not impersonate them against the proxy.
+         *
+         *     Encrypted with a key derived from HMAC(LITELLM_SALT_KEY, plugin_name),
+         *     so each plugin holds only its own key and cannot forge claims for others.
+         *
+         *     Requires LITELLM_SALT_KEY to be set; returns 503 otherwise.
+         */
+        get: operations["plugin_auth_token_api_plugins_auth_token_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/apply_guardrail": {
         parameters: {
             query?: never;
@@ -2417,6 +2471,52 @@ export interface paths {
          * @description [BETA] endpoint. This might change unexpectedly.
          */
         get: operations["get_credential_by_name_credentials_by_name__credential_name__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/migrate-encryption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Migrate Encryption Endpoint
+         * @description Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+         *
+         *     Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+         *     Idempotent and resumable — re-running skips already-migrated values. Pass
+         *     ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+         */
+        post: operations["migrate_encryption_endpoint_credentials_migrate_encryption_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/migrate-encryption/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check Encryption Endpoint
+         * @description Read-only residual scan for compliance attestation. Reports how many at-rest
+         *     values are still in the legacy format. ``residual_legacy == 0`` attests no
+         *     legacy ciphertext remains. Admin only; performs no writes.
+         */
+        get: operations["check_encryption_endpoint_credentials_migrate_encryption_check_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5935,26 +6035,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/in_product_nudges": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get In Product Nudges
-         * @description Get in-product nudges configuration.
-         */
-        get: operations["get_in_product_nudges_in_product_nudges_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/interactions": {
         parameters: {
             query?: never;
@@ -6446,7 +6526,7 @@ export interface paths {
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
          *     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          *
@@ -6834,7 +6914,7 @@ export interface paths {
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
          *     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          *
@@ -7827,6 +7907,10 @@ export interface paths {
          *
          *     Follows OpenAI API specification for individual model retrieval.
          *     https://platform.openai.com/docs/api-reference/models/retrieve
+         *
+         *     Query parameters mirror `/v1/models` so the same caller context (team
+         *     scoping, health filtering, paused deployments) drives both endpoints; the
+         *     listing's public id must resolve to the same internal deployment here.
          */
         get: operations["model_info_models__model_id__get"];
         put?: never;
@@ -8959,6 +9043,106 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/plugin-proxy/{plugin_name}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        get: operations["plugin_proxy_plugin_proxy__plugin_name___path__get"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        put: operations["plugin_proxy_plugin_proxy__plugin_name___path__put"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        post: operations["plugin_proxy_plugin_proxy__plugin_name___path__post"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        delete: operations["plugin_proxy_plugin_proxy__plugin_name___path__delete"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        options: operations["plugin_proxy_plugin_proxy__plugin_name___path__options"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        head: operations["plugin_proxy_plugin_proxy__plugin_name___path__head"];
+        /**
+         * Plugin Proxy
+         * @description Authenticated reverse-proxy to a registered plugin backend.
+         *
+         *     Restricted to proxy_admin callers — the shared plugin_key must not be
+         *     usable as a confused-deputy credential by regular users.  Plugin UIs
+         *     talk to the plugin service directly via the iframe; this route is for
+         *     administrative and server-to-server access only.
+         *
+         *     The caller's litellm credential is stripped and replaced with the
+         *     plugin's own plugin_key so plugins never receive a live litellm API key.
+         */
+        patch: operations["plugin_proxy_plugin_proxy__plugin_name___path__patch"];
         trace?: never;
     };
     "/policies": {
@@ -13379,7 +13563,7 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
@@ -13559,7 +13743,7 @@ export interface paths {
          *     Example - update team TPM Limit
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
@@ -16663,6 +16847,10 @@ export interface paths {
          *
          *     Follows OpenAI API specification for individual model retrieval.
          *     https://platform.openai.com/docs/api-reference/models/retrieve
+         *
+         *     Query parameters mirror `/v1/models` so the same caller context (team
+         *     scoping, health filtering, paused deployments) drives both endpoints; the
+         *     listing's public id must resolve to the same internal deployment here.
          */
         get: operations["model_info_v1_models__model_id__get"];
         put?: never;
@@ -17088,6 +17276,29 @@ export interface paths {
         get: operations["get_response_input_items_v1_responses__response_id__input_items_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/rust_control_plane/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Callback Logs
+         * @description Replay a batch of finished logging payloads through the callback fan-out.
+         *
+         *     Admin-only: the payloads write spend logs and trigger every callback, so this
+         *     is a trusted internal route, not a public surface.
+         */
+        post: operations["ingest_callback_logs_v1_rust_control_plane_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20960,10 +21171,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with
-             * @default chat
+             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -21364,11 +21574,59 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
             callback_name: string;
+        };
+        /**
+         * CallbackLogFailure
+         * @description A record that failed to replay, identified by its index in the batch.
+         */
+        CallbackLogFailure: {
+            /** Error */
+            error: string;
+            /** Index */
+            index: number;
+        };
+        /**
+         * CallbackLogRecord
+         * @description A single finished logging event to replay through the callbacks.
+         */
+        CallbackLogRecord: {
+            /** Error */
+            error?: string | null;
+            /** Standard Logging Payload */
+            standard_logging_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "failure";
+        };
+        /**
+         * CallbackLogsRequest
+         * @description A batch of logging events posted by an external producer.
+         */
+        CallbackLogsRequest: {
+            /** Records */
+            records: components["schemas"]["CallbackLogRecord"][];
+        };
+        /**
+         * CallbackLogsResponse
+         * @description Per-batch result: counts plus per-record failure detail so the caller can
+         *     distinguish a transient callback error from a structurally bad payload.
+         */
+        CallbackLogsResponse: {
+            /** Failed */
+            failed: number;
+            /** Failures */
+            failures?: components["schemas"]["CallbackLogFailure"][];
+            /** Processed */
+            processed: number;
         };
         /** CallbacksByType */
         CallbacksByType: {
@@ -21664,7 +21922,7 @@ export interface components {
                 [key: string]: unknown;
             } | components["schemas"]["ChatCompletionCachedContent"] | null;
             /** Signature */
-            signature?: string;
+            signature?: string | null;
             /** Thinking */
             thinking?: string;
             /**
@@ -22214,6 +22472,11 @@ export interface components {
              */
             mcp_trusted_proxy_ranges?: string[] | null;
             /**
+             * Mcp Xff Num Trusted Hops
+             * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
+             */
+            mcp_xff_num_trusted_hops?: number | null;
+            /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
              */
@@ -22228,6 +22491,11 @@ export interface components {
              * @description Default upstream request timeout in seconds for native and custom pass-through endpoints that use pass_through_request. Defaults to 600 when unset.
              */
             pass_through_request_timeout?: number | null;
+            /**
+             * Plugins
+             * @description external services registered as embeddable UI plugins
+             */
+            plugins?: components["schemas"]["PluginConfig"][] | null;
             /**
              * Reject Clientside Metadata Tags
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
@@ -23822,15 +24090,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** InProductNudgeResponse */
-        InProductNudgeResponse: {
-            /**
-             * Is Claude Code Enabled
-             * @description Whether the Claude Code nudge should be shown.
-             * @default false
-             */
-            is_claude_code_enabled: boolean;
-        };
         /** IndexCreateLiteLLMParams */
         IndexCreateLiteLLMParams: {
             /** Vector Store Index */
@@ -24974,6 +25233,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -25018,8 +25279,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -25056,6 +25321,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -25070,8 +25337,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -25117,6 +25388,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -25147,8 +25422,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -25157,6 +25436,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -25165,6 +25446,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
@@ -26638,8 +26923,6 @@ export interface components {
              * @enum {string}
              */
             transport: "sse" | "http" | "stdio";
-            /** Url */
-            url?: string | null;
         };
         /**
          * MCPSemanticFilterSettings
@@ -28207,6 +28490,32 @@ export interface components {
             name: string;
         };
         /**
+         * PluginConfig
+         * @description A single external service registered as an embeddable UI plugin.
+         */
+        PluginConfig: {
+            /**
+             * Display Name
+             * @description human-readable label shown in the UI view switcher
+             */
+            display_name?: string | null;
+            /**
+             * Name
+             * @description unique plugin identifier (kebab-case)
+             */
+            name: string;
+            /**
+             * Plugin Key
+             * @description plugin's own credential, injected as Bearer auth only on /plugin-proxy/<name>/* reverse-proxy calls
+             */
+            plugin_key?: string | null;
+            /**
+             * Url
+             * @description base URL of the plugin service
+             */
+            url: string;
+        };
+        /**
          * PluginListItem
          * @description Plugin item in list responses.
          */
@@ -29527,6 +29836,27 @@ export interface components {
             total: number;
         };
         /**
+         * RetryPolicy
+         * @description Use this to set a custom number of retries per exception type
+         *     If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+         *     Mapping of Exception type to number of retries
+         *     https://docs.litellm.ai/docs/exception_mapping
+         */
+        RetryPolicy: {
+            /** Authenticationerrorretries */
+            AuthenticationErrorRetries?: number | null;
+            /** Badrequesterrorretries */
+            BadRequestErrorRetries?: number | null;
+            /** Contentpolicyviolationerrorretries */
+            ContentPolicyViolationErrorRetries?: number | null;
+            /** Internalservererrorretries */
+            InternalServerErrorRetries?: number | null;
+            /** Ratelimiterrorretries */
+            RateLimitErrorRetries?: number | null;
+            /** Timeouterrorretries */
+            TimeoutErrorRetries?: number | null;
+        };
+        /**
          * RoleMappings
          * @description Configuration for mapping SSO groups to LiteLLM roles.
          *
@@ -30580,6 +30910,11 @@ export interface components {
              */
             allowed_models?: string[] | null;
             /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
+            /**
              * Max Budget In Team
              * @description Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits
              */
@@ -31510,12 +31845,13 @@ export interface components {
             } | null;
             /** Model Group Retry Policy */
             model_group_retry_policy?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["RetryPolicy"];
             } | null;
             /** Num Retries */
             num_retries?: number | null;
             /** Retry After */
             retry_after?: number | null;
+            retry_policy?: components["schemas"]["RetryPolicy"] | null;
             /** Routing Groups */
             routing_groups?: components["schemas"]["RoutingGroup"][] | null;
             /** Routing Strategy */
@@ -32037,6 +32373,11 @@ export interface components {
             end_user_tpm_limit?: number | null;
             /** Expires */
             expires?: string | null;
+            /**
+             * Is Session Token
+             * @default false
+             */
+            is_session_token: boolean;
             /** Jwt Claims */
             jwt_claims?: {
                 [key: string]: unknown;
@@ -32632,6 +32973,8 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Annotation Cost Per Page */
+            annotation_cost_per_page?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -32676,8 +33019,12 @@ export interface components {
             cache_read_input_token_cost_above_200k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 272K Tokens */
+            cache_read_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens Priority */
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
+            /** Cache Read Input Token Cost Above 512K Tokens */
+            cache_read_input_token_cost_above_512k_tokens?: number | null;
             /** Cache Read Input Token Cost Flex */
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
@@ -32714,6 +33061,8 @@ export interface components {
             input_cost_per_image?: number | null;
             /** Input Cost Per Image Above 128K Tokens */
             input_cost_per_image_above_128k_tokens?: number | null;
+            /** Input Cost Per Image Token */
+            input_cost_per_image_token?: number | null;
             /** Input Cost Per Pixel */
             input_cost_per_pixel?: number | null;
             /** Input Cost Per Query */
@@ -32728,8 +33077,12 @@ export interface components {
             input_cost_per_token_above_200k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 272K Tokens */
+            input_cost_per_token_above_272k_tokens?: number | null;
             /** Input Cost Per Token Above 272K Tokens Priority */
             input_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Input Cost Per Token Above 512K Tokens */
+            input_cost_per_token_above_512k_tokens?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -32775,6 +33128,10 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Ocr Cost Per Credit */
+            ocr_cost_per_credit?: number | null;
+            /** Ocr Cost Per Page */
+            ocr_cost_per_page?: number | null;
             /** Organization */
             organization?: string | null;
             /** Output Cost Per Audio Per Second */
@@ -32805,8 +33162,12 @@ export interface components {
             output_cost_per_token_above_200k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 272K Tokens */
+            output_cost_per_token_above_272k_tokens?: number | null;
             /** Output Cost Per Token Above 272K Tokens Priority */
             output_cost_per_token_above_272k_tokens_priority?: number | null;
+            /** Output Cost Per Token Above 512K Tokens */
+            output_cost_per_token_above_512k_tokens?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -32815,6 +33176,8 @@ export interface components {
             output_cost_per_token_priority?: number | null;
             /** Output Cost Per Video Per Second */
             output_cost_per_video_per_second?: number | null;
+            /** Output Vector Size */
+            output_vector_size?: number | null;
             /** Quality Router Config */
             quality_router_config?: {
                 [key: string]: unknown;
@@ -32823,6 +33186,10 @@ export interface components {
             quality_router_default_model?: string | null;
             /** Region Name */
             region_name?: string | null;
+            /** Regional Processing Uplift Multiplier Eu */
+            regional_processing_uplift_multiplier_eu?: number | null;
+            /** Regional Processing Uplift Multiplier Us */
+            regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
             /** S3 Bucket Name */
@@ -33505,6 +33872,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    list_plugins_api_plugins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    }[];
+                };
+            };
+        };
+    };
+    plugin_auth_token_api_plugins_auth_token_get: {
+        parameters: {
+            query?: {
+                plugin_name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -36742,6 +37164,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    migrate_encryption_endpoint_credentials_migrate_encryption_post: {
+        parameters: {
+            query?: {
+                /** @description If true, scan and report without writing any changes. */
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_encryption_endpoint_credentials_migrate_encryption_check_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
@@ -40755,26 +41229,6 @@ export interface operations {
             };
         };
     };
-    get_in_product_nudges_in_product_nudges_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["InProductNudgeResponse"];
-                };
-            };
-        };
-    };
     create_interaction_interactions_post: {
         parameters: {
             query?: never;
@@ -41425,7 +41879,7 @@ export interface operations {
                 page?: number;
                 /** @description Page size */
                 size?: number;
-                /** @description Filter keys by user ID. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by user ID. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 user_id?: string | null;
                 /** @description Filter keys by team ID */
                 team_id?: string | null;
@@ -41433,7 +41887,7 @@ export interface operations {
                 organization_id?: string | null;
                 /** @description Filter keys by key hash */
                 key_hash?: string | null;
-                /** @description Filter keys by key alias. Supports partial matching (substring, case-insensitive). */
+                /** @description Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching. */
                 key_alias?: string | null;
                 /** @description Return full key object */
                 return_full_object?: boolean;
@@ -41453,6 +41907,10 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Filter keys by access group ID */
                 access_group_id?: string | null;
+                /** @description Filter keys by agent ID */
+                agent_id?: string | null;
+                /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
+                substring_matching?: boolean;
             };
             header?: never;
             path?: never;
@@ -42956,7 +43414,10 @@ export interface operations {
     };
     model_info_models__model_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                team_id?: string | null;
+                healthy_only?: boolean | null;
+            };
             header?: never;
             path: {
                 model_id: string;
@@ -44533,6 +44994,230 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__options: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plugin_proxy_plugin_proxy__plugin_name___path__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -48838,6 +49523,8 @@ export interface operations {
             query?: {
                 /** @description Team ID in the request parameters */
                 team_id?: string;
+                /** @description Limit the number of keys returned */
+                key_limit?: number | null;
             };
             header?: never;
             path?: never;
@@ -53834,7 +54521,10 @@ export interface operations {
     };
     model_info_v1_models__model_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                team_id?: string | null;
+                healthy_only?: boolean | null;
+            };
             header?: never;
             path: {
                 model_id: string;
@@ -54190,6 +54880,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_callback_logs_v1_rust_control_plane_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallbackLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallbackLogsResponse"];
                 };
             };
             /** @description Validation Error */

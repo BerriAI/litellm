@@ -1032,45 +1032,6 @@ class TestProxySettingEndpoints:
         stored_settings = json.loads(create_data["ui_settings"])
         assert stored_settings["disable_model_add_for_internal_users"] is True
 
-    def test_update_ui_settings_persists_disable_ui_nudges(
-        self, mock_auth, monkeypatch
-    ):
-        """disable_ui_nudges must be allowlisted so admins can suppress UI popups for everyone"""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
-        mock_user_auth = UserAPIKeyAuth(
-            user_id="test-user-123",
-            user_role=LitellmUserRoles.PROXY_ADMIN,
-        )
-        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
-
-        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
-        mock_prisma = MagicMock()
-        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
-        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
-        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-
-        try:
-            response = client.patch(
-                "/update/ui_settings", json={"disable_ui_nudges": True}
-            )
-        finally:
-            app.dependency_overrides.clear()
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "success"
-        assert data["settings"]["disable_ui_nudges"] is True
-
-        create_data = mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"][
-            "create"
-        ]
-        stored_settings = json.loads(create_data["ui_settings"])
-        assert stored_settings["disable_ui_nudges"] is True
-
     def test_update_ui_settings_ignores_non_allowlisted_value(
         self, mock_auth, monkeypatch
     ):

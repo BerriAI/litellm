@@ -84,6 +84,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/active/callbacks",
     "/callbacks",
     "/team_callback",
+    # Rust data-plane gateway → proxy control-plane API (logging today, auth later)
+    "/v1/rust_control_plane/",
     # Alerting / email / IP allowlist
     "/alerting/",
     "/email/",
@@ -120,6 +122,9 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/robots.txt",
     # Health (k8s probes)
     "/health",
+    # Plugin system
+    "/api/plugins",
+    "/plugin-proxy/",
 )
 
 BACKEND_EXACT_PATHS: frozenset[str] = frozenset(

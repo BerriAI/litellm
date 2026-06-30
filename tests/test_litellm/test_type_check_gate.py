@@ -10,22 +10,6 @@ _spec.loader.exec_module(gate)
 ROOT = gate.REPO_ROOT
 
 
-def test_mypy_counts_per_code_ignoring_lines_notes_and_summary():
-    text = "\n".join(
-        [
-            f"{ROOT}/litellm/utils.py:10: error: missing annotation  [no-untyped-def]",
-            f"{ROOT}/litellm/utils.py:9999: error: missing annotation  [no-untyped-def]",
-            f"{ROOT}/litellm/main.py:5: error: Returning Any  [no-any-return]",
-            f"{ROOT}/litellm/main.py:5: note: see here",
-            "Found 3 errors in 2 files (checked 100 source files)",
-        ]
-    )
-    assert gate.count_errors(text, "mypy") == {
-        "no-untyped-def": 2,
-        "no-any-return": 1,
-    }
-
-
 def _bpr(file, severity, rule):
     diag = {"file": str(file), "severity": severity, "message": "msg"}
     if rule is not None:
@@ -46,7 +30,7 @@ def test_basedpyright_counts_per_rule_from_json_not_warnings():
             ]
         }
     )
-    assert gate.count_errors(payload, "basedpyright") == {
+    assert gate.count_basedpyright(payload) == {
         "reportUnknownVariableType": 2,
         "reportArgumentType": 1,
     }
@@ -56,17 +40,10 @@ def test_basedpyright_error_without_a_rule_is_bucketed():
     payload = json.dumps(
         {"generalDiagnostics": [_bpr(f"{ROOT}/litellm/x.py", "error", None)]}
     )
-    assert gate.count_errors(payload, "basedpyright") == {gate.UNCODED: 1}
-
-
-def test_mypy_error_without_a_code_is_bucketed_so_it_is_still_gated():
-    text = f"{ROOT}/litellm/x.py:1: error: something broke with no code"
-    assert gate.count_errors(text, "mypy") == {gate.UNCODED: 1}
+    assert gate.count_basedpyright(payload) == {gate.UNCODED: 1}
 
 
 def test_paths_outside_repo_are_skipped():
-    text = "/tmp/elsewhere.py:1: error: missing annotation  [no-untyped-def]"
-    assert gate.count_errors(text, "mypy") == {}
     payload = json.dumps(
         {
             "generalDiagnostics": [
@@ -74,32 +51,61 @@ def test_paths_outside_repo_are_skipped():
             ]
         }
     )
-    assert gate.count_errors(payload, "basedpyright") == {}
+    assert gate.count_basedpyright(payload) == {}
 
 
 def test_at_or_under_ceiling_passes():
     budget = {"no-any-return": {"baseline": 5, "slack": 0}}
-    assert gate.evaluate({"no-any-return": 5}, budget) == []
+    assert gate.evaluate({"no-any-return": 5}, {}, budget) == []
 
 
 def test_one_more_error_than_ceiling_fails():
     budget = {"no-any-return": {"baseline": 5, "slack": 0}}
-    assert gate.evaluate({"no-any-return": 6}, budget) == [
-        gate.Breach("no-any-return", 6, 5)
+    assert gate.evaluate({"no-any-return": 6}, {}, budget) == [
+        gate.Breach("no-any-return", 6, 5, 6)
     ]
 
 
 def test_slack_absorbs_small_increase_then_fails_past_it():
     budget = {"arg-type": {"baseline": 5, "slack": 5}}
-    assert gate.evaluate({"arg-type": 10}, budget) == []
-    assert gate.evaluate({"arg-type": 11}, budget) == [gate.Breach("arg-type", 11, 10)]
+    assert gate.evaluate({"arg-type": 10}, {}, budget) == []
+    assert gate.evaluate({"arg-type": 11}, {}, budget) == [
+        gate.Breach("arg-type", 11, 10, 11)
+    ]
 
 
 def test_unbudgeted_new_code_uses_default_slack():
-    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK}, {}) == []
-    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK + 1}, {}) == [
-        gate.Breach("brand-new", gate.DEFAULT_SLACK + 1, gate.DEFAULT_SLACK)
+    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK}, {}, {}) == []
+    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK + 1}, {}, {}) == [
+        gate.Breach(
+            "brand-new",
+            gate.DEFAULT_SLACK + 1,
+            gate.DEFAULT_SLACK,
+            gate.DEFAULT_SLACK + 1,
+        )
     ]
+
+
+def test_drift_already_over_cap_in_base_is_not_blamed_on_a_flat_change():
+    # The bystander case: a rule sits over its ceiling because two earlier PRs
+    # summed past it. A PR that branches off that base and adds nothing must pass
+    # -- total > cap but total == base, so the `> base` guard spares it.
+    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    assert gate.evaluate({"arg-type": 12}, {"arg-type": 12}, budget) == []
+
+
+def test_change_that_grows_an_over_cap_rule_is_blamed_for_only_what_it_added():
+    # Over cap AND above base: blamed, and `added` is the delta vs base, not the
+    # whole overage, so the message points at this change's contribution.
+    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    assert gate.evaluate({"arg-type": 14}, {"arg-type": 12}, budget) == [
+        gate.Breach("arg-type", 14, 10, 2)
+    ]
+
+
+def test_reducing_an_over_cap_rule_below_base_passes():
+    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    assert gate.evaluate({"arg-type": 11}, {"arg-type": 12}, budget) == []
 
 
 def test_no_output_against_a_nonempty_budget_is_a_vacuous_run():
@@ -124,10 +130,10 @@ def test_malformed_basedpyright_json_exits_loudly_not_as_zero_errors():
     import pytest
 
     with pytest.raises(SystemExit):
-        gate.count_errors("startup warning\n{not json", "basedpyright")
+        gate.count_basedpyright("startup warning\n{not json")
 
 
 def test_empty_basedpyright_payload_counts_zero():
     # Empty (not malformed) output parses to zero; the vacuous-run guard, not the
     # parser, is what rejects an empty run.
-    assert gate.count_errors("", "basedpyright") == {}
+    assert gate.count_basedpyright("") == {}

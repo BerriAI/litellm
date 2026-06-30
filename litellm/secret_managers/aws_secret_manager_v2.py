@@ -92,27 +92,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             aws_kwargs = {}
             if key_management_settings is not None:
                 aws_kwargs = {
-                    "aws_region_name": getattr(
-                        key_management_settings, "aws_region_name", None
-                    ),
-                    "aws_role_name": getattr(
-                        key_management_settings, "aws_role_name", None
-                    ),
-                    "aws_session_name": getattr(
-                        key_management_settings, "aws_session_name", None
-                    ),
-                    "aws_external_id": getattr(
-                        key_management_settings, "aws_external_id", None
-                    ),
-                    "aws_profile_name": getattr(
-                        key_management_settings, "aws_profile_name", None
-                    ),
-                    "aws_web_identity_token": getattr(
-                        key_management_settings, "aws_web_identity_token", None
-                    ),
-                    "aws_sts_endpoint": getattr(
-                        key_management_settings, "aws_sts_endpoint", None
-                    ),
+                    "aws_region_name": getattr(key_management_settings, "aws_region_name", None),
+                    "aws_role_name": getattr(key_management_settings, "aws_role_name", None),
+                    "aws_session_name": getattr(key_management_settings, "aws_session_name", None),
+                    "aws_external_id": getattr(key_management_settings, "aws_external_id", None),
+                    "aws_profile_name": getattr(key_management_settings, "aws_profile_name", None),
+                    "aws_web_identity_token": getattr(key_management_settings, "aws_web_identity_token", None),
+                    "aws_sts_endpoint": getattr(key_management_settings, "aws_sts_endpoint", None),
                     "replica_regions": key_management_settings.replica_regions,
                 }
                 # Remove None values
@@ -156,9 +142,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         )
 
         try:
-            response = await async_client.post(
-                url=endpoint_url, headers=headers, data=body.decode("utf-8")
-            )
+            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()["SecretString"]
         except httpx.TimeoutException:
@@ -209,9 +193,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         )
 
         try:
-            response = sync_client.post(
-                url=endpoint_url, headers=headers, data=body.decode("utf-8")
-            )
+            response = sync_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             return response.json()["SecretString"]
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
@@ -242,9 +224,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         """
         return json.loads(primary_secret_json_str or "{}")
 
-    def sync_read_secret_from_primary_secret(
-        self, secret_name: str, primary_secret_name: str
-    ) -> Optional[str]:
+    def sync_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> Optional[str]:
         """
         Read a secret from the primary secret
         """
@@ -252,15 +232,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
         return primary_secret_kv_pairs.get(secret_name)
 
-    async def async_read_secret_from_primary_secret(
-        self, secret_name: str, primary_secret_name: str
-    ) -> Optional[str]:
+    async def async_read_secret_from_primary_secret(self, secret_name: str, primary_secret_name: str) -> Optional[str]:
         """
         Read a secret from the primary secret
         """
-        primary_secret_json_str = await self.async_read_secret(
-            secret_name=primary_secret_name
-        )
+        primary_secret_json_str = await self.async_read_secret(secret_name=primary_secret_name)
         primary_secret_kv_pairs = self._parse_primary_secret(primary_secret_json_str)
         return primary_secret_kv_pairs.get(secret_name)
 
@@ -321,13 +297,13 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         )
 
         try:
-            response = await async_client.post(  # any-ok: untyped httpx
+            response = await async_client.post(
                 url=endpoint_url,
-                headers=headers,  # any-ok: untyped httpx
-                data=body.decode("utf-8"),  # any-ok: untyped httpx
+                headers=headers,
+                data=body.decode("utf-8"),
             )
-            response.raise_for_status()  # any-ok: untyped httpx
-            create_response = response.json()  # any-ok: untyped httpx
+            response.raise_for_status()
+            create_response = response.json()
         except httpx.HTTPStatusError as err:
             raise ValueError(f"HTTP error occurred: {err.response.text}")
         except httpx.TimeoutException:
@@ -338,7 +314,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                 await self.async_replicate_secret(
                     secret_name=secret_name,
                     replica_regions=self.replica_regions,
-                    optional_params=optional_params,  # any-ok: untyped httpx
+                    optional_params=optional_params,
                     timeout=timeout,
                 )
                 verbose_logger.debug(
@@ -354,7 +330,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
                     str(replication_err),
                 )
 
-        return create_response  # any-ok: untyped httpx
+        return create_response
 
     async def async_replicate_secret(
         self,
@@ -392,7 +368,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             "AddReplicaRegions": [{"Region": r} for r in replica_regions],
         }
 
-        endpoint_url, headers, body = self._prepare_request(  # any-ok: untyped httpx
+        endpoint_url, headers, body = self._prepare_request(
             action="ReplicateSecretToRegions",
             secret_name=secret_name,
             optional_params=optional_params,
@@ -401,13 +377,11 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
 
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.SecretManager,
-            params={"timeout": timeout},  # any-ok: untyped httpx
+            params={"timeout": timeout},
         )
 
         try:
-            response = await async_client.post(
-                url=endpoint_url, headers=headers, data=body.decode("utf-8")
-            )
+            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as err:
@@ -459,9 +433,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         )
 
         try:
-            response = await async_client.post(
-                url=endpoint_url, headers=headers, data=body.decode("utf-8")
-            )
+            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as err:
@@ -541,9 +513,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         )
 
         try:
-            response = await async_client.post(
-                url=endpoint_url, headers=headers, data=body.decode("utf-8")
-            )
+            response = await async_client.post(url=endpoint_url, headers=headers, data=body.decode("utf-8"))
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as err:
@@ -579,17 +549,12 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
             optional_params["aws_external_id"] = self.aws_external_id
         if not optional_params.get("aws_profile_name") and self.aws_profile_name:
             optional_params["aws_profile_name"] = self.aws_profile_name
-        if (
-            not optional_params.get("aws_web_identity_token")
-            and self.aws_web_identity_token
-        ):
+        if not optional_params.get("aws_web_identity_token") and self.aws_web_identity_token:
             optional_params["aws_web_identity_token"] = self.aws_web_identity_token
         if not optional_params.get("aws_sts_endpoint") and self.aws_sts_endpoint:
             optional_params["aws_sts_endpoint"] = self.aws_sts_endpoint
 
-        boto3_credentials_info = self._get_boto_credentials_from_optional_params(
-            optional_params
-        )
+        boto3_credentials_info = self._get_boto_credentials_from_optional_params(optional_params)
 
         # Get endpoint
         _, endpoint_url = self.get_runtime_endpoint(
@@ -614,9 +579,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         }
 
         # Sign request
-        request = AWSRequest(
-            method="POST", url=endpoint_url, data=body, headers=headers
-        )
+        request = AWSRequest(method="POST", url=endpoint_url, data=body, headers=headers)
         SigV4Auth(
             boto3_credentials_info.credentials,
             "secretsmanager",

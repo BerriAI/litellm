@@ -4,6 +4,7 @@ import { ServerIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/
 import { Tooltip } from "antd";
 import { fetchMCPServers, fetchMCPToolsets } from "../networking";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
+import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 interface MCPServerPermissionsProps {
   mcpServers: string[];
@@ -94,9 +95,13 @@ export function MCPServerPermissions({
     return serverId;
   };
 
+  const blocksAllMcpServers = mcpServers.includes(NO_MCP_SERVERS_SENTINEL);
+
   // Merge servers and access groups into one list
   const mergedItems = [
-    ...mcpServers.map((server) => ({ type: "server", value: server })),
+    ...mcpServers
+      .filter((server) => server !== NO_MCP_SERVERS_SENTINEL)
+      .map((server) => ({ type: "server", value: server })),
     ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
   ];
   const totalCount = mergedItems.length + mcpToolsets.length;
@@ -106,12 +111,19 @@ export function MCPServerPermissions({
       <div className="flex items-center gap-2">
         <ServerIcon className="h-4 w-4 text-blue-600" />
         <Text className="font-semibold text-gray-900">MCP Servers</Text>
-        <Badge color="blue" size="xs">
-          {totalCount}
+        <Badge color={blocksAllMcpServers ? "red" : "blue"} size="xs">
+          {blocksAllMcpServers ? "Blocked" : totalCount}
         </Badge>
       </div>
 
-      {totalCount > 0 ? (
+      {blocksAllMcpServers ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200">
+          <ServerIcon className="h-4 w-4 text-red-400" />
+          <Text className="text-red-700 text-sm">
+            No MCP servers — this key is blocked from all MCP servers, including its team&apos;s servers
+          </Text>
+        </div>
+      ) : totalCount > 0 ? (
         <div className="max-h-[400px] overflow-y-auto space-y-2 pr-1">
           {mergedItems.map((item, index) => {
             const toolsForServer = item.type === "server" ? mcpToolPermissions[item.value] : undefined;

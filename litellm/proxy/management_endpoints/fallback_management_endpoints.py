@@ -96,9 +96,7 @@ async def create_fallback(
             )
 
         # Validate that all fallback models exist in the router
-        invalid_fallback_models = [
-            m for m in data.fallback_models if m not in model_names
-        ]
+        invalid_fallback_models = [m for m in data.fallback_models if m not in model_names]
         if invalid_fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -136,9 +134,7 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(
-            fallback_key, []
-        )
+        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(fallback_key, [])
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -226,16 +222,12 @@ async def get_fallback(
             )
 
         # Get fallbacks using the existing utility function
-        fallback_models = get_all_fallbacks(
-            model=model, llm_router=llm_router, fallback_type=fallback_type
-        )
+        fallback_models = get_all_fallbacks(model=model, llm_router=llm_router, fallback_type=fallback_type)
 
         if not fallback_models:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": f"No {fallback_type} fallbacks configured for model '{model}'"
-                },
+                detail={"error": f"No {fallback_type} fallbacks configured for model '{model}'"},
             )
 
         return FallbackGetResponse(
@@ -311,9 +303,7 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(
-            fallback_key, []
-        )
+        existing_fallbacks: List[Dict[str, List[str]]] = router_settings.get(fallback_key, [])
 
         # Find and remove the fallback configuration
         fallback_found = False
@@ -327,9 +317,7 @@ async def delete_fallback(
         if not fallback_found:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={
-                    "error": f"No {fallback_type} fallbacks configured for model '{model}'"
-                },
+                detail={"error": f"No {fallback_type} fallbacks configured for model '{model}'"},
             )
 
         # Update router settings

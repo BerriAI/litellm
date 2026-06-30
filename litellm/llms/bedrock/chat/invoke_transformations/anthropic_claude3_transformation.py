@@ -88,9 +88,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # ``_clamp_adaptive_reasoning_effort_for_bedrock`` so adaptive Claude
         # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
         # models like Opus 4.6 that don't natively advertise xhigh.
-        self._clamp_adaptive_reasoning_effort_for_bedrock(
-            model=original_model, params=non_default_params
-        )
+        self._clamp_adaptive_reasoning_effort_for_bedrock(model=original_model, params=non_default_params)
 
         optional_params = AnthropicConfig.map_openai_params(
             self,
@@ -190,11 +188,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        filtered_params = {
-            k: v
-            for k, v in optional_params.items()
-            if k not in self.aws_authentication_params
-        }
+        filtered_params = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
         output_config = filtered_params.get("output_config")
         if isinstance(output_config, dict):
             filtered_params["output_config"] = dict(output_config)
@@ -217,9 +211,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("stream", None)
         anthropic_request.pop("stream_chunk_size", None)
         output_format = anthropic_request.pop("output_format", None)
-        output_config_format = pop_bedrock_invoke_output_config_format(
-            anthropic_request
-        )
+        output_config_format = pop_bedrock_invoke_output_config_format(anthropic_request)
         if output_format:
             convert_bedrock_invoke_output_format_to_inline_schema(
                 output_format=output_format,
@@ -280,9 +272,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
         beta_set.update(auto_betas)
 
-        if tool_search_used and not (
-            programmatic_tool_calling_used or input_examples_used
-        ):
+        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
@@ -332,9 +322,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
                     "data": image_chunk["data"],
                 }
 
-    async def _async_convert_document_url_sources_to_base64(
-        self, anthropic_request: dict
-    ) -> None:
+    async def _async_convert_document_url_sources_to_base64(self, anthropic_request: dict) -> None:
         """
         Async version of document URL conversion for async completion paths.
         """
@@ -390,9 +378,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             if tool_type == "tool_search_tool_regex_20251119":
                 normalized_tool = tool.copy()
                 normalized_tool["type"] = "tool_search_tool_regex"
-                normalized_tool["name"] = normalized_tool.get(
-                    "name", "tool_search_tool_regex"
-                )
+                normalized_tool["name"] = normalized_tool.get("name", "tool_search_tool_regex")
                 normalized_tools.append(normalized_tool)
                 continue
             normalized_tools.append(tool)

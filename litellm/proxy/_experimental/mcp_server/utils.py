@@ -23,9 +23,16 @@ import os
 from urllib.parse import quote
 
 # Constants
-LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
+#
+# NOTE: The environment-backed values below are read once, when this module is
+# first imported, and cached for the lifetime of the process. Changing the
+# corresponding environment variables after import has no effect unless the
+# module is reloaded (e.g. ``importlib.reload``). Tests that override these
+# variables must reload this module — see
+# ``tests/test_litellm/proxy/_experimental/mcp_server/test_mcp_server_identity_env.py``.
+LITELLM_MCP_SERVER_NAME = os.environ.get("LITELLM_MCP_SERVER_NAME", "litellm-mcp-server")
 LITELLM_MCP_SERVER_VERSION = "1.0.0"
-LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
+LITELLM_MCP_SERVER_DESCRIPTION = os.environ.get("LITELLM_MCP_SERVER_DESCRIPTION", "MCP Server for LiteLLM")
 MCP_TOOL_PREFIX_SEPARATOR = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR", "-")
 MCP_TOOL_PREFIX_FORMAT = "{server_name}{separator}{tool_name}"
 
@@ -321,6 +328,30 @@ def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
     return prefixed_name, ""
 
 
+def strip_known_server_prefix(name: str, server: Optional[Any]) -> str:
+    """Strip ``server``'s registered prefix from a prefixed tool/resource name.
+
+    Unlike :func:`split_server_prefix_from_name`, which guesses the boundary at
+    the first separator, this removes exactly ``{known_prefix}{separator}`` for
+    one of the server's actual registered prefixes. It therefore stays correct
+    when a prefix itself contains the separator (e.g. the UUID ``server_id``
+    used as the fallback prefix when a server has no alias, or a legacy
+    hyphenated alias), where the first-separator split would cut inside the
+    prefix and never match the stored bare tool name.
+
+    Returns ``name`` unchanged when ``server`` is known but none of its prefixes
+    match (the name is already unprefixed). Falls back to the legacy split only
+    when ``server`` is ``None``.
+    """
+    if server is None:
+        return split_server_prefix_from_name(name)[0]
+    for prefix in iter_known_server_prefixes(server):
+        candidate = normalize_server_name(prefix) + MCP_TOOL_PREFIX_SEPARATOR
+        if name.startswith(candidate):
+            return name[len(candidate) :]
+    return name
+
+
 def is_tool_name_prefixed(
     tool_name: str,
     known_server_prefixes: Optional[set] = None,
@@ -356,9 +387,7 @@ def is_tool_name_prefixed(
     return True
 
 
-def validate_mcp_server_name(
-    server_name: str, raise_http_exception: bool = False
-) -> None:
+def validate_mcp_server_name(server_name: str, raise_http_exception: bool = False) -> None:
     """
     Validate that MCP server name does not contain 'MCP_TOOL_PREFIX_SEPARATOR'.
 
@@ -375,9 +404,7 @@ def validate_mcp_server_name(
             from fastapi import HTTPException
             from starlette import status
 
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message}
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": error_message})
         else:
             raise Exception(error_message)
 
@@ -492,9 +519,7 @@ def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
     return _ENV_VAR_PATTERN.sub(_sub, value)
 
 
-def interpolate_headers(
-    headers: Mapping[str, str], variables: Mapping[str, str]
-) -> Dict[str, str]:
+def interpolate_headers(headers: Mapping[str, str], variables: Mapping[str, str]) -> Dict[str, str]:
     """Return a copy of ``headers`` with every value passed through ``interpolate_env_vars``."""
     return {k: interpolate_env_vars(v, variables) for k, v in headers.items()}
 

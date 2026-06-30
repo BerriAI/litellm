@@ -2870,17 +2870,20 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
-            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+            patch("litellm.proxy.proxy_server.prisma_client"),
             patch(
                 "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
                 return_value=mock_jwt_token,
             ) as mock_get_jwt,
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(return_value=mock_user_info),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new=AsyncMock(side_effect=Exception("no team")),
+            ),
         ):
-            # Mock the user lookup
-            mock_prisma.db.litellm_usertable.find_unique = AsyncMock(
-                return_value=mock_user_info
-            )
-
             # Act - Second poll with team_id
             result = await cli_poll_key(
                 key_id=session_key,
@@ -2895,14 +2898,139 @@ class TestCLIKeyRegenerationFlow:
             assert result["team_id"] == selected_team
             assert result["teams"] == ["team-a", "team-b", "team-c"]
 
-            # Verify JWT was generated with correct team
+            # Verify JWT was generated with correct team and no budget cap
+            # (team lookup failed, but team_id is set, so fallback cap must not apply)
             mock_get_jwt.assert_called_once()
             jwt_call_args = mock_get_jwt.call_args
             assert jwt_call_args.kwargs["team_id"] == selected_team
             assert jwt_call_args.kwargs["team_alias"] == "Team B"
+            assert jwt_call_args.kwargs["max_budget"] is None
 
             # Verify session was deleted after JWT generation
             mock_cache.delete_cache.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cli_poll_key_does_not_cap_session_when_user_has_budget(self):
+        """A user with a configured budget must not get the max_ui_session_budget fallback cap."""
+        from litellm.proxy._types import LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
+
+        session_data = {
+            "user_id": "budgeted-user",
+            "user_role": "internal_user",
+            "teams": [],
+            "team_details": [],
+            "models": ["gpt-4"],
+            "user_email": "budgeted@example.com",
+        }
+        mock_user_info = LiteLLM_UserTable(
+            user_id="budgeted-user",
+            user_role="internal_user",
+            teams=[],
+            models=["gpt-4"],
+            max_budget=100.0,
+        )
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": session_data,
+        }
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiJ9.budgeted.token"
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.prisma_client"),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value=mock_jwt_token,
+            ) as mock_get_jwt,
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(return_value=mock_user_info),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new=AsyncMock(
+                    side_effect=AssertionError("team lookup must be skipped")
+                ),
+            ),
+        ):
+            result = await cli_poll_key(
+                key_id="cli-session-budgeted",
+                team_id=None,
+                x_litellm_cli_poll_secret="poll-secret",
+            )
+
+        assert result["status"] == "ready"
+        mock_get_jwt.assert_called_once()
+        assert mock_get_jwt.call_args.kwargs["max_budget"] is None
+
+    @pytest.mark.asyncio
+    async def test_cli_poll_key_caps_session_when_user_and_team_have_no_budget(self):
+        """With no user and no team budget, the session falls back to max_ui_session_budget."""
+        from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
+
+        session_data = {
+            "user_id": "unbudgeted-user",
+            "user_role": "internal_user",
+            "teams": ["team-x"],
+            "team_details": [{"team_id": "team-x", "team_alias": "Team X"}],
+            "models": ["gpt-4"],
+            "user_email": "unbudgeted@example.com",
+        }
+        mock_user_info = LiteLLM_UserTable(
+            user_id="unbudgeted-user",
+            user_role="internal_user",
+            teams=["team-x"],
+            models=["gpt-4"],
+            max_budget=None,
+        )
+        mock_team = LiteLLM_TeamTableCachedObj(team_id="team-x", max_budget=None)
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": session_data,
+        }
+        mock_jwt_token = "eyJhbGciOiJIUzI1NiJ9.unbudgeted.token"
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.prisma_client"),
+            patch(
+                "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token",
+                return_value=mock_jwt_token,
+            ) as mock_get_jwt,
+            patch(
+                "litellm.proxy.auth.auth_checks.get_user_object",
+                new=AsyncMock(return_value=mock_user_info),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new=AsyncMock(return_value=mock_team),
+            ),
+        ):
+            result = await cli_poll_key(
+                key_id="cli-session-unbudgeted",
+                team_id="team-x",
+                x_litellm_cli_poll_secret="poll-secret",
+            )
+
+        assert result["status"] == "ready"
+        mock_get_jwt.assert_called_once()
+        assert (
+            mock_get_jwt.call_args.kwargs["max_budget"] == litellm.max_ui_session_budget
+        )
 
 
 class TestGetAppRolesFromIdToken:
@@ -6928,3 +7056,78 @@ async def test_debug_sso_callback_handles_missing_raw_response():
     assert '"raw_claims": {}' in body
     assert '"access_token_claims": {}' in body
     assert "user@example.com" in body
+
+
+async def _render_legacy_login_page(env_overrides, general_settings):
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://proxy.example.com/"
+
+    with (
+        # snapshot os.environ so the mutations below are reverted on exit
+        patch.dict(os.environ, {}, clear=False),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.general_settings", general_settings),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+    ):
+        # No SSO provider configured, so /sso/key/generate renders the legacy
+        # username/password form rather than redirecting to an IdP.
+        for var in (
+            "MICROSOFT_CLIENT_ID",
+            "GOOGLE_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT",
+        ):
+            os.environ.pop(var, None)
+        os.environ.update(env_overrides)
+        return await google_login(request=mock_request)
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_shows_credentials_hint_by_default():
+    """Control: without the flag, the legacy page still discloses the hint."""
+    response = await _render_legacy_login_page(env_overrides={}, general_settings={})
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" in body
+    assert "MASTER_KEY" in body
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_hides_credentials_hint_via_env_flag():
+    """
+    Regression: an anonymous GET /sso/key/generate must not disclose the
+    'admin / MASTER_KEY' default-credentials hint when
+    LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT is set. The legacy server-rendered
+    page previously ignored this flag while the new UI honored it.
+    """
+    response = await _render_legacy_login_page(
+        env_overrides={"LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT": "true"},
+        general_settings={},
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" not in body
+    assert "MASTER_KEY" not in body
+    # the login form itself must still render
+    assert 'name="username"' in body
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
+    """The flag is also honored from general_settings, matching the discovery endpoint."""
+    response = await _render_legacy_login_page(
+        env_overrides={},
+        general_settings={"hide_default_credentials_hint": True},
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" not in body
+    assert "MASTER_KEY" not in body

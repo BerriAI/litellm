@@ -14,6 +14,8 @@ from litellm.types.utils import SpecialEnums
 if TYPE_CHECKING:
     from fastapi import Request
 
+    from litellm.router import Router
+
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
     # Ensure b64_uid is a string and not a mock object
@@ -89,9 +91,7 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     return re.split(r"[;,]", batch_id, maxsplit=1)[0]
 
 
-def encode_file_id_with_model(
-    file_id: str, model: str, id_type: Literal["file", "batch"] = "file"
-) -> str:
+def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
     """
     Encode a file/batch ID with model routing information.
 
@@ -139,9 +139,7 @@ def encode_batch_response_ids(response, model: str) -> None:
     """Encode all IDs in a batch response with model routing info (in-place)."""
     if not response or not hasattr(response, "id") or not response.id:
         return
-    response.id = encode_file_id_with_model(
-        file_id=response.id, model=model, id_type="batch"
-    )
+    response.id = encode_file_id_with_model(file_id=response.id, model=model, id_type="batch")
     for attr in ("output_file_id", "error_file_id", "input_file_id"):
         if hasattr(response, attr) and getattr(response, attr):
             setattr(
@@ -251,11 +249,7 @@ def extract_model_from_sources(
     model_from_id = decode_model_from_file_id(file_id)
 
     # Check other sources for model parameter
-    model_from_param = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    model_from_param = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
 
     return model_from_id, model_from_param
 
@@ -292,12 +286,91 @@ def get_credentials_for_model(
     if credentials is None:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."
-            },
+            detail={"error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."},
         )
 
     return credentials
+
+
+def get_team_provider_credentials(
+    llm_router: Optional["Router"],
+    team_models: List[str],
+    custom_llm_provider: str,
+    team_id: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Resolve upstream credentials for a provider-scoped file operation
+    (e.g. GET /v1/files), which doesn't pin a model.
+
+    Priority:
+    1. The team's own (BYOK) deployment for this provider — a deployment whose
+       ``model_info.team_id`` matches ``team_id``. This keeps team-scoped listings
+       on the team's own provider account/key instead of a shared global one.
+    2. Fallback: any deployment the team is granted access to for this provider,
+       expanding wildcard routes and the all-proxy-models sentinel.
+
+    Credential lookup is always scoped to the team's allowlist, so a team can
+    never resolve a provider key for a deployment it isn't authorized to use.
+    Returns None when the router is unavailable or no authorized deployment
+    matches, so the caller can fall back to default credential resolution.
+    """
+    if llm_router is None:
+        return None
+
+    def _provider_credentials(model_id: str) -> Optional[dict]:
+        credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+        if credentials is not None and credentials.get("custom_llm_provider") == custom_llm_provider:
+            return credentials
+        return None
+
+    # 1. Prefer the team's own BYOK deployment, matched by model_info.team_id.
+    if team_id is not None:
+        for deployment in llm_router.model_list or []:
+            model_info = deployment.get("model_info") or {}
+            if model_info.get("team_id") != team_id:
+                continue
+            deployment_id = model_info.get("id")
+            if deployment_id is None:
+                continue
+            credentials = _provider_credentials(deployment_id)
+            if credentials is not None:
+                return credentials
+
+    # 2. Fall back to deployments the team is allowed to access. The
+    #    all-proxy-models sentinel isn't expanded by get_complete_model_list, so
+    #    normalize it to an empty allowlist, which defers to the team-scoped
+    #    proxy model list. A team with a restricted allowlist (e.g. anthropic
+    #    only) therefore never resolves another provider's key.
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    grants_all_models = SpecialModelNames.all_proxy_models.value in team_models
+    effective_team_models = [] if grants_all_models else team_models
+
+    proxy_model_list = llm_router.get_model_names(team_id=team_id)
+    model_access_groups = llm_router.get_model_access_groups()
+    models_to_try = list(
+        dict.fromkeys(
+            get_complete_model_list(
+                key_models=[],
+                team_models=effective_team_models,
+                proxy_model_list=proxy_model_list,
+                user_model=None,
+                infer_model_from_keys=False,
+                return_wildcard_routes=True,
+                llm_router=llm_router,
+                model_access_groups=model_access_groups,
+                include_model_access_groups=True,
+                team_id=team_id,
+            )
+        )
+    )
+    for model_name in models_to_try:
+        credentials = _provider_credentials(model_name)
+        if credentials is not None:
+            return credentials
+
+    return None
 
 
 def prepare_data_with_credentials(
@@ -318,9 +391,7 @@ def prepare_data_with_credentials(
     """
     data.update(credentials)
     if include_internal_credentials:
-        data["_litellm_internal_model_credentials"] = MappingProxyType(
-            dict(credentials)
-        )
+        data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
     data.pop("custom_llm_provider", None)
 
     if file_id is not None:
@@ -467,9 +538,7 @@ def detect_content_type_from_filename(filename: str) -> str:
     return "application/octet-stream"
 
 
-def normalize_mime_type_for_provider(
-    mime_type: str, provider: Optional[str] = None
-) -> str:
+def normalize_mime_type_for_provider(mime_type: str, provider: Optional[str] = None) -> str:
     """
     Normalize MIME type for specific provider requirements.
 
@@ -588,9 +657,7 @@ class FileCreationParams:
             self.target_storage = "default"
 
         # Strip whitespace from model names
-        self.target_model_names = [
-            name.strip() for name in self.target_model_names if name.strip()
-        ]
+        self.target_model_names = [name.strip() for name in self.target_model_names if name.strip()]
 
 
 async def extract_file_creation_params(
@@ -660,9 +727,7 @@ def _extract_target_model_names_simple(
 
     # Parse comma-separated string into list
     if isinstance(target_model_names_form, str):
-        return [
-            name.strip() for name in target_model_names_form.split(",") if name.strip()
-        ]
+        return [name.strip() for name in target_model_names_form.split(",") if name.strip()]
     elif isinstance(target_model_names_form, list):
         return [str(name).strip() for name in target_model_names_form if name]
 
@@ -670,9 +735,7 @@ def _extract_target_model_names_simple(
 
 
 def _is_target_model_names_key(key: str) -> bool:
-    return key == "target_model_names" or (
-        key.startswith("target_model_names[") and key.endswith("]")
-    )
+    return key == "target_model_names" or (key.startswith("target_model_names[") and key.endswith("]"))
 
 
 async def _extract_target_model_names_from_form(request: "Request") -> List[str]:
@@ -749,11 +812,7 @@ def _extract_model_param(request: "Request", request_body: dict) -> Optional[str
     2. Query parameter (?model=)
     3. Header (x-litellm-model)
     """
-    return (
-        request_body.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
-    )
+    return request_body.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
 
 
 # ============================================================================
@@ -828,9 +887,7 @@ async def ensure_batch_response_managed_file_ids(
     model_name = hidden_params.get("model_name")
     unified_file_id = hidden_params.get("unified_file_id")
     if not model_name and isinstance(unified_file_id, str):
-        decoded_unified_file_id = (
-            _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
-        )
+        decoded_unified_file_id = _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
         target_model_names = get_models_from_unified_file_id(decoded_unified_file_id)
         if target_model_names:
             model_name = ",".join(target_model_names)
@@ -858,20 +915,15 @@ async def ensure_batch_response_managed_file_ids(
             await managed_files_obj.store_unified_file_id(
                 file_id=new_unified_file_id,
                 file_object=None,
-                litellm_parent_otel_span=getattr(
-                    user_api_key_dict, "parent_otel_span", None
-                ),
+                litellm_parent_otel_span=getattr(user_api_key_dict, "parent_otel_span", None),
                 model_mappings={model_id: raw_file_id},
                 user_api_key_dict=user_api_key_dict,
             )
             setattr(response, file_attr, new_unified_file_id)
-            verbose_proxy_logger.debug(
-                f"Converted batch {file_attr} {raw_file_id!r} to managed ID before DB write"
-            )
+            verbose_proxy_logger.debug(f"Converted batch {file_attr} {raw_file_id!r} to managed ID before DB write")
         except Exception as e:
             verbose_proxy_logger.warning(
-                f"Failed to convert batch {file_attr}={raw_file_id!r} to managed ID "
-                f"before DB write: {e}"
+                f"Failed to convert batch {file_attr}={raw_file_id!r} to managed ID before DB write: {e}"
             )
 
 
@@ -927,16 +979,12 @@ async def get_batch_from_database(
         # The stored batch object has the raw provider input_file_id. Resolve to unified ID.
         await resolve_input_file_id_to_unified(response, prisma_client)
 
-        verbose_proxy_logger.debug(
-            f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}"
-        )
+        verbose_proxy_logger.debug(f"Retrieved batch {batch_id} from ManagedObjectTable with status={response.status}")
 
         return db_batch_object, response
 
     except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Failed to retrieve batch from ManagedObjectTable: {e}, falling back to provider"
-        )
+        verbose_proxy_logger.warning(f"Failed to retrieve batch from ManagedObjectTable: {e}, falling back to provider")
         return None, None
 
 
@@ -995,9 +1043,7 @@ async def update_batch_in_database(
                 f"Updating batch {batch_id} status from {db_batch_object.status} to {response.status}"
             )
         else:
-            verbose_proxy_logger.info(
-                f"Updating batch {batch_id} status to {response.status} after {operation}"
-            )
+            verbose_proxy_logger.info(f"Updating batch {batch_id} status to {response.status} after {operation}")
 
         # Normalize status for database storage
         db_status = response.status if response.status != "completed" else "complete"
@@ -1028,13 +1074,8 @@ async def update_batch_in_database(
             # If the batch_processed column doesn't exist (old schema),
             # retry without it so the status update still succeeds.
             err_str = str(col_err).lower()
-            if (
-                "batch_processed" in err_str
-                and update_data.get("batch_processed") is not None
-            ):
-                verbose_proxy_logger.warning(
-                    f"batch_processed column not found, retrying update without it: {col_err}"
-                )
+            if "batch_processed" in err_str and update_data.get("batch_processed") is not None:
+                verbose_proxy_logger.warning(f"batch_processed column not found, retrying update without it: {col_err}")
                 update_data.pop("batch_processed", None)
                 await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": batch_id},
@@ -1043,6 +1084,4 @@ async def update_batch_in_database(
             else:
                 raise
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Failed to update batch status in ManagedObjectTable: {e}"
-        )
+        verbose_proxy_logger.error(f"Failed to update batch status in ManagedObjectTable: {e}")

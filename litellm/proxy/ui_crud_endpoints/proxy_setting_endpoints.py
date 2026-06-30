@@ -14,13 +14,11 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
-    DailyTagSpendRepository,
     SSOConfigRepository,
     UISettingsRepository,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
-    InProductNudgeResponse,
     SSOConfig,
 )
 
@@ -178,11 +176,6 @@ class UISettings(BaseModel):
         description="If true, org admins cannot generate API keys via /key/generate.",
     )
 
-    disable_ui_nudges: bool = Field(
-        default=False,
-        description="If true, suppresses in-product UI nudges (survey and Claude Code feedback popups) for all users.",
-    )
-
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -206,7 +199,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
-    "disable_ui_nudges",
 }
 
 # Flags that must be synced from the persisted UISettings into
@@ -351,9 +343,7 @@ async def add_allowed_ip(ip_address: IPAddress):
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     # Load existing config
@@ -532,9 +522,7 @@ async def get_default_team_settings():
     )
 
 
-async def update_default_team_member_budget(
-    teams: List[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth
-):
+async def update_default_team_member_budget(teams: List[NewUserRequestTeam], user_api_key_dict: UserAPIKeyAuth):
     """
     1. Update the max member budget for the team
     """
@@ -562,9 +550,7 @@ async def update_default_team_member_budget(
 
 
 async def _update_litellm_setting(
-    settings: Union[
-        DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings
-    ],
+    settings: Union[DefaultInternalUserParams, DefaultTeamSSOParams, MCPSemanticFilterSettings],
     settings_key: str,
     success_message: str,
 ):
@@ -581,9 +567,7 @@ async def _update_litellm_setting(
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     in_memory_var = settings.model_dump(exclude_none=True)
@@ -625,11 +609,10 @@ async def update_internal_user_settings(
     Update the default internal user parameters for SSO users.
     These settings will be applied to new users who sign in via SSO.
     """
-    if settings.teams is not None and all(
-        isinstance(team, NewUserRequestTeam) for team in settings.teams
-    ):
+    if settings.teams is not None and all(isinstance(team, NewUserRequestTeam) for team in settings.teams):
         await update_default_team_member_budget(
-            settings.teams, user_api_key_dict=user_api_key_dict  # type: ignore
+            settings.teams,
+            user_api_key_dict=user_api_key_dict,  # type: ignore
         )
 
     return await _update_litellm_setting(
@@ -677,9 +660,7 @@ async def get_sso_settings():
         )
 
     # Get SSO config from dedicated table
-    sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(
-        where={"id": "sso_config"}
-    )
+    sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
 
     # Initialize with defaults
     sso_settings_dict = {}
@@ -716,29 +697,15 @@ async def get_sso_settings():
 
     sso_config = SSOConfig(
         google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
-        google_client_secret=decrypted_sso_settings_dict.get(
-            "google_client_secret", None
-        ),
-        microsoft_client_id=decrypted_sso_settings_dict.get(
-            "microsoft_client_id", None
-        ),
-        microsoft_client_secret=decrypted_sso_settings_dict.get(
-            "microsoft_client_secret", None
-        ),
+        google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
+        microsoft_client_id=decrypted_sso_settings_dict.get("microsoft_client_id", None),
+        microsoft_client_secret=decrypted_sso_settings_dict.get("microsoft_client_secret", None),
         microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
         generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
-        generic_client_secret=decrypted_sso_settings_dict.get(
-            "generic_client_secret", None
-        ),
-        generic_authorization_endpoint=decrypted_sso_settings_dict.get(
-            "generic_authorization_endpoint", None
-        ),
-        generic_token_endpoint=decrypted_sso_settings_dict.get(
-            "generic_token_endpoint", None
-        ),
-        generic_userinfo_endpoint=decrypted_sso_settings_dict.get(
-            "generic_userinfo_endpoint", None
-        ),
+        generic_client_secret=decrypted_sso_settings_dict.get("generic_client_secret", None),
+        generic_authorization_endpoint=decrypted_sso_settings_dict.get("generic_authorization_endpoint", None),
+        generic_token_endpoint=decrypted_sso_settings_dict.get("generic_token_endpoint", None),
+        generic_userinfo_endpoint=decrypted_sso_settings_dict.get("generic_userinfo_endpoint", None),
         proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
         user_email=decrypted_sso_settings_dict.get("user_email"),
         ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
@@ -801,9 +768,7 @@ async def update_sso_settings(sso_config: SSOConfig):
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     # Update environment variables
@@ -843,9 +808,7 @@ async def update_sso_settings(sso_config: SSOConfig):
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
-    encrypted_sso_data = proxy_config._encrypt_env_variables(
-        environment_variables=sso_data
-    )
+    encrypted_sso_data = proxy_config._encrypt_env_variables(environment_variables=sso_data)
 
     # Save to dedicated SSO table
     await SSOConfigRepository(prisma_client).table.upsert(
@@ -879,9 +842,7 @@ async def update_sso_settings(sso_config: SSOConfig):
 
             env_vars_to_remove = set(env_var_mapping.values())
             filtered_env_vars = {
-                key: value
-                for key, value in environment_variables.items()
-                if key not in env_vars_to_remove
+                key: value for key, value in environment_variables.items() if key not in env_vars_to_remove
             }
 
             await ConfigRepository(prisma_client).table.update(
@@ -971,9 +932,7 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     # Load existing config
@@ -1035,10 +994,7 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
 
     # Handle environment variable encryption if needed
     stored_config = config.copy()
-    if (
-        "environment_variables" in stored_config
-        and len(stored_config["environment_variables"]) > 0
-    ):
+    if "environment_variables" in stored_config and len(stored_config["environment_variables"]) > 0:
         # Only encrypt if there are environment variables to encrypt
         stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
             environment_variables=stored_config["environment_variables"]
@@ -1106,43 +1062,11 @@ async def update_mcp_semantic_filter_settings(
         from litellm.proxy.proxy_server import prisma_client, proxy_config
 
         if prisma_client is not None:
-            await proxy_config._init_semantic_filter_settings_in_db(
-                prisma_client=prisma_client
-            )
+            await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Failed to reinitialize MCP semantic filter settings immediately: {e}"
-        )
+        verbose_proxy_logger.warning(f"Failed to reinitialize MCP semantic filter settings immediately: {e}")
 
     return result
-
-
-@router.get(
-    "/in_product_nudges",
-    tags=["UI Settings"],
-    dependencies=[Depends(user_api_key_auth)],
-    response_model=InProductNudgeResponse,
-)
-async def get_in_product_nudges():
-    """
-    Get in-product nudges configuration.
-    """
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Database not connected. Please connect a database."},
-        )
-
-    db_record = await DailyTagSpendRepository(prisma_client).table.find_first(
-        where={"tag": "User-Agent: claude-cli"}
-    )
-
-    if db_record:
-        return InProductNudgeResponse(is_claude_code_enabled=True)
-
-    return InProductNudgeResponse(is_claude_code_enabled=False)
 
 
 UI_SETTINGS_CACHE_KEY = "ui_settings:settings_dict"
@@ -1167,23 +1091,17 @@ async def get_ui_settings_cached() -> Dict[str, Any]:
     if prisma_client is None:
         return {}
 
-    db_record = await UISettingsRepository(prisma_client).table.find_unique(
-        where={"id": "ui_settings"}
-    )
+    db_record = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
     ui_settings: Dict[str, Any] = {}
     if db_record and db_record.ui_settings:
         raw = db_record.ui_settings
         ui_settings = json.loads(raw) if isinstance(raw, str) else dict(raw)
 
     # Sanitize
-    ui_settings = {
-        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
-    }
+    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # 3. Populate cache with TTL
-    await user_api_key_cache.async_set_cache(
-        key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL
-    )
+    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     return ui_settings
 
@@ -1208,9 +1126,7 @@ async def get_ui_settings():
 
     ui_settings: Dict[str, Any] = {}
 
-    db_record = await UISettingsRepository(prisma_client).table.find_unique(
-        where={"id": "ui_settings"}
-    )
+    db_record = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
 
     if db_record and db_record.ui_settings:
         ui_settings_json = db_record.ui_settings
@@ -1220,15 +1136,11 @@ async def get_ui_settings():
             ui_settings = dict(ui_settings_json)
 
     # Sanitize any unexpected keys from persisted config before returning
-    ui_settings = {
-        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
-    }
+    ui_settings = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # Sync runtime flags into general_settings so the proxy picks them up
     # at runtime (covers server restart scenarios).
-    _flags_to_sync = {
-        k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings
-    }
+    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
@@ -1237,9 +1149,7 @@ async def get_ui_settings():
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    await user_api_key_cache.async_set_cache(
-        key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL
-    )
+    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     # Build config-like object for schema helper
     config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
@@ -1267,9 +1177,7 @@ async def update_ui_settings(
     from litellm.proxy.proxy_server import prisma_client, store_model_in_db
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=403, detail="Only proxy admins can update UI settings."
-        )
+        raise HTTPException(status_code=403, detail="Only proxy admins can update UI settings.")
 
     if prisma_client is None:
         raise HTTPException(
@@ -1280,9 +1188,7 @@ async def update_ui_settings(
     if store_model_in_db is not True:
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
-            },
+            detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
         )
 
     # Validate against the same effective class GET advertises, so
@@ -1298,10 +1204,7 @@ async def update_ui_settings(
 
     # Reject enterprise-only settings up front so the caller gets a clear
     # signal instead of a silent drop.
-    blocked_enterprise_keys = sorted(
-        (settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS)
-        - ALLOWED_UI_SETTINGS_FIELDS
-    )
+    blocked_enterprise_keys = sorted((settings_dict.keys() & _ENTERPRISE_ONLY_UI_SETTINGS) - ALLOWED_UI_SETTINGS_FIELDS)
     if blocked_enterprise_keys:
         raise HTTPException(
             status_code=403,
@@ -1314,16 +1217,12 @@ async def update_ui_settings(
         )
 
     # Enforce allowlist and drop anything unexpected
-    incoming = {
-        k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
-    }
+    incoming = {k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     # Merge with existing persisted settings so a partial PATCH doesn't
     # overwrite fields the caller didn't send.
     existing: dict = {}
-    db_existing = await UISettingsRepository(prisma_client).table.find_unique(
-        where={"id": "ui_settings"}
-    )
+    db_existing = await UISettingsRepository(prisma_client).table.find_unique(where={"id": "ui_settings"})
     if db_existing and db_existing.ui_settings:
         raw = db_existing.ui_settings
         existing = json.loads(raw) if isinstance(raw, str) else dict(raw)
@@ -1345,9 +1244,7 @@ async def update_ui_settings(
 
     # Sync runtime flags to general_settings so the proxy picks them up
     # at runtime (general_settings is checked in pre-call utils).
-    _flags_to_sync = {
-        k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings
-    }
+    _flags_to_sync = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
     if _flags_to_sync:
         from litellm.proxy.proxy_server import general_settings
 
@@ -1356,12 +1253,8 @@ async def update_ui_settings(
     # Invalidate + set DualCache so subsequent reads see the new values immediately
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    sanitized = {
-        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
-    }
-    await user_api_key_cache.async_set_cache(
-        key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL
-    )
+    sanitized = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
+    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
 
     return {
         "message": "UI settings updated successfully",
@@ -1396,9 +1289,7 @@ async def upload_logo(file: UploadFile = File(...)):
     # Validate file size (max 5MB)
     file_content = await file.read()
     if len(file_content) > 5 * 1024 * 1024:  # 5MB
-        raise HTTPException(
-            status_code=400, detail="File size too large. Maximum size is 5MB."
-        )
+        raise HTTPException(status_code=400, detail="File size too large. Maximum size is 5MB.")
 
     # Create uploads directory if it doesn't exist
     current_dir = os.path.dirname(os.path.abspath(__file__))
