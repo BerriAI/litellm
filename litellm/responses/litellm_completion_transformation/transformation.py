@@ -2018,10 +2018,12 @@ class LiteLLMCompletionResponsesConfig:
         if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
             completion_details = usage.completion_tokens_details
             output_details_dict: dict[str, int] = {}
-            if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
+            if (
+                hasattr(completion_details, "reasoning_tokens")
+                and completion_details.reasoning_tokens is not None
+                and completion_details.reasoning_tokens > 0
+            ):
                 output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
-            else:
-                output_details_dict["reasoning_tokens"] = 0
 
             if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
                 output_details_dict["text_tokens"] = completion_details.text_tokens
