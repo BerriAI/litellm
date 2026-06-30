@@ -90,7 +90,9 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: StandardLoggingPayloadErrorInformation =
 }
 
 
-def _apply_client_disconnect_metadata(target_metadata: dict[str, object]) -> None:
+def _apply_client_disconnect_metadata(target_metadata: Optional[dict[str, object]]) -> None:
+    if target_metadata is None:
+        return
     target_metadata["client_disconnected"] = True
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
 
@@ -113,8 +115,17 @@ async def _record_streaming_client_disconnect_if_needed(
     logging_obj = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
         litellm_params = logging_obj.model_call_details.setdefault("litellm_params", {})
-        _apply_client_disconnect_metadata(litellm_params.setdefault("metadata", {}))
-        _apply_client_disconnect_metadata(logging_obj.model_call_details.setdefault("metadata", {}))
+        _lp_metadata = litellm_params.get("metadata")
+        if _lp_metadata is None:
+            _lp_metadata = {}
+            litellm_params["metadata"] = _lp_metadata
+        _apply_client_disconnect_metadata(_lp_metadata)
+
+        _mcd_metadata = logging_obj.model_call_details.get("metadata")
+        if _mcd_metadata is None:
+            _mcd_metadata = {}
+            logging_obj.model_call_details["metadata"] = _mcd_metadata
+        _apply_client_disconnect_metadata(_mcd_metadata)
 
     _apply_client_disconnect_metadata(request_data.setdefault("metadata", {}))
     litellm_params = request_data.setdefault("litellm_params", {})
