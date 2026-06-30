@@ -245,6 +245,8 @@ class AzureOpenAIConfig(BaseConfig):
                 optional_params["tools"].extend(value)
             elif param in supported_openai_params:
                 optional_params[param] = value
+        if "max_completion_tokens" in optional_params:
+            optional_params.pop("max_tokens", None)
         return optional_params
 
     def transform_request(
