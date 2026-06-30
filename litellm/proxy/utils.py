@@ -2058,6 +2058,13 @@ class ProxyLogging:
                 request_data["combined_usage_object"] = _recovered_usage
                 request_data["response_cost"] = _model_call_details.get("response_cost")
 
+            # Lift standard_logging_object so failure-path spend tracking can
+            # read model_id, model_group, and other fields that are only
+            # available on the logging object's model_call_details.
+            _slo = _model_call_details.get("standard_logging_object")
+            if _slo is not None and not request_data.get("standard_logging_object"):
+                request_data["standard_logging_object"] = _slo
+
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 

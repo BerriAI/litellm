@@ -267,3 +267,30 @@ async def test_handle_logging_proxy_only_path_propagates_async_failure_raises(
             route="/chat/completions",
             original_exception=Exception("x"),
         )
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_lifts_standard_logging_object(
+    proxy_logging, make_user_api_key_auth, mock_callbacks_disabled
+):
+    """The standard_logging_object stored on model_call_details must be lifted
+    onto request_data before litellm_logging_obj is popped, so that downstream
+    spend-tracking callbacks can read model_id, model_group, etc."""
+    slo = {"model_id": "deployment-xyz", "model_group": "anthropic/claude-opus-4-7"}
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {"standard_logging_object": slo}
+
+    proxy_logging.alert_types = []
+    request_data = {
+        "litellm_call_id": "abc",
+        "model": "m",
+        "messages": [],
+        "litellm_logging_obj": logging_obj,
+    }
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=ValueError("oops"),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+    assert request_data.get("standard_logging_object") is slo
+    assert "litellm_logging_obj" not in request_data
