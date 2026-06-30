@@ -188,9 +188,13 @@ class A2AConfig(BaseConfig):
         if api_base is None:
             raise ValueError("api_base is required for A2A provider")
 
-        # A2A uses JSON-RPC 2.0 at the base URL
-        # Remove trailing slash for consistency
-        return api_base.rstrip("/")
+        # A2A uses JSON-RPC 2.0 at the agent card URL. Use it VERBATIM — do NOT
+        # strip a trailing slash. Agent servers (e.g. FastAPI/Starlette mounts,
+        # as on XCity's agent gateway) serve the A2A endpoint at the exact
+        # registered path and 307-redirect the slash-less URL; httpx drops the
+        # POST body across that redirect, so the agent sees an empty request and
+        # returns empty content. Honoring the registered slash avoids the bounce.
+        return api_base
 
     def transform_request(
         self,
