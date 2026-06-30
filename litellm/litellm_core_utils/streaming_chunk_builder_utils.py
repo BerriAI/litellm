@@ -7,6 +7,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioDelta,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
     ChatCompletionMessageToolCall,
     Choices,
@@ -541,6 +542,12 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        # Anthropic emits the cache-creation TTL breakdown (5m/1h split) only on
+        # the `message_start` event; the later `message_delta` carries the flat
+        # cache-creation count but drops the nested breakdown. prompt_tokens_details
+        # is last-wins, so without preserving this separately the 1h breakdown is
+        # lost and 1h cache writes get billed at the 5m rate.
+        cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -594,7 +601,30 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
+                prompt_tokens_details = cast(
+                    Optional[PromptTokensDetailsWrapper],
+                    usage_chunk_dict["prompt_tokens_details"],
+                )
+
+                incoming_breakdown = cast(
+                    Optional[CacheCreationTokenDetails],
+                    getattr(prompt_tokens_details, "cache_creation_token_details", None),
+                )
+                if incoming_breakdown is not None:
+                    cache_creation_token_details = incoming_breakdown
+
+        if (
+            cache_creation_token_details is not None
+            and prompt_tokens_details is not None
+            and cast(
+                Optional[CacheCreationTokenDetails],
+                getattr(prompt_tokens_details, "cache_creation_token_details", None),
+            )
+            is None
+        ):
+            prompt_tokens_details = prompt_tokens_details.model_copy(
+                update={"cache_creation_token_details": cache_creation_token_details}
+            )
 
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
