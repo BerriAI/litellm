@@ -189,7 +189,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Session ID",
     accessorKey: "session_id",
-    size: 160,
+    size: 120,
     cell: (info: any) => {
       const value = String(info.getValue() || "");
       const onSessionClick = info.row.original.onSessionClick;
@@ -211,7 +211,6 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
   {
     header: "Request ID",
     accessorKey: "request_id",
-    size: 110,
     cell: (info: any) => (
       <Tooltip title={String(info.getValue() || "")}>
         <span className="font-mono text-xs max-w-[15ch] truncate block">{String(info.getValue() || "")}</span>
