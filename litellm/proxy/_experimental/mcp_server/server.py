@@ -1568,14 +1568,6 @@ if MCP_AVAILABLE:
                 await _prefetch_oauth_creds_for_user(user_api_key_auth) if _has_oauth2_server else {}
             )
 
-            # Surface vs absorb is a route decision, not a count: a single-server route
-            # (/<server>/mcp) surfaces its upstream-auth error so the client runs the OAuth flow,
-            # while the aggregate route (/mcp) absorbs it so one unauthenticated server does not
-            # empty the others' tools. _mcp_gateway_server_name is the path-derived single-server
-            # scope set by _gateway_initialize_instructions_request_scope (never client-supplied);
-            # it is None on the aggregate route, including when the key can access only one server.
-            is_single_server_listing = _mcp_gateway_server_name.get() is not None
-
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
             ) -> List[MCPTool]:
@@ -1651,13 +1643,13 @@ if MCP_AVAILABLE:
                     )
                     return filtered_tools
                 except MCPUpstreamAuthError:
-                    # Single-server route: surface so the client gets the WWW-Authenticate
-                    # challenge and runs the upstream OAuth flow. Aggregate route: absorb, so
-                    # one unauthenticated server does not empty every other server's tools.
-                    if is_single_server_listing:
-                        raise
+                    # Absorb so one unauthenticated server does not empty every other server's
+                    # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
+                    # intentionally not done here: raising from this list handler cannot produce a
+                    # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
+                    # error), so that belongs in a request-scope preemptive check, tracked separately.
                     verbose_logger.debug(
-                        f"MCP list_tools: omitting {server.name} from the aggregate; it needs upstream auth"
+                        f"MCP list_tools: omitting {server.name}; it needs upstream auth"
                     )
                     return []
                 except Exception as e:

@@ -320,10 +320,12 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
 
 
 @pytest.mark.asyncio
-async def test_single_server_route_surfaces_upstream_auth_error():
-    """On a single-server route (/<server>/mcp), the upstream-auth error surfaces so the client
-    gets the WWW-Authenticate challenge and runs the upstream OAuth flow. The route is identified by
-    the path-derived _mcp_gateway_server_name scope, not by any server count."""
+async def test_single_server_route_also_absorbs_upstream_auth_error():
+    """A single-server route (/<server>/mcp) absorbs an upstream-auth error just like the aggregate:
+    the failing server is omitted (empty list) rather than re-raised. Surfacing it to the client as a
+    401 + WWW-Authenticate challenge cannot be done from this list handler — the MCP session manager
+    serializes a raise into a JSON-RPC error, not an HTTP 401 — so re-auth surfacing is handled by a
+    request-scope preemptive check, tracked separately."""
     from unittest.mock import patch
 
     from litellm.proxy._experimental.mcp_server import server as mcp_server
@@ -337,8 +339,7 @@ async def test_single_server_route_surfaces_upstream_auth_error():
     async def fake_get_tools(server, **kwargs):
         raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
 
-    # /<server>/mcp sets the path-derived single-server scope; the request-scope CM does this in
-    # production, so the test sets it directly.
+    # /<server>/mcp sets the path-derived single-server scope; absorption must hold even then.
     token = _mcp_gateway_server_name.set("delegate_docs")
     try:
         with patch.object(mcp_server, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
@@ -348,12 +349,12 @@ async def test_single_server_route_surfaces_upstream_auth_error():
         ), patch.object(
             mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
         ):
-            with pytest.raises(MCPUpstreamAuthError):
-                await mcp_server._get_tools_from_mcp_servers(
-                    user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
-                    mcp_auth_header=None,
-                    mcp_servers=["delegate_docs"],
-                )
+            tools = await mcp_server._get_tools_from_mcp_servers(
+                user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
+                mcp_auth_header=None,
+                mcp_servers=["delegate_docs"],
+            )
+        assert tools == []
     finally:
         _mcp_gateway_server_name.reset(token)
 
