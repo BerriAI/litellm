@@ -32,6 +32,21 @@ def test_get_complete_url(config: OpenAIVectorStoreFilesConfig):
     assert url == "https://api.example.com/v1/vector_stores/vs_123/files"
 
 
+def test_get_complete_url_encodes_vector_store_id(
+    config: OpenAIVectorStoreFilesConfig,
+):
+    url = config.get_complete_url(
+        api_base="https://api.example.com/v1",
+        vector_store_id="../vs_123?x=1#frag",
+        litellm_params={},
+    )
+
+    assert (
+        url
+        == "https://api.example.com/v1/vector_stores/..%2Fvs_123%3Fx%3D1%23frag/files"
+    )
+
+
 def test_transform_create_request(config: OpenAIVectorStoreFilesConfig):
     api_base = "https://api.example.com/v1/vector_stores/vs_123/files"
     url, payload = config.transform_create_vector_store_file_request(
@@ -58,6 +73,22 @@ def test_transform_list_request(config: OpenAIVectorStoreFilesConfig):
 
     assert url == api_base
     assert params == {"limit": 2, "order": "asc"}
+
+
+def test_transform_file_request_encodes_file_id(config: OpenAIVectorStoreFilesConfig):
+    api_base = "https://api.example.com/v1/vector_stores/vs_123/files"
+
+    url, params = config.transform_retrieve_vector_store_file_content_request(
+        vector_store_id="vs_123",
+        file_id="../../files?x=1#frag",
+        api_base=api_base,
+    )
+
+    assert (
+        url
+        == "https://api.example.com/v1/vector_stores/vs_123/files/..%2F..%2Ffiles%3Fx%3D1%23frag/content"
+    )
+    assert params == {}
 
 
 def test_transform_create_response(config: OpenAIVectorStoreFilesConfig):

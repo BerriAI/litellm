@@ -47,9 +47,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         """
         prompt = data.get("prompt")
         if prompt is None:
-            verbose_proxy_logger.debug(
-                "OpenAI Text Completion: No prompt found in request data"
-            )
+            verbose_proxy_logger.debug("OpenAI Text Completion: No prompt found in request data")
             return data
 
         if isinstance(prompt, str):
@@ -69,8 +67,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
             data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(
-                "OpenAI Text Completion: Applied guardrail to string prompt. "
-                "Original length: %d, New length: %d",
+                "OpenAI Text Completion: Applied guardrail to string prompt. Original length: %d, New length: %d",
                 len(prompt),
                 len(data["prompt"]),
             )
@@ -125,6 +122,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to completion text.
@@ -139,9 +137,7 @@ class OpenAITextCompletionHandler(BaseTranslation):
             Modified response with guardrails applied to completion text
         """
         if not hasattr(response, "choices") or not response.choices:
-            verbose_proxy_logger.debug(
-                "OpenAI Text Completion: No choices in response to process"
-            )
+            verbose_proxy_logger.debug("OpenAI Text Completion: No choices in response to process")
             return response
 
         # Collect all texts to check
@@ -155,15 +151,19 @@ class OpenAITextCompletionHandler(BaseTranslation):
 
         # Apply guardrails in batch
         if texts_to_check:
-            # Create a request_data dict with response info and user API key metadata
-            request_data: dict = {"response": response}
+            # Use the real request_data if provided (proxy path), otherwise
+            # create a standalone dict (SDK / direct-call path).
+            if request_data is None:
+                request_data = {"response": response}
+            else:
+                if "response" not in request_data:
+                    request_data["response"] = response
 
             # Add user API key metadata with prefixed keys
-            user_metadata = self.transform_user_api_key_dict_to_metadata(
-                user_api_key_dict
-            )
-            if user_metadata:
-                request_data["litellm_metadata"] = user_metadata
+            if "litellm_metadata" not in request_data:
+                user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+                if user_metadata:
+                    request_data["litellm_metadata"] = user_metadata
 
             inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
             # Include model information from the response if available

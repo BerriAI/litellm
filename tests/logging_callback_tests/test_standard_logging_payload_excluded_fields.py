@@ -49,7 +49,7 @@ def create_sample_standard_logging_payload() -> Dict:
         "completionStartTime": 1234567890.5,
         "response_time": 1.0,
         "model_map_information": {},
-        "model": "gpt-4",
+        "model": "gpt-5.5",
         "model_id": "model-123",
         "model_group": None,
         "api_base": "https://api.openai.com/v1",
@@ -63,9 +63,7 @@ def create_sample_standard_logging_payload() -> Dict:
         "user_agent": None,
         "messages": [{"role": "user", "content": "Hello, this is sensitive data!"}],
         "response": {
-            "choices": [
-                {"message": {"content": "This is a sensitive response!"}}
-            ]
+            "choices": [{"message": {"content": "This is a sensitive response!"}}]
         },
         "error_str": None,
         "error_information": None,
@@ -348,8 +346,10 @@ class TestExcludedFieldsIntegration:
         model_call_details = create_model_call_details()
 
         # Simulate what litellm_logging.py does
-        filtered_details = callback.redact_standard_logging_payload_from_model_call_details(
-            model_call_details
+        filtered_details = (
+            callback.redact_standard_logging_payload_from_model_call_details(
+                model_call_details
+            )
         )
 
         callback.log_success_event(

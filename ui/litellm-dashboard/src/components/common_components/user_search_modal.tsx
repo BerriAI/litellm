@@ -150,6 +150,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             options={selectedField === "user_email" ? userOptions : []}
             loading={loading}
             allowClear
+            data-testid="member-email-search"
           />
         </Form.Item>
 

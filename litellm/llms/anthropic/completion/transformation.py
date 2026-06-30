@@ -36,9 +36,7 @@ class AnthropicTextError(BaseLLMException):
     def __init__(self, status_code, message):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://api.anthropic.com/v1/complete"
-        )
+        self.request = httpx.Request(method="POST", url="https://api.anthropic.com/v1/complete")
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             message=self.message,
@@ -55,9 +53,7 @@ class AnthropicTextConfig(BaseConfig):
     to pass metadata to anthropic, it's {"user_id": "any-relevant-information"}
     """
 
-    max_tokens_to_sample: Optional[
-        int
-    ] = litellm.max_tokens  # anthropic requires a default
+    max_tokens_to_sample: Optional[int] = litellm.max_tokens  # anthropic requires a default
     stop_sequences: Optional[list] = None
     temperature: Optional[int] = None
     top_p: Optional[int] = None
@@ -66,9 +62,7 @@ class AnthropicTextConfig(BaseConfig):
 
     def __init__(
         self,
-        max_tokens_to_sample: Optional[
-            int
-        ] = DEFAULT_MAX_TOKENS,  # anthropic requires a default
+        max_tokens_to_sample: Optional[int] = DEFAULT_MAX_TOKENS,  # anthropic requires a default
         stop_sequences: Optional[list] = None,
         temperature: Optional[int] = None,
         top_p: Optional[int] = None,
@@ -112,9 +106,7 @@ class AnthropicTextConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        prompt = self._get_anthropic_text_prompt_from_messages(
-            messages=messages, model=model
-        )
+        prompt = self._get_anthropic_text_prompt_from_messages(messages=messages, model=model)
         ## Load Config
         config = litellm.AnthropicTextConfig.get_config()
         for k, v in config.items():
@@ -196,12 +188,8 @@ class AnthropicTextConfig(BaseConfig):
         try:
             completion_response = raw_response.json()
         except Exception:
-            raise AnthropicTextError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
-        prompt = self._get_anthropic_text_prompt_from_messages(
-            messages=messages, model=model
-        )
+            raise AnthropicTextError(message=raw_response.text, status_code=raw_response.status_code)
+        prompt = self._get_anthropic_text_prompt_from_messages(messages=messages, model=model)
         if "error" in completion_response:
             raise AnthropicTextError(
                 message=str(completion_response["error"]),
@@ -215,9 +203,7 @@ class AnthropicTextConfig(BaseConfig):
             model_response.choices[0].finish_reason = completion_response["stop_reason"]
 
         ## CALCULATING USAGE
-        prompt_tokens = len(
-            encoding.encode(prompt)
-        )  ##[TODO] use the anthropic tokenizer here
+        prompt_tokens = len(encoding.encode(prompt))  ##[TODO] use the anthropic tokenizer here
         completion_tokens = len(
             encoding.encode(model_response["choices"][0]["message"].get("content", ""))
         )  ##[TODO] use the anthropic tokenizer here
@@ -245,9 +231,7 @@ class AnthropicTextConfig(BaseConfig):
     def _is_anthropic_text_model(model: str) -> bool:
         return model == "claude-2" or model == "claude-instant-1"
 
-    def _get_anthropic_text_prompt_from_messages(
-        self, messages: List[AllMessageValues], model: str
-    ) -> str:
+    def _get_anthropic_text_prompt_from_messages(self, messages: List[AllMessageValues], model: str) -> str:
         custom_prompt_dict = litellm.custom_prompt_dict
         if model in custom_prompt_dict:
             # check if the model has a registered custom prompt
@@ -259,9 +243,7 @@ class AnthropicTextConfig(BaseConfig):
                 messages=messages,
             )
         else:
-            prompt = prompt_factory(
-                model=model, messages=messages, custom_llm_provider="anthropic"
-            )
+            prompt = prompt_factory(model=model, messages=messages, custom_llm_provider="anthropic")
 
         return str(prompt)
 

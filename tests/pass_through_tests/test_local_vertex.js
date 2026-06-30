@@ -3,8 +3,8 @@ const { VertexAI, RequestOptions } = require('@google-cloud/vertexai');
 
 
 const vertexAI = new VertexAI({
-    project: 'pathrise-convert-1606954137718',
-    location: 'us-central1',
+    project: 'litellm-ci-cd',
+    location: 'global',
     apiEndpoint: "127.0.0.1:4000/vertex-ai"
 });
 
@@ -20,7 +20,7 @@ const requestOptions = {
 };
 
 const generativeModel = vertexAI.getGenerativeModel(
-    { model: 'gemini-2.5-flash-lite' },
+    { model: 'gemini-3.1-flash-lite' },
     requestOptions
 );
 

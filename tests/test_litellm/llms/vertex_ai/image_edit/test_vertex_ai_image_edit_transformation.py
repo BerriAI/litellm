@@ -100,7 +100,9 @@ class TestVertexAIGeminiImageEditTransformation:
                             {
                                 "inlineData": {
                                     "mimeType": "image/png",
-                                    "data": base64.b64encode(b"image-one").decode("utf-8"),
+                                    "data": base64.b64encode(b"image-one").decode(
+                                        "utf-8"
+                                    ),
                                 }
                             }
                         ]
@@ -143,9 +145,15 @@ class TestVertexAIGeminiImageEditTransformation:
     def test_validate_environment_with_litellm_params(self) -> None:
         """Test validate_environment uses credentials from litellm_params"""
         with patch.object(
-            self.config, "_ensure_access_token", return_value=("test-token", "test-expiry")
+            self.config,
+            "_ensure_access_token",
+            return_value=("test-token", "test-expiry"),
         ) as mock_token:
-            with patch.object(self.config, "set_headers", return_value={"Authorization": "Bearer test-token"}) as mock_headers:
+            with patch.object(
+                self.config,
+                "set_headers",
+                return_value={"Authorization": "Bearer test-token"},
+            ) as mock_headers:
                 litellm_params = {
                     "vertex_ai_project": "custom-project",
                     "vertex_ai_credentials": "/path/to/custom/credentials.json",
@@ -164,6 +172,7 @@ class TestVertexAIGeminiImageEditTransformation:
                 assert call_kwargs["credentials"] == "/path/to/custom/credentials.json"
                 assert call_kwargs["project_id"] == "custom-project"
                 assert result == {"Authorization": "Bearer test-token"}
+
     def test_get_complete_url_from_litellm_params(self) -> None:
         """Test vertex_project/vertex_location read from litellm_params first"""
         url = self.config.get_complete_url(
@@ -329,18 +338,25 @@ class TestVertexAIImagenImageEditTransformation:
         # Second should be MASK reference
         assert reference_images[1]["referenceType"] == "REFERENCE_TYPE_MASK"
         assert "maskImageConfig" in reference_images[1]
-        assert reference_images[1]["maskImageConfig"]["maskMode"] == "MASK_MODE_USER_PROVIDED"
+        assert (
+            reference_images[1]["maskImageConfig"]["maskMode"]
+            == "MASK_MODE_USER_PROVIDED"
+        )
 
     def test_transform_image_edit_response(self) -> None:
         """Test response transformation for Vertex AI Imagen"""
         response_payload = {
             "predictions": [
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode("utf-8"),
+                    "bytesBase64Encoded": base64.b64encode(b"image-one").decode(
+                        "utf-8"
+                    ),
                     "mimeType": "image/png",
                 },
                 {
-                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode("utf-8"),
+                    "bytesBase64Encoded": base64.b64encode(b"image-two").decode(
+                        "utf-8"
+                    ),
                     "mimeType": "image/png",
                 },
             ]
@@ -390,5 +406,7 @@ class TestVertexAIImagenImageEditTransformation:
         assert self.config._read_all_bytes(bio) == b"test_bytesio"
 
         # Test with bytearray
-        assert self.config._read_all_bytes(bytearray(b"test_bytearray")) == b"test_bytearray"
-
+        assert (
+            self.config._read_all_bytes(bytearray(b"test_bytearray"))
+            == b"test_bytearray"
+        )

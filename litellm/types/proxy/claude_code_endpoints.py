@@ -39,7 +39,8 @@ class RegisterPluginRequest(BaseModel):
         description=(
             "Git source reference. Supported formats:\n"
             "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
-            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}"
+            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}"
         ),
     )
     version: Optional[str] = Field("1.0.0", description="Semantic version")
@@ -48,6 +49,8 @@ class RegisterPluginRequest(BaseModel):
     homepage: Optional[str] = Field(None, description="Plugin homepage URL")
     keywords: Optional[List[str]] = Field(None, description="Search keywords")
     category: Optional[str] = Field(None, description="Plugin category")
+    domain: Optional[str] = Field(None, description="Skill domain (e.g., 'Productivity')")
+    namespace: Optional[str] = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
 
 
 class PluginResponse(BaseModel):
@@ -81,6 +84,8 @@ class PluginListItem(BaseModel):
     homepage: Optional[str] = None
     keywords: Optional[List[str]] = None
     category: Optional[str] = None
+    domain: Optional[str] = None
+    namespace: Optional[str] = None
     enabled: bool
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -116,6 +121,4 @@ class MarketplaceResponse(BaseModel):
 
     name: str = Field(..., description="Marketplace identifier")
     owner: PluginOwner = Field(..., description="Marketplace owner")
-    plugins: List[MarketplacePluginEntry] = Field(
-        default_factory=list, description="Available plugins"
-    )
+    plugins: List[MarketplacePluginEntry] = Field(default_factory=list, description="Available plugins")

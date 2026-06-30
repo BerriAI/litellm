@@ -4,7 +4,6 @@ import asyncio
 import json
 import os
 import sys
-import traceback
 import tempfile
 from dotenv import load_dotenv
 
@@ -15,12 +14,10 @@ sys.path.insert(
 
 import logging
 import time
-import asyncio
 
 import pytest
 from typing import Optional
 import litellm
-from litellm import create_batch, create_file
 from litellm._logging import verbose_logger
 import openai
 
@@ -28,10 +25,9 @@ verbose_logger.setLevel(logging.DEBUG)
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
-import random
 import socket
 import httpx
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 def _can_resolve_openai():
@@ -49,12 +45,27 @@ skip_if_no_openai_network = pytest.mark.skipif(
 )
 
 
+async def _wait_for_standard_logging_object(
+    custom_logger: "TestCustomLogger", timeout: float = 15.0
+) -> StandardLoggingPayload:
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        await GLOBAL_LOGGING_WORKER.flush()
+        if custom_logger.standard_logging_object is not None:
+            return custom_logger.standard_logging_object
+        await asyncio.sleep(0.25)
+    assert custom_logger.standard_logging_object is not None
+    return custom_logger.standard_logging_object
+
+
 def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
     filepath = os.path.dirname(os.path.abspath(__file__))
-    vertex_key_path = filepath + "/pathrise-convert-1606954137718.json"
+    vertex_key_path = filepath + "/vertex_key.json"
 
     # Read the existing content of the file or create an empty dictionary
     try:
@@ -75,8 +86,8 @@ def load_vertex_ai_credentials():
         service_account_key_data = {}
 
     # Update the service_account_key_data with environment variables
-    private_key_id = os.environ.get("GCS_PRIVATE_KEY_ID", "")
-    private_key = os.environ.get("GCS_PRIVATE_KEY", "")
+    private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
     private_key = private_key.replace("\\n", "\n")
     service_account_key_data["private_key_id"] = private_key_id
     service_account_key_data["private_key"] = private_key
@@ -95,7 +106,7 @@ def load_vertex_ai_credentials():
 @pytest.mark.parametrize("provider", ["openai"])  # , "azure"
 @pytest.mark.asyncio
 @skip_if_no_openai_network
-async def test_create_batch(provider):
+async def test_create_batch(provider, tmp_path):
     """
     1. Create File for Batch completion
     2. Create Batch Request
@@ -108,11 +119,12 @@ async def test_create_batch(provider):
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
 
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="batch",
-        custom_llm_provider=provider,
-    )
+    with open(file_path, "rb") as batch_file:
+        file_obj = await litellm.acreate_file(
+            file=batch_file,
+            purpose="batch",
+            custom_llm_provider=provider,
+        )
     print("Response from creating file=", file_obj)
 
     batch_input_file_id = file_obj.id
@@ -161,10 +173,8 @@ async def test_create_batch(provider):
 
     result = file_content.content
 
-    result_file_name = "batch_job_results_furniture.jsonl"
-
-    with open(result_file_name, "wb") as file:
-        file.write(result)
+    result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
+    result_file_path.write_bytes(result)
 
     # Cancel Batch - handle race condition where batch may already be completed
     try:
@@ -234,9 +244,9 @@ def cleanup_azure_ft_models():
         import requests
 
         client = AzureOpenAI(
-            api_key=os.getenv("AZURE_FT_API_KEY"),
-            azure_endpoint=os.getenv("AZURE_FT_API_BASE"),
-            api_version=os.getenv("AZURE_API_VERSION"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
+            azure_endpoint=os.getenv("AZURE_AI_API_BASE"),
+            api_version=os.getenv("AZURE_AI_API_VERSION"),
         )
 
         _list_ft_jobs = client.fine_tuning.jobs.list()
@@ -268,9 +278,8 @@ def cleanup_azure_ft_models():
 
 @pytest.mark.parametrize("provider", ["openai"])
 @pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
 @skip_if_no_openai_network
-async def test_async_create_batch(provider):
+async def test_async_create_batch(provider, tmp_path):
     """
     1. Create File for Batch completion
     2. Create Batch Request
@@ -279,17 +288,16 @@ async def test_async_create_batch(provider):
     litellm._turn_on_debug()
     print("Testing async create batch")
     litellm.logging_callback_manager._reset_all_callbacks()
-    custom_logger = TestCustomLogger()
-    litellm.callbacks = [custom_logger, "datadog"]
 
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="batch",
-        custom_llm_provider=provider,
-    )
+    with open(file_path, "rb") as batch_file:
+        file_obj = await litellm.acreate_file(
+            file=batch_file,
+            purpose="batch",
+            custom_llm_provider=provider,
+        )
     print("Response from creating file=", file_obj)
 
     await asyncio.sleep(10)
@@ -302,6 +310,8 @@ async def test_async_create_batch(provider):
         "user_api_key_alias": "special_api_key_alias",
         "user_api_key_team_alias": "special_team_alias",
     }
+    custom_logger = TestCustomLogger()
+    litellm.callbacks = [custom_logger, "datadog"]
     create_batch_response = await litellm.acreate_batch(
         completion_window="24h",
         endpoint="/v1/chat/completions",
@@ -325,19 +335,18 @@ async def test_async_create_batch(provider):
         create_batch_response.input_file_id == batch_input_file_id
     ), f"Failed to create batch, expected input_file_id to be {batch_input_file_id} but got {create_batch_response.input_file_id}"
 
-    await asyncio.sleep(6)
     # Assert that the create batch event is logged on CustomLogger
-    assert custom_logger.standard_logging_object is not None
+    standard_logging_object = await _wait_for_standard_logging_object(custom_logger)
     print(
         "standard_logging_object=",
-        json.dumps(custom_logger.standard_logging_object, indent=4, default=str),
+        json.dumps(standard_logging_object, indent=4, default=str),
     )
     assert (
-        custom_logger.standard_logging_object["metadata"]["user_api_key_alias"]
+        standard_logging_object["metadata"]["user_api_key_alias"]
         == extra_metadata_field["user_api_key_alias"]
     )
     assert (
-        custom_logger.standard_logging_object["metadata"]["user_api_key_team_alias"]
+        standard_logging_object["metadata"]["user_api_key_team_alias"]
         == extra_metadata_field["user_api_key_team_alias"]
     )
 
@@ -383,10 +392,8 @@ async def test_async_create_batch(provider):
 
     print("all_files_list = ", all_files_list)
 
-    result_file_name = "batch_job_results_furniture.jsonl"
-
-    with open(result_file_name, "wb") as file:
-        file.write(file_content.content)
+    result_file_path = tmp_path / "batch_job_results_furniture.jsonl"
+    result_file_path.write_bytes(file_content.content)
 
     # Cancel Batch - handle race condition where batch may already be completed
     try:
@@ -406,11 +413,6 @@ async def test_async_create_batch(provider):
         # Re-raise any other unexpected errors
         print(f"Unexpected error during batch cancellation: {e}")
         raise
-
-    if random.randint(1, 3) == 1:
-        print("Running random cleanup of Azure files and models...")
-        cleanup_azure_files()
-        cleanup_azure_ft_models()
 
 
 mock_file_response = {
@@ -511,10 +513,26 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=mock_side_effect,
-    ) as mock_global_post:
+    # Batch jsonl file creation now streams to a GCS resumable session via
+    # _aresumable_chunked_upload (httpx send), not AsyncHTTPHandler.post, so mock
+    # that entry point to return the GCS object response. The resumable protocol
+    # itself is covered in test_vertex_ai_files_streaming.py.
+    mock_upload_response = httpx.Response(
+        200,
+        json=mock_file_response,
+        request=httpx.Request("PUT", "https://storage.googleapis.com/upload"),
+    )
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            side_effect=mock_side_effect,
+        ) as mock_global_post,
+        patch(
+            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler._aresumable_chunked_upload",
+            new_callable=AsyncMock,
+            return_value=mock_upload_response,
+        ),
+    ):
         litellm.set_verbose = True
         litellm._turn_on_debug()
         file_name = "vertex_batch_completions.jsonl"
@@ -557,7 +575,9 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_get_response = MagicMock()
             mock_get_response.json.return_value = mock_vertex_batch_response
             mock_get_response.status_code = 200
+            mock_get_response.is_redirect = False
             mock_get_response.raise_for_status.return_value = None
+            mock_get_response.is_redirect = False
             mock_get.return_value = mock_get_response
 
             retrieved_batch = await litellm.aretrieve_batch(
@@ -577,7 +597,10 @@ async def test_vertex_list_batches(monkeypatch):
 
     monkeypatch.setattr(
         "litellm.llms.vertex_ai.batches.handler.VertexAIBatchPrediction._ensure_access_token",
-        lambda self, credentials, project_id, custom_llm_provider: ("mock-token", "litellm-test-project"),
+        lambda self, credentials, project_id, custom_llm_provider: (
+            "mock-token",
+            "litellm-test-project",
+        ),
     )
 
     with patch(
@@ -587,6 +610,7 @@ async def test_vertex_list_batches(monkeypatch):
         mock_get_response.json.return_value = mock_vertex_list_response
         mock_get_response.status_code = 200
         mock_get_response.raise_for_status.return_value = None
+        mock_get_response.is_redirect = False
         mock_get.return_value = mock_get_response
 
         list_response = await litellm.alist_batches(
@@ -648,7 +672,7 @@ async def test_vertex_async_create_batch_logs_error_body_on_http_error():
 async def test_delete_batch_output_file():
     """
     Test that deleting a batch output file works correctly.
-    
+
     This test verifies the fix for:
     - When a batch is retrieved and has an output_file_id, the file object is properly stored
     - The output file can be deleted without validation errors
@@ -656,11 +680,11 @@ async def test_delete_batch_output_file():
     """
     litellm._turn_on_debug()
     print("Testing delete batch output file")
-    
+
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    
+
     # Create file for batch
     file_obj = await litellm.acreate_file(
         file=open(file_path, "rb"),
@@ -669,7 +693,7 @@ async def test_delete_batch_output_file():
     )
     print("Response from creating file=", file_obj)
     batch_input_file_id = file_obj.id
-    
+
     # Create batch
     create_batch_response = await litellm.acreate_batch(
         completion_window="24h",
@@ -678,36 +702,37 @@ async def test_delete_batch_output_file():
         custom_llm_provider="openai",
     )
     print("Batch created with ID=", create_batch_response.id)
-    
+
     # Retrieve batch to get output_file_id
     retrieved_batch = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id, 
-        custom_llm_provider="openai"
+        batch_id=create_batch_response.id, custom_llm_provider="openai"
     )
     print("Retrieved batch=", retrieved_batch)
-    
+
     # If batch has completed and has output file, test deleting it
     if retrieved_batch.output_file_id:
         print(f"Testing deletion of output file: {retrieved_batch.output_file_id}")
-        
+
         # This is the key test - deleting the output file should work
         # without validation errors (file_object should not be None)
         delete_output_file_response = await litellm.afile_delete(
-            file_id=retrieved_batch.output_file_id, 
-            custom_llm_provider="openai"
+            file_id=retrieved_batch.output_file_id, custom_llm_provider="openai"
         )
-        
+
         print("Delete output file response=", delete_output_file_response)
         assert delete_output_file_response.id == retrieved_batch.output_file_id
-        assert delete_output_file_response.deleted is True or hasattr(delete_output_file_response, 'id')
+        assert delete_output_file_response.deleted is True or hasattr(
+            delete_output_file_response, "id"
+        )
         print("✓ Successfully deleted batch output file")
     else:
-        print("⚠ Batch has not completed yet or no output file available, skipping output file deletion test")
-    
+        print(
+            "⚠ Batch has not completed yet or no output file available, skipping output file deletion test"
+        )
+
     # Clean up - delete the input file
     delete_input_file_response = await litellm.afile_delete(
-        file_id=batch_input_file_id, 
-        custom_llm_provider="openai"
+        file_id=batch_input_file_id, custom_llm_provider="openai"
     )
     print("Delete input file response=", delete_input_file_response)
     assert delete_input_file_response.id == batch_input_file_id

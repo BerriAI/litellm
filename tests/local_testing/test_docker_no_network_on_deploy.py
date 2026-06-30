@@ -350,7 +350,7 @@ def test_container_build_no_network_fetch():
     This verifies that all dependencies are properly bundled and no
     runtime network calls are made during container initialization.
 
-    Note: Build itself may need network for pip install, but runtime should not.
+    Note: Build itself may need network to resolve dependencies, but runtime should not.
     """
     # This is a simplified version - full test would need to:
     # 1. Build image with --network=none (requires pre-cached deps)

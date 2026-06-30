@@ -1,10 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ProjectResponse, projectKeys } from "./useProjects";
 
@@ -17,6 +12,7 @@ export interface ProjectCreateParams {
   models?: string[];
   max_budget?: number;
   blocked?: boolean;
+  guardrails?: string[];
   metadata?: Record<string, unknown>;
   model_rpm_limit?: Record<string, number>;
   model_tpm_limit?: Record<string, number>;
@@ -24,10 +20,7 @@ export interface ProjectCreateParams {
 
 // ── Fetch function ───────────────────────────────────────────────────────────
 
-const createProject = async (
-  accessToken: string,
-  params: ProjectCreateParams,
-): Promise<ProjectResponse> => {
+const createProject = async (accessToken: string, params: ProjectCreateParams): Promise<ProjectResponse> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl}/project/new`;
 

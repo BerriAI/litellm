@@ -34,12 +34,10 @@ const { Text, Title } = Typography;
 interface ViewUserDashboardProps {
   accessToken: string | null;
   token: string | null;
-  keys: any[] | null;
   userRole: string | null;
   userID: string | null;
   teams: any[] | null;
-  setKeys: React.Dispatch<React.SetStateAction<object[] | null>>;
-  orgAdminOrgIds?: Array<{organization_id: string, organization_alias: string}> | null;
+  orgAdminOrgIds?: Array<{ organization_id: string; organization_alias: string }> | null;
 }
 
 interface FilterState {
@@ -70,7 +68,14 @@ const initialFilters: FilterState = {
   sort_order: "desc",
 };
 
-const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, token, userRole, userID, teams, orgAdminOrgIds }) => {
+const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
+  accessToken,
+  token,
+  userRole,
+  userID,
+  teams,
+  orgAdminOrgIds,
+}) => {
   const isProxyAdmin = userRole ? isProxyAdminRole(userRole) : false;
   const queryClient = useQueryClient();
   const [currentPage, setCurrentPage] = useState(1);
@@ -289,7 +294,7 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     },
     handleDelete,
     handleResetPassword,
-    () => { }, // placeholder function, will be overridden in UserDataTable
+    () => {}, // placeholder function, will be overridden in UserDataTable
   );
 
   return (
@@ -304,7 +309,14 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
             </>
           ) : userID && accessToken ? (
             <>
-              <CreateUserButton userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+              {isProxyAdmin && (
+                <CreateUserButton
+                  userID={userID}
+                  accessToken={accessToken}
+                  teams={teams}
+                  possibleUIRoles={possibleUIRoles}
+                />
+              )}
 
               {isProxyAdmin && (
                 <Button
@@ -317,7 +329,12 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
               )}
 
               {isProxyAdmin && selectionMode && (
-                <Button type="primary" onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
+                <Button
+                  type="primary"
+                  onClick={handleBulkEdit}
+                  disabled={selectedUsers.length === 0}
+                  className="flex items-center"
+                >
                   Bulk Edit ({selectedUsers.length} selected)
                 </Button>
               )}

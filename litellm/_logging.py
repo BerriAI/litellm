@@ -1,12 +1,12 @@
 import ast
 import logging
 import os
-import re
 import sys
 from datetime import datetime
 from logging import Formatter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
@@ -17,50 +17,30 @@ if set_verbose is True:
         "`litellm.set_verbose` is deprecated. Please set `os.environ['LITELLM_LOG'] = 'DEBUG'` for debug logs."
     )
 
-_ENABLE_SECRET_REDACTION = (
-    os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
-)
-
-_REDACTED = "REDACTED"
-
-
-def _build_secret_patterns() -> re.Pattern:
-    patterns: List[str] = [
-        # AWS access key IDs
-        r"(?:AKIA|ASIA)[0-9A-Z]{16}",
-        # AWS secrets / session tokens / access key IDs (key=value)
-        r"(?:aws_secret_access_key|aws_session_token|aws_access_key_id)"
-        r"\s*[:=]\s*[A-Za-z0-9/+=]{20,}",
-        # Bearer tokens (OAuth, JWT, etc.)
-        r"Bearer\s+[A-Za-z0-9\-._~+/]{10,}=*",
-        # Basic auth headers
-        r"Basic\s+[A-Za-z0-9+/]{10,}={0,2}",
-        # OpenAI / Anthropic sk- prefixed keys
-        r"sk-[A-Za-z0-9\-_]{20,}",
-        # Generic api_key / api-key / apikey (handles 'key': 'value' dict repr)
-        r"(?:api[_-]?key)['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]{8,}",
-        # x-api-key / api-key header values (handles 'key': 'value' dict repr)
-        r"(?:x-api-key|api-key)['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
-        # Anthropic internal header keys
-        r"x-ak-[A-Za-z0-9\-_]{20,}",
-        # Google API keys
-        r"AIza[0-9A-Za-z\-_]{35}",
-        # Password / secret params (handles key=value and 'key': 'value')
-        r"\w*(?:password|passwd|client_secret|secret_key|_secret)"
-        r"['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
-        # Database connection string credentials (scheme://user:pass@host)
-        r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
-        # Databricks personal access tokens
-        r"dapi[0-9a-f]{32}",
-    ]
-    return re.compile("|".join(patterns), re.IGNORECASE)
-
-
-_SECRET_RE = _build_secret_patterns()
+_ENABLE_SECRET_REDACTION = os.getenv("LITELLM_DISABLE_REDACT_SECRETS", "").lower() != "true"
 
 
 def _redact_string(value: str) -> str:
-    return _SECRET_RE.sub(_REDACTED, value)
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return redact_string(value)
+
+
+def redact_secrets(value: str) -> str:
+    """Public API: redact known secret/credential patterns from an arbitrary string.
+
+    Use this for code paths that bypass the logging system — e.g. Slack/Teams
+    alerting, HTTP error response bodies, or any other string that may contain
+    secrets and will be sent to an external sink.
+
+    Not to be confused with redact_message_input_output_from_logging() in
+    litellm_core_utils/redact_messages.py, which redacts LLM prompt/response
+    content for privacy — this function redacts credential patterns (API keys,
+    PEM blocks, tokens, etc.) by shape.
+    """
+    if not _ENABLE_SECRET_REDACTION:
+        return value
+    return _redact_string(value)
 
 
 class SecretRedactionFilter(logging.Filter):
@@ -82,9 +62,7 @@ class SecretRedactionFilter(logging.Filter):
         # Redact exception tracebacks
         if record.exc_info and record.exc_info[1] is not None:
             try:
-                record.exc_text = _redact_string(
-                    self._formatter.formatException(record.exc_info)
-                )
+                record.exc_text = _redact_string(self._formatter.formatException(record.exc_info))
             except Exception:
                 pass
 
@@ -200,10 +178,14 @@ class JsonFormatter(Formatter):
             if key not in _STANDARD_RECORD_ATTRS and key not in json_record:
                 json_record[key] = value
 
+        # Set component/logger only if not already supplied via extra={...}
+        if "component" not in json_record:
+            json_record["component"] = record.name
+        if "logger" not in json_record:
+            json_record["logger"] = f"{record.filename}:{record.lineno}"
+
         if record.exc_info:
-            json_record["stacktrace"] = record.exc_text or self.formatException(
-                record.exc_info
-            )
+            json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
 
         return safe_dumps(json_record)
 
@@ -272,7 +254,7 @@ verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
 
-# Add the handler to the logger
+# Add the handler to the loggers
 verbose_router_logger.addHandler(handler)
 verbose_proxy_logger.addHandler(handler)
 verbose_logger.addHandler(handler)
@@ -416,6 +398,7 @@ def _turn_on_debug():
 
 
 def _disable_debugging():
+    """Disable the package, router, and proxy verbose loggers."""
     verbose_logger.disabled = True
     verbose_router_logger.disabled = True
     verbose_proxy_logger.disabled = True
@@ -430,7 +413,7 @@ def _enable_debugging():
 def print_verbose(print_statement):
     try:
         if set_verbose:
-            print(print_statement)  # noqa
+            print(redact_secrets(str(print_statement)))  # noqa: T201
     except Exception:
         pass
 

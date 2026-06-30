@@ -101,7 +101,11 @@ def test_mistral_audio_transcription_request_transform():
     config = MistralAudioTranscriptionConfig()
 
     wav_path = os.path.join(
-        os.path.dirname(__file__), "../../../../..", "tests", "llm_translation", "gettysburg.wav"
+        os.path.dirname(__file__),
+        "../../../../..",
+        "tests",
+        "llm_translation",
+        "gettysburg.wav",
     )
     audio_file = open(wav_path, "rb")
 
@@ -127,7 +131,11 @@ def test_mistral_audio_transcription_request_with_diarize():
     config = MistralAudioTranscriptionConfig()
 
     wav_path = os.path.join(
-        os.path.dirname(__file__), "../../../../..", "tests", "llm_translation", "gettysburg.wav"
+        os.path.dirname(__file__),
+        "../../../../..",
+        "tests",
+        "llm_translation",
+        "gettysburg.wav",
     )
     audio_file = open(wav_path, "rb")
 
@@ -148,14 +156,56 @@ def test_mistral_audio_transcription_response_transform():
     config = MistralAudioTranscriptionConfig()
 
     mock_response = MagicMock(spec=httpx.Response)
-    mock_response.json.return_value = {
-        "text": "Four score and seven years ago..."
-    }
+    mock_response.json.return_value = {"text": "Four score and seven years ago..."}
 
     response = config.transform_audio_transcription_response(mock_response)
 
     assert isinstance(response, TranscriptionResponse)
     assert response.text == "Four score and seven years ago..."
+
+
+def test_mistral_audio_transcription_response_transform_diarized():
+    """Test that diarized responses preserve segments and language."""
+    config = MistralAudioTranscriptionConfig()
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "model": "voxtral-mini-latest",
+        "text": "Hello, how are you? I am fine.",
+        "language": None,
+        "segments": [
+            {
+                "text": "Hello, how are you?",
+                "start": 0.3,
+                "end": 2.1,
+                "speaker_id": "speaker_1",
+                "type": "transcription_segment",
+            },
+            {
+                "text": "I am fine.",
+                "start": 2.5,
+                "end": 3.8,
+                "speaker_id": "speaker_2",
+                "type": "transcription_segment",
+            },
+        ],
+        "usage": {
+            "prompt_audio_seconds": 4,
+            "prompt_tokens": 5,
+            "total_tokens": 50,
+            "completion_tokens": 20,
+        },
+    }
+
+    response = config.transform_audio_transcription_response(mock_response)
+
+    assert isinstance(response, TranscriptionResponse)
+    assert response.text == "Hello, how are you? I am fine."
+    assert response["segments"] is not None
+    assert len(response["segments"]) == 2
+    assert response["segments"][0]["speaker_id"] == "speaker_1"
+    assert response["segments"][1]["speaker_id"] == "speaker_2"
+    assert response["language"] is None
 
 
 def test_mistral_audio_transcription_response_transform_empty():

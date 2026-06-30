@@ -6,11 +6,37 @@ import orjson
 from fastapi import Request, UploadFile, status
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.types.router import Deployment
+
+_FORM_CONTENT_TYPES: frozenset[str] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+
+
+def _normalize_media_type(content_type: str) -> str:
+    """Return the bare media type per RFC 7231: strip params, trim, lowercase."""
+    if not content_type:
+        return ""
+    return content_type.split(";", 1)[0].strip().lower()
+
+
+def _is_form_content_type(content_type: str) -> bool:
+    """
+    True iff Starlette's ``request.form()`` will actually parse this body.
+
+    Substring matching ``"form"`` is unsafe: ``request.form()`` returns empty
+    ``FormData`` for non-canonical types without consuming the body, leaving
+    the auth-time pre-read and the handler's read seeing different payloads.
+    """
+    return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
+
+
+def _is_json_content_type(content_type: str) -> bool:
+    """True iff the body should be parsed as JSON."""
+    return _normalize_media_type(content_type) == "application/json"
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
@@ -28,17 +54,31 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
             return {}
 
         # Check if we already read and parsed the body
-        _cached_request_body: Optional[dict] = _safe_get_request_parsed_body(
-            request=request
-        )
+        _cached_request_body: Optional[dict] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
             return _cached_request_body
 
         _request_headers: dict = _safe_get_request_headers(request=request)
         content_type = _request_headers.get("content-type", "")
 
-        if "form" in content_type:
-            parsed_body = dict(await request.form())
+        if _is_form_content_type(content_type):
+            try:
+                form_data = await request.form()
+            except Exception as e:
+                # ``request.form()`` raises on malformed multipart (missing
+                # boundary, malformed chunk encoding, …). Surface as 400 so
+                # the auth-time pre-read does not silently cache ``{}`` while
+                # a later raw-body re-read sees the original payload —
+                # banned-param checks must see the same body the handler
+                # acts on.
+                verbose_proxy_logger.error(f"Invalid form payload: {e}")
+                raise ProxyException(
+                    message=f"Invalid form payload: {e}",
+                    type="invalid_request_error",
+                    param="request_body",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+            parsed_body = dict(form_data)
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
@@ -52,27 +92,34 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                 try:
                     parsed_body = orjson.loads(body)
                 except orjson.JSONDecodeError as e:
+                    # The surrogate-repair fallback below runs two full-body re.sub
+                    # passes, which block the event loop on multi-MB malformed bodies.
+                    # Above the configured size, skip the repair and raise the 400 now.
+                    repair_limit_bytes = MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB * 1024 * 1024
+                    if repair_limit_bytes > 0 and len(body) > repair_limit_bytes:
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
+                        raise ProxyException(
+                            message=f"Invalid JSON payload: {str(e)}",
+                            type="invalid_request_error",
+                            param="request_body",
+                            code=status.HTTP_400_BAD_REQUEST,
+                        )
+
                     # First try the standard json module which is more forgiving
                     # First decode bytes to string if needed
                     body_str = body.decode("utf-8") if isinstance(body, bytes) else body
 
                     # Replace invalid surrogate pairs
                     # This regex finds incomplete surrogate pairs
-                    body_str = re.sub(
-                        r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str
-                    )
+                    body_str = re.sub(r"[\uD800-\uDBFF](?![\uDC00-\uDFFF])", "", body_str)
                     # This regex finds low surrogates without high surrogates
-                    body_str = re.sub(
-                        r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str
-                    )
+                    body_str = re.sub(r"(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]", "", body_str)
 
                     try:
                         parsed_body = json.loads(body_str)
                     except json.JSONDecodeError:
                         # If both orjson and json.loads fail, throw a proper error
-                        verbose_proxy_logger.error(
-                            f"Invalid JSON payload received: {str(e)}"
-                        )
+                        verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
                         raise ProxyException(
                             message=f"Invalid JSON payload: {str(e)}",
                             type="invalid_request_error",
@@ -90,20 +137,14 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         raise
     except Exception as e:
         # Catch unexpected errors to avoid crashes
-        verbose_proxy_logger.exception(
-            "Unexpected error reading request body - {}".format(e)
-        )
+        verbose_proxy_logger.exception("Unexpected error reading request body - {}".format(e))
         return {}
 
 
 def _safe_get_request_parsed_body(request: Optional[Request]) -> Optional[dict]:
     if request is None:
         return None
-    if (
-        hasattr(request, "scope")
-        and "parsed_body" in request.scope
-        and isinstance(request.scope["parsed_body"], tuple)
-    ):
+    if hasattr(request, "scope") and "parsed_body" in request.scope and isinstance(request.scope["parsed_body"], tuple):
         accepted_keys, parsed_body = request.scope["parsed_body"]
         return {key: parsed_body[key] for key in accepted_keys}
     return None
@@ -117,9 +158,7 @@ def _safe_get_request_query_params(request: Optional[Request]) -> Dict:
             return dict(request.query_params)
         return {}
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unexpected error reading request query params - {}".format(e)
-        )
+        verbose_proxy_logger.debug("Unexpected error reading request query params - {}".format(e))
         return {}
 
 
@@ -132,9 +171,7 @@ def _safe_set_request_parsed_body(
             return
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unexpected error setting request parsed body - {}".format(e)
-        )
+        verbose_proxy_logger.debug("Unexpected error setting request parsed body - {}".format(e))
 
 
 def _safe_get_request_headers(request: Optional[Request]) -> dict:
@@ -152,15 +189,11 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
     if isinstance(cached, dict):
         return cached
     if cached is not None:
-        verbose_proxy_logger.debug(
-            "Unexpected cached request headers type - {}".format(type(cached))
-        )
+        verbose_proxy_logger.debug("Unexpected cached request headers type - {}".format(type(cached)))
     try:
         headers = dict(request.headers)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unexpected error reading request headers - {}".format(e)
-        )
+        verbose_proxy_logger.debug("Unexpected error reading request headers - {}".format(e))
         headers = {}
     try:
         if state is not None:
@@ -197,9 +230,7 @@ def check_file_size_under_limit(
 
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
-            deployment: Optional[
-                Deployment
-            ] = llm_router.get_deployment_by_model_group_name(
+            deployment: Optional[Deployment] = llm_router.get_deployment_by_model_group_name(
                 model_group_name=request_data["model"]
             )
             if (
@@ -209,9 +240,7 @@ def check_file_size_under_limit(
             ):
                 max_file_size_mb = deployment.litellm_params.max_file_size_mb
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Got error when checking file size: %s", (str(e))
-            )
+            verbose_proxy_logger.error("Got error when checking file size: %s", (str(e)))
 
     if max_file_size_mb is not None:
         verbose_proxy_logger.debug(
@@ -257,7 +286,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: Dict[str, Any]
+    form_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.
@@ -306,24 +335,17 @@ async def get_request_body(request: Request) -> Dict[str, Any]:
     Read the request body and parse it as JSON.
     """
     if request.method == "POST":
-        if request.headers.get("content-type", "") == "application/json":
+        content_type = request.headers.get("content-type", "")
+        if _is_json_content_type(content_type):
             return await _read_request_body(request)
-        elif "multipart/form-data" in request.headers.get(
-            "content-type", ""
-        ) or "application/x-www-form-urlencoded" in request.headers.get(
-            "content-type", ""
-        ):
+        elif _is_form_content_type(content_type):
             return await get_form_data(request)
         else:
-            raise ValueError(
-                f"Unsupported content type: {request.headers.get('content-type')}"
-            )
+            raise ValueError(f"Unsupported content type: {content_type}")
     return {}
 
 
-def extract_nested_form_metadata(
-    form_data: Dict[str, Any], prefix: str = "litellm_metadata["
-) -> Dict[str, Any]:
+def extract_nested_form_metadata(form_data: Dict[str, Any], prefix: str = "litellm_metadata[") -> Dict[str, Any]:
     """
     Extract nested metadata from form data with bracket notation.
 
@@ -370,9 +392,7 @@ def extract_nested_form_metadata(
 
         # Skip UploadFile objects - they should not be in metadata
         if isinstance(value, UploadFile):
-            verbose_proxy_logger.warning(
-                f"Skipping UploadFile in metadata extraction for key: {key}"
-            )
+            verbose_proxy_logger.warning(f"Skipping UploadFile in metadata extraction for key: {key}")
             continue
 
         # Extract the nested path from bracket notation
@@ -385,9 +405,7 @@ def extract_nested_form_metadata(
             parts = path_string.split("][")
 
             if not parts or not parts[0]:
-                verbose_proxy_logger.warning(
-                    f"Invalid metadata key format (empty path): {key}"
-                )
+                verbose_proxy_logger.warning(f"Invalid metadata key format (empty path): {key}")
                 continue
 
             # Navigate/create nested dictionary structure
@@ -404,9 +422,7 @@ def extract_nested_form_metadata(
                 if isinstance(current, dict):
                     current[parts[-1]] = value
                 else:
-                    verbose_proxy_logger.warning(
-                        f"Cannot set value - parent is not a dict for key: {key}"
-                    )
+                    verbose_proxy_logger.warning(f"Cannot set value - parent is not a dict for key: {key}")
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error parsing metadata key '{key}': {str(e)}")
@@ -426,7 +442,16 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
         List of tag names (strings), empty list if no valid tags found
     """
     metadata_variable_name = get_metadata_variable_name_from_kwargs(request_body)
-    metadata = request_body.get(metadata_variable_name) or {}
+    metadata = request_body.get(metadata_variable_name)
+    # metadata can arrive as a JSON string from multipart/form-data or extra_body;
+    # coerce defensively so .get() below never raises AttributeError.
+    if isinstance(metadata, str):
+        from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+        parsed = safe_json_loads(metadata)
+        metadata = parsed if isinstance(parsed, dict) else {}
+    elif not isinstance(metadata, dict):
+        metadata = {}
     tags_in_metadata: Any = metadata.get("tags", [])
     tags_in_request_body: Any = request_body.get("tags", [])
     combined_tags: List[str] = []
@@ -499,7 +524,10 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         request_data: The request data dictionary to populate
         request: The FastAPI Request object
     """
-    path = request.url.path
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    path = get_request_route(request)
     vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)
     if vector_store_match:
         vector_store_id = vector_store_match.group(1)
@@ -517,6 +545,4 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
             f"populate_request_with_path_params: Updated request_data with vector_store_ids={request_data.get('vector_store_ids')}"
         )
     else:
-        verbose_proxy_logger.debug(
-            f"populate_request_with_path_params: No vector_store_id present in path={path}"
-        )
+        verbose_proxy_logger.debug(f"populate_request_with_path_params: No vector_store_id present in path={path}")

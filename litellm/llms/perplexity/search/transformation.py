@@ -1,6 +1,7 @@
 """
 Calls Perplexity's /search endpoint to search the web.
 """
+
 from typing import Dict, List, Optional, TypedDict, Union
 
 import httpx
@@ -49,11 +50,15 @@ class PerplexitySearchConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("PERPLEXITYAI_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("PERPLEXITYAI_API_KEY",),
+            base_env_var="PERPLEXITY_API_BASE",
+            default_api_base=self.PERPLEXITY_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "PERPLEXITYAI_API_KEY is not set. Set `PERPLEXITYAI_API_KEY` environment variable."
-            )
+            raise ValueError("PERPLEXITYAI_API_KEY is not set. Set `PERPLEXITYAI_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -68,11 +73,7 @@ class PerplexitySearchConfig(BaseSearchConfig):
         """
         Get complete URL for Search endpoint.
         """
-        api_base = (
-            api_base
-            or get_secret_str("PERPLEXITY_API_BASE")
-            or self.PERPLEXITY_API_BASE
-        )
+        api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or self.PERPLEXITY_API_BASE
 
         # append "/search" to the api base if it's not already there
         if not api_base.endswith("/search"):

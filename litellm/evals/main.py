@@ -152,9 +152,7 @@ def create_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -175,9 +173,7 @@ def create_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         request_body = evals_api_provider_config.transform_create_eval_request(
@@ -188,9 +184,7 @@ def create_eval(
 
         # Get API base and URL
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
-        url = evals_api_provider_config.get_complete_url(
-            api_base=api_base, endpoint="evals"
-        )
+        url = evals_api_provider_config.get_complete_url(api_base=api_base, endpoint="evals")
 
         # Pre-call logging
         litellm_logging_obj.update_from_kwargs(
@@ -343,9 +337,7 @@ def list_evals(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -371,9 +363,7 @@ def list_evals(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         url, query_params = evals_api_provider_config.transform_list_evals_request(
@@ -513,9 +503,7 @@ def get_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -524,9 +512,7 @@ def get_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -682,9 +668,7 @@ def update_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -732,9 +716,7 @@ def update_eval(
                 "user_agent",
             }
             # Only include user-provided metadata keys
-            filtered_metadata = {
-                k: v for k, v in metadata.items() if k not in internal_keys
-            }
+            filtered_metadata = {k: v for k, v in metadata.items() if k not in internal_keys}
             if filtered_metadata:  # Only add if there's user metadata
                 update_request["metadata"] = filtered_metadata
 
@@ -744,9 +726,7 @@ def update_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -893,9 +873,7 @@ def delete_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -904,9 +882,7 @@ def delete_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1047,9 +1023,7 @@ def cancel_eval(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1058,9 +1032,7 @@ def cancel_eval(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1230,9 +1202,7 @@ def create_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1254,9 +1224,7 @@ def create_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1418,9 +1386,7 @@ def list_runs(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1444,9 +1410,7 @@ def list_runs(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         url, query_params = evals_api_provider_config.transform_list_runs_request(
@@ -1592,9 +1556,7 @@ def get_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1603,9 +1565,7 @@ def get_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1752,9 +1712,7 @@ def cancel_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1763,9 +1721,7 @@ def cancel_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE
@@ -1921,9 +1877,7 @@ def delete_run(
             custom_llm_provider = "openai"
 
         # Get provider config
-        evals_api_provider_config: Optional[
-            BaseEvalsAPIConfig
-        ] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
+        evals_api_provider_config: Optional[BaseEvalsAPIConfig] = ProviderConfigManager.get_provider_evals_api_config(  # type: ignore
             provider=litellm.LlmProviders(custom_llm_provider),
         )
 
@@ -1932,9 +1886,7 @@ def delete_run(
 
         # Validate environment and get headers
         headers = extra_headers or {}
-        headers = evals_api_provider_config.validate_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        headers = evals_api_provider_config.validate_environment(headers=headers, litellm_params=litellm_params)
 
         # Transform request
         api_base = litellm_params.api_base or DEFAULT_OPENAI_API_BASE

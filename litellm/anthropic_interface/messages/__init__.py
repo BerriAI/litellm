@@ -10,7 +10,7 @@ This is an __init__.py file to allow the following interface
 
 """
 
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Coroutine, Dict, Iterator, List, Optional, Union
 
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages as _async_anthropic_messages,
@@ -38,7 +38,7 @@ async def acreate(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     container: Optional[Dict] = None,
-    **kwargs
+    **kwargs,
 ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
     Async wrapper for Anthropic's messages API
@@ -97,11 +97,12 @@ def create(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     container: Optional[Dict] = None,
-    **kwargs
+    **kwargs,
 ) -> Union[
     AnthropicMessagesResponse,
+    Iterator[bytes],
     AsyncIterator[Any],
-    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]],
 ]:
     """
     Async wrapper for Anthropic's messages API

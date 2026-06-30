@@ -27,9 +27,7 @@ class MistralAudioTranscriptionException(BaseLLMException):
 
 
 class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIAudioTranscriptionOptionalParams]:
         return [
             "language",
             "temperature",
@@ -59,9 +57,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = (
-            "https://api.mistral.ai/v1" if api_base is None else api_base.rstrip("/")
-        )
+        api_base = "https://api.mistral.ai/v1" if api_base is None else api_base.rstrip("/")
         return f"{api_base}/audio/transcriptions"
 
     def get_error_class(
@@ -119,9 +115,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             openai_params=self.get_supported_openai_params(model),
         )
         for key, value in provider_specific_params.items():
-            form_fields[key] = (
-                str(value).lower() if isinstance(value, bool) else str(value)
-            )
+            form_fields[key] = str(value).lower() if isinstance(value, bool) else str(value)
 
         files = {
             "file": (
@@ -148,5 +142,12 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         text = response_json.get("text") or ""
         response = TranscriptionResponse(text=text)
+
+        # Preserve Mistral-specific fields (e.g. diarization segments)
+        if "segments" in response_json:
+            response["segments"] = response_json["segments"]
+        if "language" in response_json:
+            response["language"] = response_json["language"]
+
         response._hidden_params = response_json
         return response

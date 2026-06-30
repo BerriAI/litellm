@@ -1,6 +1,7 @@
 """
 Azure Anthropic handler - reuses AnthropicChatCompletion logic with Azure authentication
 """
+
 import copy
 import json
 from typing import TYPE_CHECKING, Callable, Union
@@ -118,11 +119,7 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
-                    client=(
-                        client
-                        if client is not None and isinstance(client, AsyncHTTPHandler)
-                        else None
-                    ),
+                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                 )
             else:
                 return self.acompletion_function(

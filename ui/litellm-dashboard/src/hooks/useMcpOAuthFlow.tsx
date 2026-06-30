@@ -11,19 +11,28 @@ import {
   serverRootPath,
 } from "@/components/networking";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { generateCodeChallenge, generateCodeVerifier } from "@/utils/pkce";
+import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
 
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
-  getCredentials: () => {
-    client_id?: string;
-    client_secret?: string;
-    scopes?: string[];
-  } | undefined;
+  getCredentials: () =>
+    | {
+        client_id?: string;
+        client_secret?: string;
+        scopes?: string[];
+      }
+    | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
   onTokenReceived: (tokenResponse: Record<string, any>) => void;
   onBeforeRedirect?: () => void;
+  // Distinguishes which form started the flow (e.g. "create" vs "edit"). Both forms
+  // mount this hook with shared storage keys, so the return handler only processes a
+  // callback whose stored flowSource matches, preventing one form from grabbing the
+  // other's OAuth result.
+  flowSource: string;
 }
 
 interface UseMcpOAuthFlowResult {
@@ -31,26 +40,8 @@ interface UseMcpOAuthFlowResult {
   status: McpOAuthStatus;
   error: string | null;
   tokenResponse: Record<string, any> | null;
+  reset: () => void;
 }
-
-const base64UrlEncode = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  bytes.forEach((b) => (binary += String.fromCharCode(b)));
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-const generateCodeVerifier = () => {
-  const array = new Uint8Array(32);
-  window.crypto.getRandomValues(array);
-  return base64UrlEncode(array.buffer);
-};
-
-const generateCodeChallenge = async (verifier: string) => {
-  const data = new TextEncoder().encode(verifier);
-  const digest = await window.crypto.subtle.digest("SHA-256", data);
-  return base64UrlEncode(digest);
-};
 
 export const useMcpOAuthFlow = ({
   accessToken,
@@ -58,6 +49,7 @@ export const useMcpOAuthFlow = ({
   getTemporaryPayload,
   onTokenReceived,
   onBeforeRedirect,
+  flowSource,
 }: UseMcpOAuthFlowOptions): UseMcpOAuthFlowResult => {
   const [status, setStatus] = useState<McpOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -75,25 +67,18 @@ export const useMcpOAuthFlow = ({
     clientSecret?: string;
     serverId: string;
     redirectUri: string;
+    flowSource?: string;
   };
 
   const setStorageItem = (key: string, value: string) => {
     if (typeof window === "undefined") return;
-    try {
-      // Use sessionStorage only — the flow state may contain client credentials;
-      // writing them to localStorage would persist across browser sessions and
-      // make them readable by any injected script (XSS).
-      window.sessionStorage.setItem(key, value);
-    } catch (err) {
-      console.warn(`Failed to set storage item ${key}`, err);
-    }
+    setSecureItem(key, value);
   };
 
   const getStorageItem = (key: string): string | null => {
     if (typeof window === "undefined") return null;
     try {
-      // Try sessionStorage first, fall back to localStorage
-      return window.sessionStorage.getItem(key) || window.localStorage.getItem(key);
+      return getSecureItem(key);
     } catch (err) {
       console.warn(`Failed to get storage item ${key}`, err);
       return null;
@@ -159,7 +144,9 @@ export const useMcpOAuthFlow = ({
       }
 
       let registeredClient: { clientId?: string; clientSecret?: string } = {};
-      const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret);
+      const hasPreconfiguredCredentials = Boolean(
+        temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret,
+      );
 
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
@@ -200,6 +187,7 @@ export const useMcpOAuthFlow = ({
         clientSecret: registeredClient.clientSecret || credentials.client_secret,
         serverId,
         redirectUri: callbackUrl(),
+        flowSource,
       };
 
       if (typeof window === "undefined") {
@@ -249,12 +237,21 @@ export const useMcpOAuthFlow = ({
       if (!storedPayload) {
         return;
       }
-      
+
+      // Guard: the callback page writes to the admin result key for *all* OAuth
+      // flows (including the tools re-auth flow).  Only proceed if this hook's
+      // own flow state exists, meaning startOAuthFlow() was actually called here.
+      // Without this guard, a tools re-auth redirect triggers a spurious
+      // "OAuth session state was lost" error from this hook.
+      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
+      if (!storedFlowState) {
+        return;
+      }
+
       // Mark as processing
       processingRef.current = true;
       payload = JSON.parse(storedPayload);
-      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
-      flowState = storedFlowState ? JSON.parse(storedFlowState) : null;
+      flowState = JSON.parse(storedFlowState);
     } catch (err) {
       clearStoredFlow();
       processingRef.current = false;
@@ -265,6 +262,16 @@ export const useMcpOAuthFlow = ({
     }
 
     if (!payload) {
+      processingRef.current = false;
+      return;
+    }
+
+    // Only the form that started this redirect should consume the result. The create
+    // form and the edit form both mount this hook with shared storage keys, so without
+    // this another instance (e.g. the always-mounted create form) would grab and handle
+    // an edit-page authorization. Bail out without clearing RESULT_KEY so the matching
+    // instance can still process it.
+    if (flowState?.flowSource !== flowSource) {
       processingRef.current = false;
       return;
     }
@@ -283,7 +290,7 @@ export const useMcpOAuthFlow = ({
       if (!flowState || !flowState.state || !flowState.codeVerifier || !flowState.serverId) {
         throw new Error(
           "OAuth session state was lost. This can happen if you have strict browser privacy settings. " +
-          "Please try again and ensure cookies/storage is enabled."
+            "Please try again and ensure cookies/storage is enabled.",
         );
       }
       if (!payload.state || payload.state !== flowState.state) {
@@ -304,6 +311,7 @@ export const useMcpOAuthFlow = ({
         clientSecret: flowState.clientSecret,
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
+        accessToken,
       });
 
       onTokenReceived(token);
@@ -329,10 +337,18 @@ export const useMcpOAuthFlow = ({
     resumeOAuthFlow();
   }, [resumeOAuthFlow]);
 
+  const reset = useCallback(() => {
+    setStatus("idle");
+    setError(null);
+    setTokenResponse(null);
+    processingRef.current = false;
+  }, []);
+
   return {
     startOAuthFlow,
     status,
     error,
     tokenResponse,
+    reset,
   };
 };

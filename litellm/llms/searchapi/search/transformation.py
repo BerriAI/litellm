@@ -3,6 +3,7 @@ Calls SearchAPI.io's Google Search API endpoint.
 
 SearchAPI.io API Reference: https://www.searchapi.io/docs/google
 """
+
 from typing import Dict, List, Literal, Optional, TypedDict, Union, cast
 from urllib.parse import urlencode
 
@@ -73,12 +74,16 @@ class SearchAPIConfig(BaseSearchConfig):
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("SEARCHAPI_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("SEARCHAPI_API_KEY",),
+            base_env_var="SEARCHAPI_API_BASE",
+            default_api_base=self.SEARCHAPI_API_BASE,
+        )
 
         if not api_key:
-            raise ValueError(
-                "SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable."
-            )
+            raise ValueError("SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable.")
 
         headers["Content-Type"] = "application/json"
 
@@ -96,9 +101,7 @@ class SearchAPIConfig(BaseSearchConfig):
 
         SearchAPI.io uses GET requests and includes api_key in query params.
         """
-        api_base = (
-            api_base or get_secret_str("SEARCHAPI_API_BASE") or self.SEARCHAPI_API_BASE
-        )
+        api_base = api_base or get_secret_str("SEARCHAPI_API_BASE") or self.SEARCHAPI_API_BASE
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_searchapi_params" in data:
@@ -113,6 +116,7 @@ class SearchAPIConfig(BaseSearchConfig):
         query: Union[str, List[str]],
         optional_params: dict,
         api_key: Optional[str] = None,
+        api_base: str | None = None,
         search_engine_id: Optional[str] = None,
         **kwargs,
     ) -> Dict:
@@ -136,12 +140,18 @@ class SearchAPIConfig(BaseSearchConfig):
         if isinstance(query, list):
             query = " ".join(query)
 
-        # Get API key from parameter or environment
-        api_key = api_key or get_secret_str("SEARCHAPI_API_KEY")
+        # Get API key from parameter or environment. The key is sent as a query
+        # param to api_base, so resolve it host-aware to avoid leaking a
+        # server-managed key to a caller-supplied host.
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("SEARCHAPI_API_KEY",),
+            base_env_var="SEARCHAPI_API_BASE",
+            default_api_base=self.SEARCHAPI_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable."
-            )
+            raise ValueError("SEARCHAPI_API_KEY is not set. Set `SEARCHAPI_API_KEY` environment variable.")
 
         request_data: SearchAPIRequest = {
             "engine": "google",
@@ -162,9 +172,7 @@ class SearchAPIConfig(BaseSearchConfig):
             # Convert to multiple "site:domain" clauses
             domains = optional_params["search_domain_filter"]
             if isinstance(domains, list) and len(domains) > 0:
-                result_data["q"] = self._append_domain_filters(
-                    str(result_data["q"]), domains
-                )
+                result_data["q"] = self._append_domain_filters(str(result_data["q"]), domains)
 
         if "country" in optional_params:
             # Map to gl parameter
@@ -172,10 +180,7 @@ class SearchAPIConfig(BaseSearchConfig):
 
         # Pass through all other SearchAPI.io-specific parameters
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for URL building (GET request)

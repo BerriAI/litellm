@@ -11,7 +11,12 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { getGuardrailLogoAndName, guardrail_provider_map } from "./guardrail_info_helpers";
+import {
+  getGuardrailLogoAndName,
+  guardrail_provider_map,
+  skipSystemMessageToChoice,
+  skipToolMessageToChoice,
+} from "./guardrail_info_helpers";
 import EditGuardrailForm from "./edit_guardrail_form";
 import { Guardrail, GuardrailDefinitionLocation } from "./types";
 
@@ -291,6 +296,7 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
           accessToken={accessToken}
           onSuccess={handleEditSuccess}
           guardrailId={selectedGuardrail.guardrail_id || ""}
+          fullLitellmParams={selectedGuardrail.litellm_params}
           initialValues={{
             guardrail_name: selectedGuardrail.guardrail_name || "",
             provider:
@@ -300,6 +306,12 @@ const GuardrailTable: React.FC<GuardrailTableProps> = ({
             mode: selectedGuardrail.litellm_params.mode,
             default_on: selectedGuardrail.litellm_params.default_on,
             pii_entities_config: selectedGuardrail.litellm_params.pii_entities_config,
+            skip_system_message_choice: skipSystemMessageToChoice(
+              selectedGuardrail.litellm_params?.skip_system_message_in_guardrail,
+            ),
+            skip_tool_message_choice: skipToolMessageToChoice(
+              selectedGuardrail.litellm_params?.skip_tool_message_in_guardrail,
+            ),
             ...selectedGuardrail.guardrail_info,
           }}
         />

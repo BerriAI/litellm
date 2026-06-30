@@ -45,6 +45,10 @@ vi.mock("../../../EntityUsageExport", () => ({
   UsageExportHeader: () => <div>Usage Export Header</div>,
 }));
 
+vi.mock("../../../common_components/team_multi_select", () => ({
+  default: () => <div>Team Multi Select</div>,
+}));
+
 // Mock useTeams hook
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
   default: vi.fn(() => ({
@@ -698,5 +702,40 @@ describe("EntityUsage", () => {
     await waitFor(() => {
       expect(screen.getByText("tag-1")).toBeInTheDocument();
     });
+  });
+
+  it("should label the chart with user_email metadata instead of the raw UUID (LIT-3889)", async () => {
+    const userUuid = "c0e68be8-057e-4e2f-9d3a-000000000000";
+    const spendDataForUser = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            entities: {
+              [userUuid]: {
+                ...mockSpendData.results[0].breakdown.entities["tag-1"],
+                metadata: { user_email: "spender@example.com" },
+              },
+            },
+          },
+        },
+      ],
+    };
+
+    mockUserDailyActivityCall.mockResolvedValue(spendDataForUser);
+
+    // entityList is null to simulate a spender missing from the paginated user list
+    render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityCall).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("spender@example.com")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(userUuid)).not.toBeInTheDocument();
   });
 });

@@ -5,15 +5,22 @@ from litellm.proxy.auth.user_api_key_auth import (
     _run_post_custom_auth_checks,
     update_valid_token_with_end_user_params,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
+    UserAPIKeyAuth,
+)
 
 
 @pytest.mark.asyncio
 async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
-    # Test backwards compatibility — common_checks only runs when opt-in flag is set
+    # common_checks now runs in the user_api_key_auth wrapper via
+    # _run_centralized_common_checks, gated by
+    # custom_auth_run_common_checks for custom-auth deployments. The
+    # helper itself no longer calls common_checks.
     valid_token = UserAPIKeyAuth(token="test_token")
 
-    # Default: common_checks should NOT be called
+    # Default: common_checks should NOT be called inside the helper
     with patch(
         "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
     ) as mock_common:
@@ -29,12 +36,16 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
         assert getattr(result, "end_user_id", None) is None
         mock_common.assert_not_awaited()
 
-    # With opt-in flag: common_checks SHOULD be called
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-    ) as mock_common, patch(
-        "litellm.proxy.proxy_server.general_settings",
-        {"custom_auth_run_common_checks": True},
+    # With opt-in flag: still not from the helper — the centralized gate
+    # in the wrapper handles it.
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+        ) as mock_common,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"custom_auth_run_common_checks": True},
+        ),
     ):
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
@@ -45,7 +56,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
             parent_otel_span=None,
         )
         assert result.token == "test_token"
-        mock_common.assert_awaited_once()
+        mock_common.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -79,6 +90,87 @@ async def test_custom_auth_run_post_custom_auth_checks_with_end_user_budget_exce
                     parent_otel_span=None,
                 )
             mock_budget_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_enforces_end_user_budget_when_common_checks_skipped():
+    # custom-auth deployments with custom_auth_run_common_checks unset skip
+    # common_checks() (and its end-user budget enforcement) in the centralized
+    # gate, so the helper must enforce the end-user budget itself. Regression:
+    # an over-budget end user must be rejected on this path.
+    valid_token = UserAPIKeyAuth(token="test_token", end_user_id="customer-1")
+    over_budget_end_user = LiteLLM_EndUserTable(
+        user_id="customer-1",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    async def mock_get_current_spend(
+        counter_key, fallback_spend, max_budget=None, **kwargs
+    ):
+        if counter_key == "spend:end_user:customer-1":
+            return 5.0
+        return fallback_spend
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+            new_callable=AsyncMock,
+            return_value=over_budget_end_user,
+        ),
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await _run_post_custom_auth_checks(
+                valid_token=valid_token,
+                request=None,
+                request_data={"model": "gpt-4"},
+                route="/v1/chat/completions",
+                parent_otel_span=None,
+            )
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_defers_end_user_budget_to_common_checks_when_enabled():
+    # With custom_auth_run_common_checks set, the wrapper's common_checks()
+    # enforces the end-user budget, so the helper must not double-enforce it.
+    valid_token = UserAPIKeyAuth(token="test_token", end_user_id="customer-1")
+    end_user_obj = LiteLLM_EndUserTable(
+        user_id="customer-1",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+            new_callable=AsyncMock,
+            return_value=end_user_obj,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._check_end_user_budget",
+            new_callable=AsyncMock,
+        ) as mock_check,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"custom_auth_run_common_checks": True},
+        ),
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=None,
+            request_data={"model": "gpt-4"},
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+        mock_check.assert_not_awaited()
 
 
 def test_update_valid_token_does_not_override_custom_auth_values_with_none():

@@ -1,23 +1,27 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { notification } from "antd";
+import { notification, message } from "antd";
 import { setNotificationInstance } from "@/components/molecules/notifications_manager";
+import { setMessageInstance } from "@/components/molecules/message_manager";
 
 export default function AntdGlobalProvider({ children }: { children: React.ReactNode }) {
-  const [api, contextHolder] = notification.useNotification();
+  const [notificationApi, notificationContextHolder] = notification.useNotification();
+  const [messageApi, messageContextHolder] = message.useMessage();
   const initialized = useRef(false);
 
   useEffect(() => {
     if (!initialized.current) {
-      setNotificationInstance(api);
+      setNotificationInstance(notificationApi);
+      setMessageInstance(messageApi);
       initialized.current = true;
     }
-  }, [api]);
+  }, [notificationApi, messageApi]);
 
   return (
     <>
-      {contextHolder}
+      {notificationContextHolder}
+      {messageContextHolder}
       {children}
     </>
   );

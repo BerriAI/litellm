@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrail,
     GraySwanGuardrailAPIError,
@@ -435,7 +436,10 @@ def test_format_violation_message() -> None:
     assert "Gray Swan Cygnal Guardrail" in message
     assert "the input query has a violation score of 0.85" in message
     assert "violating the rule(s): 1, 3, 5" in message
-    assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
+    assert (
+        "Mutation effort to make the harmful intention disguised was DETECTED"
+        in message
+    )
     # IPI should not be in message since it's False
     assert "Indirect Prompt Injection was DETECTED" not in message
 
@@ -446,4 +450,58 @@ def test_format_violation_message() -> None:
     assert "Gray Swan Cygnal Guardrail" in message
     assert "the model response has a violation score of 0.85" in message
     assert "violating the rule(s): 1, 3, 5" in message
-    assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
+    assert (
+        "Mutation effort to make the harmful intention disguised was DETECTED"
+        in message
+    )
+
+
+def test_prepare_payload_includes_litellm_metadata(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Verify _prepare_payload forwards litellm_metadata from request_data."""
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "litellm_metadata": {
+            "user_api_key_user_id": "user-123",
+            "user_api_key_team_id": "team-456",
+            "user_api_key_spend": 0,
+        }
+    }
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert payload is not None
+    assert "litellm_metadata" in payload
+    assert payload["litellm_metadata"]["user_api_key_user_id"] == "user-123"
+    assert payload["litellm_metadata"]["user_api_key_team_id"] == "team-456"
+
+
+def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
+    """Verify _ensure_litellm_metadata populates litellm_metadata."""
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        _ensure_litellm_metadata,
+    )
+
+    user_auth = UserAPIKeyAuth(user_id="u1", team_id="t1", api_key="sk-test-hashed")
+    data: dict = {}
+
+    _ensure_litellm_metadata(data, user_auth)
+
+    assert "litellm_metadata" in data
+    assert data["litellm_metadata"]["user_api_key_user_id"] == "u1"
+    assert data["litellm_metadata"]["user_api_key_team_id"] == "t1"
+
+
+def test_ensure_litellm_metadata_noop_when_already_present() -> None:
+    """Verify _ensure_litellm_metadata does not overwrite existing litellm_metadata."""
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+        _ensure_litellm_metadata,
+    )
+
+    user_auth = UserAPIKeyAuth(user_id="should-not-appear")
+    data: dict = {"litellm_metadata": {"existing": "value"}}
+
+    _ensure_litellm_metadata(data, user_auth)
+
+    assert data["litellm_metadata"] == {"existing": "value"}

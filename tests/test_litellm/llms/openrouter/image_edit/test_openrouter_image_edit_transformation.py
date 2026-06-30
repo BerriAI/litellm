@@ -196,7 +196,9 @@ class TestOpenRouterImageEditTransformation:
 
     @patch("litellm.llms.openrouter.image_edit.transformation.litellm")
     @patch("litellm.llms.openrouter.image_edit.transformation.get_secret_str")
-    def test_validate_environment_missing_api_key_raises(self, mock_get_secret, mock_litellm):
+    def test_validate_environment_missing_api_key_raises(
+        self, mock_get_secret, mock_litellm
+    ):
         """Test that validate_environment raises ValueError when no API key is available."""
         mock_get_secret.return_value = None
         mock_litellm.api_key = None
@@ -332,24 +334,30 @@ class TestOpenRouterImageEditTransformation:
     def test_transform_image_edit_response_with_base64(self):
         """Test response transformation with base64 image data."""
         response_data = {
-            "choices": [{
-                "message": {
-                    "content": "Here is the edited image.",
-                    "role": "assistant",
-                    "images": [{
-                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANS"},
-                        "type": "image_url"
-                    }]
+            "choices": [
+                {
+                    "message": {
+                        "content": "Here is the edited image.",
+                        "role": "assistant",
+                        "images": [
+                            {
+                                "image_url": {
+                                    "url": "data:image/png;base64,iVBORw0KGgoAAAANS"
+                                },
+                                "type": "image_url",
+                            }
+                        ],
+                    }
                 }
-            }],
+            ],
             "usage": {
                 "prompt_tokens": 300,
                 "completion_tokens": 1299,
                 "total_tokens": 1599,
                 "completion_tokens_details": {"image_tokens": 1290},
-                "cost": 0.05
+                "cost": 0.05,
             },
-            "model": self.model
+            "model": self.model,
         }
 
         mock_response = MagicMock()
@@ -370,18 +378,22 @@ class TestOpenRouterImageEditTransformation:
     def test_transform_image_edit_response_with_url(self):
         """Test response transformation with URL image data."""
         response_data = {
-            "choices": [{
-                "message": {
-                    "content": "Edited.",
-                    "role": "assistant",
-                    "images": [{
-                        "image_url": {"url": "https://example.com/edited.png"},
-                        "type": "image_url"
-                    }]
+            "choices": [
+                {
+                    "message": {
+                        "content": "Edited.",
+                        "role": "assistant",
+                        "images": [
+                            {
+                                "image_url": {"url": "https://example.com/edited.png"},
+                                "type": "image_url",
+                            }
+                        ],
+                    }
                 }
-            }],
+            ],
             "usage": {"prompt_tokens": 10, "total_tokens": 1310},
-            "model": self.model
+            "model": self.model,
         }
 
         mock_response = MagicMock()
@@ -402,16 +414,20 @@ class TestOpenRouterImageEditTransformation:
     def test_transform_image_edit_response_usage_and_cost(self):
         """Test that usage and cost are correctly extracted from response."""
         response_data = {
-            "choices": [{
-                "message": {
-                    "content": "Edited.",
-                    "role": "assistant",
-                    "images": [{
-                        "image_url": {"url": "data:image/png;base64,abc123"},
-                        "type": "image_url"
-                    }]
+            "choices": [
+                {
+                    "message": {
+                        "content": "Edited.",
+                        "role": "assistant",
+                        "images": [
+                            {
+                                "image_url": {"url": "data:image/png;base64,abc123"},
+                                "type": "image_url",
+                            }
+                        ],
+                    }
                 }
-            }],
+            ],
             "usage": {
                 "prompt_tokens": 300,
                 "completion_tokens": 1299,
@@ -419,9 +435,9 @@ class TestOpenRouterImageEditTransformation:
                 "completion_tokens_details": {"image_tokens": 1290},
                 "prompt_tokens_details": {"image_tokens": 258},
                 "cost": 0.05,
-                "cost_details": {"input_cost": 0.01, "output_cost": 0.04}
+                "cost_details": {"input_cost": 0.01, "output_cost": 0.04},
             },
-            "model": self.model
+            "model": self.model,
         }
 
         mock_response = MagicMock()
@@ -444,7 +460,12 @@ class TestOpenRouterImageEditTransformation:
         assert result.usage.input_tokens_details.text_tokens == 42
 
         # Check cost
-        assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.05
+        assert (
+            result._hidden_params["additional_headers"][
+                "llm_provider-x-litellm-response-cost"
+            ]
+            == 0.05
+        )
 
         # Check cost details
         assert result._hidden_params["response_cost_details"]["input_cost"] == 0.01
@@ -456,24 +477,26 @@ class TestOpenRouterImageEditTransformation:
     def test_transform_image_edit_response_multiple_images(self):
         """Test response transformation with multiple output images."""
         response_data = {
-            "choices": [{
-                "message": {
-                    "content": "Here are your edits.",
-                    "role": "assistant",
-                    "images": [
-                        {
-                            "image_url": {"url": "data:image/png;base64,img1data"},
-                            "type": "image_url"
-                        },
-                        {
-                            "image_url": {"url": "data:image/png;base64,img2data"},
-                            "type": "image_url"
-                        }
-                    ]
+            "choices": [
+                {
+                    "message": {
+                        "content": "Here are your edits.",
+                        "role": "assistant",
+                        "images": [
+                            {
+                                "image_url": {"url": "data:image/png;base64,img1data"},
+                                "type": "image_url",
+                            },
+                            {
+                                "image_url": {"url": "data:image/png;base64,img2data"},
+                                "type": "image_url",
+                            },
+                        ],
+                    }
                 }
-            }],
+            ],
             "usage": {"prompt_tokens": 300, "total_tokens": 2600},
-            "model": self.model
+            "model": self.model,
         }
 
         mock_response = MagicMock()

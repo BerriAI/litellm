@@ -18,7 +18,8 @@ vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => ({
 }));
 
 vi.mock("@/utils/cookieUtils", () => ({
-  getCookie: vi.fn(),
+  clearTokenCookies: vi.fn(),
+  getCookieFromDocument: vi.fn(),
 }));
 
 vi.mock("@/utils/jwtUtils", () => ({
@@ -41,8 +42,19 @@ vi.mock("@/app/(dashboard)/hooks/login/useLogin", () => ({
   })),
 }));
 
+vi.mock("@/hooks/useWorker", () => ({
+  useWorker: vi.fn(() => ({
+    isControlPlane: false,
+    workers: [],
+    selectedWorkerId: null,
+    selectedWorker: null,
+    selectWorker: vi.fn(),
+    disconnectFromWorker: vi.fn(),
+  })),
+}));
+
 import { useUIConfig } from "@/app/(dashboard)/hooks/uiConfig/useUIConfig";
-import { getCookie } from "@/utils/cookieUtils";
+import { getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 
 const createQueryClient = () =>
@@ -72,7 +84,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
     const queryClient = createQueryClient();
     render(
@@ -97,7 +109,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     const queryClient = createQueryClient();
@@ -108,7 +120,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("http://localhost:4000/ui");
+      expect(mockReplace).toHaveBeenCalledWith("/ui");
     });
   });
 
@@ -123,7 +135,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -149,7 +161,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(invalidToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -178,7 +190,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(validToken);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     const queryClient = createQueryClient();
@@ -189,7 +201,7 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("http://localhost:4000/ui");
+      expect(mockReplace).toHaveBeenCalledWith("/ui");
     });
 
     expect(mockPush).not.toHaveBeenCalled();
@@ -205,7 +217,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
     const queryClient = createQueryClient();
     render(
@@ -233,7 +245,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -260,7 +272,7 @@ describe("LoginPage", () => {
       },
       isLoading: false,
     });
-    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
 
     const queryClient = createQueryClient();
@@ -277,5 +289,85 @@ describe("LoginPage", () => {
     const ssoButton = screen.getByRole("button", { name: "Login with SSO" });
     expect(ssoButton).toBeInTheDocument();
     expect(ssoButton).toBeDisabled();
+  });
+
+  describe("URL ?token= legacy path is rejected (security regression test)", () => {
+    const originalLocation = window.location;
+
+    beforeEach(() => {
+      Object.defineProperty(window, "location", {
+        value: {
+          ...originalLocation,
+          href: "http://localhost:3000/ui/login?token=attacker.jwt.value",
+          pathname: "/ui/login",
+          search: "?token=attacker.jwt.value",
+        },
+        writable: true,
+      });
+      document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax";
+    });
+
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        value: originalLocation,
+        writable: true,
+      });
+    });
+
+    it("must not set a token cookie or redirect to /ui/?login=success when ?token= is in the URL", async () => {
+      (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          auto_redirect_to_sso: false,
+          server_root_path: "/",
+          proxy_base_url: null,
+          sso_configured: false,
+        },
+        isLoading: false,
+      });
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+      (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <LoginPage />
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
+      });
+
+      expect(document.cookie).not.toContain("token=attacker.jwt.value");
+      expect(mockReplace).not.toHaveBeenCalledWith("/ui/?login=success");
+    });
+
+    it("must not overwrite an existing valid session cookie when ?token= is in the URL", async () => {
+      (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+        data: {
+          auto_redirect_to_sso: false,
+          server_root_path: "/",
+          proxy_base_url: null,
+          sso_configured: false,
+        },
+        isLoading: false,
+      });
+      (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue("legitimate-session-jwt");
+      (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+      const queryClient = createQueryClient();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <LoginPage />
+        </QueryClientProvider>,
+      );
+
+      await waitFor(() => {
+        expect(mockReplace).toHaveBeenCalledWith("/ui");
+      });
+
+      expect(document.cookie).not.toContain("token=attacker.jwt.value");
+      expect(mockReplace).not.toHaveBeenCalledWith("/ui/?login=success");
+    });
   });
 });

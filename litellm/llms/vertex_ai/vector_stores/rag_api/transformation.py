@@ -35,9 +35,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     def __init__(self):
         super().__init__()
 
-    def get_auth_credentials(
-        self, litellm_params: dict
-    ) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
         # Get credentials and project info
         vertex_credentials = self.get_vertex_ai_credentials(dict(litellm_params))
         vertex_project = self.get_vertex_ai_project(dict(litellm_params))
@@ -62,9 +60,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             "write": [("POST", "/ragCorpora")],
         }
 
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]) -> dict:
         """
         Validate and set up authentication for Vertex AI RAG API
         """
@@ -100,6 +96,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform search request for Vertex AI RAG API
@@ -182,9 +179,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
                 # Generate file_id from source URI or use display name as fallback
                 file_id = source_uri if source_uri else source_display_name
-                filename = (
-                    source_display_name if source_display_name else "Unknown Document"
-                )
+                filename = source_display_name if source_display_name else "Unknown Document"
 
                 # Build attributes with available metadata
                 attributes = {}
@@ -232,9 +227,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         # Build the request body for Vertex AI RAG Corpus creation
         request_body: Dict[str, Any] = {
-            "display_name": vector_store_create_optional_params.get(
-                "name", "litellm-vector-store"
-            ),
+            "display_name": vector_store_create_optional_params.get("name", "litellm-vector-store"),
             "description": "Vector store created via LiteLLM",
         }
 
@@ -245,9 +238,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         return url, request_body
 
-    def transform_create_vector_store_response(
-        self, response: httpx.Response
-    ) -> VectorStoreCreateResponse:
+    def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         """
         Transform Vertex AI RAG Corpus creation response to standard vector store response
         """
@@ -256,9 +247,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
             # Extract the corpus ID from the response name
             corpus_name = response_json.get("name", "")
-            corpus_id = (
-                corpus_name.split("/")[-1] if "/" in corpus_name else corpus_name
-            )
+            corpus_id = corpus_name.split("/")[-1] if "/" in corpus_name else corpus_name
 
             # Handle createTime conversion
             create_time = response_json.get("createTime", 0)

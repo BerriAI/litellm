@@ -5,6 +5,7 @@ Issue: https://github.com/BerriAI/litellm/issues/18430
 Vertex AI Anthropic models don't support URL sources for images.
 LiteLLM should convert image URLs to base64 when using Vertex AI Anthropic.
 """
+
 import os
 import sys
 from unittest.mock import patch, MagicMock
@@ -35,7 +36,9 @@ class TestVertexAIAnthropicImageURLHandling:
         For regular Anthropic, HTTPS URLs are passed through as URL type.
         For Vertex AI Anthropic, HTTPS URLs should be converted to base64.
         """
-        mock_convert_url.return_value = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
+        mock_convert_url.return_value = (
+            "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ=="
+        )
 
         messages = [
             {
@@ -108,9 +111,7 @@ class TestVertexAIAnthropicImageURLHandling:
         assert image_content["source"]["url"] == "https://example.com/image.jpg"
 
     @patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
-    def test_vertex_ai_beta_also_converts_to_base64(
-        self, mock_convert_url: MagicMock
-    ):
+    def test_vertex_ai_beta_also_converts_to_base64(self, mock_convert_url: MagicMock):
         """
         Test that vertex_ai_beta provider also converts image URLs to base64.
         """
@@ -210,7 +211,9 @@ class TestToolMessageImageURLHandling:
 
         result = convert_to_anthropic_tool_result(tool_message, force_base64=True)
 
-        mock_convert_url.assert_called_once_with(url="https://example.com/tool_result.jpg")
+        mock_convert_url.assert_called_once_with(
+            url="https://example.com/tool_result.jpg"
+        )
         assert result["type"] == "tool_result"
         assert result["tool_use_id"] == "call_123"
 
@@ -303,7 +306,10 @@ class TestToolMessageImageURLHandling:
         for msg in result:
             if msg.get("role") == "user":
                 for content_item in msg.get("content", []):
-                    if isinstance(content_item, dict) and content_item.get("type") == "tool_result":
+                    if (
+                        isinstance(content_item, dict)
+                        and content_item.get("type") == "tool_result"
+                    ):
                         tool_content = content_item.get("content", [])
                         for item in tool_content:
                             if isinstance(item, dict) and item.get("type") == "image":
@@ -312,9 +318,7 @@ class TestToolMessageImageURLHandling:
         pytest.fail("Could not find image in tool result")
 
     @patch("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64")
-    def test_regular_anthropic_tool_message_uses_url(
-        self, mock_convert_url: MagicMock
-    ):
+    def test_regular_anthropic_tool_message_uses_url(self, mock_convert_url: MagicMock):
         """
         Test that regular Anthropic API uses URL type for tool result images.
         """
@@ -362,7 +366,10 @@ class TestToolMessageImageURLHandling:
         for msg in result:
             if msg.get("role") == "user":
                 for content_item in msg.get("content", []):
-                    if isinstance(content_item, dict) and content_item.get("type") == "tool_result":
+                    if (
+                        isinstance(content_item, dict)
+                        and content_item.get("type") == "tool_result"
+                    ):
                         tool_content = content_item.get("content", [])
                         for item in tool_content:
                             if isinstance(item, dict) and item.get("type") == "image":

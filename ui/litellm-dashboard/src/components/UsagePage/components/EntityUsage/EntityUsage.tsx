@@ -25,6 +25,7 @@ import {
 import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
 import { Alert, Button } from "antd";
 import React, { useMemo, useState } from "react";
+import TeamMultiSelect from "../../../common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
 import { UsageExportHeader } from "../../../EntityUsageExport";
 import type { EntityType } from "../../../EntityUsageExport/types";
@@ -327,6 +328,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     if (metadata?.team_alias) {
       return metadata.team_alias;
     }
+    // Resolve user_id to email/alias so the Spend Per User chart never shows a raw UUID
+    // when an email is on file (the entityList is paginated and may miss spenders)
+    if (metadata?.user_email) {
+      return metadata.user_email;
+    }
+    if (metadata?.user_alias) {
+      return metadata.user_alias;
+    }
     return entity;
   };
 
@@ -468,11 +477,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
           }
         />
       )}
+      {entityType === "team" && (
+        <div className="mb-4">
+          <Text className="mb-2">Filter by team</Text>
+          <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
+        </div>
+      )}
       <UsageExportHeader
         dateValue={dateValue}
         entityType={entityType}
         spendData={spendData}
-        showFilters={entityList !== null && entityList.length > 0}
+        showFilters={entityType !== "team" && entityList !== null && entityList.length > 0}
         filterLabel={getFilterLabel(entityType)}
         filterPlaceholder={getFilterPlaceholder(entityType)}
         selectedFilters={selectedTags}

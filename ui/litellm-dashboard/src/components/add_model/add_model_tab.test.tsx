@@ -175,7 +175,7 @@ describe("Add Model Tab", () => {
     );
 
     expect(await screen.findByRole("tab", { name: "Add Model" })).toBeInTheDocument();
-  }, 10000); // This test is flaky, adding a timeout until we find a better solution
+  });
 
   it("should display both Add Model and Add Auto Router tabs", async () => {
     const props = createTestProps();
@@ -269,7 +269,7 @@ describe("Add Model Tab", () => {
       },
       { timeout: 10000 },
     );
-  }, 15000); // 15 second timeout to allow waitFor to complete
+  });
 
   it("should show team selection when team-only switch is enabled", async () => {
     const props = createTestProps();

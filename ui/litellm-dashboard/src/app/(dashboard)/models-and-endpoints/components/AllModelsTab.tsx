@@ -7,7 +7,7 @@ import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { modelDeleteCall } from "@/components/networking";
+import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { InfoCircleOutlined, SettingOutlined } from "@ant-design/icons";
 import { PaginationState, SortingState } from "@tanstack/react-table";
 import { useQueryClient } from "@tanstack/react-query";
@@ -68,7 +68,7 @@ const AllModelsTab = ({
         setCurrentPage(1);
         setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
       }, 200),
-    []
+    [],
   );
 
   useEffect(() => {
@@ -100,15 +100,11 @@ const AllModelsTab = ({
     return sort.desc ? "desc" : "asc";
   }, [sorting]);
 
-  const { data: rawModelData, isLoading: isLoadingModelsInfo, refetch: refetchModels } = useModelsInfo(
-    currentPage,
-    pageSize,
-    debouncedSearch || undefined,
-    undefined,
-    teamIdForQuery,
-    sortBy,
-    sortOrder
-  );
+  const {
+    data: rawModelData,
+    isLoading: isLoadingModelsInfo,
+    refetch: refetchModels,
+  } = useModelsInfo(currentPage, pageSize, debouncedSearch || undefined, undefined, teamIdForQuery, sortBy, sortOrder);
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = (model: string) => {
@@ -217,6 +213,25 @@ const AllModelsTab = ({
     } finally {
       setDeleteLoading(false);
       setDeleteModalModelId(null);
+    }
+  };
+
+  const [pausingModelId, setPausingModelId] = useState<string | null>(null);
+
+  const handleTogglePause = async (modelId: string, blocked: boolean) => {
+    if (!accessToken) return;
+    try {
+      setPausingModelId(modelId);
+      await modelPatchUpdateCall(accessToken, { blocked }, modelId);
+      NotificationsManager.success(blocked ? "Model paused" : "Model resumed");
+      // invalidateQueries already schedules a refetch for active observers
+      // on this key — no need to also call refetchModels() (would double-fetch).
+      queryClient.invalidateQueries({ queryKey: ["models", "list"] });
+    } catch (error) {
+      console.error("Error toggling model pause state:", error);
+      NotificationsManager.fromBackend(error);
+    } finally {
+      setPausingModelId(null);
     }
   };
 
@@ -365,6 +380,7 @@ const AllModelsTab = ({
                       <input
                         type="text"
                         placeholder="Search model names..."
+                        data-testid="model-search-input"
                         className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                         value={modelNameSearch}
                         onChange={(e) => setModelNameSearch(e.target.value)}
@@ -472,9 +488,9 @@ const AllModelsTab = ({
                   {isLoading ? (
                     <Skeleton.Input active style={{ width: 184, height: 20 }} />
                   ) : (
-                    <span className="text-sm text-gray-700">
+                    <span data-testid="models-results-count" className="text-sm text-gray-700">
                       {paginationMeta.total_count > 0
-                        ? `Showing ${((currentPage - 1) * pageSize) + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
+                        ? `Showing ${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
                         : "Showing 0 results"}
                     </span>
                   )}
@@ -490,10 +506,9 @@ const AllModelsTab = ({
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         }}
                         disabled={currentPage === 1}
-                        className={`px-3 py-1 text-sm border rounded-md ${currentPage === 1
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "hover:bg-gray-50"
-                          }`}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
+                        }`}
                       >
                         Previous
                       </button>
@@ -509,10 +524,11 @@ const AllModelsTab = ({
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         }}
                         disabled={currentPage >= paginationMeta.total_pages}
-                        className={`px-3 py-1 text-sm border rounded-md ${currentPage >= paginationMeta.total_pages
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "hover:bg-gray-50"
-                          }`}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          currentPage >= paginationMeta.total_pages
+                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : "hover:bg-gray-50"
+                        }`}
                       >
                         Next
                       </button>
@@ -530,11 +546,13 @@ const AllModelsTab = ({
                 setSelectedModelId,
                 setSelectedTeamId,
                 getDisplayModelName,
-                () => { },
-                () => { },
+                () => {},
+                () => {},
                 expandedRows,
                 setExpandedRows,
                 setDeleteModalModelId,
+                handleTogglePause,
+                pausingModelId,
               )}
               data={filteredData}
               isLoading={isLoadingModelsInfo}
@@ -555,24 +573,28 @@ const AllModelsTab = ({
         alertMessage="This action cannot be undone."
         message="Are you sure you want to delete this model?"
         resourceInformationTitle="Model Information"
-        resourceInformation={modelToDelete ? [
-          {
-            label: "Model Name",
-            value: modelToDelete.model_name || "Not Set",
-          },
-          {
-            label: "LiteLLM Model Name",
-            value: modelToDelete.litellm_model_name || "Not Set",
-          },
-          {
-            label: "Provider",
-            value: modelToDelete.provider || "Not Set",
-          },
-          {
-            label: "Created By",
-            value: modelToDelete.model_info?.created_by || "Not Set",
-          },
-        ] : []}
+        resourceInformation={
+          modelToDelete
+            ? [
+                {
+                  label: "Model Name",
+                  value: modelToDelete.model_name || "Not Set",
+                },
+                {
+                  label: "LiteLLM Model Name",
+                  value: modelToDelete.litellm_model_name || "Not Set",
+                },
+                {
+                  label: "Provider",
+                  value: modelToDelete.provider || "Not Set",
+                },
+                {
+                  label: "Created By",
+                  value: modelToDelete.model_info?.created_by || "Not Set",
+                },
+              ]
+            : []
+        }
         onCancel={() => setDeleteModalModelId(null)}
         onOk={handleDeleteModel}
         confirmLoading={deleteLoading}

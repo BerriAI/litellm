@@ -98,12 +98,15 @@ async def test_async_session_id_affinity_routes_to_same_deployment():
             return seq[0]
         return seq[1] if len(seq) > 1 else seq[0]
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch(
+            "litellm.router_strategy.simple_shuffle.random.choice",
+            side_effect=deterministic_choice,
+        ),
     ):
         mock_post.return_value = MockResponse(mock_response_data, 200)
 

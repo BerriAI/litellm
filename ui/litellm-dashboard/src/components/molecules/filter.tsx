@@ -7,6 +7,7 @@ export interface FilterOptionCustomComponentProps {
   value?: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  allFilters?: { [key: string]: string };
 }
 
 export interface FilterOption {
@@ -128,20 +129,6 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     }
   };
 
-  // Define the order of filters
-  const orderedFilters = [
-    "Team ID",
-    "Status",
-    "Organization ID",
-    "Key Alias",
-    "User ID",
-    "End User",
-    "Error Code",
-    "Error Message",
-    "Key Hash",
-    "Model",
-  ];
-
   return (
     <div className="w-full">
       <div className="flex items-center gap-2 mb-6">
@@ -157,10 +144,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
 
       {showFilters && (
         <div className="grid grid-cols-3 gap-x-6 gap-y-4 mb-6">
-          {orderedFilters.map((filterName) => {
-            const option = options.find((opt) => opt.label === filterName || opt.name === filterName);
-            if (!option) return null;
-
+          {options.map((option) => {
             return (
               <div key={option.name} className="flex flex-col gap-2">
                 <label className="text-sm text-gray-600">{option.label || option.name}</label>
@@ -209,6 +193,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                         value={tempValues[option.name] || undefined}
                         onChange={(value) => handleFilterChange(option.name, value ?? "")}
                         placeholder={`Select ${option.label || option.name}...`}
+                        allFilters={tempValues}
                       />
                     );
                   })()

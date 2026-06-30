@@ -9,11 +9,11 @@ from litellm._logging import (
     JsonFormatter,
     _redact_string,
     _secret_filter,
-    _setup_json_exception_handlers,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
 )
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
@@ -57,12 +57,12 @@ def test_redact_string_catches_secret_patterns():
         SECRET,
     ]
     for secret in cases:
-        result = _redact_string("msg: " + secret)
+        result = redact_string("msg: " + secret)
         assert secret not in result, f"{secret!r} was not redacted"
         assert "REDACTED" in result
 
     normal = "Loaded model gpt-4 with 3 replicas on us-east-1"
-    assert _redact_string(normal) == normal
+    assert redact_string(normal) == normal
 
 
 def test_filter_redacts_secrets_in_logger_output():
@@ -155,7 +155,7 @@ def test_x_api_key_regex_does_not_consume_json_delimiters():
     """x-api-key pattern must stop before closing quotes/braces so JSON stays valid."""
     # Simulates a JSON log line containing an x-api-key header value
     json_line = '{"headers": {"x-api-key": "secret123"}, "status": 200}'
-    result = _redact_string(json_line)
+    result = redact_string(json_line)
     # The secret value should be redacted
     assert "secret123" not in result
     assert "REDACTED" in result
@@ -213,3 +213,161 @@ def test_json_excepthook_redacts_traceback_secrets():
     output = h.formatter.format(record)
     assert SECRET not in output
     assert "REDACTED" in output
+
+
+def test_xai_key_redaction_catches_proxy_log_and_config_dump():
+    """xai_key is redacted in proxy log and config dump formats."""
+    cases = [
+        ("setting litellm.xai_key=xai-test-secret-123456", "xai-test-secret-123456"),
+        ("'xai_key': 'xai-test-secret-123456'", "xai-test-secret-123456"),
+    ]
+    for secret_line, secret in cases:
+        result = redact_string(secret_line)
+        assert secret not in result
+        assert "REDACTED" in result, f"xai_key redaction missed: {secret_line!r}"
+
+
+def test_module_level_provider_key_redaction_catches_proxy_log_format():
+    """Provider module-level keys are redacted when logged by proxy startup."""
+    cases = [
+        ("setting litellm.groq_key=gsk-test-secret-123456", "gsk-test-secret-123456"),
+        (
+            "setting litellm.openai_key=openai-test-secret-123456",
+            "openai-test-secret-123456",
+        ),
+    ]
+    for secret_line, secret in cases:
+        result = redact_string(secret_line)
+        assert secret not in result
+        assert (
+            "REDACTED" in result
+        ), f"Module-level key redaction missed: {secret_line!r}"
+
+    safe = "cache_key=cache-value-123456"
+    assert redact_string(safe) == safe
+
+
+def test_key_name_redaction_catches_secrets_in_dict_repr():
+    """Secrets inside dict repr strings are redacted based on key names."""
+    cases = [
+        # Python dict repr (the exact leak format from the bug report)
+        "param_name=general_settings, param_value={'master_key': 'my-random-secret-key-1234', 'enable_jwt_auth': True}",
+        # database_url
+        "'database_url': 'postgres://admin:password@db.example.com:5432/litellm'",
+        # JSON format
+        '"database_url": "postgres://admin:password@db.example.com:5432/litellm"',
+        # access_token
+        "'access_token': 'some-opaque-token-value'",
+        # refresh_token
+        "refresh_token=my-refresh-tok-12345",
+        # auth_token
+        "'auth_token': 'random-auth-value'",
+        # slack_webhook_url
+        "'slack_webhook_url': 'https://hooks.slack.com/services/T00/B00/xxx'",
+    ]
+    for secret_line in cases:
+        result = redact_string(secret_line)
+        assert "REDACTED" in result, f"Key-name redaction missed: {secret_line!r}"
+
+    # Non-sensitive keys should NOT be redacted
+    safe = "'enable_jwt_auth': True, 'store_model_in_db': True"
+    assert redact_string(safe) == safe
+
+
+def test_key_name_redaction_in_general_settings_dict():
+    """End-to-end: secrets inside a general_settings dict dump are redacted
+    when logged through the named litellm loggers."""
+
+    def log_messages():
+        general_settings = {
+            "master_key": "my-random-secret-key-1234",
+            "database_url": "postgres://admin:password@db.example.com:5432/litellm",
+            "enable_jwt_auth": True,
+            "store_model_in_db": True,
+        }
+        verbose_proxy_logger.debug(
+            f"param_name=general_settings, param_value={general_settings}"
+        )
+
+    output = _capture_logger_output(log_messages)
+    assert "my-random-secret-key-1234" not in output
+    assert "REDACTED" in output
+    # Non-sensitive values should survive
+    assert "enable_jwt_auth" in output
+
+
+# ── GCP service-account / Vertex credential redaction ──
+
+
+_SAMPLE_SA_JSON = (
+    '{"type": "service_account", "project_id": "my-proj-123", '
+    '"private_key_id": "abc123def", '
+    '"private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkq\\n-----END PRIVATE KEY-----\\n", '
+    '"client_email": "sa@my-proj.iam.gserviceaccount.com", '
+    '"client_id": "123456789"}'
+)
+
+
+def test_pem_private_key_redacted_in_json():
+    result = redact_string(_SAMPLE_SA_JSON)
+    assert "MIIEvQIBADA" not in result
+    assert "-----BEGIN" not in result
+
+
+def test_pem_private_key_redacted_in_dict_repr():
+    import json
+
+    sa = json.loads(_SAMPLE_SA_JSON)
+    result = redact_string(str(sa))
+    assert "MIIEvQIBADA" not in result
+
+
+def test_service_account_blob_fully_redacted():
+    result = redact_string(f"Got={_SAMPLE_SA_JSON}")
+    assert "my-proj-123" not in result
+    assert "sa@my-proj.iam.gserviceaccount.com" not in result
+    assert "abc123def" not in result
+    assert "MIIEvQIBADA" not in result
+
+
+def test_vertex_error_message_no_credential_leak():
+    """The old Vertex error format leaked the full credential JSON.
+    The new format must not contain any credential material."""
+    new_msg = (
+        "Unable to load vertex credentials from environment. "
+        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
+        "Parse error: JSONDecodeError"
+    )
+    result = _redact_string(new_msg)
+    assert result == new_msg  # nothing to redact
+
+
+def test_vertex_traceback_redacts_pem():
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        '  File "vertex_llm_base.py", line 95\n'
+        "    json_obj = json.loads(credentials)\n"
+        "json.decoder.JSONDecodeError: Invalid control character\n"
+        "Failed to load vertex credentials. Error: "
+        "Unable to load vertex credentials from environment. "
+        f"Got={_SAMPLE_SA_JSON}"
+    )
+    result = redact_string(traceback_text)
+    assert "MIIEvQIBADA" not in result
+    assert "-----BEGIN" not in result
+
+
+def test_gcp_oauth_token_redacted():
+    result = redact_string("access token ya29.c.c0ASRK0GZvXlongtokenhere")
+    assert "ya29." not in result
+    assert "REDACTED" in result
+
+
+def test_non_pem_private_key_value_redacted():
+    result = redact_string("'private_key': 'some-non-pem-secret-value'")
+    assert "some-non-pem-secret" not in result
+
+
+def test_normal_vertex_log_not_redacted():
+    msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
+    assert redact_string(msg) == msg

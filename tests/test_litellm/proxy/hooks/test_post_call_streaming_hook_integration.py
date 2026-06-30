@@ -43,7 +43,9 @@ async def test_streaming_hook_transforms_response():
     """
     Test that async_post_call_streaming_hook can transform streaming responses.
     """
-    transformer = StreamingResponseTransformerLogger(transform_content="Modified streaming response")
+    transformer = StreamingResponseTransformerLogger(
+        transform_content="Modified streaming response"
+    )
 
     with patch("litellm.callbacks", [transformer]):
         from litellm.proxy.utils import ProxyLogging
@@ -138,7 +140,7 @@ async def test_streaming_hook_works_with_sse_format():
     This was the only supported format before the fix.
     """
     transformer = StreamingResponseTransformerLogger(
-        transform_content="data: {\"error\": \"custom error\"}\n\n"
+        transform_content='data: {"error": "custom error"}\n\n'
     )
 
     with patch("litellm.callbacks", [transformer]):
@@ -168,7 +170,7 @@ async def test_streaming_hook_works_with_sse_format():
         )
 
         # Verify SSE-formatted response is returned
-        assert result == "data: {\"error\": \"custom error\"}\n\n"
+        assert result == 'data: {"error": "custom error"}\n\n'
 
 
 @pytest.mark.asyncio

@@ -33,7 +33,9 @@ def test_transform_usage():
     openai_usage = config._transform_usage(usage)
     assert (
         openai_usage.prompt_tokens
-        == usage["inputTokens"] + usage["cacheReadInputTokens"] + usage["cacheWriteInputTokens"]
+        == usage["inputTokens"]
+        + usage["cacheReadInputTokens"]
+        + usage["cacheWriteInputTokens"]
     )
     assert openai_usage.completion_tokens == usage["outputTokens"]
     assert openai_usage.total_tokens == usage["totalTokens"]
@@ -234,7 +236,7 @@ def test_transform_tool_call_with_cache_control():
     ]
 
     result = config.transform_request(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
@@ -277,13 +279,268 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     }
 
     optional_params = config.map_openai_params(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         non_default_params=non_default_params,
         optional_params={},
         drop_params=False,
     )
 
     assert optional_params["tool_choice"] == {"auto": {}}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
+    """reasoning_effort="none" must omit thinking from the Bedrock Converse request."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "low", "low"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "medium", "medium"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh", "xhigh"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "xhigh", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "minimal", "low"),
+    ],
+)
+def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(
+    model, effort, expected_effort
+):
+    """Adaptive Claude 4.6 / 4.7 on Bedrock Converse routes the tier via ``output_config.effort``."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"]["type"] == "adaptive"
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_forwarded_into_additional_request_fields(model):
+    """``output_config`` rides along inside ``additionalModelRequestFields``."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
+
+
+def test_output_config_format_translated_to_native_output_config_converse():
+    """``output_config.format`` becomes Bedrock ``outputConfig`` and is not forwarded raw."""
+    config = AmazonConverseConfig()
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    result = config._transform_request(
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {
+                "effort": "xhigh",
+                "format": {"type": "json_schema", "schema": schema},
+            },
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "xhigh"}
+    assert "format" not in additional["output_config"]
+    assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
+    parsed_schema = json.loads(
+        result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
+    )
+    assert parsed_schema == {**schema, "additionalProperties": False}
+
+
+def test_output_config_format_dropped_on_unsupported_converse_model_warns(caplog):
+    """When Converse model lacks native structured-output support, the silently
+    dropped ``output_config.format`` must surface as a warning so callers can
+    diagnose plain-text responses."""
+    from unittest.mock import patch
+
+    config = AmazonConverseConfig()
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    with patch.object(
+        AmazonConverseConfig,
+        "_supports_native_structured_outputs",
+        return_value=False,
+    ):
+        with caplog.at_level("WARNING"):
+            result = config._transform_request(
+                model="bedrock/converse/us.anthropic.claude-3-haiku-20240307-v1:0",
+                messages=[{"role": "user", "content": "hi"}],
+                optional_params={
+                    "maxTokens": 256,
+                    "output_config": {
+                        "format": {"type": "json_schema", "schema": schema},
+                    },
+                },
+                litellm_params={},
+                headers={},
+            )
+
+    assert "outputConfig" not in result
+    assert any(
+        "dropping `output_config.format`" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_output_config_normalized_marker_does_not_leak_into_optional_params():
+    """The internal ``_output_config_normalized`` marker set by
+    ``_handle_reasoning_effort_parameter`` must be consumed during request
+    preparation so it does not linger on the caller's ``optional_params``."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        drop_params=False,
+    )
+    assert optional_params.get("_output_config_normalized") is True
+
+    config._transform_request(
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "_output_config_normalized" not in optional_params
+
+
+@pytest.mark.parametrize(
+    "model,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0", "high"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh"),
+    ],
+)
+def test_output_config_effort_normalized_for_bedrock_converse_opus(
+    model, expected_effort
+):
+    """Bedrock Converse accepts ``xhigh`` and forwards the provider-safe effort."""
+    config = AmazonConverseConfig()
+
+    result = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "xhigh"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": expected_effort}
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["disabled", "invalid", ""],
+)
+def test_reasoning_effort_garbage_raises_bad_request_converse(effort):
+    """Unmapped reasoning_effort on Bedrock Converse Anthropic raises BadRequestError."""
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/global.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/eu.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/au.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_max_passes_through_on_sonnet_46_variants(model):
+    """``effort='max'`` flows through for every Bedrock Converse Sonnet 4.6 id."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "max"}
+
 
 def test_get_supported_openai_params():
     config = AmazonConverseConfig()
@@ -315,7 +572,9 @@ def test_get_supported_openai_params_bedrock_converse():
             model=f"bedrock/converse/{model}"
         )
 
-        assert set(supported_params_without_prefix) == set(supported_params_with_prefix), f"Supported params mismatch for model: {model}. Without prefix: {supported_params_without_prefix}, With prefix: {supported_params_with_prefix}"
+        assert set(supported_params_without_prefix) == set(
+            supported_params_with_prefix
+        ), f"Supported params mismatch for model: {model}. Without prefix: {supported_params_without_prefix}, With prefix: {supported_params_with_prefix}"
         print(f"✅ Passed for model: {model}")
 
 
@@ -324,10 +583,10 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     config = AmazonConverseConfig()
     system_content_blocks = []
     optional_params = {
-        "anthropic_beta": ["computer-use-2024-10-22"],
+        "anthropic_beta": ["computer-use-2025-01-24"],
         "tools": [
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "name": "computer",
                 "display_height_px": 768,
                 "display_width_px": 1024,
@@ -337,7 +596,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
         "some_other_param": 123,
     }
     data = config._transform_request_helper(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         system_content_blocks=system_content_blocks,
         optional_params=optional_params,
         messages=None,
@@ -345,11 +604,11 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert "additionalModelRequestFields" in data
     fields = data["additionalModelRequestFields"]
     assert "anthropic_beta" in fields
-    assert fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
     # Verify computer tool is included
     assert "tools" in fields
     assert len(fields["tools"]) == 1
-    assert fields["tools"][0]["type"] == "computer_20241022"
+    assert fields["tools"][0]["type"] == "computer_20250124"
 
 
 def test_transform_response_with_computer_use_tool():
@@ -382,7 +641,7 @@ def test_transform_response_with_computer_use_tool():
                             },
                         }
                     }
-                ]
+                ],
             }
         },
         "stopReason": "tool_use",
@@ -396,10 +655,12 @@ def test_transform_response_with_computer_use_tool():
             "cacheWriteInputTokens": 0,
         },
     }
+
     # Mock httpx.Response
     class MockResponse:
         def json(self):
             return response_json
+
         @property
         def text(self):
             return json.dumps(response_json)
@@ -409,7 +670,7 @@ def test_transform_response_with_computer_use_tool():
     optional_params = {
         "tools": [
             {
-                "type": "computer_20241022",
+                "type": "computer_20250124",
                 "function": {
                     "name": "computer",
                     "parameters": {
@@ -423,7 +684,7 @@ def test_transform_response_with_computer_use_tool():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -468,12 +729,10 @@ def test_transform_response_with_bash_tool():
                         "toolUse": {
                             "toolUseId": "tooluse_456",
                             "name": "bash",
-                            "input": {
-                                "command": "ls -la *.py"
-                            },
+                            "input": {"command": "ls -la *.py"},
                         }
                     }
-                ]
+                ],
             }
         },
         "stopReason": "tool_use",
@@ -487,10 +746,12 @@ def test_transform_response_with_bash_tool():
             "cacheWriteInputTokens": 0,
         },
     }
+
     # Mock httpx.Response
     class MockResponse:
         def json(self):
             return response_json
+
         @property
         def text(self):
             return json.dumps(response_json)
@@ -510,7 +771,7 @@ def test_transform_response_with_bash_tool():
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -549,10 +810,11 @@ def test_transform_response_with_structured_response_being_called():
                             "name": "json_tool_call",
                             "input": {
                                 "Current_Temperature": 62,
-                                "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."},
+                                "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation.",
+                            },
                         }
                     }
-                ]
+                ],
             }
         },
         "stopReason": "tool_use",
@@ -566,10 +828,12 @@ def test_transform_response_with_structured_response_being_called():
             "cacheWriteInputTokens": 0,
         },
     }
+
     # Mock httpx.Response
     class MockResponse:
         def json(self):
             return response_json
+
         @property
         def text(self):
             return json.dumps(response_json)
@@ -580,53 +844,53 @@ def test_transform_response_with_structured_response_being_called():
         "json_mode": True,
         "tools": [
             {
-                'type': 'function',
-                'function': {
-                    'name': 'get_weather',
-                    'description': 'Get the current weather in a given location',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'location': {
-                                'type': 'string',
-                                'description': 'The city and state, e.g. San Francisco, CA'
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
                             },
-                            'unit': {
-                                'type': 'string',
-                                'enum': ['celsius', 'fahrenheit']
-                            }
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
                         },
-                        'required': ['location']
-                    }
-                }
+                        "required": ["location"],
+                    },
+                },
             },
             {
-                'type': 'function',
-                'function': {
-                    'name': 'json_tool_call',
-                    'parameters': {
-                        '$schema': 'http://json-schema.org/draft-07/schema#',
-                        'type': 'object',
-                        'required': ['Weather_Explanation', 'Current_Temperature'],
-                        'properties': {
-                            'Weather_Explanation': {
-                                'type': ['string', 'null'],
-                                'description': '1-2 sentences explaining the weather in the location'
+                "type": "function",
+                "function": {
+                    "name": "json_tool_call",
+                    "parameters": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                        "required": ["Weather_Explanation", "Current_Temperature"],
+                        "properties": {
+                            "Weather_Explanation": {
+                                "type": ["string", "null"],
+                                "description": "1-2 sentences explaining the weather in the location",
                             },
-                            'Current_Temperature': {
-                                'type': ['number', 'null'],
-                                'description': 'Current temperature in the location'
-                            }
+                            "Current_Temperature": {
+                                "type": ["number", "null"],
+                                "description": "Current temperature in the location",
+                            },
                         },
-                        'additionalProperties': False
-                    }
-                }
-            }
-        ]
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        ],
     }
     # Call the transformation logic
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -641,7 +905,11 @@ def test_transform_response_with_structured_response_being_called():
     assert result.choices[0].message.tool_calls is None
 
     assert result.choices[0].message.content is not None
-    assert result.choices[0].message.content ==  '{"Current_Temperature": 62, "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."}'
+    assert (
+        result.choices[0].message.content
+        == '{"Current_Temperature": 62, "Weather_Explanation": "San Francisco typically has mild, cool weather year-round due to its coastal location and marine influence. The city is known for its fog, moderate temperatures, and relatively stable climate with little seasonal variation."}'
+    )
+
 
 def test_transform_response_with_structured_response_calling_tool():
     """Test response transformation with structured response."""
@@ -650,28 +918,25 @@ def test_transform_response_with_structured_response_calling_tool():
 
     # Simulate a Bedrock Converse response with a bash tool call
     response_json = {
-        "metrics": {
-            "latencyMs": 1148
-        },
+        "metrics": {"latencyMs": 1148},
         "output": {
-            "message":
-            {
+            "message": {
                 "content": [
                     {
-                        "text": "I\'ll check the current weather in San Francisco for you."
+                        "text": "I'll check the current weather in San Francisco for you."
                     },
                     {
                         "toolUse": {
                             "input": {
                                 "location": "San Francisco, CA",
-                                "unit": "celsius"
+                                "unit": "celsius",
                             },
                             "name": "get_weather",
-                            "toolUseId": "tooluse_oKk__QrqSUmufMw3Q7vGaQ"
+                            "toolUseId": "tooluse_oKk__QrqSUmufMw3Q7vGaQ",
                         }
-                    }
+                    },
                 ],
-                "role": "assistant"
+                "role": "assistant",
             }
         },
         "stopReason": "tool_use",
@@ -682,13 +947,15 @@ def test_transform_response_with_structured_response_calling_tool():
             "cacheWriteInputTokens": 0,
             "inputTokens": 534,
             "outputTokens": 69,
-            "totalTokens": 603
-        }
+            "totalTokens": 603,
+        },
     }
+
     # Mock httpx.Response
     class MockResponse:
         def json(self):
             return response_json
+
         @property
         def text(self):
             return json.dumps(response_json)
@@ -699,49 +966,49 @@ def test_transform_response_with_structured_response_calling_tool():
         "json_mode": True,
         "tools": [
             {
-                'type': 'function',
-                'function': {
-                    'name': 'get_weather',
-                    'description': 'Get the current weather in a given location',
-                    'parameters': {
-                        'type': 'object',
-                        'properties': {
-                            'location': {
-                                'type': 'string',
-                                'description': 'The city and state, e.g. San Francisco, CA'
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather in a given location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city and state, e.g. San Francisco, CA",
                             },
-                            'unit': {
-                                'type': 'string',
-                                'enum': ['celsius', 'fahrenheit']
-                            }
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                            },
                         },
-                        'required': ['location']
-                    }
-                }
+                        "required": ["location"],
+                    },
+                },
             },
             {
-                'type': 'function',
-                'function': {
-                    'name': 'json_tool_call',
-                    'parameters': {
-                        '$schema': 'http://json-schema.org/draft-07/schema#',
-                        'type': 'object',
-                        'required': ['Weather_Explanation', 'Current_Temperature'],
-                        'properties': {
-                            'Weather_Explanation': {
-                                'type': ['string', 'null'],
-                                'description': '1-2 sentences explaining the weather in the location'
+                "type": "function",
+                "function": {
+                    "name": "json_tool_call",
+                    "parameters": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "type": "object",
+                        "required": ["Weather_Explanation", "Current_Temperature"],
+                        "properties": {
+                            "Weather_Explanation": {
+                                "type": ["string", "null"],
+                                "description": "1-2 sentences explaining the weather in the location",
                             },
-                            'Current_Temperature': {
-                                'type': ['number', 'null'],
-                                'description': 'Current temperature in the location'
-                            }
+                            "Current_Temperature": {
+                                "type": ["number", "null"],
+                                "description": "Current temperature in the location",
+                            },
                         },
-                        'additionalProperties': False
-                    }
-                }
-            }
-        ]
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        ],
     }
     # Call the transformation logic
     result = config._transform_response(
@@ -760,7 +1027,10 @@ def test_transform_response_with_structured_response_calling_tool():
     assert result.choices[0].message.tool_calls is not None
     assert len(result.choices[0].message.tool_calls) == 1
     assert result.choices[0].message.tool_calls[0].function.name == "get_weather"
-    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location": "San Francisco, CA", "unit": "celsius"}'
+    assert (
+        result.choices[0].message.tool_calls[0].function.arguments
+        == '{"location": "San Francisco, CA", "unit": "celsius"}'
+    )
 
 
 @pytest.mark.asyncio
@@ -775,20 +1045,15 @@ async def test_bedrock_bash_tool_acompletion():
         }
     ]
 
-    messages = [
-        {
-            "role": "user",
-            "content": "run ls command and find all python files"
-        }
-    ]
+    messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     try:
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             tools=tools,
             # Using dummy API key - test should fail with auth error, proving request formatting works
-            api_key="dummy-key-for-testing"
+            api_key="dummy-key-for-testing",
         )
         # If we get here, something's wrong - we expect an auth error
         assert False, "Expected authentication error but got successful response"
@@ -797,8 +1062,16 @@ async def test_bedrock_bash_tool_acompletion():
 
         # Check if it's an expected authentication/credentials error
         auth_error_indicators = [
-            "credentials", "authentication", "unauthorized", "access denied",
-            "aws", "region", "profile", "token", "invalid", "signature"
+            "credentials",
+            "authentication",
+            "unauthorized",
+            "access denied",
+            "aws",
+            "region",
+            "profile",
+            "token",
+            "invalid",
+            "signature",
         ]
 
         if any(auth_error in error_str for auth_error in auth_error_indicators):
@@ -816,7 +1089,7 @@ async def test_bedrock_computer_use_acompletion():
     # Test with computer use tool
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "name": "computer",
             "display_height_px": 768,
             "display_width_px": 1024,
@@ -828,27 +1101,24 @@ async def test_bedrock_computer_use_acompletion():
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": "Go to the bedrock console"
-                },
+                {"type": "text", "text": "Go to the bedrock console"},
                 {
                     "type": "image_url",
                     "image_url": {
                         "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-                    }
-                }
-            ]
+                    },
+                },
+            ],
         }
     ]
 
     try:
         response = await litellm.acompletion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             tools=tools,
             # Using dummy API key - test should fail with auth error, proving request formatting works
-            api_key="dummy-key-for-testing"
+            api_key="dummy-key-for-testing",
         )
         # If we get here, something's wrong - we expect an auth error
         assert False, "Expected authentication error but got successful response"
@@ -857,8 +1127,16 @@ async def test_bedrock_computer_use_acompletion():
 
         # Check if it's an expected authentication/credentials error
         auth_error_indicators = [
-            "credentials", "authentication", "unauthorized", "access denied",
-            "aws", "region", "profile", "token", "invalid", "signature"
+            "credentials",
+            "authentication",
+            "unauthorized",
+            "access denied",
+            "aws",
+            "region",
+            "profile",
+            "token",
+            "invalid",
+            "signature",
         ]
 
         if any(auth_error in error_str for auth_error in auth_error_indicators):
@@ -877,7 +1155,7 @@ async def test_transformation_directly():
 
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "name": "computer",
             "display_height_px": 768,
             "display_width_px": 1024,
@@ -886,23 +1164,18 @@ async def test_transformation_directly():
         {
             "type": "bash_20241022",
             "name": "bash",
-        }
+        },
     ]
 
-    messages = [
-        {
-            "role": "user",
-            "content": "run ls command and find all python files"
-        }
-    ]
+    messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify the structure
@@ -911,7 +1184,7 @@ async def test_transformation_directly():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -919,7 +1192,7 @@ async def test_transformation_directly():
 
     # Verify tool types
     tool_types = [tool.get("type") for tool in additional_fields["tools"]]
-    assert "computer_20241022" in tool_types
+    assert "computer_20250124" in tool_types
     assert "bash_20241022" in tool_types
 
 
@@ -928,7 +1201,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools_bash():
     config = AmazonConverseConfig()
     system_content_blocks = []
     optional_params = {
-        "anthropic_beta": ["computer-use-2024-10-22"],
+        "anthropic_beta": ["computer-use-2025-01-24"],
         "tools": [
             {
                 "type": "bash_20241022",
@@ -938,7 +1211,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools_bash():
         "some_other_param": 123,
     }
     data = config._transform_request_helper(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         system_content_blocks=system_content_blocks,
         optional_params=optional_params,
         messages=None,
@@ -946,7 +1219,7 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools_bash():
     assert "additionalModelRequestFields" in data
     fields = data["additionalModelRequestFields"]
     assert "anthropic_beta" in fields
-    assert fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert fields["anthropic_beta"] == ["computer-use-2025-01-24"]
     # Verify bash tool is included
     assert "tools" in fields
     assert len(fields["tools"]) == 1
@@ -960,7 +1233,7 @@ def test_transform_request_with_multiple_tools():
     # Use the exact payload from the user's error
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "function": {
                 "name": "computer",
                 "parameters": {
@@ -994,24 +1267,19 @@ def test_transform_request_with_multiple_tools():
                     },
                     "required": ["location"],
                 },
-            }
-        }
+            },
+        },
     ]
 
-    messages = [
-        {
-            "role": "user",
-            "content": "run ls command and find all python files"
-        }
-    ]
+    messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify the structure
@@ -1020,7 +1288,7 @@ def test_transform_request_with_multiple_tools():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -1028,7 +1296,7 @@ def test_transform_request_with_multiple_tools():
 
     # Verify tool types
     tool_types = [tool.get("type") for tool in additional_fields["tools"]]
-    assert "computer_20241022" in tool_types
+    assert "computer_20250124" in tool_types
     assert "bash_20241022" in tool_types
     assert "text_editor_20241022" in tool_types
 
@@ -1042,7 +1310,7 @@ def test_transform_request_with_computer_tool_only():
 
     tools = [
         {
-            "type": "computer_20241022",
+            "type": "computer_20250124",
             "name": "computer",
             "display_height_px": 768,
             "display_width_px": 1024,
@@ -1054,27 +1322,24 @@ def test_transform_request_with_computer_tool_only():
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": "Go to the bedrock console"
-                },
+                {"type": "text", "text": "Go to the bedrock console"},
                 {
                     "type": "image_url",
                     "image_url": {
                         "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-                    }
-                }
-            ]
+                    },
+                },
+            ],
         }
     ]
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify the structure
@@ -1083,12 +1348,12 @@ def test_transform_request_with_computer_tool_only():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
     assert len(additional_fields["tools"]) == 1
-    assert additional_fields["tools"][0]["type"] == "computer_20241022"
+    assert additional_fields["tools"][0]["type"] == "computer_20250124"
 
 
 def test_transform_request_with_bash_tool_only():
@@ -1102,20 +1367,15 @@ def test_transform_request_with_bash_tool_only():
         }
     ]
 
-    messages = [
-        {
-            "role": "user",
-            "content": "run ls command and find all python files"
-        }
-    ]
+    messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify the structure
@@ -1124,7 +1384,7 @@ def test_transform_request_with_bash_tool_only():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -1143,20 +1403,15 @@ def test_transform_request_with_text_editor_tool():
         }
     ]
 
-    messages = [
-        {
-            "role": "user",
-            "content": "Edit this text file"
-        }
-    ]
+    messages = [{"role": "user", "content": "Edit this text file"}]
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify the structure
@@ -1165,7 +1420,7 @@ def test_transform_request_with_text_editor_tool():
 
     # Check that anthropic_beta is set correctly for computer use
     assert "anthropic_beta" in additional_fields
-    assert additional_fields["anthropic_beta"] == ["computer-use-2024-10-22"]
+    assert additional_fields["anthropic_beta"] == ["computer-use-2025-01-24"]
 
     # Check that tools are present
     assert "tools" in additional_fields
@@ -1194,32 +1449,28 @@ def test_transform_request_with_function_tool():
                     },
                     "required": ["location"],
                 },
-            }
+            },
         }
     ]
 
     messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in San Francisco?"
-        }
+        {"role": "user", "content": "What's the weather like in San Francisco?"}
     ]
 
     # Transform request
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify the structure
-    assert "additionalModelRequestFields" in request_data
-    additional_fields = request_data["additionalModelRequestFields"]
+    # Function tools are not computer use tools, so they don't get anthropic_beta —
+    # additionalModelRequestFields should be absent (not serialized as empty {})
+    assert "additionalModelRequestFields" not in request_data
 
-    # Function tools are not computer use tools, so they don't get anthropic_beta
-    # They are processed through the regular tool config
     assert "toolConfig" in request_data
     assert "tools" in request_data["toolConfig"]
     assert len(request_data["toolConfig"]["tools"]) == 1
@@ -1247,7 +1498,7 @@ def test_map_openai_params_with_response_format():
                     },
                     "required": ["location"],
                 },
-            }
+            },
         }
     ]
 
@@ -1279,7 +1530,7 @@ def test_map_openai_params_with_response_format():
         non_default_params={"response_format": json_schema},
         optional_params={"tools": tools},
         model="eu.anthropic.claude-sonnet-4-20250514-v1:0",
-        drop_params=False
+        drop_params=False,
     )
 
     assert "tools" in optional_params
@@ -1302,28 +1553,32 @@ async def test_assistant_message_cache_control():
         {
             "role": "assistant",
             "content": "Hi there!",
-            "cache_control": {"type": "ephemeral"}
-        }
+            "cache_control": {"type": "ephemeral"},
+        },
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
@@ -1357,22 +1612,24 @@ async def test_assistant_message_list_content_cache_control():
                 {
                     "type": "text",
                     "text": "This should be cached",
-                    "cache_control": {"type": "ephemeral"}
+                    "cache_control": {"type": "ephemeral"},
                 }
-            ]
-        }
+            ],
+        },
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
@@ -1402,9 +1659,9 @@ async def test_tool_message_cache_control():
                 {
                     "id": "call_123",
                     "type": "function",
-                    "function": {"name": "get_weather", "arguments": "{}"}
+                    "function": {"name": "get_weather", "arguments": "{}"},
                 }
-            ]
+            ],
         },
         {
             "role": "tool",
@@ -1413,22 +1670,24 @@ async def test_tool_message_cache_control():
                 {
                     "type": "text",
                     "text": "Weather data: sunny, 25°C",
-                    "cache_control": {"type": "ephemeral"}
+                    "cache_control": {"type": "ephemeral"},
                 }
-            ]
-        }
+            ],
+        },
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
@@ -1442,7 +1701,10 @@ async def test_tool_message_cache_control():
 
     # First should be tool result
     assert "toolResult" in tool_message_content[0]
-    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather data: sunny, 25°C"
+    assert (
+        tool_message_content[0]["toolResult"]["content"][0]["text"]
+        == "Weather data: sunny, 25°C"
+    )
 
     # Second should be cachePoint
     assert "cachePoint" in tool_message_content[1]
@@ -1466,28 +1728,30 @@ async def test_tool_message_string_content_cache_control():
                 {
                     "id": "call_123",
                     "type": "function",
-                    "function": {"name": "get_weather", "arguments": "{}"}
+                    "function": {"name": "get_weather", "arguments": "{}"},
                 }
-            ]
+            ],
         },
         {
             "role": "tool",
             "tool_call_id": "call_123",
             "content": "Weather: sunny, 25°C",
-            "cache_control": {"type": "ephemeral"}
-        }
+            "cache_control": {"type": "ephemeral"},
+        },
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
@@ -1498,11 +1762,253 @@ async def test_tool_message_string_content_cache_control():
 
     # First should be tool result
     assert "toolResult" in tool_message_content[0]
-    assert tool_message_content[0]["toolResult"]["content"][0]["text"] == "Weather: sunny, 25°C"
+    assert (
+        tool_message_content[0]["toolResult"]["content"][0]["text"]
+        == "Weather: sunny, 25°C"
+    )
 
     # Second should be cachePoint
     assert "cachePoint" in tool_message_content[1]
     assert tool_message_content[1]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_tool_message_search_results_maps_to_bedrock_search_result_block():
+    """OpenAI tool message search_results should map to Bedrock searchResult blocks."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "What is Apptio?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+                    "type": "function",
+                    "function": {
+                        "name": "RAGRequest",
+                        "arguments": '{"query":"What is Apptio?"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_a4rBqeZNRTKj2lTskvaO4H",
+            "content": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM",
+            "search_results": [
+                {
+                    "source": "Great Source of Information About Apptio",
+                    "title": "12adbd74-46bd-4a88-88b2-0048755f6eb5",
+                    "content": [
+                        {
+                            "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                        }
+                    ],
+                    "citations": {"enabled": True},
+                }
+            ],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    tool_result = result[2]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_a4rBqeZNRTKj2lTskvaO4H"
+    assert tool_result["status"] == "success"
+    assert len(tool_result["content"]) == 1
+    assert "searchResult" in tool_result["content"][0]
+    assert (
+        tool_result["content"][0]["searchResult"]["title"]
+        == "12adbd74-46bd-4a88-88b2-0048755f6eb5"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tool_message_empty_search_results_falls_back_to_content():
+    """Empty search_results must not skip normal tool content processing."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "hello"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tooluse_empty_search",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_empty_search",
+            "content": "fallback tool text",
+            "search_results": [],
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+    assert result == async_result
+
+    tool_result = result[2]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_empty_search"
+    assert "status" not in tool_result
+    assert len(tool_result["content"]) == 1
+    assert tool_result["content"][0]["text"] == "fallback tool text"
+
+
+def test_transform_response_omits_annotations_when_citations_not_stitched():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": "cited sentence only in citations"}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 5,
+                                        }
+                                    },
+                                    "source": "https://example.com",
+                                    "title": "Example",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "separate assistant answer"},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content == "separate assistant answer"
+    assert message.model_dump().get("annotations") is None
+
+
+def test_extract_search_results_text_counts_hidden_tool_payload():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        convert_content_list_to_str,
+        extract_search_results_text,
+    )
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    hidden = "x" * 500
+    message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {
+                "source": "s",
+                "title": "t",
+                "content": [{"text": hidden}],
+            }
+        ],
+    }
+
+    extracted = extract_search_results_text(message["search_results"])
+    assert hidden in extracted
+    assert "st" in extracted
+    assert len(convert_content_list_to_str(message)) > len("small")
+
+    tokens_with_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[message],
+    )
+    tokens_without_search = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "tool", "content": "small"}],
+    )
+    assert tokens_with_search > tokens_without_search
+
+    huge_title = "y" * 500
+    title_only_message = {
+        "role": "tool",
+        "content": "small",
+        "search_results": [
+            {"source": "s", "title": huge_title, "content": []},
+        ],
+    }
+    assert len(extract_search_results_text(title_only_message["search_results"])) >= 500
+    tokens_title_bypass = token_counter(
+        model="gpt-3.5-turbo",
+        messages=[title_only_message],
+    )
+    assert tokens_title_bypass > tokens_without_search
 
 
 @pytest.mark.asyncio
@@ -1523,22 +2029,24 @@ async def test_assistant_tool_calls_cache_control():
                     "id": "call_proxy_123",
                     "type": "function",
                     "function": {"name": "calc", "arguments": "{}"},
-                    "cache_control": {"type": "ephemeral"}
+                    "cache_control": {"type": "ephemeral"},
                 }
-            ]
-        }
+            ],
+        },
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
@@ -1575,28 +2083,30 @@ async def test_multiple_tool_calls_with_mixed_cache_control():
                     "id": "call_1",
                     "type": "function",
                     "function": {"name": "calc", "arguments": '{"expr": "2+2"}'},
-                    "cache_control": {"type": "ephemeral"}
+                    "cache_control": {"type": "ephemeral"},
                 },
                 {
                     "id": "call_2",
                     "type": "function",
-                    "function": {"name": "calc", "arguments": '{"expr": "3+3"}'}
+                    "function": {"name": "calc", "arguments": '{"expr": "3+3"}'},
                     # No cache_control
-                }
-            ]
-        }
+                },
+            ],
+        },
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
@@ -1632,20 +2142,22 @@ async def test_no_cache_control_no_cache_point():
         {
             "role": "tool",
             "tool_call_id": "call_123",
-            "content": "Tool result"  # No cache_control
-        }
+            "content": "Tool result",  # No cache_control
+        },
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
     )
 
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages=messages,
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-        llm_provider="bedrock_converse"
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
     )
 
     assert result == async_result
@@ -1665,6 +2177,7 @@ async def test_no_cache_control_no_cache_point():
 # Guarded Text Feature Tests
 # ============================================================================
 
+
 def test_guarded_text_wraps_in_guardrail_converse_content():
     """Test that guarded_text content type gets wrapped in guardContent blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -1677,15 +2190,15 @@ def test_guarded_text_wraps_in_guardrail_converse_content():
             "content": [
                 {"type": "text", "text": "Regular text content"},
                 {"type": "guarded_text", "text": "This should be guarded"},
-                {"type": "text", "text": "More regular text"}
-            ]
+                {"type": "text", "text": "More regular text"},
+            ],
         }
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
         model="us.amazon.nova-pro-v1:0",
-        llm_provider="bedrock_converse"
+        llm_provider="bedrock_converse",
     )
 
     # Should have 1 message
@@ -1705,6 +2218,7 @@ def test_guarded_text_wraps_in_guardrail_converse_content():
     assert "guardContent" in content[1]
     assert content[1]["guardContent"]["text"]["text"] == "This should be guarded"
 
+
 def test_guarded_text_with_system_messages():
     """Test guarded_text with system messages using the full transformation."""
     config = AmazonConverseConfig()
@@ -1714,16 +2228,22 @@ def test_guarded_text_with_system_messages():
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "What is the main topic of this legal document?"},
-                {"type": "guarded_text", "text": "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question."}
-            ]
-        }
+                {
+                    "type": "text",
+                    "text": "What is the main topic of this legal document?",
+                },
+                {
+                    "type": "guarded_text",
+                    "text": "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question.",
+                },
+            ],
+        },
     ]
 
     optional_params = {
         "guardrailConfig": {
             "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "DRAFT"
+            "guardrailVersion": "DRAFT",
         }
     }
 
@@ -1732,7 +2252,7 @@ def test_guarded_text_with_system_messages():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Should have system content blocks
@@ -1755,7 +2275,10 @@ def test_guarded_text_with_system_messages():
     assert content[0]["text"] == "What is the main topic of this legal document?"
     # Second should be guardContent
     assert "guardContent" in content[1]
-    assert content[1]["guardContent"]["text"]["text"] == "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question."
+    assert (
+        content[1]["guardContent"]["text"]["text"]
+        == "This is a set of very long instructions that you will follow. Here is a legal document that you will use to answer the user's question."
+    )
 
 
 def test_guarded_text_with_mixed_content_types():
@@ -1769,16 +2292,22 @@ def test_guarded_text_with_mixed_content_types():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Look at this image"},
-                {"type": "image_url", "image_url": {"url": "data:image/png;base64,test"}},
-                {"type": "guarded_text", "text": "This sensitive content should be guarded"}
-            ]
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,test"},
+                },
+                {
+                    "type": "guarded_text",
+                    "text": "This sensitive content should be guarded",
+                },
+            ],
         }
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
         model="us.amazon.nova-pro-v1:0",
-        llm_provider="bedrock_converse"
+        llm_provider="bedrock_converse",
     )
 
     # Should have 1 message
@@ -1798,7 +2327,11 @@ def test_guarded_text_with_mixed_content_types():
 
     # Third should be guardContent
     assert "guardContent" in content[2]
-    assert content[2]["guardContent"]["text"]["text"] == "This sensitive content should be guarded"
+    assert (
+        content[2]["guardContent"]["text"]["text"]
+        == "This sensitive content should be guarded"
+    )
+
 
 @pytest.mark.asyncio
 async def test_async_guarded_text():
@@ -1812,15 +2345,15 @@ async def test_async_guarded_text():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Hello"},
-                {"type": "guarded_text", "text": "This should be guarded"}
-            ]
+                {"type": "guarded_text", "text": "This should be guarded"},
+            ],
         }
     ]
 
     result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
         messages=messages,
         model="us.amazon.nova-pro-v1:0",
-        llm_provider="bedrock_converse"
+        llm_provider="bedrock_converse",
     )
 
     # Should have 1 message
@@ -1851,8 +2384,11 @@ def test_guarded_text_with_tool_calls():
             "role": "user",
             "content": [
                 {"type": "text", "text": "What's the weather?"},
-                {"type": "guarded_text", "text": "Please be careful with sensitive information"}
-            ]
+                {
+                    "type": "guarded_text",
+                    "text": "Please be careful with sensitive information",
+                },
+            ],
         },
         {
             "role": "assistant",
@@ -1861,21 +2397,17 @@ def test_guarded_text_with_tool_calls():
                 {
                     "id": "call_123",
                     "type": "function",
-                    "function": {"name": "get_weather", "arguments": "{}"}
+                    "function": {"name": "get_weather", "arguments": "{}"},
                 }
-            ]
+            ],
         },
-        {
-            "role": "tool",
-            "tool_call_id": "call_123",
-            "content": "It's sunny and 25°C"
-        }
+        {"role": "tool", "tool_call_id": "call_123", "content": "It's sunny and 25°C"},
     ]
 
     result = _bedrock_converse_messages_pt(
         messages=messages,
         model="us.amazon.nova-pro-v1:0",
-        llm_provider="bedrock_converse"
+        llm_provider="bedrock_converse",
     )
 
     # Should have 3 messages
@@ -1893,7 +2425,10 @@ def test_guarded_text_with_tool_calls():
 
     # Second should be guardContent
     assert "guardContent" in content[1]
-    assert content[1]["guardContent"]["text"]["text"] == "Please be careful with sensitive information"
+    assert (
+        content[1]["guardContent"]["text"]["text"]
+        == "Please be careful with sensitive information"
+    )
 
     # Other messages should not have guardContent
     for i in range(1, 3):
@@ -1911,15 +2446,15 @@ def test_guarded_text_guardrail_config_preserved():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Hello"},
-                {"type": "guarded_text", "text": "This should be guarded"}
-            ]
+                {"type": "guarded_text", "text": "This should be guarded"},
+            ],
         }
     ]
 
     optional_params = {
         "guardrailConfig": {
             "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "DRAFT"
+            "guardrailVersion": "DRAFT",
         }
     }
 
@@ -1928,7 +2463,7 @@ def test_guarded_text_guardrail_config_preserved():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # GuardrailConfig should be present at top level
@@ -1938,7 +2473,10 @@ def test_guarded_text_guardrail_config_preserved():
     # GuardrailConfig should also be in inferenceConfig
     assert "inferenceConfig" in result
     assert "guardrailConfig" in result["inferenceConfig"]
-    assert result["inferenceConfig"]["guardrailConfig"]["guardrailIdentifier"] == "gr-abc123"
+    assert (
+        result["inferenceConfig"]["guardrailConfig"]["guardrailIdentifier"]
+        == "gr-abc123"
+    )
 
 
 def test_auto_convert_last_user_message_to_guarded_text():
@@ -1951,28 +2489,30 @@ def test_auto_convert_last_user_message_to_guarded_text():
             "content": [
                 {
                     "type": "text",
-                    "text": "What is the main topic of this legal document?"
+                    "text": "What is the main topic of this legal document?",
                 }
-            ]
+            ],
         }
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify the conversion
     assert len(converted_messages) == 1
     assert converted_messages[0]["role"] == "user"
     assert len(converted_messages[0]["content"]) == 1
     assert converted_messages[0]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[0]["content"][0]["text"] == "What is the main topic of this legal document?"
+    assert (
+        converted_messages[0]["content"][0]["text"]
+        == "What is the main topic of this legal document?"
+    )
 
 
 def test_auto_convert_last_user_message_string_content():
@@ -1980,28 +2520,27 @@ def test_auto_convert_last_user_message_string_content():
     config = AmazonConverseConfig()
 
     messages = [
-        {
-            "role": "user",
-            "content": "What is the main topic of this legal document?"
-        }
+        {"role": "user", "content": "What is the main topic of this legal document?"}
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify the conversion
     assert len(converted_messages) == 1
     assert converted_messages[0]["role"] == "user"
     assert len(converted_messages[0]["content"]) == 1
     assert converted_messages[0]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[0]["content"][0]["text"] == "What is the main topic of this legal document?"
+    assert (
+        converted_messages[0]["content"][0]["text"]
+        == "What is the main topic of this legal document?"
+    )
 
 
 def test_no_conversion_when_no_guardrail_config():
@@ -2014,16 +2553,18 @@ def test_no_conversion_when_no_guardrail_config():
             "content": [
                 {
                     "type": "text",
-                    "text": "What is the main topic of this legal document?"
+                    "text": "What is the main topic of this legal document?",
                 }
-            ]
+            ],
         }
     ]
 
     optional_params = {}
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify no conversion happened
     assert converted_messages == messages
@@ -2036,24 +2577,18 @@ def test_no_conversion_when_guarded_text_already_present():
     messages = [
         {
             "role": "user",
-            "content": [
-                {
-                    "type": "guarded_text",
-                    "text": "This is already guarded"
-                }
-            ]
+            "content": [{"type": "guarded_text", "text": "This is already guarded"}],
         }
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify no conversion happened
     assert converted_messages == messages
@@ -2069,25 +2604,24 @@ def test_auto_convert_with_mixed_content():
             "content": [
                 {
                     "type": "text",
-                    "text": "What is the main topic of this legal document?"
+                    "text": "What is the main topic of this legal document?",
                 },
                 {
                     "type": "image_url",
-                    "image_url": {"url": "https://example.com/image.jpg"}
-                }
-            ]
+                    "image_url": {"url": "https://example.com/image.jpg"},
+                },
+            ],
         }
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify the conversion
     assert len(converted_messages) == 1
@@ -2096,11 +2630,17 @@ def test_auto_convert_with_mixed_content():
 
     # First element should be converted to guarded_text
     assert converted_messages[0]["content"][0]["type"] == "guarded_text"
-    assert converted_messages[0]["content"][0]["text"] == "What is the main topic of this legal document?"
+    assert (
+        converted_messages[0]["content"][0]["text"]
+        == "What is the main topic of this legal document?"
+    )
 
     # Second element should remain unchanged
     assert converted_messages[0]["content"][1]["type"] == "image_url"
-    assert converted_messages[0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
+    assert (
+        converted_messages[0]["content"][1]["image_url"]["url"]
+        == "https://example.com/image.jpg"
+    )
 
 
 def test_auto_convert_in_full_transformation():
@@ -2113,17 +2653,14 @@ def test_auto_convert_in_full_transformation():
             "content": [
                 {
                     "type": "text",
-                    "text": "What is the main topic of this legal document?"
+                    "text": "What is the main topic of this legal document?",
                 }
-            ]
+            ],
         }
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the full transformation
@@ -2132,7 +2669,7 @@ def test_auto_convert_in_full_transformation():
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify the transformation worked
@@ -2144,7 +2681,10 @@ def test_auto_convert_in_full_transformation():
     assert "content" in message
     assert len(message["content"]) == 1
     assert "guardContent" in message["content"][0]
-    assert message["content"][0]["guardContent"]["text"]["text"] == "What is the main topic of this legal document?"
+    assert (
+        message["content"][0]["guardContent"]["text"]["text"]
+        == "What is the main topic of this legal document?"
+    )
 
 
 def test_convert_consecutive_user_messages_to_guarded_text():
@@ -2152,48 +2692,20 @@ def test_convert_consecutive_user_messages_to_guarded_text():
     config = AmazonConverseConfig()
 
     messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "First user message"
-                }
-            ]
-        },
-        {
-            "role": "assistant",
-            "content": "Assistant response"
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Second user message"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Third user message"
-                }
-            ]
-        }
+        {"role": "user", "content": [{"type": "text", "text": "First user message"}]},
+        {"role": "assistant", "content": "Assistant response"},
+        {"role": "user", "content": [{"type": "text", "text": "Second user message"}]},
+        {"role": "user", "content": [{"type": "text", "text": "Third user message"}]},
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify the conversion - only the last two user messages should be converted
     assert len(converted_messages) == 4
@@ -2223,44 +2735,19 @@ def test_convert_all_user_messages_when_all_consecutive():
     config = AmazonConverseConfig()
 
     messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "First user message"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Second user message"
-                }
-            ]
-        },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Third user message"
-                }
-            ]
-        }
+        {"role": "user", "content": [{"type": "text", "text": "First user message"}]},
+        {"role": "user", "content": [{"type": "text", "text": "Second user message"}]},
+        {"role": "user", "content": [{"type": "text", "text": "Third user message"}]},
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify all three user messages are converted
     assert len(converted_messages) == 3
@@ -2279,29 +2766,19 @@ def test_convert_consecutive_user_messages_with_string_content():
     config = AmazonConverseConfig()
 
     messages = [
-        {
-            "role": "assistant",
-            "content": "Assistant response"
-        },
-        {
-            "role": "user",
-            "content": "First user message"
-        },
-        {
-            "role": "user",
-            "content": "Second user message"
-        }
+        {"role": "assistant", "content": "Assistant response"},
+        {"role": "user", "content": "First user message"},
+        {"role": "user", "content": "Second user message"},
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify the conversion
     assert len(converted_messages) == 3
@@ -2329,33 +2806,19 @@ def test_skip_consecutive_user_messages_with_existing_guarded_text():
     messages = [
         {
             "role": "user",
-            "content": [
-                {
-                    "type": "guarded_text",
-                    "text": "Already guarded"
-                }
-            ]
+            "content": [{"type": "guarded_text", "text": "Already guarded"}],
         },
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": "Should be converted"
-                }
-            ]
-        }
+        {"role": "user", "content": [{"type": "text", "text": "Should be converted"}]},
     ]
 
     optional_params = {
-        "guardrailConfig": {
-            "guardrailIdentifier": "gr-abc123",
-            "guardrailVersion": "1"
-        }
+        "guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}
     }
 
     # Test the helper method directly
-    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(messages, optional_params)
+    converted_messages = config._convert_consecutive_user_messages_to_guarded_text(
+        messages, optional_params
+    )
 
     # Verify the conversion
     assert len(converted_messages) == 2
@@ -2387,7 +2850,7 @@ def test_request_metadata_transformation():
     request_metadata = {
         "cost_center": "engineering",
         "user_id": "user123",
-        "session_id": "sess_abc123"
+        "session_id": "sess_abc123",
     }
 
     messages = [
@@ -2396,11 +2859,11 @@ def test_request_metadata_transformation():
 
     # Transform request with requestMetadata
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": request_metadata},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify that requestMetadata appears as top-level field
@@ -2422,11 +2885,11 @@ def test_request_metadata_validation():
 
     # Should not raise exception
     config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Test too many items (max 16)
@@ -2434,11 +2897,11 @@ def test_request_metadata_validation():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": too_many_items},
             litellm_params={},
-            headers={}
+            headers={},
         )
         assert False, "Should have raised validation error for too many items"
     except Exception as e:
@@ -2457,11 +2920,11 @@ def test_request_metadata_key_constraints():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
-            headers={}
+            headers={},
         )
         assert False, "Should have raised validation error for key too long"
     except Exception as e:
@@ -2472,11 +2935,11 @@ def test_request_metadata_key_constraints():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
-            headers={}
+            headers={},
         )
         assert False, "Should have raised validation error for empty key"
     except Exception as e:
@@ -2495,11 +2958,11 @@ def test_request_metadata_value_constraints():
 
     try:
         config.transform_request(
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
             litellm_params={},
-            headers={}
+            headers={},
         )
         assert False, "Should have raised validation error for value too long"
     except Exception as e:
@@ -2510,11 +2973,11 @@ def test_request_metadata_value_constraints():
 
     # Should not raise exception
     config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
 
@@ -2533,11 +2996,11 @@ def test_request_metadata_character_pattern():
 
     # Should not raise exception
     config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
 
@@ -2545,10 +3008,7 @@ def test_request_metadata_with_other_params():
     """Test that requestMetadata works alongside other parameters."""
     config = AmazonConverseConfig()
 
-    request_metadata = {
-        "experiment": "test_A",
-        "user_type": "premium"
-    }
+    request_metadata = {"experiment": "test_A", "user_type": "premium"}
 
     messages = [
         {"role": "user", "content": "What's the weather?"},
@@ -2562,27 +3022,25 @@ def test_request_metadata_with_other_params():
                 "description": "Get the current weather",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
-                    "required": ["location"]
-                }
-            }
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            },
         }
     ]
 
     # Transform request with multiple parameters including request_metadata
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={
             "requestMetadata": request_metadata,
             "tools": tools,
             "max_tokens": 100,
-            "temperature": 0.7
+            "temperature": 0.7,
         },
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # Verify requestMetadata is at top level
@@ -2603,11 +3061,11 @@ def test_request_metadata_empty():
 
     # Empty dict should be allowed
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": {}},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     assert "requestMetadata" in request_data
@@ -2622,11 +3080,11 @@ def test_request_metadata_not_provided():
 
     # No requestMetadata provided
     request_data = config.transform_request(
-        model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={},
         litellm_params={},
-        headers={}
+        headers={},
     )
 
     # requestMetadata should not be in the request
@@ -2649,7 +3107,7 @@ def test_empty_assistant_message_handling():
     messages = [
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": ""},  # Empty content
-        {"role": "user", "content": "How are you?"}
+        {"role": "user", "content": "How are you?"},
     ]
 
     # Use patch to ensure we modify the litellm reference that factory.py actually uses
@@ -2657,8 +3115,8 @@ def test_empty_assistant_message_handling():
     with patch.object(factory_module.litellm, "modify_params", True):
         result = _bedrock_converse_messages_pt(
             messages=messages,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            llm_provider="bedrock_converse"
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
         )
 
         # Should have 3 messages: user, assistant (with placeholder), user
@@ -2676,13 +3134,13 @@ def test_empty_assistant_message_handling():
         messages = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "   "},  # Whitespace-only content
-            {"role": "user", "content": "How are you?"}
+            {"role": "user", "content": "How are you?"},
         ]
 
         result = _bedrock_converse_messages_pt(
             messages=messages,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            llm_provider="bedrock_converse"
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
         )
 
         # Assistant message should have placeholder text instead of whitespace
@@ -2692,14 +3150,17 @@ def test_empty_assistant_message_handling():
         # Test case 3: Empty list content
         messages = [
             {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": [{"type": "text", "text": ""}]},  # Empty text in list
-            {"role": "user", "content": "How are you?"}
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": ""}],
+            },  # Empty text in list
+            {"role": "user", "content": "How are you?"},
         ]
 
         result = _bedrock_converse_messages_pt(
             messages=messages,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            llm_provider="bedrock_converse"
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
         )
 
         # Assistant message should have placeholder text instead of empty text
@@ -2709,19 +3170,76 @@ def test_empty_assistant_message_handling():
         # Test case 4: Normal content should not be affected
         messages = [
             {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "I'm doing well, thank you!"},  # Normal content
-            {"role": "user", "content": "How are you?"}
+            {
+                "role": "assistant",
+                "content": "I'm doing well, thank you!",
+            },  # Normal content
+            {"role": "user", "content": "How are you?"},
         ]
 
         result = _bedrock_converse_messages_pt(
             messages=messages,
-            model="anthropic.claude-3-5-sonnet-20240620-v1:0",
-            llm_provider="bedrock_converse"
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
         )
 
         # Assistant message should keep original content
         assert len(result[1]["content"]) == 1
         assert result[1]["content"][0]["text"] == "I'm doing well, thank you!"
+
+
+def test_bedrock_converse_trailing_prefix_assistant_skips_user_continue():
+    """Assistant prefill (prefix: true) must not inject a dummy user 'Please continue.' turn."""
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hello, how are you?"},
+        {
+            "role": "assistant",
+            "content": "Good as",
+            "prefix": True,
+        },
+    ]
+
+    with patch.object(factory_module.litellm, "modify_params", True):
+        result = _bedrock_converse_messages_pt(
+            messages=list(messages),
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+
+    assert len(result) == 2
+    assert result[0]["role"] == "user"
+    assert result[1]["role"] == "assistant"
+    assert result[1]["content"][0]["text"] == "Good as"
+
+
+def test_bedrock_converse_leading_prefix_assistant_skips_user_continue():
+    """Leading assistant with prefix: true should not prepend dummy user."""
+    import litellm.litellm_core_utils.prompt_templates.factory as factory_module
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "assistant", "content": "Partial", "prefix": True},
+        {"role": "user", "content": "Go on"},
+    ]
+
+    with patch.object(factory_module.litellm, "modify_params", True):
+        result = _bedrock_converse_messages_pt(
+            messages=list(messages),
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+
+    assert len(result) == 2
+    assert result[0]["role"] == "assistant"
+    assert result[0]["content"][0]["text"] == "Partial"
+    assert result[1]["role"] == "user"
 
 
 def test_is_nova_2_model():
@@ -2752,7 +3270,7 @@ def test_is_nova_2_model():
     assert config._is_nova_2_model("eu.amazon.nova-pro-v1:0") is False
 
     # Test with completely different models (should return False)
-    assert config._is_nova_2_model("anthropic.claude-3-5-sonnet-20240620-v1:0") is False
+    assert config._is_nova_2_model("anthropic.claude-haiku-4-5-20251001-v1:0") is False
     assert config._is_nova_2_model("meta.llama3-70b-instruct-v1:0") is False
     assert config._is_nova_2_model("mistral.mistral-7b-instruct-v0:2") is False
 
@@ -2771,7 +3289,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_completion,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2793,7 +3311,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_tokens,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2816,7 +3334,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_without_max,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2827,6 +3345,7 @@ def test_thinking_with_max_completion_tokens():
     assert "thinking" in result
     assert result["thinking"]["type"] == "enabled"
     assert result["thinking"]["budget_tokens"] == 5000
+
 
 def test_drop_thinking_param_when_thinking_blocks_missing():
     """
@@ -2883,10 +3402,9 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
             if litellm.modify_params:
                 optional_params.pop("thinking", None)
 
-        assert "thinking" not in optional_params, (
-            "thinking param should be dropped when modify_params=True "
-            "and thinking_blocks are missing"
-        )
+        assert (
+            "thinking" not in optional_params
+        ), "thinking param should be dropped when modify_params=True and thinking_blocks are missing"
 
         # Test case 2: thinking should NOT be dropped when thinking_blocks are present
         messages_with_thinking_blocks = [
@@ -2928,9 +3446,9 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
             if litellm.modify_params:
                 optional_params_with_thinking.pop("thinking", None)
 
-        assert "thinking" in optional_params_with_thinking, (
-            "thinking param should NOT be dropped when thinking_blocks are present"
-        )
+        assert (
+            "thinking" in optional_params_with_thinking
+        ), "thinking param should NOT be dropped when thinking_blocks are present"
 
         # Test case 3: thinking should NOT be dropped when modify_params=False
         litellm.modify_params = False
@@ -2950,9 +3468,9 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
             if litellm.modify_params:
                 optional_params_no_modify.pop("thinking", None)
 
-        assert "thinking" in optional_params_no_modify, (
-            "thinking param should NOT be dropped when modify_params=False"
-        )
+        assert (
+            "thinking" in optional_params_no_modify
+        ), "thinking param should NOT be dropped when modify_params=False"
 
     finally:
         # Restore original modify_params setting
@@ -2960,46 +3478,74 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
 
 
 def test_supports_native_structured_outputs():
-    """Test model detection for native structured outputs support."""
-    config = AmazonConverseConfig()
+    """Test model detection for native structured outputs support.
 
-    # Supported models
-    assert config._supports_native_structured_outputs(
-        "anthropic.claude-sonnet-4-5-20250929-v1:0"
-    )
-    assert config._supports_native_structured_outputs(
-        "anthropic.claude-haiku-4-5-20251001-v1:0"
-    )
-    assert config._supports_native_structured_outputs(
-        "anthropic.claude-opus-4-6-v1:0"
-    )
-    assert config._supports_native_structured_outputs(
-        "eu.anthropic.claude-opus-4-5-20260101-v1:0"
-    )
-    assert config._supports_native_structured_outputs("qwen.qwen3-235b-instruct-v1:0")
-    assert config._supports_native_structured_outputs("mistral.mistral-large-3-v1:0")
-    assert config._supports_native_structured_outputs("deepseek.deepseek-v3.1-v1:0")
+    Support is driven by the ``supports_native_structured_output`` flag in the
+    cost JSON (litellm.model_cost), not a hardcoded model set.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
 
-    # Unsupported models — should fall back to tool-call approach
-    assert not config._supports_native_structured_outputs(
-        "anthropic.claude-3-5-sonnet-20241022-v2:0"
-    )
-    assert not config._supports_native_structured_outputs(
-        "anthropic.claude-sonnet-4-20250514-v1:0"
-    )
-    assert not config._supports_native_structured_outputs(
-        "meta.llama3-3-70b-instruct-v1:0"
-    )
-    assert not config._supports_native_structured_outputs(
-        "amazon.nova-pro-v1:0"
-    )
-    # Excluded despite AWS listing them: broken constrained decoding on Bedrock
-    assert not config._supports_native_structured_outputs(
-        "openai.gpt-oss-120b-1:0"
-    )
-    assert not config._supports_native_structured_outputs(
-        "mistral.magistral-small-2509"
-    )
+        # Supported models (have supports_native_structured_output=true in cost JSON)
+        assert config._supports_native_structured_outputs(
+            "anthropic.claude-sonnet-4-5-20250929-v1:0"
+        )
+        assert config._supports_native_structured_outputs(
+            "anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        assert config._supports_native_structured_outputs(
+            "anthropic.claude-opus-4-6-v1"
+        )
+        # Regional prefix is stripped by get_bedrock_base_model
+        assert config._supports_native_structured_outputs(
+            "eu.anthropic.claude-opus-4-5-20251101-v1:0"
+        )
+        # Claude 4.6 Sonnet
+        assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-6")
+        assert config._supports_native_structured_outputs(
+            "us.anthropic.claude-sonnet-4-6"
+        )
+        # Non-Anthropic models
+        assert config._supports_native_structured_outputs(
+            "qwen.qwen3-235b-a22b-2507-v1:0"
+        )
+        assert config._supports_native_structured_outputs(
+            "mistral.mistral-large-3-675b-instruct"
+        )
+        assert config._supports_native_structured_outputs("minimax.minimax-m2")
+        assert config._supports_native_structured_outputs("moonshot.kimi-k2-thinking")
+        assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
+        # DeepSeek: old substring "deepseek-v3.1" didn't match real ID
+        assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
+
+        # Unsupported models -- should fall back to tool-call approach
+        assert not config._supports_native_structured_outputs(
+            "anthropic.claude-sonnet-4-20250514-v1:0"
+        )
+        assert not config._supports_native_structured_outputs(
+            "meta.llama3-3-70b-instruct-v1:0"
+        )
+        assert not config._supports_native_structured_outputs("amazon.nova-pro-v1:0")
+        # Excluded: broken constrained decoding on Bedrock
+        assert not config._supports_native_structured_outputs("openai.gpt-oss-120b-1:0")
+        assert not config._supports_native_structured_outputs(
+            "mistral.magistral-small-2509"
+        )
+        # Excluded: ignores schema or broken on Bedrock
+        assert not config._supports_native_structured_outputs("google.gemma-3-27b-it")
+        assert not config._supports_native_structured_outputs(
+            "nvidia.nemotron-nano-12b-v2"
+        )
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_create_output_config_for_response_format():
@@ -3039,49 +3585,65 @@ def test_create_output_config_for_response_format():
 
 def test_translate_response_format_native_output_config():
     """For supported models, _translate_response_format_param should produce outputConfig."""
-    config = AmazonConverseConfig()
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
 
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "WeatherResult",
-            "description": "Weather info",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "temp": {"type": "number"},
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "WeatherResult",
+                "description": "Weather info",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "temp": {"type": "number"},
+                    },
+                    "required": ["temp"],
                 },
-                "required": ["temp"],
             },
-        },
-    }
+        }
 
-    optional_params: dict = {}
-    result = config._translate_response_format_param(
-        value=response_format,
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-        optional_params=optional_params,
-        non_default_params={"response_format": response_format},
-        is_thinking_enabled=False,
-    )
+        optional_params: dict = {}
+        result = config._translate_response_format_param(
+            value=response_format,
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            optional_params=optional_params,
+            non_default_params={"response_format": response_format},
+            is_thinking_enabled=False,
+        )
 
-    # Should have outputConfig, NOT tools
-    assert "outputConfig" in result
-    assert "tools" not in result
-    assert "tool_choice" not in result
-    assert result["json_mode"] is True
-    # No fake_stream for native approach
-    assert "fake_stream" not in result
+        # Should have outputConfig, NOT tools
+        assert "outputConfig" in result
+        assert "tools" not in result
+        assert "tool_choice" not in result
+        assert result["json_mode"] is True
+        # No fake_stream for native approach
+        assert "fake_stream" not in result
 
-    # Verify the schema content (additionalProperties: false is added by normalization)
-    schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
-    parsed_schema = json.loads(schema_str)
-    expected_schema = {**response_format["json_schema"]["schema"], "additionalProperties": False}
-    assert parsed_schema == expected_schema
-    assert (
-        result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"]
-        == "WeatherResult"
-    )
+        # Verify the schema content (additionalProperties: false is added by normalization)
+        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"][
+            "schema"
+        ]
+        parsed_schema = json.loads(schema_str)
+        expected_schema = {
+            **response_format["json_schema"]["schema"],
+            "additionalProperties": False,
+        }
+        assert parsed_schema == expected_schema
+        assert (
+            result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"]
+            == "WeatherResult"
+        )
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_translate_response_format_fallback_tool_call():
@@ -3104,13 +3666,13 @@ def test_translate_response_format_fallback_tool_call():
     optional_params: dict = {}
     result = config._translate_response_format_param(
         value=response_format,
-        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+        model="anthropic.claude-3-haiku-20240307-v1:0",
         optional_params=optional_params,
         non_default_params={"response_format": response_format},
         is_thinking_enabled=False,
     )
 
-    # Should use tool-call approach, NOT outputConfig
+    # Should use tool-call approach, NOT outputConfig (model doesn't support native structured outputs)
     assert "outputConfig" not in result
     assert "tools" in result
     assert result["json_mode"] is True
@@ -3118,42 +3680,55 @@ def test_translate_response_format_fallback_tool_call():
 
 def test_native_structured_output_no_fake_stream():
     """When using native structured outputs with streaming, fake_stream should NOT be set."""
-    config = AmazonConverseConfig()
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
 
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "Result",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "answer": {"type": "string"},
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "Result",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {"type": "string"},
+                    },
                 },
             },
-        },
-    }
+        }
 
-    optional_params: dict = {}
-    result = config._translate_response_format_param(
-        value=response_format,
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-        optional_params=optional_params,
-        non_default_params={"response_format": response_format, "stream": True},
-        is_thinking_enabled=False,
-    )
+        optional_params: dict = {}
+        result = config._translate_response_format_param(
+            value=response_format,
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            optional_params=optional_params,
+            non_default_params={"response_format": response_format, "stream": True},
+            is_thinking_enabled=False,
+        )
 
-    assert "outputConfig" in result
-    assert result["json_mode"] is True
-    # No fake_stream for native approach
-    assert "fake_stream" not in result
+        assert "outputConfig" in result
+        assert result["json_mode"] is True
+        # No fake_stream for native approach
+        assert "fake_stream" not in result
 
-    # Verify the schema content
-    schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["schema"]
-    assert json.loads(schema_str) == {
-        "type": "object",
-        "properties": {"answer": {"type": "string"}},
-        "additionalProperties": False,
-    }
+        # Verify the schema content
+        schema_str = result["outputConfig"]["textFormat"]["structure"]["jsonSchema"][
+            "schema"
+        ]
+        assert json.loads(schema_str) == {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "additionalProperties": False,
+        }
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_transform_request_with_output_config():
@@ -3195,7 +3770,10 @@ def test_transform_request_with_output_config():
 
     assert "outputConfig" in result
     assert result["outputConfig"]["textFormat"]["type"] == "json_schema"
-    assert result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"] == "TestSchema"
+    assert (
+        result["outputConfig"]["textFormat"]["structure"]["jsonSchema"]["name"]
+        == "TestSchema"
+    )
 
 
 def test_transform_request_strips_anthropic_output_config():
@@ -3221,17 +3799,64 @@ def test_transform_request_strips_anthropic_output_config():
     assert "output_config" not in additional_fields
 
 
+def test_converse_drop_params_strips_output_config_for_pre_4_5_anthropic():
+    """``drop_params=True`` strips unsupported ``output_config`` on Bedrock Converse."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "output_config": {"effort": "low"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional
+
+
+def test_converse_drop_params_keeps_output_config_for_supporting_anthropic():
+    """``drop_params=True`` does not strip on models that support ``output_config``."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "high"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
+
+
 def test_transform_response_native_structured_output():
     """Test response handling when model returns JSON as text content (native structured output)."""
     response_json = {
         "output": {
             "message": {
                 "role": "assistant",
-                "content": [
-                    {
-                        "text": '{"temp": 62, "description": "Mild and foggy"}'
-                    }
-                ],
+                "content": [{"text": '{"temp": 62, "description": "Mild and foggy"}'}],
             }
         },
         "stopReason": "end_turn",
@@ -3269,7 +3894,10 @@ def test_transform_response_native_structured_output():
     )
 
     # Content should be the JSON text directly
-    assert result.choices[0].message.content == '{"temp": 62, "description": "Mild and foggy"}'
+    assert (
+        result.choices[0].message.content
+        == '{"temp": 62, "description": "Mild and foggy"}'
+    )
     # Should NOT have tool_calls
     assert result.choices[0].message.tool_calls is None
     assert result.choices[0].finish_reason == "stop"
@@ -3382,29 +4010,49 @@ def test_add_additional_properties_definitions():
     # definitions object
     assert result["definitions"]["Item"]["additionalProperties"] is False
     # Nested object inside definitions
-    assert result["definitions"]["Item"]["properties"]["details"]["additionalProperties"] is False
-
-
-def test_json_object_no_schema_falls_back_to_tool_call():
-    """response_format: {type: json_object} with no schema should use tool-call fallback,
-    even for models that support native structured outputs."""
-    config = AmazonConverseConfig()
-    optional_params: dict = {}
-    non_default_params = {"response_format": {"type": "json_object"}}
-
-    result = config._translate_response_format_param(
-        value=non_default_params["response_format"],
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
-        optional_params=optional_params,
-        non_default_params=non_default_params,
-        is_thinking_enabled=False,
+    assert (
+        result["definitions"]["Item"]["properties"]["details"]["additionalProperties"]
+        is False
     )
 
-    # Should NOT use native outputConfig (no schema provided)
-    assert "outputConfig" not in result
-    # Should use tool-call fallback
-    assert "tools" in result
-    assert result["json_mode"] is True
+
+def test_json_object_no_schema_skips_tool_injection():
+    """response_format: {type: json_object} with no schema should NOT inject
+    the synthetic json_tool_call tool.
+
+    When no schema is given, _create_json_tool_call_for_response_format builds
+    a tool with an empty schema (properties: {}). The model follows the schema
+    and returns {} instead of the requested JSON. Skipping tool injection lets
+    the model respond naturally with the JSON the caller asked for."""
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        optional_params: dict = {}
+        non_default_params = {"response_format": {"type": "json_object"}}
+
+        result = config._translate_response_format_param(
+            value=non_default_params["response_format"],
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            optional_params=optional_params,
+            non_default_params=non_default_params,
+            is_thinking_enabled=False,
+        )
+
+        # Should NOT use native outputConfig (no schema provided)
+        assert "outputConfig" not in result
+        # Should NOT inject tools - empty schema causes model to return {}
+        assert "tools" not in result
+        assert "tool_choice" not in result
+        assert result["json_mode"] is True
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_output_config_applies_additional_properties():
@@ -3422,10 +4070,11 @@ def test_output_config_applies_additional_properties():
     output_config = AmazonConverseConfig._create_output_config_for_response_format(
         json_schema=schema, name="test_schema"
     )
-    parsed = json.loads(output_config["textFormat"]["structure"]["jsonSchema"]["schema"])
+    parsed = json.loads(
+        output_config["textFormat"]["structure"]["jsonSchema"]["schema"]
+    )
     assert parsed["additionalProperties"] is False
     assert parsed["properties"]["nested"]["additionalProperties"] is False
-
 
 
 _TOOL_PARAM = [
@@ -3472,14 +4121,19 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
 
     assert "additionalModelRequestFields" in request_data
     assert "tool_choice" in request_data["additionalModelRequestFields"]
-    assert request_data["additionalModelRequestFields"]["tool_choice"]["disable_parallel_tool_use"] is True
+    assert (
+        request_data["additionalModelRequestFields"]["tool_choice"][
+            "disable_parallel_tool_use"
+        ]
+        is True
+    )
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
 
 def test_parallel_tool_calls_older_model_drops_disable_flag():
     """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
     config = AmazonConverseConfig()
-    model = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    model = "anthropic.claude-3-haiku-20240307-v1:0"
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
 
     optional_params = config.map_openai_params(
@@ -3506,7 +4160,7 @@ class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
     def _map_params(
-        self, thinking_value, model="anthropic.claude-3-7-sonnet-20250219-v1:0"
+        self, thinking_value, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
     ):
         """Helper to call map_openai_params with the given thinking value."""
         config = AmazonConverseConfig()
@@ -3540,10 +4194,11 @@ class TestBedrockMinThinkingBudgetTokens:
         result = config.map_openai_params(
             non_default_params={},
             optional_params={},
-            model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             drop_params=False,
         )
         assert "thinking" not in result or result.get("thinking") is None
+
 
 def test_transform_response_with_both_json_tool_call_and_real_tool():
     """
@@ -3608,7 +4263,7 @@ def test_transform_response_with_both_json_tool_call_and_real_tool():
     optional_params = {"json_mode": True}
 
     result = config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -3686,7 +4341,7 @@ def test_transform_response_does_not_mutate_optional_params():
     optional_params = {"json_mode": True, "other_key": "value"}
 
     config._transform_response(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         response=MockResponse(),
         model_response=model_response,
         stream=False,
@@ -3758,9 +4413,7 @@ def test_streaming_filters_json_tool_call_with_real_tools():
     assert decoder.tool_calls_index == 0
 
     # Chunk 5: real tool delta
-    real_delta = ContentBlockDeltaEvent(
-        toolUse={"input": '{"location": "SF"}'}
-    )
+    real_delta = ContentBlockDeltaEvent(toolUse={"input": '{"location": "SF"}'})
     text_5, tool_use_5, _, _, _ = decoder._handle_converse_delta_event(
         real_delta, index=1
     )
@@ -3803,3 +4456,975 @@ def test_streaming_without_json_mode_passes_all_tools():
     assert tool_use_delta is not None
     assert tool_use_delta["function"]["arguments"] == '{"data": 1}'
 
+
+def test_cache_control_injection_tool_config():
+    """Test that cache_control_injection_points with location=tool_config appends cachePoint to tools."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"},
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "tool_config"},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tool_config = result["toolConfig"]
+    tools = tool_config["tools"]
+    # Last element should be a cachePoint block
+    assert tools[-1] == {"cachePoint": {"type": "default"}}
+    # First element should be the actual tool
+    assert "toolSpec" in tools[0]
+
+
+def test_cache_control_injection_tool_config_no_tools():
+    """Test that tool_config injection is ignored when no tools are provided."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "Hello"},
+    ]
+    optional_params = {
+        "cache_control_injection_points": [
+            {"location": "tool_config"},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    assert "toolConfig" not in result
+
+
+def test_cache_control_injection_tool_config_not_added_without_injection_point():
+    """Test that cachePoint is NOT appended when cache_control_injection_points doesn't include tool_config."""
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "message", "role": "system"},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tools = result["toolConfig"]["tools"]
+    # No cachePoint should be appended
+    assert all("cachePoint" not in tool for tool in tools)
+
+
+def test_translate_response_format_json_schema_still_injects_tool():
+    """
+    response_format with an explicit json_schema should still use the
+    synthetic tool call approach (for models that don't support native
+    structured outputs).
+    """
+    config = AmazonConverseConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "FactResult",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "facts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["facts"],
+            },
+        },
+    }
+
+    optional_params: dict = {}
+    result = config._translate_response_format_param(
+        value=response_format,
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        optional_params=optional_params,
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
+
+    assert result["json_mode"] is True
+    assert "tools" in result
+    assert "tool_choice" in result
+
+
+def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools():
+    """
+    When json_mode is True and _filter_json_mode_tools strips all synthetic
+    tool calls, finish_reason should be "stop", not "tool_calls".
+
+    Bedrock returns stopReason="tool_use" for json_tool_call responses.
+    After filtering, the response is plain JSON content and should not look
+    like a pending tool invocation to callers.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_001",
+                            "name": "json_tool_call",
+                            "input": {
+                                "facts": ["Bob is a software engineer"],
+                            },
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 50,
+            "outputTokens": 20,
+            "totalTokens": 70,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    # Simulate what happens when json_tool_call was injected for a
+    # json_schema request: optional_params has the synthetic tool
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "json_tool_call",
+                    "parameters": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {},
+                    },
+                },
+            }
+        ],
+    }
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    # Content should have the JSON from the tool call arguments
+    content = result.choices[0].message.content
+    assert content is not None
+    parsed = json.loads(content)
+    assert parsed["facts"] == ["Bob is a software engineer"]
+
+    # No tool_calls on the message
+    assert result.choices[0].message.tool_calls is None
+
+    # finish_reason must be "stop", not "tool_calls"
+    assert result.choices[0].finish_reason == "stop"
+
+
+def test_transform_response_citations_content_maps_to_annotations():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content.startswith("Apptio is a company")
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    annotation = message.annotations[0]
+    assert annotation["type"] == "url_citation"
+    assert annotation["url_citation"]["start_index"] == 0
+    assert annotation["url_citation"]["end_index"] == 42
+    assert annotation["url_citation"]["title"] == "About Apptio"
+    assert annotation["url_citation"]["url"] == "https://www.apptio.com/about"
+
+
+def test_transform_response_citation_null_source_title_become_empty_strings():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": None,
+                                    "title": None,
+                                }
+                            ],
+                        }
+                    },
+                    {"text": "."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    annotation = message.annotations[0]
+    assert annotation["url_citation"]["url"] == ""
+    assert annotation["url_citation"]["title"] == ""
+
+
+def test_transform_response_citations_offset_tracks_text_only_blocks():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    leading_text = "First sentence without a citation. "
+    cited_text = "Apptio is a company that makes calls to Bedrock"
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [{"text": leading_text}],
+                        }
+                    },
+                    {
+                        "citationsContent": {
+                            "content": [{"text": cited_text}],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": len(cited_text),
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    expected_start = len(leading_text)
+    assert message.content == leading_text + cited_text
+    assert (
+        message.content[expected_start : expected_start + len(cited_text)] == cited_text
+    )
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == expected_start
+    assert message.annotations[0]["url_citation"]["end_index"] == expected_start + len(
+        cited_text
+    )
+
+
+def test_transform_response_stitches_citations_for_whitespace_punctuation_text():
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "citationsContent": {
+                            "content": [
+                                {
+                                    "text": "Apptio is a company that makes calls to Bedrock using passthrough APIs via LiteLLM"
+                                }
+                            ],
+                            "citations": [
+                                {
+                                    "location": {
+                                        "searchResultLocation": {
+                                            "start": 0,
+                                            "end": 42,
+                                            "searchResultIndex": 0,
+                                        }
+                                    },
+                                    "source": "https://www.apptio.com/about",
+                                    "title": "About Apptio",
+                                }
+                            ],
+                        }
+                    },
+                    {"text": " ."},
+                ],
+            }
+        },
+        "stopReason": "end_turn",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5,
+            "totalTokens": 15,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=ModelResponse(),
+        stream=False,
+        logging_obj=None,
+        optional_params={},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    message = result.choices[0].message
+    assert message.content.startswith("Apptio is a company")
+    assert message.annotations is not None
+    assert len(message.annotations) == 1
+    assert message.annotations[0]["url_citation"]["start_index"] == 0
+    assert message.annotations[0]["url_citation"]["end_index"] == 42
+
+
+def test_bedrock_tool_message_openai_file_pdf_becomes_document():
+    """
+    OpenAI Chat Completions `{type: "file", file: {file_data: "data:application/pdf;...", filename}}`
+    inside a tool message content list should translate to a Bedrock
+    toolResult.content[].document block.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"  # tiny "%PDF-1.4\n" header
+    messages = [
+        {"role": "user", "content": "Summarize the attached PDF."},
+        {
+            "tool_call_id": "tooluse_pdf_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                        "filename": "summary.pdf",
+                    },
+                },
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_pdf_1"
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "document" in block, f"expected document block, got {block}"
+    assert block["document"]["format"] == "pdf"
+    assert block["document"]["source"]["bytes"] == pdf_b64
+    assert block["document"]["name"].startswith("DocumentPDFmessages_")
+    assert block["document"]["name"].endswith("_pdf")
+
+
+def test_bedrock_tool_message_image_url_pdf_data_uri_becomes_document():
+    """
+    Regression for the processor-returns-document-but-wrapper-drops-it bug:
+    when a caller sends a PDF as an `image_url` data URI on the tool-result path,
+    BedrockImageProcessor correctly returns a {"document": ...} block, but the
+    tool-result wrapper only appended the "image" case, silently dropping documents.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
+    messages = [
+        {"role": "user", "content": "Summarize the attached PDF."},
+        {
+            "tool_call_id": "tooluse_pdf_img_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:application/pdf;base64,{pdf_b64}",
+                    },
+                },
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_pdf_img_1"
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "document" in block, f"expected document block, got {block}"
+    assert block["document"]["format"] == "pdf"
+    assert block["document"]["source"]["bytes"] == pdf_b64
+
+
+def test_bedrock_tool_message_file_id_http_url_becomes_document():
+    """
+    OpenAI `file.file_id` is a server-side file reference. The Bedrock
+    user-message path (_process_file_message at factory.py:4796) accepts either
+    `file_data` or `file_id` and forwards to BedrockImageProcessor. The
+    tool-result path must match: when `file_id` is an http(s) PDF URL, it
+    should resolve to a Bedrock document block, not be silently dropped.
+    """
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockImageProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    pdf_url = "https://example.com/whitepaper.pdf"
+    fake_document_block = {
+        "document": {
+            "format": "pdf",
+            "name": "fake_doc",
+            "source": {"bytes": "ZmFrZQ=="},
+        }
+    }
+    messages = [
+        {"role": "user", "content": "Summarize the attached PDF."},
+        {
+            "tool_call_id": "tooluse_fid_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": pdf_url,
+                        "filename": "whitepaper.pdf",
+                    },
+                },
+            ],
+        },
+    ]
+
+    with patch.object(
+        BedrockImageProcessor,
+        "process_image_sync",
+        return_value=fake_document_block,
+    ) as mock_proc:
+        translated_msg = _bedrock_converse_messages_pt(
+            messages=messages, model="", llm_provider=""
+        )
+
+    mock_proc.assert_called_once()
+    assert mock_proc.call_args.kwargs["image_url"] == pdf_url
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "document" in block, f"expected document block, got {block}"
+    assert block["document"]["source"]["bytes"] == "ZmFrZQ=="
+
+
+def test_bedrock_tool_message_file_without_data_or_id_raises():
+    """
+    The user-message path raises BadRequestError when a `type: "file"` block
+    has neither `file_data` nor `file_id` (factory.py:4802-4809). The
+    tool-result path must match — silently dropping the block makes the model
+    see an empty tool result and obscures the caller bug.
+    """
+    import litellm
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Summarize."},
+        {
+            "tool_call_id": "tooluse_bad_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {"filename": "nothing.pdf"},
+                },
+            ],
+        },
+    ]
+
+    with pytest.raises(litellm.BadRequestError):
+        _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
+
+
+def test_bedrock_tool_message_image_url_png_still_becomes_image():
+    """
+    Regression: image_url with an image mime type must continue to translate
+    to a Bedrock image block (not document). Locks in existing behavior after
+    the document-passthrough fix.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    messages = [
+        {"role": "user", "content": "Describe the attached image."},
+        {
+            "tool_call_id": "tooluse_png_1",
+            "role": "tool",
+            "name": "fetch_image",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{png_b64}",
+                    },
+                },
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "image" in block, f"expected image block, got {block}"
+    assert "document" not in block
+    assert block["image"]["format"] == "png"
+    assert block["image"]["source"]["bytes"] == png_b64
+
+
+def test_transform_response_does_not_leak_body_on_parse_failure():
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    leaky_body = {"output": {"message": {"content": [{"text": "secret content"}]}}}
+
+    class MockResponse:
+        def json(self):
+            return leaky_body
+
+        @property
+        def text(self):
+            return json.dumps(leaky_body)
+
+    with patch(
+        "litellm.llms.bedrock.chat.converse_transformation.ConverseResponseBlock",
+        side_effect=KeyError("missing required field"),
+    ):
+        with pytest.raises(BedrockError) as exc_info:
+            AmazonConverseConfig()._transform_response(
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                response=MockResponse(),
+                model_response=ModelResponse(),
+                stream=False,
+                logging_obj=None,
+                optional_params={},
+                api_key=None,
+                data=None,
+                messages=[],
+                encoding=None,
+            )
+
+    msg = str(exc_info.value)
+    assert "secret content" not in msg
+    assert "Error converting to valid response block" in msg
+
+
+def test_converse_drops_sampling_params_for_models_that_removed_them():
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p; with
+    drop_params set, converse must drop them instead of forwarding (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-fable-5",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "topP" not in result
+
+
+def test_converse_sampling_params_raise_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="global.anthropic.claude-opus-4-8-v1:0",
+            drop_params=False,
+        )
+
+
+def test_converse_sampling_params_forwarded_on_models_that_accept_them():
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-6",
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["topP"] == 0.9
+
+
+def test_converse_top_k_dropped_for_models_that_removed_it():
+    """``top_k`` reaches converse as a provider-specific kwarg destined for
+    ``additionalModelRequestFields``, bypassing ``map_openai_params``; the
+    transform must strip it for models that removed sampling params (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result.get("additionalModelRequestFields", {})
+
+
+def test_converse_top_k_raises_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 40
+
+
+def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
+    """``top_k=0`` must hit the same gating as any other value; previously the
+    truthiness check let it silently disappear on models that removed sampling
+    params, diverging from the Anthropic boundary that treats ``0`` as present."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 0},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 0},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grounding_source_and_query_rendered_as_text():
+    """grounding_source / query content blocks must render as plain text on the
+    generate path (the model needs to see the RAG context + question). The bedrock
+    converse dispatch silently drops unrecognised content types, so these would
+    otherwise vanish from the prompt."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "grounding_source", "text": "Tokyo is the capital of Japan."},
+                {"type": "query", "text": "What is the capital of Japan?"},
+            ],
+        }
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        llm_provider="bedrock_converse",
+    )
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages=messages,
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            llm_provider="bedrock_converse",
+        )
+    )
+
+    assert result == async_result
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    user_content = result[0]["content"]
+    assert {"text": "Tokyo is the capital of Japan."} in user_content
+    assert {"text": "What is the capital of Japan?"} in user_content

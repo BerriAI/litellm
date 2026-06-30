@@ -7,6 +7,10 @@ import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
+from litellm.llms.gemini.common_utils import (
+    get_gemini_image_web_search_requests,
+    map_gemini_image_tools_params,
+)
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
@@ -52,6 +56,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "aspect_ratio",
             "imageSize",
             "image_size",
+            "tools",
+            "web_search_options",
         ]
 
     def map_openai_params(
@@ -77,9 +83,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    else:
+                    elif k not in ("tools", "web_search_options"):
                         mapped_params[k] = v
 
+        mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:
@@ -146,19 +153,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_location = (
-            self.safe_get_vertex_ai_location(litellm_params)
-            or self._resolve_vertex_location()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
 
         if not vertex_project or not vertex_location:
-            raise ValueError(
-                "vertex_project and vertex_location are required for Vertex AI"
-            )
+            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
 
         base_url = get_vertex_base_url(vertex_location)
 
@@ -184,14 +183,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = (
-            self.safe_get_vertex_ai_project(litellm_params)
-            or self._resolve_vertex_project()
-        )
-        vertex_credentials = (
-            self.safe_get_vertex_ai_credentials(litellm_params)
-            or self._resolve_vertex_credentials()
-        )
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -246,6 +239,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "contents": contents,
             "generationConfig": generation_config,
         }
+
+        if tools := optional_params.get("tools"):
+            request_body["tools"] = tools
+        if tool_config := optional_params.get("toolConfig"):
+            request_body["toolConfig"] = tool_config
 
         return request_body
 
@@ -313,15 +311,15 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                             ImageObject(
                                 b64_json=inline_data["data"],
                                 url=None,
-                                provider_specific_fields={
-                                    "thought_signature": thought_sig
-                                }
-                                if thought_sig
-                                else None,
+                                provider_specific_fields=({"thought_signature": thought_sig} if thought_sig else None),
                             )
                         )
 
         if usage_metadata := response_data.get("usageMetadata", None):
             model_response.usage = self._transform_image_usage(usage_metadata)
+
+        web_search_requests = get_gemini_image_web_search_requests(response_data)
+        if web_search_requests and model_response.usage is not None:
+            setattr(model_response.usage, "web_search_requests", web_search_requests)
 
         return model_response

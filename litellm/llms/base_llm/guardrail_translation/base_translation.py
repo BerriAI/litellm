@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class BaseTranslation(ABC):
@@ -28,11 +29,7 @@ class BaseTranslation(ABC):
             return {}
 
         # Convert to dict if it's a Pydantic object
-        user_dict = (
-            user_api_key_dict.model_dump()
-            if hasattr(user_api_key_dict, "model_dump")
-            else user_api_key_dict
-        )
+        user_dict = user_api_key_dict.model_dump() if hasattr(user_api_key_dict, "model_dump") else user_api_key_dict
 
         if not isinstance(user_dict, dict):
             return {}
@@ -73,6 +70,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response with guardrails.
@@ -91,6 +89,7 @@ class BaseTranslation(ABC):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.
@@ -98,6 +97,16 @@ class BaseTranslation(ABC):
         Optional to override in subclasses.
         """
         return responses_so_far
+
+    def get_structured_messages(self, data: dict) -> Optional[List["AllMessageValues"]]:
+        """
+        Convert request data to OpenAI-spec structured messages.
+
+        Override in subclasses for format-specific conversion.
+
+        Returns None if no convertible content is found.
+        """
+        return None
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
         """

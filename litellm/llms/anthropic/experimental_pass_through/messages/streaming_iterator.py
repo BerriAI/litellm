@@ -27,6 +27,7 @@ class BaseAnthropicMessagesStreamingIterator:
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
         self.start_time = datetime.now()
+        self.completion_start_time: datetime | None = None
 
     async def _handle_streaming_logging(self, collected_chunks: List[bytes]):
         """Handle the logging after all chunks have been collected."""
@@ -35,6 +36,11 @@ class BaseAnthropicMessagesStreamingIterator:
         )
 
         end_time = datetime.now()
+        # Set completion_start_time so TTFT is calculated from the first
+        # chunk rather than falling back to end_time in async_success_handler.
+        if self.completion_start_time is not None:
+            self.litellm_logging_obj.completion_start_time = self.completion_start_time
+            self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
         asyncio.create_task(
             PassThroughStreamingHandler._route_streaming_logging_to_handler(
                 litellm_logging_obj=self.litellm_logging_obj,
@@ -79,7 +85,7 @@ class BaseAnthropicMessagesStreamingIterator:
         """
         if isinstance(chunk, dict):
             event_type: str = str(chunk.get("type", "message"))
-            payload = f"event: {event_type}\n" f"data: {json.dumps(chunk)}\n\n"
+            payload = f"event: {event_type}\ndata: {json.dumps(chunk)}\n\n"
             return payload.encode()
         else:
             # For non-dict chunks, return as is
@@ -87,9 +93,7 @@ class BaseAnthropicMessagesStreamingIterator:
 
     async def async_sse_wrapper(
         self,
-        completion_stream: AsyncIterator[
-            Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]
-        ],
+        completion_stream: AsyncIterator[Union[bytes, GenericStreamingChunk, ModelResponseStream, dict]],
     ) -> AsyncIterator[bytes]:
         """
         Generic async SSE wrapper that converts streaming chunks to SSE format
@@ -100,6 +104,8 @@ class BaseAnthropicMessagesStreamingIterator:
         collected_chunks = []
 
         async for chunk in completion_stream:
+            if self.completion_start_time is None:
+                self.completion_start_time = datetime.now()
             encoded_chunk = self._convert_chunk_to_sse_format(chunk)
             collected_chunks.append(encoded_chunk)
             yield encoded_chunk

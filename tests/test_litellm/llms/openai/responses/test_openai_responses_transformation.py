@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
@@ -84,6 +85,90 @@ class TestOpenAIResponsesAPIConfig:
         }
 
         self.validate_responses_api_request_params(result, expected_fields)
+
+    def test_transform_strips_cache_control_from_input_content_blocks(self):
+        """`cache_control` markers (Anthropic-only) must be stripped from
+        Responses API input content blocks before sending to OpenAI.
+
+        OpenAI rejects unknown params on input content blocks with HTTP 400:
+            "Unknown parameter: 'input[0].content[0].cache_control'"
+        Chat Completions strips these via
+        `remove_cache_control_flag_from_messages_and_tools`; the Responses
+        path must do the same.
+        """
+        input_with_cache_control = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_with_cache_control,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "cache_control" not in result["input"][0]["content"][0]
+        assert result["input"][0]["content"][0]["type"] == "input_text"
+        assert result["input"][0]["content"][0]["text"] == "Hello"
+
+    def test_transform_strips_cache_control_from_tools(self):
+        """`cache_control` markers must also be stripped from tools for
+        symmetry with the Chat Completions path. OpenAI currently accepts
+        cache_control on tools silently but stripping keeps the wire payload
+        clean and matches `remove_cache_control_flag_from_messages_and_tools`.
+        """
+        tools_with_cache_control = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input="hi",
+            response_api_optional_request_params={"tools": tools_with_cache_control},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "cache_control" not in result["tools"][0]
+        assert result["tools"][0]["name"] == "get_weather"
+
+    def test_transform_preserves_input_without_cache_control(self):
+        """Inputs without cache_control must pass through unmodified."""
+        input_clean = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hello"}],
+            }
+        ]
+
+        result = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_clean,
+            response_api_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert result["input"] == input_clean
 
     def test_transform_streaming_response(self):
         """Test streaming response transformation"""
@@ -162,6 +247,7 @@ class TestOpenAIResponsesAPIConfig:
 
         assert "Authorization" in result
         assert result["Authorization"] == f"Bearer {api_key}"
+        assert result["Content-Type"] == "application/json"
 
         # Test with empty headers
         headers = {}
@@ -264,6 +350,24 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result == "https://custom-openai.example.com/v1/responses"
 
+    def test_response_id_path_requests_encode_response_id(self):
+        """Test response_id is treated as one upstream URL path segment."""
+        api_base = "https://custom-openai.example.com/v1/responses"
+        response_id = "../../files?x=1#frag"
+
+        url, data = self.config.transform_list_input_items_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
+        )
+        assert data["limit"] == 20
+
     def test_get_event_model_class_generic_event(self):
         """Test that get_event_model_class returns the correct event model class"""
         from litellm.types.llms.openai import GenericEvent
@@ -336,7 +440,9 @@ class TestOpenAIResponsesAPIConfig:
             )
 
             assert isinstance(result, ImageGenerationPartialImageEvent)
-            assert result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+            assert (
+                result.type == ResponsesAPIStreamEvents.IMAGE_GENERATION_PARTIAL_IMAGE
+            )
             assert result.partial_image_index == idx
             assert result.b64_json == chunk["b64_json"]
 
@@ -540,6 +646,62 @@ class TestOpenAIResponsesAPIConfig:
         assert result.output_index == 0
         assert result.content_index == 0
 
+    def test_base_strip_custom_tool_call_namespace_all_providers(self):
+        """Base helper strips ``namespace`` from custom_tool_call for every provider path."""
+        inp = [
+            {"type": "function_call", "call_id": "a", "name": "f", "namespace": "keep"},
+            {
+                "type": "custom_tool_call",
+                "call_id": "b",
+                "name": "c",
+                "namespace": "drop",
+            },
+        ]
+        out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
+            inp
+        )
+        assert out[0]["namespace"] == "keep"
+        assert "namespace" not in out[1]
+
+        body = {"model": "x", "input": inp}
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][0]["namespace"] == "keep"
+        assert "namespace" not in norm["input"][1]
+
+    def test_openai_transform_then_normalize_strips_custom_tool_call_namespace(self):
+        """``transform_responses_api_request`` leaves input as validated; HTTP layer ``normalize_*`` strips."""
+        input_items = [
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "t",
+                "arguments": "{}",
+                "namespace": "my_tools",
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "c2",
+                "name": "agent",
+                "input": "x",
+                "namespace": "None",
+                "status": "completed",
+            },
+        ]
+        body = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"][0].get("namespace") == "my_tools"
+        assert body["input"][1].get("namespace") == "None"
+
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][0].get("namespace") == "my_tools"
+        assert norm["input"][1]["type"] == "custom_tool_call"
+        assert "namespace" not in norm["input"][1]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):
@@ -580,6 +742,50 @@ class TestAzureResponsesAPIConfig:
             result_date
             == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
         )
+
+    def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):
+        """Same as OpenAI path: ``normalize_responses_api_request_dict`` strips custom_tool_call only."""
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_1",
+                "input": "do thing",
+                "name": "my_tool",
+                "id": "ctc_1",
+                "namespace": "None",
+                "status": "completed",
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "get_weather",
+                "arguments": "{}",
+                "id": "fc_1",
+                "namespace": "tools",
+                "status": "completed",
+            },
+        ]
+        body = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"][1].get("namespace") == "None"
+        assert body["input"][2].get("namespace") == "tools"
+
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][1]["type"] == "custom_tool_call"
+        assert "namespace" not in norm["input"][1]
+        assert norm["input"][2]["type"] == "function_call"
+        assert norm["input"][2].get("namespace") == "tools"
+        assert norm["input"][2]["name"] == "get_weather"
 
 
 class TestTransformListInputItemsRequest:
@@ -689,9 +895,7 @@ class TestTransformListInputItemsRequest:
     def test_openai_transform_compact_response_api_request_query_params_preserved(self):
         """Test compact URL construction preserves query params and appends path."""
         # Setup
-        azure_style_api_base = (
-            "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
-        )
+        azure_style_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
         # Execute
         url, data = self.openai_config.transform_compact_response_api_request(
@@ -731,12 +935,12 @@ class TestTransformListInputItemsRequest:
     def test_azure_transform_list_input_items_request_minimal(self):
         """Test Azure implementation with minimal parameters"""
         # Setup
-        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        AZURE_AI_API_BASE = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
         # Execute
         url, params = self.azure_config.transform_list_input_items_request(
             response_id=self.response_id,
-            api_base=azure_api_base,
+            api_base=AZURE_AI_API_BASE,
             litellm_params=self.litellm_params,
             headers=self.headers,
         )
@@ -749,12 +953,12 @@ class TestTransformListInputItemsRequest:
     def test_azure_transform_list_input_items_request_url_construction(self):
         """Test Azure implementation URL construction with response_id in path"""
         # Setup
-        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        AZURE_AI_API_BASE = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
         # Execute
         url, params = self.azure_config.transform_list_input_items_request(
             response_id=self.response_id,
-            api_base=azure_api_base,
+            api_base=AZURE_AI_API_BASE,
             litellm_params=self.litellm_params,
             headers=self.headers,
         )
@@ -768,12 +972,12 @@ class TestTransformListInputItemsRequest:
     def test_azure_transform_list_input_items_request_with_all_params(self):
         """Test Azure implementation with all optional parameters"""
         # Setup
-        azure_api_base = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
+        AZURE_AI_API_BASE = "https://test.openai.azure.com/openai/responses?api-version=2024-05-01-preview"
 
         # Execute
         url, params = self.azure_config.transform_list_input_items_request(
             response_id=self.response_id,
-            api_base=azure_api_base,
+            api_base=AZURE_AI_API_BASE,
             litellm_params=self.litellm_params,
             headers=self.headers,
             after="cursor_after_123",
@@ -1128,9 +1332,9 @@ class TestPhaseParameter:
                 phase = getattr(output_item, "phase", None)
 
             expected = "commentary" if idx == 0 else "final_answer"
-            assert phase == expected, (
-                f"output[{idx}] phase={phase!r}, expected {expected!r}"
-            )
+            assert (
+                phase == expected
+            ), f"output[{idx}] phase={phase!r}, expected {expected!r}"
 
     def test_streaming_output_item_done_preserves_phase(self):
         """OutputItemDoneEvent must preserve phase on its item."""

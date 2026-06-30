@@ -48,13 +48,12 @@ async def test_get_credentials_from_env():
     assert credentials["LANGSMITH_BASE_URL"] == "https://api.smith.langchain.com"
 
     # Test with tenant_id
-    credentials = logger.get_credentials_from_env(
-        langsmith_tenant_id="test-tenant-id"
-    )
+    credentials = logger.get_credentials_from_env(langsmith_tenant_id="test-tenant-id")
     assert credentials["LANGSMITH_TENANT_ID"] == "test-tenant-id"
 
     # Test tenant_id from environment variable
     import os
+
     os.environ["LANGSMITH_TENANT_ID"] = "env-tenant-id"
     credentials = logger.get_credentials_from_env()
     assert credentials["LANGSMITH_TENANT_ID"] == "env-tenant-id"
@@ -277,8 +276,7 @@ async def test_async_send_batch():
 @pytest.mark.asyncio
 async def test_async_send_batch_with_tenant_id():
     logger = LangsmithLogger(
-        langsmith_api_key="test-key",
-        langsmith_tenant_id="test-tenant-id"
+        langsmith_api_key="test-key", langsmith_tenant_id="test-tenant-id"
     )
 
     # Mock the httpx client
@@ -317,22 +315,24 @@ async def test_langsmith_key_based_logging():
         mock_async_httpx_handler = AsyncMock()
         mock_response = MagicMock()  # Use MagicMock for response to allow sync methods
         mock_response.status_code = 200
-        mock_response.raise_for_status = MagicMock()  # raise_for_status is sync in httpx
+        mock_response.raise_for_status = (
+            MagicMock()
+        )  # raise_for_status is sync in httpx
         mock_response.text = ""
         mock_async_httpx_handler.post = AsyncMock(return_value=mock_response)
-        
+
         mock_get_client = patch(
             "litellm.integrations.langsmith.get_async_httpx_client",
-            return_value=mock_async_httpx_handler
+            return_value=mock_async_httpx_handler,
         )
         mock_get_client.start()
-        
+
         litellm.set_verbose = True
         litellm.DEFAULT_FLUSH_INTERVAL_SECONDS = 1
 
         litellm.callbacks = [LangsmithLogger()]
         response = await litellm.acompletion(
-            model="gpt-3.5-turbo",
+            model="gpt-4.1-mini",
             messages=[{"role": "user", "content": "Test message"}],
             max_tokens=10,
             temperature=0.2,
@@ -373,7 +373,7 @@ async def test_langsmith_key_based_logging():
                     "inputs": {
                         "id": "chatcmpl-82699ee4-7932-4fc0-9585-76abc8caeafa",
                         "call_type": "acompletion",
-                        "model": "gpt-3.5-turbo",
+                        "model": "gpt-4.1-mini",
                         "messages": [{"role": "user", "content": "Test message"}],
                         "model_parameters": {
                             "temperature": 0.2,
@@ -382,7 +382,7 @@ async def test_langsmith_key_based_logging():
                     },
                     "outputs": {
                         "id": "chatcmpl-82699ee4-7932-4fc0-9585-76abc8caeafa",
-                        "model": "gpt-3.5-turbo",
+                        "model": "gpt-4.1-mini",
                         "choices": [
                             {
                                 "finish_reason": "stop",
@@ -448,7 +448,7 @@ async def test_langsmith_key_based_logging():
             actual_body["post"][0]["session_name"]
             == expected_body["post"][0]["session_name"]
         )
-        
+
         mock_get_client.stop()
 
     except Exception as e:
@@ -468,7 +468,7 @@ async def test_langsmith_queue_logging():
         # Make multiple calls to ensure we don't hit the batch size
         for _ in range(5):
             response = await litellm.acompletion(
-                model="gpt-3.5-turbo",
+                model="gpt-4.1-mini",
                 messages=[{"role": "user", "content": "Test message"}],
                 max_tokens=10,
                 temperature=0.2,
@@ -487,7 +487,7 @@ async def test_langsmith_queue_logging():
         # Now make calls to exceed the batch size
         for _ in range(3):
             response = await litellm.acompletion(
-                model="gpt-3.5-turbo",
+                model="gpt-4.1-mini",
                 messages=[{"role": "user", "content": "Test message"}],
                 max_tokens=10,
                 temperature=0.2,

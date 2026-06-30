@@ -84,4 +84,3 @@ def test_transform_request_includes_s3_media():
     s3_location = request["mediaSource"]["s3Location"]
     assert s3_location["uri"] == "s3://test-bucket/video.mp4"
     assert s3_location["bucketOwner"] == "123456789012"
-

@@ -92,9 +92,12 @@ def test_tool_call_id_includes_signature_in_response(enable_preview_features):
     assert tools is not None
     assert len(tools) == 1
     tool_call_id = tools[0]["id"]
-    
+
     # Verify signature is always in provider_specific_fields
-    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == test_signature
+    assert (
+        tools[0].get("provider_specific_fields", {}).get("thought_signature")
+        == test_signature
+    )
 
     # When preview features enabled, signature should be embedded in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
@@ -241,7 +244,6 @@ def test_openai_client_e2e_flow(enable_preview_features):
     assert gemini_parts_converted[0]["thoughtSignature"] == test_signature
 
 
-
 @pytest.mark.parametrize("enable_preview_features", [True, False])
 def test_parallel_tool_calls_with_signatures(enable_preview_features):
     """Test that parallel tool calls preserve signatures correctly"""
@@ -269,13 +271,15 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert len(tools) == 2
 
     # First tool call should have signature in provider_specific_fields
-    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == signature1
-    
+    assert (
+        tools[0].get("provider_specific_fields", {}).get("thought_signature")
+        == signature1
+    )
+
     # When preview features enabled, first tool call has signature in ID
     assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]
     sig1 = _get_thought_signature_from_tool({"id": tools[0]["id"], "type": "function"})
     assert sig1 == signature1
-
 
     # Second tool call has no signature in ID (regardless of flag)
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]

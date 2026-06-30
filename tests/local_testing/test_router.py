@@ -20,7 +20,6 @@ import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
-from respx import MockRouter
 import httpx
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -34,6 +33,8 @@ from litellm.router_utils.cooldown_handlers import (
     _get_cooldown_deployments,
 )
 from litellm.types.router import DeploymentTypedDict
+
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 load_dotenv()
 
@@ -126,7 +127,9 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model=os.environ.get("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+        model=os.environ.get(
+            "CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"
+        ),
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -143,14 +146,14 @@ async def test_router_provider_wildcard_routing_regex():
                 "model_name": "openai/fo::*:static::*",
                 "litellm_params": {
                     "model": "openai/fo::*:static::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
             {
                 "model_name": "openai/foo3::hello::*",
                 "litellm_params": {
                     "model": "openai/foo3::hello::*",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
         ]
@@ -356,51 +359,6 @@ async def test_router_retries(sync_mode):
         print(response.choices[0].message)
 
 
-@pytest.mark.parametrize(
-    "mistral_api_base",
-    [
-        "os.environ/AZURE_MISTRAL_API_BASE",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1/",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com",
-    ],
-)
-@pytest.mark.skip(
-    reason="Router no longer creates clients, this is delegated to the provider integration."
-)
-def test_router_azure_ai_studio_init(mistral_api_base):
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "azure/mistral-large-latest",
-                    "api_key": "os.environ/AZURE_MISTRAL_API_KEY",
-                    "api_base": mistral_api_base,
-                },
-                "model_info": {"id": 1234},
-            }
-        ]
-    )
-
-    # model_client = router._get_client(
-    #     deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
-    # )
-    # url = getattr(model_client, "_base_url")
-    # uri_reference = str(getattr(url, "_uri_reference"))
-
-    # print(f"uri_reference: {uri_reference}")
-
-    # assert "/v1/" in uri_reference
-    # assert uri_reference.count("v1") == 1
-    response = router.completion(
-        model="azure/mistral-large-latest",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    assert response is not None
-
-
 def test_exception_raising():
     # this tests if the router raises an exception when invalid params are set
     # in this test both deployments have bad keys - Keep this test. It validates if the router raises the most recent exception
@@ -409,8 +367,8 @@ def test_exception_raising():
 
     try:
         print("testing if router raises an exception")
-        old_api_key = os.environ["AZURE_API_KEY"]
-        os.environ["AZURE_API_KEY"] = ""
+        old_api_key = os.environ["AZURE_AI_API_KEY"]
+        os.environ["AZURE_AI_API_KEY"] = ""
         model_list = [
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
@@ -418,7 +376,7 @@ def test_exception_raising():
                     "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -446,16 +404,16 @@ def test_exception_raising():
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "hello this request will fail"}],
         )
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         pytest.fail(f"Should have raised an Auth Error")
     except openai.AuthenticationError:
         print(
             "Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!"
         )
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         router.reset()
     except Exception as e:
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         print("Got unexpected exception on router!", e)
 
 
@@ -530,7 +488,7 @@ def test_call_one_endpoint():
     # this test makes a completion calls azure/gpt-4.1-mini, it should work
     try:
         print("Testing calling a specific deployment")
-        old_api_key = os.environ["AZURE_API_KEY"]
+        old_api_key = os.environ["AZURE_AI_API_KEY"]
 
         model_list = [
             {
@@ -539,7 +497,7 @@ def test_call_one_endpoint():
                     "model": "azure/gpt-4.1-mini",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -548,8 +506,8 @@ def test_call_one_endpoint():
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
                     "model": "azure/text-embedding-ada-002",
-                    "api_key": os.environ["AZURE_API_KEY"],
-                    "api_base": os.environ["AZURE_API_BASE"],
+                    "api_key": os.environ["AZURE_AI_API_KEY"],
+                    "api_base": os.environ["AZURE_AI_API_BASE"],
                 },
                 "tpm": 100000,
                 "rpm": 10000,
@@ -562,7 +520,7 @@ def test_call_one_endpoint():
             set_verbose=True,
             num_retries=1,
         )  # type: ignore
-        old_api_base = os.environ.pop("AZURE_API_BASE", None)
+        old_api_base = os.environ.pop("AZURE_AI_API_BASE", None)
 
         async def call_azure_completion():
             response = await router.acompletion(
@@ -584,15 +542,14 @@ def test_call_one_endpoint():
         asyncio.run(call_azure_completion())
         asyncio.run(call_azure_embedding())
 
-        os.environ["AZURE_API_BASE"] = old_api_base
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_BASE"] = old_api_base
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
     except Exception as e:
         print(f"FAILED TEST")
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
 
 # test_call_one_endpoint()
-
 
 
 @pytest.mark.asyncio
@@ -708,9 +665,9 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info()
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
                     "mock_response": "Hello world 1!",
                 },
@@ -762,9 +719,9 @@ def test_router_context_window_check_pre_call_check():
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
                     "mock_response": "Hello world 1!",
                 },
@@ -816,9 +773,9 @@ def test_router_context_window_check_pre_call_check_out_group():
                 "model_name": "gpt-3.5-turbo-small",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
                 },
             },
@@ -896,9 +853,9 @@ def test_router_region_pre_call_check(allowed_model_region):
             "model_name": "gpt-3.5-turbo",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
                 "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_key": os.getenv("AZURE_AI_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_base": os.getenv("AZURE_AI_API_BASE"),
                 "base_model": "azure/gpt-35-turbo",
                 "region_name": allowed_model_region,
             },
@@ -1039,15 +996,15 @@ async def test_aimg_gen_on_router():
     try:
         model_list = [
             {
-                "model_name": "dall-e-3",
+                "model_name": "gpt-image-1",
                 "litellm_params": {
-                    "model": "dall-e-3",
+                    "model": "gpt-image-1",
                 },
             }
         ]
         router = Router(model_list=model_list, num_retries=3)
         response = await router.aimage_generation(
-            model="dall-e-3", prompt="A cute baby sea otter"
+            model="gpt-image-1", prompt="A cute baby sea otter"
         )
         print(response)
         assert len(response.data) > 0
@@ -1074,15 +1031,15 @@ def test_img_gen_on_router():
     try:
         model_list = [
             {
-                "model_name": "dall-e-3",
+                "model_name": "gpt-image-1",
                 "litellm_params": {
-                    "model": "dall-e-3",
+                    "model": "gpt-image-1",
                 },
             }
         ]
         router = Router(model_list=model_list)
         response = router.image_generation(
-            model="dall-e-3", prompt="A cute baby sea otter"
+            model="gpt-image-1", prompt="A cute baby sea otter"
         )
         print(response)
         assert len(response.data) > 0
@@ -1173,8 +1130,8 @@ def test_azure_embedding_on_router():
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
                     "model": "azure/text-embedding-ada-002",
-                    "api_key": os.environ["AZURE_API_KEY"],
-                    "api_base": os.environ["AZURE_API_BASE"],
+                    "api_key": os.environ["AZURE_AI_API_KEY"],
+                    "api_base": os.environ["AZURE_AI_API_BASE"],
                 },
                 "tpm": 100000,
                 "rpm": 10000,
@@ -1381,8 +1338,8 @@ def test_reading_keys_os_environ():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_key": "os.environ/AZURE_API_KEY",
-                    "api_base": "os.environ/AZURE_API_BASE",
+                    "api_key": "os.environ/AZURE_AI_API_KEY",
+                    "api_base": "os.environ/AZURE_AI_API_BASE",
                     "api_version": "os.environ/AZURE_API_VERSION",
                     "timeout": "os.environ/AZURE_TIMEOUT",
                     "stream_timeout": "os.environ/AZURE_STREAM_TIMEOUT",
@@ -1394,11 +1351,11 @@ def test_reading_keys_os_environ():
         router = Router(model_list=model_list)
         for model in router.model_list:
             assert (
-                model["litellm_params"]["api_key"] == os.environ["AZURE_API_KEY"]
-            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_API_KEY']}"
+                model["litellm_params"]["api_key"] == os.environ["AZURE_AI_API_KEY"]
+            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
             assert (
-                model["litellm_params"]["api_base"] == os.environ["AZURE_API_BASE"]
-            ), f"{model['litellm_params']['api_base']} vs {os.environ['AZURE_API_BASE']}"
+                model["litellm_params"]["api_base"] == os.environ["AZURE_AI_API_BASE"]
+            ), f"{model['litellm_params']['api_base']} vs {os.environ['AZURE_AI_API_BASE']}"
             assert (
                 model["litellm_params"]["api_version"]
                 == os.environ["AZURE_API_VERSION"]
@@ -1415,8 +1372,8 @@ def test_reading_keys_os_environ():
             print("passed testing of reading keys from os.environ")
             model_id = model["model_info"]["id"]
             async_client: openai.AsyncAzureOpenAI = router.cache.get_cache(f"{model_id}_async_client")  # type: ignore
-            assert async_client.api_key == os.environ["AZURE_API_KEY"]
-            assert async_client.base_url == os.environ["AZURE_API_BASE"]
+            assert async_client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert async_client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1428,8 +1385,8 @@ def test_reading_keys_os_environ():
             print("\n Testing async streaming client")
 
             stream_async_client: openai.AsyncAzureOpenAI = router.cache.get_cache(f"{model_id}_stream_async_client")  # type: ignore
-            assert stream_async_client.api_key == os.environ["AZURE_API_KEY"]
-            assert stream_async_client.base_url == os.environ["AZURE_API_BASE"]
+            assert stream_async_client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert stream_async_client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert stream_async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1440,8 +1397,8 @@ def test_reading_keys_os_environ():
 
             print("\n Testing sync client")
             client: openai.AzureOpenAI = router.cache.get_cache(f"{model_id}_client")  # type: ignore
-            assert client.api_key == os.environ["AZURE_API_KEY"]
-            assert client.base_url == os.environ["AZURE_API_BASE"]
+            assert client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1452,8 +1409,8 @@ def test_reading_keys_os_environ():
 
             print("\n Testing sync stream client")
             stream_client: openai.AzureOpenAI = router.cache.get_cache(f"{model_id}_stream_client")  # type: ignore
-            assert stream_client.api_key == os.environ["AZURE_API_KEY"]
-            assert stream_client.base_url == os.environ["AZURE_API_BASE"]
+            assert stream_client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert stream_client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert stream_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1503,7 +1460,7 @@ def test_reading_openai_keys_os_environ():
         for model in router.model_list:
             assert (
                 model["litellm_params"]["api_key"] == os.environ["OPENAI_API_KEY"]
-            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_API_KEY']}"
+            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
             assert float(model["litellm_params"]["timeout"]) == float(
                 os.environ["AZURE_TIMEOUT"]
             ), f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
@@ -1574,7 +1531,9 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": os.environ.get("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+                "model": os.environ.get(
+                    "CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"
+                ),
                 "api_key": anthropic_api_key,
             },
         }
@@ -1682,7 +1641,7 @@ async def test_router_text_completion_client():
                 "litellm_params": {
                     "model": "text-completion-openai/gpt-3.5-turbo-instruct",
                     "api_key": os.getenv("OPENAI_API_KEY", None),
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             }
         ]
@@ -2273,8 +2232,8 @@ async def test_router_batch_endpoints(provider):
                 "model_name": "my-custom-name",
                 "litellm_params": {
                     "model": "azure/gpt-4o-mini",
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                 },
             },
         ]
@@ -2452,8 +2411,8 @@ def test_is_team_specific_model():
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "tpm": 100000,
 #                     "rpm": 100000,
 #                 },
@@ -2462,8 +2421,8 @@ def test_is_team_specific_model():
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "tpm": 500,
 #                     "rpm": 500,
 #                 },

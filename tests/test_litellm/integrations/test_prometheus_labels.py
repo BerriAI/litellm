@@ -1,6 +1,7 @@
 """
 Unit tests for prometheus metric labels configuration
 """
+
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
@@ -69,6 +70,21 @@ def test_model_id_in_required_metrics():
         print(f"✅ {metric_name} contains model_id label")
 
 
+def test_api_provider_in_spend_and_requests_metrics():
+    """
+    Test that api_provider label is present in spend and requests metrics
+    so users can build spend-by-provider and request-count-by-provider dashboards.
+    """
+    api_provider_label = UserAPIKeyLabelNames.API_PROVIDER.value
+
+    for metric_name in ["litellm_spend_metric", "litellm_requests_metric"]:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            api_provider_label in labels
+        ), f"Metric {metric_name} should contain api_provider label"
+        print(f"✅ {metric_name} contains api_provider label")
+
+
 def test_user_email_label_exists():
     """Test that the USER_EMAIL label is properly defined"""
     assert UserAPIKeyLabelNames.USER_EMAIL.value == "user_email"
@@ -121,13 +137,43 @@ def test_model_id_in_required_metrics():
         "litellm_proxy_total_requests_metric",
         "litellm_proxy_failed_requests_metric",
         "litellm_request_total_latency_metric",
-        "litellm_llm_api_time_to_first_token_metric"
+        "litellm_llm_api_time_to_first_token_metric",
     ]
 
     for metric_name in metrics_with_model_id:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert model_id_label in labels, f"Metric {metric_name} should contain model_id label"
+        assert (
+            model_id_label in labels
+        ), f"Metric {metric_name} should contain model_id label"
         print(f"✅ {metric_name} contains model_id label")
+
+
+def test_requested_model_in_spend_and_requests_metrics():
+    """
+    Regression test for LIT-3796.
+
+    litellm_spend_metric and litellm_requests_metric must expose the
+    requested_model label so spend and request counts can be grouped by the
+    model alias the caller asked for, not just the backend deployment that
+    served the request. The sibling token metrics (input/output/total)
+    already carry this label; spend and requests were the odd ones out, even
+    though both are emitted side-by-side from the same call site.
+    """
+    requested_model_label = UserAPIKeyLabelNames.REQUESTED_MODEL.value
+
+    metrics_with_requested_model = [
+        "litellm_spend_metric",
+        "litellm_requests_metric",
+        "litellm_input_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_total_tokens_metric",
+    ]
+
+    for metric_name in metrics_with_requested_model:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert requested_model_label in labels, (
+            f"Metric {metric_name} should contain requested_model label"
+        )
 
 
 def test_route_normalization_for_responses_api():
@@ -266,6 +312,12 @@ def test_prometheus_metrics_use_normalized_routes():
 
     # Create a mock PrometheusLogger
     prometheus_logger = MagicMock()
+    # ``get_labels_for_metric`` reads ``_cached_metric_labels`` and
+    # ``label_filters`` off ``self``; default MagicMock attribute access
+    # returns Mocks that masquerade as a populated cache, so seed real
+    # containers before binding the real method.
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
     prometheus_logger.get_labels_for_metric = (
         PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
     )
@@ -309,6 +361,8 @@ def test_prometheus_label_value_sanitization():
     from unittest.mock import MagicMock
 
     prometheus_logger = MagicMock()
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
     prometheus_logger.get_labels_for_metric = (
         PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
     )
@@ -330,9 +384,9 @@ def test_prometheus_label_value_sanitization():
     )
 
     # U+2028 must be stripped
-    assert "\u2028" not in labels["requested_model"], (
-        f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
-    )
+    assert (
+        "\u2028" not in labels["requested_model"]
+    ), f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
     assert labels["requested_model"] == "claude-haiku-4-5-20251001"
 
     # Newlines must be replaced with spaces, quotes must be escaped

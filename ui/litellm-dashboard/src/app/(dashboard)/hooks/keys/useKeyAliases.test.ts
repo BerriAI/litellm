@@ -65,7 +65,7 @@ describe("useInfiniteKeyAliases", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, undefined);
+    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, undefined, undefined);
     expect(result.current.data?.pages[0]).toEqual(mockPage1);
   });
 
@@ -74,7 +74,7 @@ describe("useInfiniteKeyAliases", () => {
     renderHook(() => useInfiniteKeyAliases(25), { wrapper });
 
     await waitFor(() => {
-      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 25, undefined);
+      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 25, undefined, undefined);
     });
   });
 
@@ -83,7 +83,7 @@ describe("useInfiniteKeyAliases", () => {
     renderHook(() => useInfiniteKeyAliases(50, "my-alias"), { wrapper });
 
     await waitFor(() => {
-      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "my-alias");
+      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "my-alias", undefined);
     });
   });
 
@@ -128,9 +128,7 @@ describe("useInfiniteKeyAliases", () => {
   });
 
   it("should fetch the next page when fetchNextPage is called", async () => {
-    mockKeyAliasesCall
-      .mockResolvedValueOnce(mockPage1)
-      .mockResolvedValueOnce(mockPage2);
+    mockKeyAliasesCall.mockResolvedValueOnce(mockPage1).mockResolvedValueOnce(mockPage2);
 
     const wrapper = createWrapper();
     const { result } = renderHook(() => useInfiniteKeyAliases(2), { wrapper });
@@ -145,16 +143,16 @@ describe("useInfiniteKeyAliases", () => {
       expect(result.current.data?.pages).toHaveLength(2);
     });
 
-    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 2, 2, undefined);
+    expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 2, 2, undefined, undefined);
     expect(result.current.data?.pages[1]).toEqual(mockPage2);
   });
 
   it("should include search in query key so search changes refetch from page 1", async () => {
     const wrapper = createWrapper();
-    const { result, rerender } = renderHook(
-      ({ search }: { search?: string }) => useInfiniteKeyAliases(50, search),
-      { wrapper, initialProps: { search: undefined } },
-    );
+    const { result, rerender } = renderHook(({ search }: { search?: string }) => useInfiniteKeyAliases(50, search), {
+      wrapper,
+      initialProps: { search: undefined },
+    });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -171,7 +169,7 @@ describe("useInfiniteKeyAliases", () => {
     rerender({ search: "search-result" });
 
     await waitFor(() => {
-      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "search-result");
+      expect(mockKeyAliasesCall).toHaveBeenCalledWith("test-token", 1, 50, "search-result", undefined);
     });
   });
 });

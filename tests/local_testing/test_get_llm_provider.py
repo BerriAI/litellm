@@ -16,6 +16,7 @@ import pytest
 import litellm
 from litellm.types.router import LiteLLM_Params
 
+
 def test_get_llm_provider():
     _, response, _, _ = litellm.get_llm_provider(model="anthropic.claude-v2:1")
 
@@ -130,6 +131,7 @@ def test_default_api_base():
     from litellm.litellm_core_utils.get_llm_provider_logic import (
         _get_openai_compatible_provider_info,
     )
+    from litellm.types.utils import LlmProviders
 
     # Patch environment variable to remove API base if it's set
     with patch.dict(os.environ, {}, clear=True):
@@ -149,13 +151,13 @@ def test_default_api_base():
             if api_base is None:
                 continue
 
-            for other_provider in litellm.provider_list:
-                if other_provider != provider and provider != "{}_chat".format(
+            for other_provider in LlmProviders:
+                if other_provider.value != provider and provider != "{}_chat".format(
                     other_provider.value
                 ):
-                    if provider == "codestral" and other_provider == "mistral":
+                    if provider == "codestral" and other_provider.value == "mistral":
                         continue
-                    elif provider == "github" and other_provider == "azure":
+                    elif provider == "github" and other_provider.value == "azure":
                         continue
                     assert other_provider.value not in api_base.replace("/openai", "")
 
@@ -229,10 +231,10 @@ def test_nova_bedrock_converse():
 
 def test_bedrock_invoke_anthropic():
     model, custom_llm_provider, dynamic_api_key, api_base = litellm.get_llm_provider(
-        model="bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+        model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
     )
     assert custom_llm_provider == "bedrock"
-    assert model == "invoke/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    assert model == "invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
 @pytest.mark.parametrize("model", ["xai/grok-2-vision-latest", "grok-2-vision-latest"])
@@ -252,7 +254,9 @@ def test_xai_api_base(model):
     assert api_base == "https://api.x.ai/v1"
     assert dynamic_api_key == "xai-my-specialkey"
 
+
 # -------- Tests for force_use_litellm_proxy ---------
+
 
 def test_get_litellm_proxy_custom_llm_provider():
     """
@@ -262,16 +266,28 @@ def test_get_litellm_proxy_custom_llm_provider():
     expected_api_base = "http://localhost:8000"
     expected_api_key = "test_proxy_key"
 
-    with patch.dict(os.environ, {
-        "LITELLM_PROXY_API_BASE": expected_api_base,
-        "LITELLM_PROXY_API_KEY": expected_api_key
-    }, clear=True):
-        model, provider, key, base = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(model=test_model)
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_PROXY_API_BASE": expected_api_base,
+            "LITELLM_PROXY_API_KEY": expected_api_key,
+        },
+        clear=True,
+    ):
+        (
+            model,
+            provider,
+            key,
+            base,
+        ) = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(
+            model=test_model
+        )
 
     assert model == test_model
     assert provider == "litellm_proxy"
     assert key == expected_api_key
     assert base == expected_api_base
+
 
 def test_get_litellm_proxy_with_args_override_env_vars():
     """
@@ -280,24 +296,29 @@ def test_get_litellm_proxy_with_args_override_env_vars():
     test_model = "gpt-4"
     arg_api_base = "http://custom-proxy.com"
     arg_api_key = "custom_key_from_arg"
-    
+
     env_api_base = "http://env-proxy.com"
     env_api_key = "env_key"
 
-    with patch.dict(os.environ, {
-        "LITELLM_PROXY_API_BASE": env_api_base,
-        "LITELLM_PROXY_API_KEY": env_api_key
-    }, clear=True):
-        model, provider, key, base = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(
-            model=test_model,
-            api_base=arg_api_base,
-            api_key=arg_api_key
+    with patch.dict(
+        os.environ,
+        {"LITELLM_PROXY_API_BASE": env_api_base, "LITELLM_PROXY_API_KEY": env_api_key},
+        clear=True,
+    ):
+        (
+            model,
+            provider,
+            key,
+            base,
+        ) = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(
+            model=test_model, api_base=arg_api_base, api_key=arg_api_key
         )
 
     assert model == test_model
     assert provider == "litellm_proxy"
     assert key == arg_api_key
     assert base == arg_api_base
+
 
 def test_get_litellm_proxy_model_prefix_stripping():
     """
@@ -308,18 +329,31 @@ def test_get_litellm_proxy_model_prefix_stripping():
     expected_api_base = "http://localhost:4000"
     expected_api_key = "proxy_secret_key"
 
-    with patch.dict(os.environ, {
-        "LITELLM_PROXY_API_BASE": expected_api_base,
-        "LITELLM_PROXY_API_KEY": expected_api_key
-    }, clear=True):
-        model, provider, key, base = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(model=original_model)
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_PROXY_API_BASE": expected_api_base,
+            "LITELLM_PROXY_API_KEY": expected_api_key,
+        },
+        clear=True,
+    ):
+        (
+            model,
+            provider,
+            key,
+            base,
+        ) = litellm.LiteLLMProxyChatConfig().litellm_proxy_get_custom_llm_provider_info(
+            model=original_model
+        )
 
     assert model == expected_model
     assert provider == "litellm_proxy"
     assert key == expected_api_key
     assert base == expected_api_base
 
+
 # -------- Tests for get_llm_provider triggering use_litellm_proxy ---------
+
 
 def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true():
     """
@@ -330,19 +364,24 @@ def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true():
     proxy_api_base = "http://my-global-proxy.com"
     proxy_api_key = "global_proxy_key"
 
-    with patch.dict(os.environ, {
-        "USE_LITELLM_PROXY": "True",
-        "LITELLM_PROXY_API_BASE": proxy_api_base,
-        "LITELLM_PROXY_API_KEY": proxy_api_key
-    }, clear=True):
+    with patch.dict(
+        os.environ,
+        {
+            "USE_LITELLM_PROXY": "True",
+            "LITELLM_PROXY_API_BASE": proxy_api_base,
+            "LITELLM_PROXY_API_KEY": proxy_api_key,
+        },
+        clear=True,
+    ):
         model, provider, key, base = litellm.get_llm_provider(model=test_model_input)
-    
+
     print("get_llm_provider", model, provider, key, base)
 
     assert model == expected_model_output
     assert provider == "litellm_proxy"
     assert key == proxy_api_key
     assert base == proxy_api_base
+
 
 def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true_model_prefix():
     """
@@ -353,11 +392,15 @@ def test_get_llm_provider_LITELLM_PROXY_ALWAYS_true_model_prefix():
     proxy_api_base = "http://another-proxy.net"
     proxy_api_key = "another_key"
 
-    with patch.dict(os.environ, {
-        "USE_LITELLM_PROXY": "True",
-        "LITELLM_PROXY_API_BASE": proxy_api_base,
-        "LITELLM_PROXY_API_KEY": proxy_api_key
-    }, clear=True):
+    with patch.dict(
+        os.environ,
+        {
+            "USE_LITELLM_PROXY": "True",
+            "LITELLM_PROXY_API_BASE": proxy_api_base,
+            "LITELLM_PROXY_API_KEY": proxy_api_key,
+        },
+        clear=True,
+    ):
         model, provider, key, base = litellm.get_llm_provider(model=test_model_input)
 
     assert model == expected_model_output
@@ -371,24 +414,33 @@ def test_get_llm_provider_use_proxy_arg_true():
     Tests get_llm_provider uses litellm_proxy when use_proxy=True argument is passed.
     """
     test_model_input = "mistral/mistral-large"
-    expected_model_output = "mistral/mistral-large" # force_use_litellm_proxy keep the model name
+    expected_model_output = (
+        "mistral/mistral-large"  # force_use_litellm_proxy keep the model name
+    )
     proxy_api_base = "http://my-arg-proxy.com"
     proxy_api_key = "arg_proxy_key"
-    
+
     # Ensure LITELLM_PROXY_ALWAYS is not set or False
-    with patch.dict(os.environ, {
-        "LITELLM_PROXY_API_BASE": proxy_api_base,
-        "LITELLM_PROXY_API_KEY": proxy_api_key
-    }, clear=True): # clear=True removes LITELLM_PROXY_ALWAYS if it was set by other tests
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_PROXY_API_BASE": proxy_api_base,
+            "LITELLM_PROXY_API_KEY": proxy_api_key,
+        },
+        clear=True,
+    ):  # clear=True removes LITELLM_PROXY_ALWAYS if it was set by other tests
         model, provider, key, base = litellm.get_llm_provider(
-            model=test_model_input, 
-            litellm_params=LiteLLM_Params(use_litellm_proxy=True, model=test_model_input)
+            model=test_model_input,
+            litellm_params=LiteLLM_Params(
+                use_litellm_proxy=True, model=test_model_input
+            ),
         )
 
     assert model == expected_model_output
     assert provider == "litellm_proxy"
     assert key == proxy_api_key
     assert base == proxy_api_base
+
 
 def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     """
@@ -397,7 +449,7 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     """
     test_model_input = "anthropic/claude-3-opus"
     expected_model_output = "anthropic/claude-3-opus"
-    
+
     arg_api_base = "http://specific-proxy-endpoint.org"
     arg_api_key = "specific_key_for_call"
 
@@ -405,18 +457,130 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     env_proxy_api_base = "http://env-default-proxy.com"
     env_proxy_api_key = "env_default_key"
 
-    with patch.dict(os.environ, {
-        "LITELLM_PROXY_API_BASE": env_proxy_api_base,
-        "LITELLM_PROXY_API_KEY": env_proxy_api_key
-    }, clear=True):
+    with patch.dict(
+        os.environ,
+        {
+            "LITELLM_PROXY_API_BASE": env_proxy_api_base,
+            "LITELLM_PROXY_API_KEY": env_proxy_api_key,
+        },
+        clear=True,
+    ):
         model, provider, key, base = litellm.get_llm_provider(
-            model=test_model_input, 
+            model=test_model_input,
             api_base=arg_api_base,
             api_key=arg_api_key,
-            litellm_params=LiteLLM_Params(use_litellm_proxy=True, model=test_model_input)
+            litellm_params=LiteLLM_Params(
+                use_litellm_proxy=True, model=test_model_input
+            ),
         )
 
     assert model == expected_model_output
     assert provider == "litellm_proxy"
     assert key == arg_api_key  # Should use the argument key
-    assert base == arg_api_base # Should use the argument base
+    assert base == arg_api_base  # Should use the argument base
+
+
+# -------- Tests for Claude model pattern matching ---------
+
+
+class TestClaudeModelPatternMatching:
+    """
+    Tests for _matches_claude_model_pattern which routes future Claude models
+    to the Anthropic provider without requiring model_prices_and_context_window.json updates.
+    """
+
+    def test_matches_claude_opus_pattern(self):
+        """Test claude-opus-X-Y pattern matching."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-opus-4-7") is True
+        assert _matches_claude_model_pattern("claude-opus-4-9") is True
+        assert _matches_claude_model_pattern("claude-opus-5-1") is True
+
+    def test_matches_claude_sonnet_pattern(self):
+        """Test claude-sonnet-X-Y pattern matching."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-sonnet-4-6") is True
+        assert _matches_claude_model_pattern("claude-sonnet-5-0") is True
+
+    def test_matches_claude_haiku_pattern(self):
+        """Test claude-haiku-X-Y pattern matching."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-haiku-4-5") is True
+        assert _matches_claude_model_pattern("claude-haiku-5-0") is True
+
+    def test_matches_claude_with_date_suffix(self):
+        """Test claude model pattern with date suffix."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-opus-5-1-20270101") is True
+        assert _matches_claude_model_pattern("claude-sonnet-4-7-20260601") is True
+        assert _matches_claude_model_pattern("claude-haiku-4-6-20251201") is True
+
+    def test_matches_unknown_tier_name(self):
+        """A tier segment we don't know about today should still route to anthropic.
+
+        The pattern intentionally accepts any ``[a-z]+`` tier rather than a
+        hard-coded ``opus|sonnet|haiku`` list so a future tier (e.g. a new
+        "mini" line) is covered without a code change. This guards against a
+        regression back to hard-coded tier names.
+        """
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-mini-4-5") is True
+        assert _matches_claude_model_pattern("claude-neptune-6-0") is True
+
+    def test_rejects_non_claude_models(self):
+        """Test that non-Claude models are not matched."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("gpt-4") is False
+        assert _matches_claude_model_pattern("mistral-large") is False
+        assert _matches_claude_model_pattern("llama-3") is False
+
+    def test_rejects_invalid_claude_patterns(self):
+        """Test that invalid Claude model patterns are not matched."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        # Wrong order (variant before name)
+        assert _matches_claude_model_pattern("claude-4-opus") is False
+        # Missing version numbers
+        assert _matches_claude_model_pattern("claude-opus") is False
+        # Old format (claude-3-opus instead of claude-opus-3)
+        assert _matches_claude_model_pattern("claude-3-opus-20240229") is False
+
+    def test_get_llm_provider_future_claude_model(self):
+        """Test that get_llm_provider routes future Claude models to anthropic."""
+        model, custom_llm_provider, dynamic_api_key, api_base = (
+            litellm.get_llm_provider(
+                model="claude-opus-4-9",
+            )
+        )
+        assert custom_llm_provider == "anthropic"
+        assert model == "claude-opus-4-9"
+
+    def test_get_llm_provider_future_claude_model_with_date(self):
+        """Test that get_llm_provider routes future Claude models with date suffix."""
+        model, custom_llm_provider, dynamic_api_key, api_base = (
+            litellm.get_llm_provider(
+                model="claude-opus-5-1-20270101",
+            )
+        )
+        assert custom_llm_provider == "anthropic"
+        assert model == "claude-opus-5-1-20270101"

@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { Modal, Input, Switch, message } from "antd";
+import { Modal, Input, Switch } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   KeyOutlined,
   LockOutlined,
@@ -46,7 +47,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
 
   const handleAuthorize = async () => {
     if (!apiKey.trim()) {
-      message.error("Please enter your API key");
+      MessageManager.error("Please enter your API key");
       return;
     }
     setLoading(true);
@@ -63,25 +64,18 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
         const err = await response.json();
         throw new Error(err?.detail?.error || "Failed to save credential");
       }
-      message.success(`Connected to ${serverDisplayName}`);
+      MessageManager.success(`Connected to ${serverDisplayName}`);
       onSuccess(server.server_id);
       handleClose();
     } catch (e: any) {
-      message.error(e.message || "Failed to connect");
+      MessageManager.error(e.message || "Failed to connect");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Modal
-      open={open}
-      onCancel={handleClose}
-      footer={null}
-      width={480}
-      closeIcon={null}
-      className="byok-modal"
-    >
+    <Modal open={open} onCancel={handleClose} footer={null} width={480} closeIcon={null} className="byok-modal">
       <div className="relative p-2">
         {/* Step dots + close */}
         <div className="flex items-center justify-between mb-6">
@@ -118,9 +112,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
             </div>
 
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Connect {serverDisplayName}</h2>
-            <p className="text-gray-500 mb-6">
-              LiteLLM needs access to {serverDisplayName} to complete your request.
-            </p>
+            <p className="text-gray-500 mb-6">LiteLLM needs access to {serverDisplayName} to complete your request.</p>
 
             {/* How it works */}
             <div className="bg-gray-50 rounded-xl p-4 text-left mb-4">
@@ -146,12 +138,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
               <div className="bg-gray-50 rounded-xl p-4 text-left mb-6">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-green-500">
-                    <path
-                      d="M12 2L12 22M2 12L22 12"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    />
+                    <path d="M12 2L12 22M2 12L22 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                     <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" />
                   </svg>
                   Requested Access
@@ -173,10 +160,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
             >
               Continue to Authentication <ArrowRightOutlined />
             </button>
-            <button
-              onClick={handleClose}
-              className="mt-3 w-full text-gray-400 hover:text-gray-600 text-sm py-2"
-            >
+            <button onClick={handleClose} className="mt-3 w-full text-gray-400 hover:text-gray-600 text-sm py-2">
               Cancel
             </button>
           </div>
@@ -188,14 +172,10 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
             </div>
 
             <h2 className="text-2xl font-bold text-gray-900 mb-2">Provide API Key</h2>
-            <p className="text-gray-500 mb-6">
-              Enter your {serverDisplayName} API key to authorize this connection.
-            </p>
+            <p className="text-gray-500 mb-6">Enter your {serverDisplayName} API key to authorize this connection.</p>
 
             <div className="mb-4">
-              <label className="block text-sm font-semibold text-gray-800 mb-2">
-                {serverDisplayName} API Key
-              </label>
+              <label className="block text-sm font-semibold text-gray-800 mb-2">{serverDisplayName} API Key</label>
               <Input.Password
                 placeholder="Enter your API key"
                 value={apiKey}

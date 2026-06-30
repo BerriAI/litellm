@@ -18,6 +18,7 @@ from openai.types.file_deleted import FileDeleted
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -91,9 +92,7 @@ class ManusFilesConfig(BaseFilesConfig):
         )
         return headers
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAICreateFileRequestOptionalParams]:
         """
         Return supported OpenAI file creation parameters for Manus.
         Manus supports the standard 'purpose' parameter.
@@ -128,12 +127,7 @@ class ManusFilesConfig(BaseFilesConfig):
         Returns:
             str: The full URL for the Manus /v1/files endpoint
         """
-        api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret_str("MANUS_API_BASE")
-            or MANUS_API_BASE
-        )
+        api_base = api_base or litellm.api_base or get_secret_str("MANUS_API_BASE") or MANUS_API_BASE
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")
@@ -192,11 +186,7 @@ class ManusFilesConfig(BaseFilesConfig):
         )
 
         # Get API key
-        api_key = (
-            litellm_params.get("api_key")
-            or litellm.api_key
-            or get_secret_str("MANUS_API_KEY")
-        )
+        api_key = litellm_params.get("api_key") or litellm.api_key or get_secret_str("MANUS_API_KEY")
 
         if not api_key:
             raise ValueError(
@@ -306,7 +296,8 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}", {}
 
     def transform_retrieve_file_response(
         self,
@@ -336,7 +327,8 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}", {}
 
     def transform_delete_file_response(
         self,
@@ -422,7 +414,8 @@ class ManusFilesConfig(BaseFilesConfig):
             optional_params=optional_params,
             litellm_params=litellm_params,
         )
-        return f"{api_base}/{file_id}/content", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base}/{encoded_file_id}/content", {}
 
     def transform_file_content_response(
         self,

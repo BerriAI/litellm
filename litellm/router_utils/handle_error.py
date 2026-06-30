@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from litellm._logging import verbose_router_logger
+from litellm._logging import redact_secrets, verbose_router_logger
 from litellm.constants import MAX_EXCEPTION_MESSAGE_LENGTH
 from litellm.router_utils.cooldown_handlers import (
     _async_get_cooldown_deployments_with_debug_info,
@@ -57,6 +57,9 @@ async def send_llm_exception_alert(
         exception_str += litellm_debug_info
     exception_str += f"\n\n{error_traceback_str[:MAX_EXCEPTION_MESSAGE_LENGTH]}"
 
+    # Redact secrets before sending to external service (Slack / MS Teams)
+    exception_str = redact_secrets(exception_str)
+
     await litellm_router_instance.slack_alerting_logger.send_alert(
         message=f"LLM API call failed: `{exception_str}`",
         level="High",
@@ -71,9 +74,7 @@ async def async_raise_no_deployment_exception(
     """
     Raises a RouterRateLimitError if no deployment is found for the given model.
     """
-    verbose_router_logger.info(
-        f"get_available_deployment for model: {model}, No deployment available"
-    )
+    verbose_router_logger.info(f"get_available_deployment for model: {model}, No deployment available")
     model_ids = litellm_router_instance.get_model_ids(model_name=model)
     _cooldown_time = litellm_router_instance.cooldown_cache.get_min_cooldown(
         model_ids=model_ids, parent_otel_span=parent_otel_span

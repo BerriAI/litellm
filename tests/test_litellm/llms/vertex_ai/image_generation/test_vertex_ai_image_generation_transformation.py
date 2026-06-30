@@ -67,7 +67,9 @@ class TestVertexAIGeminiImageGenerationConfig:
 
     def test_get_supported_openai_params_includes_native_gemini_params(self):
         """Test that native Gemini imageConfig params are supported"""
-        supported = self.config.get_supported_openai_params("gemini-3-pro-image-preview")
+        supported = self.config.get_supported_openai_params(
+            "gemini-3-pro-image-preview"
+        )
         assert "aspectRatio" in supported
         assert "aspect_ratio" in supported
         assert "imageSize" in supported
@@ -137,6 +139,44 @@ class TestVertexAIGeminiImageGenerationConfig:
         )
         assert request["generationConfig"]["imageConfig"]["imageSize"] == "4K"
 
+    def test_map_openai_params_web_search_options(self):
+        """Test web_search_options maps to googleSearch tool"""
+        result = self.config.map_openai_params(
+            {"web_search_options": {}}, {}, "gemini-3.1-flash-image-preview", False
+        )
+        assert result["tools"] == [{"googleSearch": {}}]
+
+    def test_transform_image_generation_request_with_web_search_tools(self):
+        """Test request transformation includes googleSearch tools"""
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of the latest iPhone",
+            optional_params={"tools": [{"googleSearch": {}}]},
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleSearch": {}}]
+
+    def test_transform_image_generation_request_forwards_tool_config(self):
+        """Test request transformation forwards toolConfig side-effects from tool mapping"""
+        mapped = self.config.map_openai_params(
+            {"tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]},
+            {},
+            "gemini-3.1-flash-image-preview",
+            False,
+        )
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of a coffee shop nearby",
+            optional_params=mapped,
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleMaps": {}}]
+        assert request["toolConfig"] == {
+            "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
+        }
+
     def test_transform_image_generation_request_with_candidate_count(self):
         """Test request transformation with candidate_count"""
         request = self.config.transform_image_generation_request(
@@ -188,11 +228,11 @@ class TestVertexAIGeminiImageGenerationConfig:
                     {
                         "modality": "IMAGE",
                         "tokenCount": 39,
-                    }
+                    },
                 ],
                 "candidatesTokenCount": 17,
                 "totalTokenCount": 110,
-            }
+            },
         }
         mock_response.headers = {}
 
@@ -218,7 +258,6 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert result.usage.input_tokens_details.image_tokens == 39
         assert result.usage.output_tokens == 17
         assert result.usage.total_tokens == 110
-
 
     def test_transform_image_generation_response_multiple_images(self):
         """Test response transformation with multiple images"""
@@ -305,7 +344,55 @@ class TestVertexAIGeminiImageGenerationConfig:
 
         assert len(result.data) == 1
         assert result.data[0].b64_json == "base64_encoded_image_data"
-        assert result.data[0].provider_specific_fields["thought_signature"] == "test_signature_abc123"
+        assert (
+            result.data[0].provider_specific_fields["thought_signature"]
+            == "test_signature_abc123"
+        )
+
+    def test_transform_image_generation_response_tracks_web_search_requests(self):
+        """Grounding queries are carried onto usage so search spend can be billed"""
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "base64_encoded_image_data",
+                                }
+                            }
+                        ]
+                    },
+                    "groundingMetadata": {
+                        "webSearchQueries": ["eiffel tower", "paris skyline"]
+                    },
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 93,
+                "candidatesTokenCount": 17,
+                "totalTokenCount": 110,
+            },
+        }
+        mock_response.headers = {}
+
+        from litellm.types.utils import ImageResponse
+
+        result = self.config.transform_image_generation_response(
+            model="gemini-2.5-flash-image",
+            raw_response=mock_response,
+            model_response=ImageResponse(),
+            logging_obj=MagicMock(),
+            request_data={},
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.usage.web_search_requests == 2
 
 
 class TestVertexAIImagenImageGenerationConfig:
@@ -369,14 +456,26 @@ class TestVertexAIImagenImageGenerationConfig:
         assert request["parameters"]["sampleCount"] == 2
         assert request["parameters"]["aspectRatio"] == "16:9"
 
+    def test_transform_image_generation_request_labels_from_metadata(self):
+        """Billing labels from litellm_params.metadata.requester_metadata on predict body."""
+        request = self.config.transform_image_generation_request(
+            model="imagegeneration@006",
+            prompt="A cat",
+            optional_params={},
+            litellm_params={
+                "metadata": {"requester_metadata": {"team": "platform", "env": "prod"}}
+            },
+            headers={},
+        )
+        assert request["labels"] == {"team": "platform", "env": "prod"}
+        assert "labels" not in request["parameters"]
+
     def test_transform_image_generation_response(self):
         """Test response transformation"""
         mock_response = MagicMock(spec=httpx.Response)
         mock_response.status_code = 200
         mock_response.json.return_value = {
-            "predictions": [
-                {"bytesBase64Encoded": "base64_encoded_image_data"}
-            ]
+            "predictions": [{"bytesBase64Encoded": "base64_encoded_image_data"}]
         }
         mock_response.headers = {}
 
@@ -453,9 +552,7 @@ class TestGetVertexAIImageGenerationConfig:
         config = get_vertex_ai_image_generation_config("imagen-4.0-generate-001")
         assert isinstance(config, VertexAIImagenImageGenerationConfig)
 
-        config = get_vertex_ai_image_generation_config(
-            "vertex_ai/imagegeneration@006"
-        )
+        config = get_vertex_ai_image_generation_config("vertex_ai/imagegeneration@006")
         assert isinstance(config, VertexAIImagenImageGenerationConfig)
 
     def test_get_non_gemini_model_config(self):
@@ -474,12 +571,14 @@ class TestVertexAIImageGenerationIntegration:
     def test_gemini_image_generation_config_validation(self):
         """Test that Gemini config can validate environment"""
         config = VertexAIGeminiImageGenerationConfig()
-        with patch.object(
-            config, "_resolve_vertex_project", return_value="test-project"
-        ), patch.object(
-            config, "_resolve_vertex_location", return_value="us-central1"
-        ), patch.object(
-            config, "_ensure_access_token", return_value=("token", None)
+        with (
+            patch.object(
+                config, "_resolve_vertex_project", return_value="test-project"
+            ),
+            patch.object(
+                config, "_resolve_vertex_location", return_value="us-central1"
+            ),
+            patch.object(config, "_ensure_access_token", return_value=("token", None)),
         ):
             headers = config.validate_environment(
                 headers={},
@@ -497,12 +596,14 @@ class TestVertexAIImageGenerationIntegration:
     def test_imagen_image_generation_config_validation(self):
         """Test that Imagen config can validate environment"""
         config = VertexAIImagenImageGenerationConfig()
-        with patch.object(
-            config, "_resolve_vertex_project", return_value="test-project"
-        ), patch.object(
-            config, "_resolve_vertex_location", return_value="us-central1"
-        ), patch.object(
-            config, "_ensure_access_token", return_value=("token", None)
+        with (
+            patch.object(
+                config, "_resolve_vertex_project", return_value="test-project"
+            ),
+            patch.object(
+                config, "_resolve_vertex_location", return_value="us-central1"
+            ),
+            patch.object(config, "_ensure_access_token", return_value=("token", None)),
         ):
             headers = config.validate_environment(
                 headers={},
@@ -548,4 +649,3 @@ class TestVertexAIImageGenerationIntegration:
         assert "us-central1" in url
         assert "imagegeneration@006" in url
         assert "predict" in url
-

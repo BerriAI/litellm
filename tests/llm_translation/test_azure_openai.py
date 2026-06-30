@@ -5,6 +5,7 @@ sys.path.insert(
     0, os.path.abspath("../../")
 )  # Adds the parent directory to the system path
 
+import httpx
 import pytest
 from litellm.llms.azure.common_utils import process_azure_headers
 from httpx import Headers
@@ -174,14 +175,14 @@ def test_azure_extra_headers(input, call_type, header_value):
     "api_base, model, expected_endpoint",
     [
         (
-            "https://my-endpoint-sweden-berri992.openai.azure.com",
+            "https://fake-azure-endpoint.invalid",
             "dall-e-3-test",
-            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/dall-e-3-test/images/generations?api-version=2023-12-01-preview",
+            "https://fake-azure-endpoint.invalid/openai/deployments/dall-e-3-test/images/generations?api-version=2023-12-01-preview",
         ),
         (
-            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/my-custom-deployment",
+            "https://fake-azure-endpoint.invalid/openai/deployments/my-custom-deployment",
             "dall-e-3",
-            "https://my-endpoint-sweden-berri992.openai.azure.com/openai/deployments/my-custom-deployment/images/generations?api-version=2023-12-01-preview",
+            "https://fake-azure-endpoint.invalid/openai/deployments/my-custom-deployment/images/generations?api-version=2023-12-01-preview",
         ),
     ],
 )
@@ -208,8 +209,8 @@ class TestAzureEmbedding(BaseLLMEmbeddingTest):
     def get_base_embedding_call_args(self) -> dict:
         return {
             "model": "azure/text-embedding-ada-002",
-            "api_key": os.getenv("AZURE_API_KEY"),
-            "api_base": os.getenv("AZURE_API_BASE"),
+            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": os.getenv("AZURE_AI_API_BASE"),
         }
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
@@ -261,7 +262,7 @@ def test_azure_openai_gpt_4o_naming(monkeypatch):
 
     client = AzureOpenAI(
         api_key="test-api-key",
-        base_url="https://my-endpoint-sweden-berri992.openai.azure.com",
+        base_url="https://fake-azure-endpoint.invalid",
         api_version="2023-12-01-preview",
     )
 
@@ -618,8 +619,8 @@ def test_azure_safety_result():
 
     response = completion(
         model="azure/gpt-4.1-mini",
-        api_key=os.getenv("AZURE_API_KEY"),
-        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
         api_version="2024-12-01-preview",
         messages=[{"role": "user", "content": "Hello world"}],
     )
@@ -671,6 +672,8 @@ def test_completion_azure_deployment_id():
     )
     # Add any assertions here to check the response
     print(response)
+
+
 def test_azure_with_content_safety_error():
     """
     Verify user can access innererror from the Azure OpenAI exception
@@ -679,55 +682,55 @@ def test_azure_with_content_safety_error():
     from litellm.exceptions import ContentPolicyViolationError
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
     from unittest.mock import MagicMock
-    
-    mock_exception = Exception("The response was filtered due to the prompt triggering Azure OpenAI's content management policy")
+
+    mock_exception = Exception(
+        "The response was filtered due to the prompt triggering Azure OpenAI's content management policy"
+    )
     mock_exception.body = {
         "innererror": {
             "code": "ResponsibleAIPolicyViolation",
             "content_filter_result": {
-                "hate": {
-                    "filtered": False,
-                    "severity": "safe"
-                },
-                "jailbreak": {
-                    "filtered": False,
-                    "detected": False
-                },
-                "self_harm": {
-                    "filtered": False,
-                    "severity": "safe"
-                },
-                "sexual": {
-                    "filtered": False,
-                    "severity": "safe"
-                },
-                "violence": {
-                    "filtered": True,
-                    "severity": "high"
-                }
-            }
+                "hate": {"filtered": False, "severity": "safe"},
+                "jailbreak": {"filtered": False, "detected": False},
+                "self_harm": {"filtered": False, "severity": "safe"},
+                "sexual": {"filtered": False, "severity": "safe"},
+                "violence": {"filtered": True, "severity": "high"},
+            },
         }
     }
-    
+
     mock_response = MagicMock()
     mock_response.status_code = 400
     mock_exception.response = mock_response
-    
+
     with pytest.raises(ContentPolicyViolationError) as exc_info:
         exception_type(
             model="azure/gpt-4o-new-test",
             original_exception=mock_exception,
-            custom_llm_provider="azure"
+            custom_llm_provider="azure",
         )
-    
+
     e = exc_info.value
     print("got exception=", e)
     assert e.provider_specific_fields is not None
     print("got provider_specific_fields=", e.provider_specific_fields)
     assert e.provider_specific_fields.get("innererror") is not None
-    assert e.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
-    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["filtered"] is True
-    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"
+    assert (
+        e.provider_specific_fields["innererror"]["code"]
+        == "ResponsibleAIPolicyViolation"
+    )
+    assert (
+        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
+            "filtered"
+        ]
+        is True
+    )
+    assert (
+        e.provider_specific_fields["innererror"]["content_filter_result"]["violence"][
+            "severity"
+        ]
+        == "high"
+    )
 
 
 def test_azure_openai_with_prompt_cache_key():
@@ -737,8 +740,8 @@ def test_azure_openai_with_prompt_cache_key():
     litellm._turn_on_debug()
     response = litellm.completion(
         model="azure/gpt-4.1-mini",
-        api_key=os.getenv("AZURE_API_KEY"),
-        api_base=os.getenv("AZURE_API_BASE"),
+        api_key=os.getenv("AZURE_AI_API_KEY"),
+        api_base=os.getenv("AZURE_AI_API_BASE"),
         api_version="2024-12-01-preview",
         messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
         prompt_cache_key="test_streaming_azure_openai",
