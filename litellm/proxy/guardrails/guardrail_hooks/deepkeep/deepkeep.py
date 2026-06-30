@@ -374,7 +374,7 @@ class DeepKeepGuardrail(CustomGuardrail):
             )
         except httpx.RequestError as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj, is_unreachable=False)
 
     @staticmethod
