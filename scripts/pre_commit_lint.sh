@@ -71,6 +71,19 @@ EOF
 
 status=0
 
+if [ -n "$litellm_py_files" ]; then
+    echo "pre-commit: linting Python (make lint)"
+    make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; status=1; }
+    # `make lint` format-checks files in origin/base...HEAD, which at pre-commit time
+    # predates the staged change, so format-check the staged litellm files directly to
+    # cover a brand-new commit before it lands.
+    if [ -n "$fmt_files" ]; then
+        echo "pre-commit: ruff format --check (staged litellm files)"
+        printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check --exclude '/enterprise/' \
+            || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; status=1; }
+    fi
+fi
+
 if [ -n "$ui_prettier_files" ] || [ -n "$ui_eslint_files" ]; then
     echo "pre-commit: linting dashboard (prettier + eslint + lint budgets)"
     lint_dashboard || { echo "✗ Dashboard lint failed. See above; format with: (cd ui/litellm-dashboard && npm run format)." >&2; status=1; }
@@ -93,22 +106,6 @@ if [ -n "$spec_files" ]; then
     else
         echo "✗ Could not regenerate API types (npm run gen:api failed)." >&2
         status=1
-    fi
-fi
-
-# Python last: `make lint` -> install-dev runs `uv sync --frozen`, which prunes the
-# proxy deps (prisma, websockets, ...) the gen:api block above needs, so it must run
-# after that block, not before.
-if [ -n "$litellm_py_files" ]; then
-    echo "pre-commit: linting Python (make lint)"
-    make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; status=1; }
-    # `make lint` format-checks files in origin/base...HEAD, which at pre-commit time
-    # predates the staged change, so format-check the staged litellm files directly to
-    # cover a brand-new commit before it lands.
-    if [ -n "$fmt_files" ]; then
-        echo "pre-commit: ruff format --check (staged litellm files)"
-        printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check --exclude '/enterprise/' \
-            || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; status=1; }
     fi
 fi
 

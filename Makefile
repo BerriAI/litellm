@@ -8,7 +8,8 @@
 	lint-basedpyright lint-basedpyright-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety pre-commit
+	install-helm-unittest check-circular-imports check-import-safety pre-commit \
+	lint-install lint-fetch-base
 
 # Default target
 help:
@@ -57,8 +58,11 @@ info:
 	@echo "UV: $(UV)"
 
 # Installation targets
+# --inexact: sync the locked deps without pruning anything already installed, so running
+# a lint/format target doesn't tear the proxy extras (prisma, websockets, ...) out from
+# under a dev's venv (CI installs its own env per job, so it is unaffected by this).
 install-dev:
-	$(UV) sync --frozen
+	$(UV) sync --inexact --frozen
 
 install-proxy-dev:
 	$(UV) sync --frozen --group proxy-dev --extra proxy
@@ -95,6 +99,15 @@ format-check: install-dev
 # trip instead of each re-fetching when chained from `lint`.
 lint-fetch-base:
 	git fetch origin litellm_internal_staging
+
+# The lint environment test-linting.yml installs: the proxy-dev group plus a generated
+# Prisma client, so basedpyright resolves the same modules CI does (without the generated
+# client the DB wrappers typed against it degrade to Unknown and the budget drifts from
+# CI's). --inexact so it tops up the venv instead of pruning the proxy extras gen:api and
+# the running proxy need.
+lint-install:
+	$(UV) sync --inexact --frozen --group proxy-dev
+	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
 
 # Diff-scoped format check, identical to test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
@@ -177,11 +190,13 @@ check-import-safety: install-dev
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting, isomorphic to test-linting.yml's lint job so a local pass means a
-# green CI lint: diff-scoped ruff format check, whole-tree ruff check, the
-# strict-rule / type-discipline / basedpyright budgets as a delta vs the base, then the
-# circular-import and import-safety checks. Steps that compare against the base resolve
-# it the same way CI does (merge-base with origin/litellm_internal_staging).
-lint: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright check-circular-imports check-import-safety
+# green CI lint: it installs the same env (proxy-dev + generated Prisma client) and then
+# runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
+# type-discipline / basedpyright budgets as a delta vs the base, then the circular-import
+# and import-safety checks. Steps that compare against the base resolve it the same way CI
+# does (merge-base with origin/litellm_internal_staging). lint-install is first so the
+# Prisma client exists before basedpyright runs.
+lint: lint-install lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
