@@ -2117,6 +2117,16 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if standard_logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
 
+            # response_obj is Optional[Any]: non-LLM call types (e.g. management
+            # list endpoints which return a list, or MCP tool calls which return a
+            # CallToolResult) pass a non-mapping value here. The response-derived
+            # attributes below call response_obj.get(...), which raises
+            # AttributeError on those types and fails the whole tracing callback
+            # (once per such request). Drop it to None so those attributes are
+            # simply skipped instead.
+            if response_obj is not None and not callable(getattr(response_obj, "get", None)):
+                response_obj = None
+
             # https://github.com/open-telemetry/semantic-conventions/blob/main/model/registry/gen-ai.yaml
             # Following Conventions here: https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
             #############################################
@@ -2464,6 +2474,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         """
         Safely sets an attribute on the span, ensuring the value is a primitive type.
         """
+        # Skip writes to a span that has already ended. The OTel SDK logs a
+        # "Setting attribute on ended span" warning for every such call, which
+        # floods logs (and burns CPU/IO) when async success/failure logging races
+        # the request span's end(). Writing to an ended span is a no-op anyway.
+        if hasattr(span, "is_recording") and not span.is_recording():
+            return
         primitive_value = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
