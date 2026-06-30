@@ -41,9 +41,7 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
     ) -> Dict[str, Any]:
         mcp_tool_name = data.get("mcp_tool_name") or data.get("name")
         mcp_arguments = data.get("mcp_arguments") or data.get("arguments")
-        mcp_tool_description = data.get("mcp_tool_description") or data.get(
-            "description"
-        )
+        mcp_tool_description = data.get("mcp_tool_description") or data.get("description")
         if mcp_arguments is None or not isinstance(mcp_arguments, dict):
             mcp_arguments = {}
 

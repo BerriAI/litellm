@@ -31,15 +31,20 @@ class OAuthToken:
     with each mode); it is never minted into a header directly. ``repr`` masks both secrets so a
     stray log line cannot leak them (the values are still plain ``str`` for the header path, since
     ``SecretStr`` resolves as unknown under this repo's basedpyright).
+
+    ``scopes`` is the recorded grant. A refresh response that omits ``scope`` (RFC 6749 §5.1: an
+    omitted ``scope`` means unchanged) carries the prior value forward, so a refresh never silently
+    drops it; the resolver itself does not read it.
     """
 
     access_token: str
     expires_at: float | None = None
     refresh_token: str | None = None
+    scopes: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         has_refresh = self.refresh_token is not None
-        return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh})"
+        return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh}, scopes={self.scopes!r})"
 
 
 class TokenStoreUnavailable(Exception):
@@ -77,9 +82,7 @@ class TokenRefresher(Protocol):
     are not derivable from ``token``, so the seam threads them alongside it.
     """
 
-    async def refresh(
-        self, user_id: str, server_id: str, token: OAuthToken
-    ) -> OAuthToken | None: ...
+    async def refresh(self, user_id: str, server_id: str, token: OAuthToken) -> OAuthToken | None: ...
 
 
 class TokenCacheBackend(Protocol):
@@ -91,9 +94,7 @@ class TokenCacheBackend(Protocol):
 
     async def get(self, user_id: str, server_id: str) -> OAuthToken | None: ...
 
-    async def set(
-        self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float
-    ) -> None: ...
+    async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None: ...
 
     async def delete(self, user_id: str, server_id: str) -> None: ...
 
@@ -101,9 +102,7 @@ class TokenCacheBackend(Protocol):
 class InMemoryTokenCacheBackend:
     """Per-process token cache: a bounded dict with wall-clock TTLs (the default backend)."""
 
-    def __init__(
-        self, *, max_size: int = 4096, clock: Callable[[], float] = time.time
-    ) -> None:
+    def __init__(self, *, max_size: int = 4096, clock: Callable[[], float] = time.time) -> None:
         self._max_size = max_size
         self._clock = clock
         self._cache: dict[tuple[str, str], tuple[OAuthToken, float]] = {}
@@ -119,9 +118,7 @@ class InMemoryTokenCacheBackend:
         self._cache.pop(key, None)
         return None
 
-    async def set(
-        self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float
-    ) -> None:
+    async def set(self, user_id: str, server_id: str, token: OAuthToken, ttl_seconds: float) -> None:
         key = (user_id, server_id)
         if key not in self._cache and len(self._cache) >= self._max_size:
             # Evict the oldest entry (insertion order), rather than clearing the whole cache and
@@ -159,15 +156,11 @@ class CachedOAuthTokenStore:
         self._default_ttl_seconds = default_ttl_seconds
         self._expiry_skew_seconds = expiry_skew_seconds
         self._clock = clock
-        self._backend: TokenCacheBackend = backend or InMemoryTokenCacheBackend(
-            max_size=max_size, clock=clock
-        )
+        self._backend: TokenCacheBackend = backend or InMemoryTokenCacheBackend(max_size=max_size, clock=clock)
 
     def _ttl(self, token: OAuthToken) -> float:
         if token.expires_at is not None:
-            return max(
-                0.0, token.expires_at - self._expiry_skew_seconds - self._clock()
-            )
+            return max(0.0, token.expires_at - self._expiry_skew_seconds - self._clock())
         return self._default_ttl_seconds
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
@@ -263,15 +256,10 @@ class RefreshingTokenStore:
         self._refresher = refresher
         self._expiry_skew_seconds = expiry_skew_seconds
         self._clock = clock
-        self._coordinator: RefreshCoordinator = (
-            coordinator or InProcessRefreshCoordinator()
-        )
+        self._coordinator: RefreshCoordinator = coordinator or InProcessRefreshCoordinator()
 
     def _is_expired(self, token: OAuthToken) -> bool:
-        return (
-            token.expires_at is not None
-            and self._clock() >= token.expires_at - self._expiry_skew_seconds
-        )
+        return token.expires_at is not None and self._clock() >= token.expires_at - self._expiry_skew_seconds
 
     async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
         token = await self._inner.fetch(user_id, server_id)
@@ -284,9 +272,18 @@ class RefreshingTokenStore:
                 return latest_token
             return await self._refresher.refresh(user_id, server_id, latest_token)
 
+        async def reread_fresh_token() -> OAuthToken | None:
+            # A loser re-reads what the winner persisted. If the winner's refresh failed, the store
+            # still holds the expired token; surface None (-> challenge) like the winner did rather
+            # than the stale bearer the upstream would 401.
+            latest_token = await self._inner.fetch(user_id, server_id)
+            if latest_token is None or self._is_expired(latest_token):
+                return None
+            return latest_token
+
         return await self._coordinator.run(
             user_id,
             server_id,
             refresh=refresh_latest_token,
-            reread=lambda: self._inner.fetch(user_id, server_id),
+            reread=reread_fresh_token,
         )

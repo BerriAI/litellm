@@ -158,6 +158,148 @@ def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
     )
 
 
+def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_drops_server_tool_use():
+    """
+    Regression: on the Anthropic /v1/messages sync cost path the response is the raw
+    Anthropic dict while the reconstructed OpenAI-shape Usage drops server_tool_use.
+    The web-search fee must still be charged by reading the count off the raw dict,
+    and the passed-in Usage must not be mutated.
+    """
+    from litellm.types.utils import Usage
+
+    model = "claude-3-7-sonnet-20250219"
+    web_search_requests = 3
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "server_tool_use": {"web_search_requests": web_search_requests},
+        },
+    }
+    usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    assert getattr(usage, "server_tool_use", None) is None
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=raw_response,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+
+    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    assert cost == per_query_cost * web_search_requests
+    assert cost > 0.0
+    assert getattr(usage, "server_tool_use", None) is None
+
+
+def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_is_none():
+    """
+    Regression: when a caller hands the cost tracker a raw Anthropic dict without a
+    parallel Usage object, the web-search fee must still be priced per request from
+    usage.server_tool_use.web_search_requests on the dict instead of falling back to
+    the flat search_context_size_medium tier.
+    """
+    model = "claude-3-7-sonnet-20250219"
+    web_search_requests = 4
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "server_tool_use": {"web_search_requests": web_search_requests},
+        },
+    }
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=raw_response,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+
+    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    assert cost == per_query_cost * web_search_requests
+
+
+def test_anthropic_web_search_zero_requests_from_raw_response_charges_zero():
+    """
+    Regression: a raw Anthropic dict reporting zero web search requests must price
+    the call at zero rather than charging the default medium-tier fee.
+    """
+    model = "claude-3-7-sonnet-20250219"
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "server_tool_use": {"web_search_requests": 0},
+        },
+    }
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=raw_response,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
+
+
+def test_anthropic_response_usage_block_preserves_server_tool_use():
+    """
+    Regression: AnthropicResponse.model_validate(...).model_dump() must keep
+    server_tool_use so the /v1/messages logging fallback does not strip the
+    web-search usage before cost tracking sees it.
+    """
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-7-sonnet-20250219",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "server_tool_use": {"web_search_requests": 2},
+        },
+    }
+
+    dumped_usage = AnthropicResponse.model_validate(raw_response).model_dump()["usage"]
+
+    assert dumped_usage["server_tool_use"] == {"web_search_requests": 2}
+
+
 @pytest.mark.parametrize(
     "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
 )
