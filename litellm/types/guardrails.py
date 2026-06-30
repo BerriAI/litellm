@@ -55,6 +55,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.headroom import (
     HeadroomGuardrailConfigModel,
 )
