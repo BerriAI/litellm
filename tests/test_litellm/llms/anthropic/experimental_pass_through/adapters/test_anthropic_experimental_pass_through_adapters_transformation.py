@@ -402,6 +402,113 @@ def test_translate_anthropic_messages_to_openai_tool_message_placement():
     ), "Tool message should be placed before user message"
 
 
+def test_translate_streaming_openai_text_delta_no_tool_calls():
+    """When tool_calls is None, a text delta with content should be text_delta."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Hello",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices  # type: ignore[arg-type]
+    )
+
+    assert type_of_content == "text_delta"
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == "Hello"  # type: ignore[typeddict-unknown-key]
+
+
+def test_translate_streaming_openai_text_delta_empty_tool_calls():
+    """When tool_calls is an empty list (len==0), content should still be text_delta.
+
+    This reproduces the bug where DeepSeek/vLLM sends tool_calls: []
+    instead of tool_calls: None. Before the fix, the `is not None` guard
+    let this into the tool_calls branch, and a stray partial_json="" caused
+    an empty input_json_delta to be emitted instead of the text content.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Hello from DeepSeek",
+                role="assistant",
+                function_call=None,
+                tool_calls=[],  # empty list — the exact pattern from vLLM/DeepSeek
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices  # type: ignore[arg-type]
+    )
+
+    assert type_of_content == "text_delta", (
+        f"Expected text_delta but got {type_of_content} — "
+        "empty tool_calls list should not trigger input_json_delta"
+    )
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == "Hello from DeepSeek"  # type: ignore[typeddict-unknown-key]
+
+
+def test_translate_streaming_openai_text_delta_tool_calls_empty_list():
+    """When tool_calls is an empty list, a text delta should fall through to content_block_stop or text_delta.
+
+    This is the same scenario as empty_tool_calls above but specifically tests
+    the interaction with _translate_streaming_openai_chunk_to_anthropic_content_block,
+    which correctly returns "text" when there's text content and tool_calls is [].
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Let me think about that.",
+                role="assistant",
+                function_call=None,
+                tool_calls=[],  # empty list — the exact pattern from vLLM/DeepSeek
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices  # type: ignore[arg-type]
+    )
+
+    assert type_of_content == "text_delta", (
+        f"Expected text_delta but got {type_of_content} — "
+        "empty tool_calls list should not trigger input_json_delta"
+    )
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == "Let me think about that."  # type: ignore[typeddict-unknown-key]
+
+
 def test_translate_openai_content_to_anthropic_empty_function_arguments():
     """Test that empty function arguments are handled safely and don't cause JSON parsing errors."""
 
