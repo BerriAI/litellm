@@ -106,14 +106,10 @@ class VigilGuardGuardrail(CustomGuardrail):
         self.api_key = resolved_key
 
         fallback = (unreachable_fallback or "fail_closed").lower()
-        self.unreachable_fallback: _FallbackMode = (
-            "fail_open" if fallback == "fail_open" else "fail_closed"
-        )
+        self.unreachable_fallback: _FallbackMode = "fail_open" if fallback == "fail_open" else "fail_closed"
 
         self.timeout: httpx.Timeout = (
-            _DEFAULT_VIGIL_TIMEOUT
-            if timeout is None
-            else httpx.Timeout(timeout, connect=min(timeout, 5.0))
+            _DEFAULT_VIGIL_TIMEOUT if timeout is None else httpx.Timeout(timeout, connect=min(timeout, 5.0))
         )
 
         self.async_handler: _AsyncPostHandler = async_handler or get_async_httpx_client(
@@ -146,11 +142,7 @@ class VigilGuardGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         texts = inputs.get("texts") or []
         has_text = any(isinstance(text, str) and text.strip() for text in texts)
-        tool_call_args = (
-            self._tool_call_arguments(inputs.get("tool_calls"))
-            if input_type == "response"
-            else []
-        )
+        tool_call_args = self._tool_call_arguments(inputs.get("tool_calls")) if input_type == "response" else []
         if not has_text and not tool_call_args:
             return inputs
 
@@ -164,9 +156,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                 continue
 
             try:
-                analysis = await self._analyze(
-                    text=text, source=source, metadata=metadata
-                )
+                analysis = await self._analyze(text=text, source=source, metadata=metadata)
             except (
                 httpx.HTTPError,
                 LiteLLMTimeout,
@@ -184,8 +174,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             decision = analysis.get("decision") if isinstance(analysis, dict) else None
             if decision not in _VALID_DECISIONS:
                 verbose_proxy_logger.error(
-                    "Vigil Guard unrecognized decision for guardrail_name=%s "
-                    "source=%s: %r",
+                    "Vigil Guard unrecognized decision for guardrail_name=%s source=%s: %r",
                     self.guardrail_name,
                     source,
                     decision,
@@ -217,24 +206,19 @@ class VigilGuardGuardrail(CustomGuardrail):
         result_tool_calls = inputs.get("tool_calls")
         for tc_index, arguments in tool_call_args:
             try:
-                analysis = await self._analyze(
-                    text=arguments, source=source, metadata=metadata
-                )
+                analysis = await self._analyze(text=arguments, source=source, metadata=metadata)
             except (
                 httpx.HTTPError,
                 LiteLLMTimeout,
                 JSONDecodeError,
                 OSError,
             ) as exc:
-                return self._handle_backend_failure(
-                    exc, inputs, source, result_texts, result_tool_calls
-                )
+                return self._handle_backend_failure(exc, inputs, source, result_texts, result_tool_calls)
 
             decision = analysis.get("decision") if isinstance(analysis, dict) else None
             if decision not in _VALID_DECISIONS:
                 verbose_proxy_logger.error(
-                    "Vigil Guard unrecognized decision for guardrail_name=%s "
-                    "source=%s: %r",
+                    "Vigil Guard unrecognized decision for guardrail_name=%s source=%s: %r",
                     self.guardrail_name,
                     source,
                     decision,
@@ -281,8 +265,7 @@ class VigilGuardGuardrail(CustomGuardrail):
             )
             return self._build_output(inputs, final_texts, final_tool_calls)
         verbose_proxy_logger.error(
-            "Vigil Guard backend failure with fail_closed; blocking request. "
-            "guardrail_name=%s source=%s error=%s",
+            "Vigil Guard backend failure with fail_closed; blocking request. guardrail_name=%s source=%s error=%s",
             self.guardrail_name,
             source,
             str(exc),
@@ -321,20 +304,14 @@ class VigilGuardGuardrail(CustomGuardrail):
         pairs: List[Tuple[int, str]] = []
         if isinstance(tool_calls, list):
             for index, tool_call in enumerate(tool_calls):
-                function = (
-                    tool_call.get("function") if isinstance(tool_call, dict) else None
-                )
-                arguments = (
-                    function.get("arguments") if isinstance(function, dict) else None
-                )
+                function = tool_call.get("function") if isinstance(tool_call, dict) else None
+                arguments = function.get("arguments") if isinstance(function, dict) else None
                 if isinstance(arguments, str) and arguments.strip():
                     pairs.append((index, arguments))
         return pairs
 
     @staticmethod
-    def _set_tool_call_arguments(
-        tool_calls: Any, index: int, arguments: str
-    ) -> List[Any]:
+    def _set_tool_call_arguments(tool_calls: Any, index: int, arguments: str) -> List[Any]:
         updated = list(tool_calls)
         tool_call = dict(updated[index])
         function = dict(tool_call.get("function") or {})
@@ -343,9 +320,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         updated[index] = tool_call
         return updated
 
-    async def _analyze(
-        self, text: str, source: str, metadata: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    async def _analyze(self, text: str, source: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
         payload = {
             "text": text,
             "source": source,
@@ -360,9 +335,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         response = await self._post_with_retry(endpoint, headers, payload)
         return response.json()
 
-    async def _post_with_retry(
-        self, endpoint: str, headers: Dict[str, str], payload: Dict[str, Any]
-    ) -> httpx.Response:
+    async def _post_with_retry(self, endpoint: str, headers: Dict[str, str], payload: Dict[str, Any]) -> httpx.Response:
         for attempt in range(2):
             try:
                 response = await self.async_handler.post(
@@ -419,9 +392,7 @@ class VigilGuardGuardrail(CustomGuardrail):
                 return value
         return original
 
-    def _collect_metadata(
-        self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
-    ) -> Dict[str, Any]:
+    def _collect_metadata(self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> Dict[str, Any]:
         sources: List[dict] = []
         if isinstance(request_data, dict):
             sources.append(request_data)
@@ -466,9 +437,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def _extract_call_id(
-        request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
-    ) -> Optional[str]:
+    def _extract_call_id(request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> Optional[str]:
         if logging_obj is not None:
             call_id = getattr(logging_obj, "litellm_call_id", None)
             if isinstance(call_id, str) and call_id:

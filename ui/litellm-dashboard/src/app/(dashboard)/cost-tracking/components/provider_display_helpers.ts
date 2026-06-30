@@ -1,4 +1,5 @@
 import { Providers, provider_map, providerLogoMap } from "@/components/provider_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
 export interface ProviderDisplayInfo {
   displayName: string;
@@ -16,7 +17,7 @@ export const getProviderDisplayInfo = (providerValue: string): ProviderDisplayIn
 
   if (enumKey) {
     const displayName = Providers[enumKey as keyof typeof Providers];
-    const logo = providerLogoMap[displayName];
+    const logo = resolveLogoSrc(providerLogoMap[displayName]) ?? "";
     return { displayName, logo, enumKey };
   }
 

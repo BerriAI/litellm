@@ -68,11 +68,7 @@ async def _get_internal_user_api_keys(
         where={"user_id": user_id},
         select={"token": True},
     )
-    user_api_keys.update(
-        key_record.token
-        for key_record in key_records
-        if getattr(key_record, "token", None)
-    )
+    user_api_keys.update(key_record.token for key_record in key_records if getattr(key_record, "token", None))
 
     return sorted(user_api_keys)
 
@@ -82,9 +78,7 @@ async def _get_tag_list_scope(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, dict]]:
     user_role = user_api_key_dict.user_role
-    if user_api_key_has_admin_view(user_api_key_dict) or (
-        user_role is None or not user_role.is_internal_user_role
-    ):
+    if user_api_key_has_admin_view(user_api_key_dict) or (user_role is None or not user_role.is_internal_user_role):
         return None
 
     scoped_api_keys = await _get_internal_user_api_keys(
@@ -100,9 +94,7 @@ async def _get_tag_daily_activity_api_key_filter(
     requested_api_key: Optional[str],
 ) -> Optional[Union[str, List[str]]]:
     user_role = user_api_key_dict.user_role
-    if user_api_key_has_admin_view(user_api_key_dict) or (
-        user_role is None or not user_role.is_internal_user_role
-    ):
+    if user_api_key_has_admin_view(user_api_key_dict) or (user_role is None or not user_role.is_internal_user_role):
         return requested_api_key
 
     scoped_api_keys = await _get_internal_user_api_keys(
@@ -117,18 +109,14 @@ async def _get_tag_daily_activity_api_key_filter(
 async def _get_model_names(prisma_client, model_ids: list) -> Dict[str, str]:
     """Helper function to get model names from model IDs"""
     try:
-        models = await ModelRepository(prisma_client).table.find_many(
-            where={"model_id": {"in": model_ids}}
-        )
+        models = await ModelRepository(prisma_client).table.find_many(where={"model_id": {"in": model_ids}})
         return {model.model_id: model.model_name for model in models}
     except Exception as e:
         verbose_proxy_logger.error(f"Error getting model names: {str(e)}")
         return {}
 
 
-async def get_deployments_by_model(
-    model: str, llm_router: "Router"
-) -> List["Deployment"]:
+async def get_deployments_by_model(model: str, llm_router: "Router") -> List["Deployment"]:
     """
     Get all deployments by model
     """
@@ -188,22 +176,14 @@ async def new_tag(
     )
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     if llm_router is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.no_llm_router.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.no_llm_router.value)
     try:
         # Check if tag already exists
-        existing_tag = await TagRepository(prisma_client).table.find_unique(
-            where={"tag_name": tag.name}
-        )
+        existing_tag = await TagRepository(prisma_client).table.find_unique(where={"tag_name": tag.name})
         if existing_tag is not None:
-            raise HTTPException(
-                status_code=400, detail=f"Tag {tag.name} already exists"
-            )
+            raise HTTPException(status_code=400, detail=f"Tag {tag.name} already exists")
 
         # Handle budget creation/assignment using common helper
         budget_id = await handle_budget_for_entity(
@@ -275,9 +255,7 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
 
     try:
         # Get current model from database to preserve encrypted fields
-        db_model = await ModelRepository(prisma_client).table.find_unique(
-            where={"model_id": deployment.model_info.id}
-        )
+        db_model = await ModelRepository(prisma_client).table.find_unique(where={"model_id": deployment.model_info.id})
 
         if db_model is None:
             raise HTTPException(
@@ -343,9 +321,7 @@ async def update_tag(
 
     try:
         # Check if tag exists
-        existing_tag = await TagRepository(prisma_client).table.find_unique(
-            where={"tag_name": tag.name}
-        )
+        existing_tag = await TagRepository(prisma_client).table.find_unique(where={"tag_name": tag.name})
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {tag.name} not found")
 
@@ -431,9 +407,7 @@ async def info_tag(
         found_tag_names = {tag.tag_name for tag in tag_records}
         missing_tags = [name for name in data.names if name not in found_tag_names]
         if missing_tags:
-            raise HTTPException(
-                status_code=404, detail=f"Tags not found: {missing_tags}"
-            )
+            raise HTTPException(status_code=404, detail=f"Tags not found: {missing_tags}")
 
         # Build response
         requested_tags = {}
@@ -457,10 +431,7 @@ async def info_tag(
             }
 
             # Add budget info if available
-            if (
-                hasattr(tag_record, "litellm_budget_table")
-                and tag_record.litellm_budget_table
-            ):
+            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
                 tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
 
             requested_tags[tag_record.tag_name] = tag_dict
@@ -470,9 +441,7 @@ async def info_tag(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _validate_tag_list_date_range(
-    start_date: Optional[str], end_date: Optional[str]
-) -> None:
+def _validate_tag_list_date_range(start_date: Optional[str], end_date: Optional[str]) -> None:
     """Require both dates together, and enforce YYYY-MM-DD format with start <= end."""
     if (start_date is None) != (end_date is None):
         raise HTTPException(
@@ -554,9 +523,7 @@ async def list_tags(
         if tag_scope is not None and not used_tag_names:
             return []
 
-        stored_tag_where = (
-            {"tag_name": {"in": used_tag_names}} if tag_scope is not None else None
-        )
+        stored_tag_where = {"tag_name": {"in": used_tag_names}} if tag_scope is not None else None
 
         ## QUERY STORED TAGS ##
         tag_records = await TagRepository(prisma_client).table.find_many(
@@ -587,10 +554,7 @@ async def list_tags(
             }
 
             # Add budget info if available
-            if (
-                hasattr(tag_record, "litellm_budget_table")
-                and tag_record.litellm_budget_table
-            ):
+            if hasattr(tag_record, "litellm_budget_table") and tag_record.litellm_budget_table:
                 tag_dict["litellm_budget_table"] = tag_record.litellm_budget_table
 
             list_of_tags.append(tag_dict)
@@ -634,9 +598,7 @@ async def delete_tag(
 
     try:
         # Check if tag exists
-        existing_tag = await TagRepository(prisma_client).table.find_unique(
-            where={"tag_name": data.name}
-        )
+        existing_tag = await TagRepository(prisma_client).table.find_unique(where={"tag_name": data.name})
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {data.name} not found")
 
