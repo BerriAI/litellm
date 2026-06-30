@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-17T22:13:32.966924Z"
+exclude-newer = "2026-06-27T01:16:05.524641Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3245,7 +3245,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.90.0"
+version = "1.90.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -3610,7 +3610,7 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.43"
+version = "0.1.43.post1"
 source = { editable = "enterprise" }
 
 [[package]]
