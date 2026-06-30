@@ -1070,6 +1070,7 @@ async def test_prune_expired_cache_deletes_underlying_container():
         container,
         params,
         time.time() - handler_mod._CACHE_TTL_SECONDS - 1,
+        None,
     )
 
     await logger._prune_expired_cache()
@@ -1348,3 +1349,78 @@ async def test_non_session_sandbox_still_deleted_after_loop():
     )
 
     assert len(sandbox.delete_calls) == 1, "non-session sandbox must still be cleaned up after each request"
+
+
+@pytest.mark.asyncio
+async def test_sandbox_key_scoped_to_api_key_hash_isolates_users():
+    """Two callers supplying the same session_id but different API key hashes must
+    each get their own sandbox; sharing across tenants would let one read or mutate
+    the other's interpreter state."""
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=FakeSandbox())
+    session_id = "same-session-id"
+
+    result_a = await logger.async_pre_call_deployment_hook(
+        {
+            "tools": [{"type": "code_interpreter"}],
+            "custom_llm_provider": "openai",
+            "metadata": {"session_id": session_id},
+            "user_api_key_hash": "hash-for-tenant-a",
+        },
+        CallTypes.acompletion,
+    )
+    result_b = await logger.async_pre_call_deployment_hook(
+        {
+            "tools": [{"type": "code_interpreter"}],
+            "custom_llm_provider": "openai",
+            "metadata": {"session_id": session_id},
+            "user_api_key_hash": "hash-for-tenant-b",
+        },
+        CallTypes.acompletion,
+    )
+
+    assert result_a is not None and result_b is not None
+    assert result_a[_SANDBOX_KEY] != result_b[_SANDBOX_KEY], (
+        "same session_id from different API keys must yield different sandbox keys; "
+        "otherwise tenant A can read tenant B's sandbox state"
+    )
+    assert "hash-for-tenant-a" in result_a[_SANDBOX_KEY]
+    assert "hash-for-tenant-b" in result_b[_SANDBOX_KEY]
+
+
+@pytest.mark.asyncio
+async def test_per_identity_cap_evicts_lru_session():
+    """When a single identity holds the cap limit of session sandboxes and opens a
+    new one, the least-recently-used session is evicted so the allocation stays
+    bounded.  Without this, rotating session IDs is an unbounded sandbox leak."""
+    from litellm.integrations.code_interpreter_interception.handler import _SESSION_SCOPED_PER_IDENTITY_CAP
+
+    sandbox = FakeSandbox(stdout="ok")
+    logger = CodeInterpreterInterceptionLogger(sandbox_config=sandbox)
+    identity = "hash-for-identity-x"
+
+    for i in range(_SESSION_SCOPED_PER_IDENTITY_CAP):
+        await logger._get_or_create_container(
+            cache_key=f"{identity}:session-{i}",
+            identity=identity,
+        )
+        logger._container_cache[f"{identity}:session-{i}"] = (
+            logger._container_cache[f"{identity}:session-{i}"][0],
+            logger._container_cache[f"{identity}:session-{i}"][1],
+            float(i),
+            identity,
+        )
+
+    assert len(logger._container_cache) == _SESSION_SCOPED_PER_IDENTITY_CAP
+
+    await logger._get_or_create_container(
+        cache_key=f"{identity}:session-new",
+        identity=identity,
+    )
+
+    assert len(logger._container_cache) == _SESSION_SCOPED_PER_IDENTITY_CAP, (
+        "adding a new session beyond the cap must evict one entry so total stays bounded"
+    )
+    assert f"{identity}:session-0" not in logger._container_cache, (
+        "the entry with the oldest last_accessed timestamp must be evicted first (LRU)"
+    )
+    assert len(sandbox.delete_calls) == 1, "evicted sandbox must be deleted, not just removed from cache"

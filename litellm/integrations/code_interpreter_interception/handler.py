@@ -44,6 +44,7 @@ _SESSION_SCOPED_KEY = "_code_interpreter_interception_session_scoped"
 _CONVERTED_STREAM_KEY = "_code_interpreter_interception_converted_stream"
 _LITELLM_METADATA_KEY = "litellm_metadata"
 _CACHE_TTL_SECONDS = 15 * 60
+_SESSION_SCOPED_PER_IDENTITY_CAP = 10
 
 
 class CodeExecutionToolCall(TypedDict, total=False):
@@ -118,6 +119,10 @@ def _extract_session_id(kwargs: dict[str, Any]) -> str | None:
     return None
 
 
+def _extract_identity(kwargs: dict[str, Any]) -> str:
+    return kwargs.get("user_api_key_hash") or ""
+
+
 def _resolve_sandbox_tool(sandbox_tool_name: str | None) -> dict[str, Any] | None:
     try:
         from litellm.sandbox.sandbox_tools import resolve_sandbox_tool
@@ -151,7 +156,7 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         self.enabled_providers = enabled_providers
         self.sandbox_tool_name = sandbox_tool_name
         self.sandbox_config = sandbox_config
-        self._container_cache: dict[str, tuple[Any, dict[str, Any] | None, float]] = {}
+        self._container_cache: dict[str, tuple[Any, dict[str, Any] | None, float, str | None]] = {}
 
     @classmethod
     def from_config_yaml(cls, config: CodeInterpreterInterceptionConfig) -> "CodeInterpreterInterceptionLogger":
@@ -204,7 +209,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         kwargs[_INTERCEPTION_ACTIVE_KEY] = True
         session_id = _extract_session_id(kwargs)
         if session_id:
-            kwargs[_SANDBOX_KEY] = session_id
+            identity = _extract_identity(kwargs)
+            kwargs[_SANDBOX_KEY] = f"{identity}:{session_id}" if identity else session_id
             kwargs[_SESSION_SCOPED_KEY] = True
         else:
             kwargs[_SANDBOX_KEY] = uuid.uuid4().hex
@@ -364,7 +370,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         await self._prune_expired_cache()
         tool_calls = cast(list[CodeExecutionToolCall], tools.get("tool_calls", []))
         sandbox_key = kwargs.get(_SANDBOX_KEY)
-        container, params = await self._get_or_create_container(cache_key=sandbox_key)
+        is_session = bool(kwargs.get(_SESSION_SCOPED_KEY))
+        identity = _extract_identity(kwargs) if is_session else None
+        container, params = await self._get_or_create_container(cache_key=sandbox_key, identity=identity)
 
         try:
             container_id = cast(str | None, getattr(container, "id", None))
@@ -437,7 +445,9 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         await self._prune_expired_cache()
         tool_calls = cast(list[CodeExecutionToolCall], tools.get("tool_calls", []))
         sandbox_key = cast(str | None, kwargs.get(_SANDBOX_KEY))
-        container, params = await self._get_or_create_container(cache_key=sandbox_key)
+        is_session = bool(kwargs.get(_SESSION_SCOPED_KEY))
+        identity = _extract_identity(cast(dict[str, Any], kwargs)) if is_session else None
+        container, params = await self._get_or_create_container(cache_key=sandbox_key, identity=identity)
 
         try:
             container_id = cast(str | None, getattr(container, "id", None))
@@ -587,17 +597,31 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
             return f"[execution error] {message}"
         return getattr(result, "stdout", "") or ""
 
-    async def _get_or_create_container(self, cache_key: str | None) -> tuple[Any, dict[str, Any] | None]:
+    async def _get_or_create_container(
+        self,
+        cache_key: str | None,
+        identity: str | None = None,
+    ) -> tuple[Any, dict[str, Any] | None]:
         if cache_key:
             cached = self._container_cache.get(cache_key)
             if cached is not None:
-                self._container_cache[cache_key] = (cached[0], cached[1], time.time())
+                self._container_cache[cache_key] = (cached[0], cached[1], time.time(), cached[3])
                 return cached[0], cached[1]
 
         container, params = await self._create_container()
         if cache_key:
-            self._container_cache[cache_key] = (container, params, time.time())
+            if identity is not None:
+                await self._evict_lru_session_if_over_cap(identity)
+            self._container_cache[cache_key] = (container, params, time.time(), identity)
         return container, params
+
+    async def _evict_lru_session_if_over_cap(self, identity: str) -> None:
+        identity_entries = [(k, v) for k, v in self._container_cache.items() if v[3] == identity]
+        if len(identity_entries) < _SESSION_SCOPED_PER_IDENTITY_CAP:
+            return
+        lru_key, lru_entry = min(identity_entries, key=lambda item: item[1][2])
+        self._container_cache.pop(lru_key, None)
+        await self._delete_container(container=lru_entry[0], params=lru_entry[1])
 
     async def _create_container(self) -> tuple[Any, dict[str, Any] | None]:
         if self.sandbox_config is not None:
@@ -762,12 +786,8 @@ class CodeInterpreterInterceptionLogger(CustomLogger):
         now = time.time()
         expired = [
             (cache_key, container, params)
-            for cache_key, (
-                container,
-                params,
-                created_at,
-            ) in self._container_cache.items()
-            if now - created_at > _CACHE_TTL_SECONDS
+            for cache_key, (container, params, last_accessed, *_) in self._container_cache.items()
+            if now - last_accessed > _CACHE_TTL_SECONDS
         ]
         for cache_key, container, params in expired:
             self._container_cache.pop(cache_key, None)
