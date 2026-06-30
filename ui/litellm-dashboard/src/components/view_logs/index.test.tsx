@@ -177,4 +177,26 @@ describe("SpendLogsTable", () => {
       expect(screen.queryByRole("button", { name: /Last 24 Hours/i })).not.toBeInTheDocument();
     });
   });
+
+  describe("Search by Request ID (LIT-3981)", () => {
+    // uiSpendLogsCall fires from the real useLogFilterLogic query, so restore it.
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import("./log_filter_logic")>("./log_filter_logic");
+      vi.mocked(useLogFilterLogic).mockImplementation(actual.useLogFilterLogic);
+    });
+
+    it("sends the typed request id to the server instead of filtering only the loaded page", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await user.type(screen.getByPlaceholderText("Search by Request ID"), "req-on-another-page");
+
+      await waitFor(() => {
+        const lastCall = vi.mocked(uiSpendLogsCall).mock.calls.at(-1)?.[0];
+        if (!lastCall) throw new Error("uiSpendLogsCall was not called");
+        expect(lastCall.params?.request_id).toBe("req-on-another-page");
+        expect(lastCall.page).toBe(1);
+      });
+    });
+  });
 });
