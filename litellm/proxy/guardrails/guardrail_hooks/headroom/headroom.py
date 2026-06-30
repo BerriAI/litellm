@@ -98,37 +98,59 @@ def has_headroom_retrieve_tool(tools: object) -> bool:
 def _extract_headroom_tool_calls(
     response: object,
 ) -> list[dict[str, object]]:
-    choices = getattr(response, "choices", None)
-    if not isinstance(choices, list) or not choices:
-        return []
-    message = getattr(choices[0], "message", None)
-    if message is None:
-        return []
-    tool_calls = getattr(message, "tool_calls", None)
-    if not isinstance(tool_calls, list):
-        return []
-
     result: list[dict[str, object]] = []
-    for tc in tool_calls:
-        fn = getattr(tc, "function", None)
-        if fn is None:
-            continue
-        name = getattr(fn, "name", None)
-        if name != HEADROOM_RETRIEVE_TOOL_NAME:
-            continue
-        arguments_str = getattr(fn, "arguments", "{}")
-        try:
-            arguments: dict[str, object] = json.loads(arguments_str)
-        except (json.JSONDecodeError, TypeError):
-            arguments = {}
-        result.append(
-            {
-                "id": getattr(tc, "id", None),
-                "type": "function",
-                "name": name,
-                "arguments": arguments,
-            }
-        )
+
+    # OpenAI chat completions format: choices[0].message.tool_calls
+    choices = getattr(response, "choices", None)
+    if isinstance(choices, list) and choices:
+        message = getattr(choices[0], "message", None)
+        tool_calls = getattr(message, "tool_calls", None) if message else None
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                fn = getattr(tc, "function", None)
+                if fn is None:
+                    continue
+                name = getattr(fn, "name", None)
+                if name != HEADROOM_RETRIEVE_TOOL_NAME:
+                    continue
+                arguments_str = getattr(fn, "arguments", "{}")
+                try:
+                    arguments: dict[str, object] = json.loads(arguments_str)
+                except (json.JSONDecodeError, TypeError):
+                    arguments = {}
+                result.append(
+                    {
+                        "id": getattr(tc, "id", None),
+                        "type": "function",
+                        "name": name,
+                        "arguments": arguments,
+                    }
+                )
+            return result
+
+    # Anthropic messages format: content blocks with type=tool_use
+    content = getattr(response, "content", None)
+    if isinstance(content, list):
+        for block in content:
+            block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+            block_name = block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
+            if block_type != "tool_use" or block_name != HEADROOM_RETRIEVE_TOOL_NAME:
+                continue
+            if isinstance(block, dict):
+                raw_input: object = block.get("input", {})
+                block_id: object = block.get("id")
+            else:
+                raw_input = getattr(block, "input", {})
+                block_id = getattr(block, "id", None)
+            result.append(
+                {
+                    "id": block_id,
+                    "type": "function",
+                    "name": block_name,
+                    "arguments": raw_input if isinstance(raw_input, dict) else {},
+                }
+            )
+
     return result
 
 
