@@ -65,9 +65,7 @@ class VertexEmbedding(VertexBase):
                 litellm_params=litellm_params,
             )
 
-        should_use_v1beta1_features = self.is_using_v1beta1_features(
-            optional_params=optional_params
-        )
+        should_use_v1beta1_features = self.is_using_v1beta1_features(optional_params=optional_params)
 
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
@@ -92,11 +90,13 @@ class VertexEmbedding(VertexBase):
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-            input=input,
-            optional_params=optional_params,
-            model=model,
-            litellm_params=litellm_params,
+        vertex_request: VertexEmbeddingRequest = (
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+                input=input,
+                optional_params=optional_params,
+                model=model,
+                litellm_params=litellm_params,
+            )
         )
 
         _client_params = {}
@@ -128,14 +128,10 @@ class VertexEmbedding(VertexBase):
 
         _json_response = response.json()
         ## LOGGING POST-CALL
-        logging_obj.post_call(
-            input=input, api_key=None, original_response=_json_response
-        )
+        logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
-        model_response = (
-            litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-                response=_json_response, model=model, model_response=model_response
-            )
+        model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
+            response=_json_response, model=model, model_response=model_response
         )
 
         return model_response
@@ -164,9 +160,7 @@ class VertexEmbedding(VertexBase):
         """
         Async embedding implementation
         """
-        should_use_v1beta1_features = self.is_using_v1beta1_features(
-            optional_params=optional_params
-        )
+        should_use_v1beta1_features = self.is_using_v1beta1_features(optional_params=optional_params)
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -190,20 +184,20 @@ class VertexEmbedding(VertexBase):
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-            input=input,
-            optional_params=optional_params,
-            model=model,
-            litellm_params=litellm_params,
+        vertex_request: VertexEmbeddingRequest = (
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+                input=input,
+                optional_params=optional_params,
+                model=model,
+                litellm_params=litellm_params,
+            )
         )
 
         _async_client_params = {}
         if timeout:
             _async_client_params["timeout"] = timeout
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI
-            )
+            client = get_async_httpx_client(params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI)
         else:
             client = client  # type: ignore
         ## LOGGING
@@ -228,14 +222,10 @@ class VertexEmbedding(VertexBase):
 
         _json_response = response.json()
         ## LOGGING POST-CALL
-        logging_obj.post_call(
-            input=input, api_key=None, original_response=_json_response
-        )
+        logging_obj.post_call(input=input, api_key=None, original_response=_json_response)
 
-        model_response = (
-            litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
-                response=_json_response, model=model, model_response=model_response
-            )
+        model_response = litellm.vertexAITextEmbeddingConfig.transform_vertex_response_to_openai(
+            response=_json_response, model=model, model_response=model_response
         )
 
         return model_response

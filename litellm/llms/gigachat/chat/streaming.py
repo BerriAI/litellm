@@ -81,14 +81,10 @@ class GigaChatModelResponseIterator:
                     completion_tokens=usage.completion_tokens,
                     total_tokens=usage.total_tokens,
                     prompt_tokens_details=(
-                        usage.prompt_tokens_details.model_dump()
-                        if usage.prompt_tokens_details
-                        else None
+                        usage.prompt_tokens_details.model_dump() if usage.prompt_tokens_details else None
                     ),
                     completion_tokens_details=(
-                        usage.completion_tokens_details.model_dump()
-                        if usage.completion_tokens_details
-                        else None
+                        usage.completion_tokens_details.model_dump() if usage.completion_tokens_details else None
                     ),
                 )
 

@@ -2799,6 +2799,77 @@ def test_partial_json_chunk_on_first_chunk():
     ), "Should switch to accumulated_json mode"
 
 
+def test_accumulated_json_does_not_reparse_every_fragment():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/26181
+
+    handle_accumulated_json_chunk used to call json.loads on the entire
+    accumulated buffer after EVERY fragment. For a large response fragmented
+    across many chunks that is O(n^2) work in a single GIL-holding C call,
+    which freezes the asyncio event loop for seconds and kills liveness probes.
+
+    The buffer only becomes a complete JSON object on the final fragment, so a
+    correct implementation parses it ~once, not once per fragment. We assert the
+    full chunk still parses correctly AND that json.loads is not called on every
+    fragment (which is what made it quadratic).
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    text = "x" * 200_000  # no braces/brackets so only the final fragment closes
+    blob = json.dumps(
+        {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
+    )
+    fragments = [blob[i : i + 4096] for i in range(0, len(blob), 4096)]
+    assert len(fragments) > 10, "need a multi-fragment payload to exercise the bug"
+
+    parsed = None
+    with patch("json.loads", wraps=json.loads) as spy:
+        for fragment in fragments:
+            out = iterator.handle_accumulated_json_chunk(chunk=fragment)
+            if out is not None:
+                parsed = out
+        parse_calls = spy.call_count
+
+    assert parsed is not None, "the reassembled chunk must still parse"
+    assert parsed.choices[0].delta.content == text, "content must be preserved intact"
+
+    assert parse_calls <= 2, (
+        f"json.loads was called {parse_calls} times for {len(fragments)} "
+        "fragments; the O(n^2) per-fragment re-parse has regressed"
+    )
+
+
+def test_accumulated_json_partial_fragment_returns_none_without_parsing():
+    """A fragment that cannot complete the JSON must not trigger a json.loads
+    parse of the whole growing buffer (issue #26181)."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        logging_obj=MagicMock(),
+    )
+    iterator.chunk_type = "accumulated_json"
+
+    with patch("json.loads", wraps=json.loads) as spy:
+        result = iterator.handle_accumulated_json_chunk(
+            chunk='{"candidates": [{"content": {"parts": [{"text": "partial'
+        )
+    assert result is None
+    assert spy.call_count == 0, "incomplete buffer should not be parsed"
+
+
 def test_google_ai_studio_presence_penalty_supported():
     """
     Test that presence_penalty is supported for Google AI Studio Gemini.

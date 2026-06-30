@@ -83,9 +83,7 @@ def get_access_token(
     if not litellm_params:
         litellm_params = {}
 
-    access_token = litellm_params.get("gigachat_access_token") or get_secret_str(
-        "GIGACHAT_ACCESS_TOKEN"
-    )
+    access_token = litellm_params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
     if access_token:
         return access_token
 
@@ -114,9 +112,7 @@ def get_access_token(
 
     if expires_at:
         # Cache token
-        ttl_seconds = max(
-            0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000
-        )
+        ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
         if ttl_seconds > 0:
             _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 
@@ -133,9 +129,7 @@ async def get_access_token_async(
     if not litellm_params:
         litellm_params = {}
 
-    access_token = litellm_params.get("gigachat_access_token") or get_secret_str(
-        "GIGACHAT_ACCESS_TOKEN"
-    )
+    access_token = litellm_params.get("gigachat_access_token") or get_secret_str("GIGACHAT_ACCESS_TOKEN")
     if access_token:
         return access_token
 
@@ -163,9 +157,7 @@ async def get_access_token_async(
 
     if expires_at:
         # Cache token
-        ttl_seconds = max(
-            0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000
-        )
+        ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
         if ttl_seconds > 0:
             _token_cache.set_cache(cache_key, (token, expires_at), ttl=ttl_seconds)
 

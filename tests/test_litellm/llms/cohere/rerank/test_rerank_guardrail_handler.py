@@ -2,10 +2,8 @@
 Unit tests for Cohere Rerank Guardrail Translation Handler
 """
 
-import asyncio
 import os
 import sys
-from typing import List, Optional, Tuple
 
 import pytest
 
@@ -93,6 +91,74 @@ class TestInputProcessing:
             "text": "JavaScript is used for web development.",
             "id": "doc2",
         }
+
+    @pytest.mark.asyncio
+    async def test_process_query_and_instruction(self):
+        """Both query and instruction are guardrailed; documents untouched"""
+        handler = CohereRerankHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "qwen3-reranker",
+            "query": "What is machine learning?",
+            "instruction": "Rank by relevance to ML research",
+            "documents": ["Doc 1", "Doc 2"],
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        # Both user-controlled text fields are scanned and written back
+        assert result["query"] == "What is machine learning? [GUARDRAILED]"
+        assert result["instruction"] == "Rank by relevance to ML research [GUARDRAILED]"
+        # Documents unchanged
+        assert result["documents"] == ["Doc 1", "Doc 2"]
+
+    @pytest.mark.asyncio
+    async def test_instruction_masked_with_pii(self):
+        """A masking guardrail rewrites instruction, not just query"""
+
+        class PIIMaskingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
+                texts = inputs.get("texts", [])
+                return {"texts": [t.replace("John Doe", "[NAME_REDACTED]") for t in texts]}
+
+        handler = CohereRerankHandler()
+        guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
+
+        data = {
+            "model": "qwen3-reranker",
+            "query": "find records",
+            "instruction": "prioritize anything authored by John Doe",
+            "documents": ["Doc 1"],
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        # The sensitive value in instruction is sanitized before forwarding
+        assert "John Doe" not in result["instruction"]
+        assert "[NAME_REDACTED]" in result["instruction"]
+        assert result["documents"] == ["Doc 1"]
+
+    @pytest.mark.asyncio
+    async def test_non_string_instruction_not_scanned(self):
+        """A non-string instruction is left as-is (only strings are scanned)"""
+        handler = CohereRerankHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+
+        data = {
+            "model": "qwen3-reranker",
+            "query": "hello",
+            "instruction": 12345,  # invalid type; backend will reject it
+            "documents": ["Doc 1"],
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        # Query still guardrailed; non-string instruction untouched
+        assert result["query"] == "hello [GUARDRAILED]"
+        assert result["instruction"] == 12345
 
     @pytest.mark.asyncio
     async def test_process_no_query(self):

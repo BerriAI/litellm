@@ -77,26 +77,14 @@ class SpanSpec:
 
 
 SPAN_REGISTRY: dict[SpanRole, SpanSpec] = {
-    SpanRole.PROXY_REQUEST: SpanSpec(
-        SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None
-    ),
-    SpanRole.LLM_CALL: SpanSpec(
-        SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
+    SpanRole.PROXY_REQUEST: SpanSpec(SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None),
+    SpanRole.LLM_CALL: SpanSpec(SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
     # The proxy is an MCP client to the upstream server it dispatches the tool
     # call to, so this is a CLIENT span, sibling of the LLM call under the request.
-    SpanRole.MCP_TOOL_CALL: SpanSpec(
-        SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
-    SpanRole.GUARDRAIL: SpanSpec(
-        SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST
-    ),
-    SpanRole.DB_CALL: SpanSpec(
-        SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
-    SpanRole.SERVICE: SpanSpec(
-        SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST
-    ),
+    SpanRole.MCP_TOOL_CALL: SpanSpec(SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.GUARDRAIL: SpanSpec(SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.DB_CALL: SpanSpec(SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.SERVICE: SpanSpec(SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
 }
 
 
@@ -138,9 +126,7 @@ def db_system(service_name: str) -> str | None:
 #   - ``auth``           — emitted instead as a live phase span (see
 #                          ``logger.phase_span``) so its DB lookups nest under it,
 #                          not as a flat post-hoc service span.
-_METRICS_ONLY_SERVICES: frozenset[str] = frozenset(
-    {"self", "router", "proxy_pre_call", "auth"}
-)
+_METRICS_ONLY_SERVICES: frozenset[str] = frozenset({"self", "router", "proxy_pre_call", "auth"})
 
 
 def span_role_for_service(service_name: str) -> SpanRole | None:

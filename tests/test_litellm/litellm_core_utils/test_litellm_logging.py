@@ -1424,6 +1424,71 @@ def test_response_cost_calculator_with_response_cost_in_hidden_params(logging_ob
     assert response_cost > 100
 
 
+def test_response_cost_calculator_native_generate_content_body_uses_usage_metadata():
+    """
+    Regression for LIT-4076: a native Google :generateContent body reports tokens
+    under ``usageMetadata`` rather than ``usage``, so the cost calculator read 0
+    tokens and returned 0.0 synchronously. The calculator now transforms the native
+    body (as the async logging path does) so the cost is the real non-zero amount.
+    """
+    from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LitellmLogging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="lit4076",
+        function_id="lit4076",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "gemini"
+    logging_obj.optional_params = {}
+
+    native_body = GenerateContentResponseBody(
+        candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+        usageMetadata={
+            "promptTokenCount": 1000,
+            "candidatesTokenCount": 500,
+            "totalTokenCount": 1500,
+        },
+    )
+
+    expected_cost = litellm.completion_cost(
+        completion_response=ModelResponse(
+            model="gemini-2.5-flash",
+            usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+        ),
+        model="gemini-2.5-flash",
+        custom_llm_provider="gemini",
+    )
+    assert expected_cost > 0
+
+    cost = logging_obj._response_cost_calculator(result=native_body)
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_response_cost_calculator_does_not_transform_non_generate_content_dict():
+    """The native-body transform must only run for generate_content call types, so a
+    plain dict on a chat completion call is left untouched (no spurious Gemini cost)."""
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="lit4076-2",
+        function_id="lit4076-2",
+    )
+    logging_obj.optional_params = {}
+
+    cost = logging_obj._response_cost_calculator(
+        result={"usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 500}}
+    )
+    assert not cost
+
+
 def test_sentry_event_scrubber_initialization(monkeypatch):
     # Step 1: Create a fake sentry_sdk.scrubber module
     mock_event_scrubber_instance = MagicMock()
@@ -3585,3 +3650,43 @@ def test_failure_handler_zeroes_spend_without_recovered_usage(logging_obj):
     assert payload["status"] == "failure"
     assert payload["response_cost"] == 0
     assert payload["total_tokens"] == 0
+
+
+def test_set_cost_breakdown_stores_reasoning_cost():
+    """reasoning_cost is stored only when positive, mirroring the cache-cost fields."""
+    from datetime import datetime
+
+    logging_obj = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="reasoning-cost-set",
+        function_id="f",
+    )
+    logging_obj.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        reasoning_cost=0.0005,
+    )
+    assert logging_obj.cost_breakdown["reasoning_cost"] == 0.0005
+
+    no_reasoning = LitellmLogging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="reasoning-cost-absent",
+        function_id="f",
+    )
+    no_reasoning.set_cost_breakdown(
+        input_cost=0.001,
+        output_cost=0.002,
+        total_cost=0.003,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+    )
+    assert "reasoning_cost" not in no_reasoning.cost_breakdown

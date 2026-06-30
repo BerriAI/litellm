@@ -84,9 +84,7 @@ def create_request_copy(request: Request):
     }
 
 
-def is_passthrough_request_using_router_model(
-    request_body: dict, llm_router: litellm.Router | None
-) -> bool:
+def is_passthrough_request_using_router_model(request_body: dict, llm_router: litellm.Router | None) -> bool:
     """
     Returns True if the model is in the llm_router model names
     """
@@ -122,16 +120,12 @@ async def llm_passthrough_factory_proxy_route(
         model=None,
     )
     if provider_config is None:
-        raise HTTPException(
-            status_code=404, detail=f"Provider {custom_llm_provider} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Provider {custom_llm_provider} not found")
 
     base_target_url = provider_config.get_api_base()
 
     if base_target_url is None:
-        raise HTTPException(
-            status_code=404, detail=f"Provider {custom_llm_provider} api base not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Provider {custom_llm_provider} api base not found")
 
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -143,9 +137,7 @@ async def llm_passthrough_factory_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     # Add or update query parameters
@@ -206,17 +198,11 @@ async def gemini_proxy_route(
     [Docs](https://docs.litellm.ai/docs/pass_through/google_ai_studio)
     """
     ## CHECK FOR LITELLM API KEY IN THE QUERY PARAMS - ?..key=LITELLM_API_KEY
-    google_ai_studio_api_key = request.query_params.get("key") or request.headers.get(
-        "x-goog-api-key"
-    )
+    google_ai_studio_api_key = request.query_params.get("key") or request.headers.get("x-goog-api-key")
 
-    user_api_key_dict = await user_api_key_auth(
-        request=request, api_key=f"Bearer {google_ai_studio_api_key}"
-    )
+    user_api_key_dict = await user_api_key_auth(request=request, api_key=f"Bearer {google_ai_studio_api_key}")
 
-    base_target_url = (
-        os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
-    )
+    base_target_url = os.getenv("GEMINI_API_BASE") or "https://generativelanguage.googleapis.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -227,9 +213,7 @@ async def gemini_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     # Add or update query parameters
@@ -292,9 +276,7 @@ async def cohere_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     # Add or update query parameters
@@ -341,9 +323,7 @@ async def vllm_proxy_route(
     from litellm.proxy.proxy_server import llm_router
 
     request_body = await get_request_body(request)
-    is_router_model = is_passthrough_request_using_router_model(
-        request_body, llm_router
-    )
+    is_router_model = is_passthrough_request_using_router_model(request_body, llm_router)
     is_streaming_request = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
         result = cast(
@@ -358,11 +338,7 @@ async def vllm_proxy_route(
                 content=None,
                 data=None,
                 files=None,
-                json=(
-                    request_body
-                    if request.headers.get("content-type") == "application/json"
-                    else None
-                ),
+                json=(request_body if request.headers.get("content-type") == "application/json" else None),
                 params=None,
                 headers=None,
                 cookies=None,
@@ -423,9 +399,7 @@ async def mistral_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     # Add or update query parameters
@@ -468,9 +442,7 @@ async def milvus_proxy_route(
     Enable using Milvus `/vectors` endpoint as a pass-through endpoint.
     """
 
-    provider_config = ProviderConfigManager.get_provider_vector_stores_config(
-        provider=LlmProviders.MILVUS
-    )
+    provider_config = ProviderConfigManager.get_provider_vector_stores_config(provider=LlmProviders.MILVUS)
     if not provider_config:
         raise HTTPException(
             status_code=500,
@@ -516,11 +488,7 @@ async def milvus_proxy_route(
     # get the vector store name from index registry
 
     index_object = (
-        (
-            litellm.vector_store_index_registry.get_vector_store_index_by_name(
-                vector_store_index_name=collection_name
-            )
-        )
+        (litellm.vector_store_index_registry.get_vector_store_index_by_name(vector_store_index_name=collection_name))
         if litellm.vector_store_index_registry is not None
         else None
     )
@@ -545,9 +513,7 @@ async def milvus_proxy_route(
         user_api_key_dict=user_api_key_dict,
     )
     litellm_params = vector_store.get("litellm_params") or {}
-    auth_credentials = provider_config.get_auth_credentials(
-        litellm_params=litellm_params
-    )
+    auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
     extra_headers = auth_credentials.get("headers") or {}
 
@@ -558,9 +524,7 @@ async def milvus_proxy_route(
     )
 
     if base_target_url is None:
-        raise Exception(
-            f"api_base not found in vector store configuration for {vector_store_name}"
-        )
+        raise Exception(f"api_base not found in vector store configuration for {vector_store_name}")
 
     encoded_endpoint = httpx.URL(endpoint).path
 
@@ -572,9 +536,7 @@ async def milvus_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
@@ -617,11 +579,7 @@ async def anthropic_proxy_route(
     """
     [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
-    base_target_url = (
-        os.getenv("ANTHROPIC_API_BASE")
-        or os.getenv("ANTHROPIC_BASE_URL")
-        or "https://api.anthropic.com"
-    )
+    base_target_url = os.getenv("ANTHROPIC_API_BASE") or os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
 
     # Ensure endpoint starts with '/' for proper URL construction
@@ -632,9 +590,7 @@ async def anthropic_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     # Add or update query parameters
@@ -870,9 +826,7 @@ async def handle_bedrock_count_tokens(
         # Extract model from request body
         model = request_body.get("model")
         if not model:
-            raise HTTPException(
-                status_code=400, detail={"error": "Model is required in request body"}
-            )
+            raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
 
         # Get model parameters from router
         litellm_params = {"user_api_key_dict": user_api_key_dict}
@@ -908,18 +862,14 @@ async def handle_bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.error(
-            f"BedrockError in handle_bedrock_count_tokens: {str(e)}"
-        )
+        verbose_proxy_logger.error(f"BedrockError in handle_bedrock_count_tokens: {str(e)}")
         raise HTTPException(status_code=e.status_code, detail={"error": e.message})
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error in handle_bedrock_count_tokens: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail={"error": f"CountTokens processing error: {str(e)}"}
-        )
+        raise HTTPException(status_code=500, detail={"error": f"CountTokens processing error: {str(e)}"})
 
 
 async def bedrock_llm_proxy_route(
@@ -977,9 +927,7 @@ async def bedrock_llm_proxy_route(
         )
 
     # Check if this is a router model (from config.yaml)
-    is_router_model = is_passthrough_request_using_router_model(
-        request_body={"model": model}, llm_router=llm_router
-    )
+    is_router_model = is_passthrough_request_using_router_model(request_body={"model": model}, llm_router=llm_router)
 
     # If router model, use dedicated router passthrough handler
     # This uses the same common processing path as non-router models
@@ -1004,9 +952,7 @@ async def bedrock_llm_proxy_route(
         )
 
     # Fall back to existing implementation for direct Bedrock models
-    verbose_proxy_logger.debug(
-        f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'"
-    )
+    verbose_proxy_logger.debug(f"Bedrock passthrough: Using direct Bedrock model '{model}' for endpoint '{endpoint}'")
 
     data: Dict[str, Any] = {}
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -1071,9 +1017,7 @@ async def bedrock_proxy_route(
 
     aws_region_name = litellm.utils.get_secret(secret_name="AWS_REGION_NAME")
     if _is_bedrock_agent_runtime_route(endpoint=endpoint):  # handle bedrock agents
-        base_target_url = (
-            f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
-        )
+        base_target_url = f"https://bedrock-agent-runtime.{aws_region_name}.amazonaws.com"
     else:
         return await bedrock_llm_proxy_route(
             endpoint=endpoint,
@@ -1091,9 +1035,7 @@ async def bedrock_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     # Add or update query parameters
@@ -1108,9 +1050,7 @@ async def bedrock_proxy_route(
         data = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
-    _request = AWSRequest(
-        method="POST", url=str(updated_url), data=json.dumps(data), headers=headers
-    )
+    _request = AWSRequest(method="POST", url=str(updated_url), data=json.dumps(data), headers=headers)
     sigv4.add_auth(_request)
     prepped = _request.prepare()
 
@@ -1167,9 +1107,7 @@ def _resolve_vertex_model_from_router(
         return encoded_endpoint, endpoint, vertex_project, vertex_location
 
     try:
-        deployment = llm_router.get_available_deployment_for_pass_through(
-            model=model_id
-        )
+        deployment = llm_router.get_available_deployment_for_pass_through(model=model_id)
         if not deployment:
             return encoded_endpoint, endpoint, vertex_project, vertex_location
 
@@ -1190,9 +1128,7 @@ def _resolve_vertex_model_from_router(
             # get_llm_provider returns (model, custom_llm_provider, dynamic_api_key, api_base)
             # For "vertex_ai/gemini-2.0-flash-exp" it returns:
             # model="gemini-2.0-flash-exp", custom_llm_provider="vertex_ai"
-            actual_model, custom_llm_provider, _, _ = get_llm_provider(
-                model=model_from_config
-            )
+            actual_model, custom_llm_provider, _, _ = get_llm_provider(model=model_from_config)
 
             # Log only non-sensitive information (model names and provider), never API keys or secrets.
             safe_actual_model = actual_model
@@ -1217,9 +1153,7 @@ def _resolve_vertex_model_from_router(
                 endpoint = endpoint.replace(model_id, actual_model)
 
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Error resolving vertex model from router for model {model_id}: {e}"
-        )
+        verbose_proxy_logger.debug(f"Error resolving vertex model from router for model {model_id}: {e}")
 
     return encoded_endpoint, endpoint, vertex_project, vertex_location
 
@@ -1258,14 +1192,8 @@ async def assemblyai_proxy_route(
     [Docs](https://api.assemblyai.com)
     """
     # Set base URL based on the route
-    assembly_region = AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(
-        url=str(request.url)
-    )
-    base_target_url = (
-        AssemblyAIPassthroughLoggingHandler._get_assembly_base_url_from_region(
-            region=assembly_region
-        )
-    )
+    assembly_region = AssemblyAIPassthroughLoggingHandler._get_assembly_region_from_url(url=str(request.url))
+    base_target_url = AssemblyAIPassthroughLoggingHandler._get_assembly_base_url_from_region(region=assembly_region)
     encoded_endpoint = httpx.URL(endpoint).path
     # Ensure endpoint starts with '/' for proper URL construction
     if not encoded_endpoint.startswith("/"):
@@ -1275,9 +1203,7 @@ async def assemblyai_proxy_route(
     # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     # Add or update query parameters
@@ -1347,11 +1273,7 @@ async def azure_proxy_route(
             )
             # check if vector store index
             is_vector_store_index = (
-                (
-                    litellm.vector_store_index_registry.is_vector_store_index(
-                        vector_store_index_name=part
-                    )
-                )
+                (litellm.vector_store_index_registry.is_vector_store_index(vector_store_index_name=part))
                 if litellm.vector_store_index_registry is not None
                 else False
             )
@@ -1369,11 +1291,7 @@ async def azure_proxy_route(
                     content=None,
                     data=None,
                     files=None,
-                    json=(
-                        request_body
-                        if request.headers.get("content-type") == "application/json"
-                        else None
-                    ),
+                    json=(request_body if request.headers.get("content-type") == "application/json" else None),
                     params=None,
                     headers=None,
                     cookies=None,
@@ -1415,10 +1333,8 @@ async def azure_proxy_route(
                 )
             elif is_vector_store_index:
                 # get the api key from the provider config
-                provider_config = (
-                    ProviderConfigManager.get_provider_vector_stores_config(
-                        provider=litellm.LlmProviders.AZURE_AI
-                    )
+                provider_config = ProviderConfigManager.get_provider_vector_stores_config(
+                    provider=litellm.LlmProviders.AZURE_AI
                 )
                 if provider_config is None:
                     raise Exception("Provider config not found for Azure AI")
@@ -1434,11 +1350,7 @@ async def azure_proxy_route(
                 )
                 # get the vector store name from index registry
                 index_object = (
-                    (
-                        litellm.vector_store_index_registry.get_vector_store_index_by_name(
-                            vector_store_index_name=part
-                        )
-                    )
+                    (litellm.vector_store_index_registry.get_vector_store_index_by_name(vector_store_index_name=part))
                     if litellm.vector_store_index_registry is not None
                     else None
                 )
@@ -1457,9 +1369,7 @@ async def azure_proxy_route(
                     user_api_key_dict=user_api_key_dict,
                 )
                 litellm_params = vector_store.get("litellm_params") or {}
-                auth_credentials = provider_config.get_auth_credentials(
-                    litellm_params=litellm_params
-                )
+                auth_credentials = provider_config.get_auth_credentials(litellm_params=litellm_params)
 
                 extra_headers = auth_credentials.get("headers") or {}
 
@@ -1479,18 +1389,14 @@ async def azure_proxy_route(
 
     base_target_url = get_secret_str(secret_name="AZURE_API_BASE")
     if base_target_url is None:
-        raise Exception(
-            "Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure."
-        )
+        raise Exception("Required 'AZURE_API_BASE' in environment to make pass-through calls to Azure.")
     # Add or update query parameters
     azure_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider=litellm.LlmProviders.AZURE.value,
         region_name=None,
     )
     if azure_api_key is None:
-        raise Exception(
-            "Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure."
-        )
+        raise Exception("Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure.")
 
     return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
         endpoint=endpoint,
@@ -1514,9 +1420,7 @@ class BaseVertexAIPassThroughHandler(ABC):
 
     @staticmethod
     @abstractmethod
-    def update_base_target_url_with_credential_location(
-        base_target_url: str, vertex_location: str | None
-    ) -> str:
+    def update_base_target_url_with_credential_location(base_target_url: str, vertex_location: str | None) -> str:
         pass
 
 
@@ -1526,9 +1430,7 @@ class VertexAIDiscoveryPassThroughHandler(BaseVertexAIPassThroughHandler):
         return "https://discoveryengine.googleapis.com/"
 
     @staticmethod
-    def update_base_target_url_with_credential_location(
-        base_target_url: str, vertex_location: str | None
-    ) -> str:
+    def update_base_target_url_with_credential_location(base_target_url: str, vertex_location: str | None) -> str:
         return base_target_url
 
 
@@ -1538,9 +1440,7 @@ class VertexAIPassThroughHandler(BaseVertexAIPassThroughHandler):
         return get_vertex_base_url(vertex_location)
 
     @staticmethod
-    def update_base_target_url_with_credential_location(
-        base_target_url: str, vertex_location: str | None
-    ) -> str:
+    def update_base_target_url_with_credential_location(base_target_url: str, vertex_location: str | None) -> str:
         return get_vertex_base_url(vertex_location)
 
 
@@ -1612,15 +1512,11 @@ def _override_vertex_params_from_router_credentials(
     if router_credentials is None:
         return vertex_project, vertex_location
 
-    verbose_proxy_logger.debug(
-        "Using vector store credentials to override vertex project and location"
-    )
+    verbose_proxy_logger.debug("Using vector store credentials to override vertex project and location")
 
     litellm_params = router_credentials.get("litellm_params", {})
     if not litellm_params:
-        verbose_proxy_logger.warning(
-            "Vector store credentials found but litellm_params is empty"
-        )
+        verbose_proxy_logger.warning("Vector store credentials found but litellm_params is empty")
         return vertex_project, vertex_location
 
     # Extract vertex_project and vertex_location from litellm_params
@@ -1635,9 +1531,7 @@ def _override_vertex_params_from_router_credentials(
         )
         vertex_project = vector_store_project
     else:
-        verbose_proxy_logger.warning(
-            "Vector store credentials found but missing vertex_project in litellm_params"
-        )
+        verbose_proxy_logger.warning("Vector store credentials found but missing vertex_project in litellm_params")
 
     if vector_store_location:
         verbose_proxy_logger.debug(
@@ -1647,9 +1541,7 @@ def _override_vertex_params_from_router_credentials(
         )
         vertex_location = vector_store_location
     else:
-        verbose_proxy_logger.warning(
-            "Vector store credentials found but missing vertex_location in litellm_params"
-        )
+        verbose_proxy_logger.warning("Vector store credentials found but missing vertex_location in litellm_params")
 
     return vertex_project, vertex_location
 
@@ -1687,14 +1579,10 @@ async def _prepare_vertex_auth_headers(
     headers_passed_through = False
 
     # Use headers from the incoming request if no vertex credentials are found
-    if (
-        vertex_credentials is None or vertex_credentials.vertex_project is None
-    ) and router_credentials is None:
+    if (vertex_credentials is None or vertex_credentials.vertex_project is None) and router_credentials is None:
         headers = _safe_get_request_headers(request).copy()
         headers_passed_through = True
-        verbose_proxy_logger.debug(
-            "default_vertex_config  not set, incoming request headers %s", headers
-        )
+        verbose_proxy_logger.debug("default_vertex_config  not set, incoming request headers %s", headers)
         headers.pop("content-length", None)
         headers.pop("host", None)
     else:
@@ -1835,9 +1723,7 @@ async def _base_vertex_proxy_route(
         location=vertex_location,
     )
 
-    base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(
-        vertex_location
-    )
+    base_target_url = get_vertex_pass_through_handler.get_default_base_target_url(vertex_location)
 
     # Prepare authentication headers
     (
@@ -1932,21 +1818,15 @@ async def vertex_discovery_proxy_route(
 
     if vector_store_id_match:
         vector_store_id = vector_store_id_match.group(1)
-        verbose_proxy_logger.debug(
-            "Extracted vector store ID from endpoint: %s", vector_store_id
-        )
+        verbose_proxy_logger.debug("Extracted vector store ID from endpoint: %s", vector_store_id)
 
         # Retrieve LiteLLM-managed vector store credentials if the datastore id
         # is registered with LiteLLM. Unknown datastore ids keep the existing
         # direct Vertex pass-through behavior.
-        vector_store_credentials = await get_litellm_managed_vector_store(
-            vector_store_id=vector_store_id
-        )
+        vector_store_credentials = await get_litellm_managed_vector_store(vector_store_id=vector_store_id)
 
         if vector_store_credentials:
-            verbose_proxy_logger.debug(
-                "Found vector store credentials for ID: %s", vector_store_id
-            )
+            verbose_proxy_logger.debug("Found vector store credentials for ID: %s", vector_store_id)
         else:
             verbose_proxy_logger.debug(
                 "Vector store ID %s found in endpoint but no credentials found in registry",
@@ -2042,9 +1922,7 @@ async def openai_proxy_route(
         region_name=None,
     )
     if openai_api_key is None:
-        raise Exception(
-            "Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI."
-        )
+        raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
     return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
         endpoint=endpoint,
@@ -2116,17 +1994,12 @@ class BaseOpenAIPassThroughHandler:
         """
         Appends the OpenAI-Beta header to the headers if the request is an OpenAI Assistants API request
         """
-        if (
-            RouteChecks._is_assistants_api_request(request) is True
-            and "OpenAI-Beta" not in headers
-        ):
+        if RouteChecks._is_assistants_api_request(request) is True and "OpenAI-Beta" not in headers:
             headers["OpenAI-Beta"] = "assistants=v2"
         return headers
 
     @staticmethod
-    def _assemble_headers(
-        api_key: str | None, request: Request, extra_headers: dict | None = None
-    ) -> dict:
+    def _assemble_headers(api_key: str | None, request: Request, extra_headers: dict | None = None) -> dict:
         base_headers = {}
         if api_key is not None:
             base_headers = {
@@ -2141,31 +2014,20 @@ class BaseOpenAIPassThroughHandler:
         )
 
     @staticmethod
-    def _join_url_paths(
-        base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders
-    ) -> str:
+    def _join_url_paths(base_url: httpx.URL, path: str, custom_llm_provider: litellm.LlmProviders) -> str:
         """
         Properly joins a base URL with a path, preserving any existing path in the base URL.
         """
         # Combine paths via the shared helper so any '..' in the path cannot
         # climb above the configured base path.
         joined_path_str = str(
-            base_url.copy_with(
-                path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-                    base_url, path
-                )
-            )
+            base_url.copy_with(path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, path))
         )
 
         # Apply OpenAI-specific path handling for both branches
-        if (
-            custom_llm_provider == litellm.LlmProviders.OPENAI
-            and "/v1/" not in joined_path_str
-        ):
+        if custom_llm_provider == litellm.LlmProviders.OPENAI and "/v1/" not in joined_path_str:
             # Insert v1 after api.openai.com for OpenAI requests
-            joined_path_str = joined_path_str.replace(
-                "api.openai.com/", "api.openai.com/v1/"
-            )
+            joined_path_str = joined_path_str.replace("api.openai.com/", "api.openai.com/v1/")
 
         return joined_path_str
 
@@ -2214,10 +2076,7 @@ async def cursor_proxy_route(
 
     if cursor_api_key is None:
         for credential in litellm.credential_list:
-            if (
-                credential.credential_info
-                and credential.credential_info.get("custom_llm_provider") == "cursor"
-            ):
+            if credential.credential_info and credential.credential_info.get("custom_llm_provider") == "cursor":
                 cursor_api_key = credential.credential_values.get("api_key")
                 credential_api_base = credential.credential_values.get("api_base")
                 if credential_api_base:
@@ -2237,9 +2096,7 @@ async def cursor_proxy_route(
 
     base_url = httpx.URL(base_target_url)
     updated_url = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
-            base_url, encoded_endpoint
-        )
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
 
     auth_value = base64.b64encode(f"{cursor_api_key}:".encode("utf-8")).decode("ascii")
@@ -2316,9 +2173,7 @@ async def vertex_ai_live_websocket_passthrough(
         )
 
     try:
-        resolved_location = resolved_location or (
-            vertex_llm_base.get_default_vertex_location()
-        )
+        resolved_location = resolved_location or (vertex_llm_base.get_default_vertex_location())
         if model:
             resolved_location = vertex_llm_base.get_vertex_region(
                 vertex_region=resolved_location,
@@ -2334,9 +2189,7 @@ async def vertex_ai_live_websocket_passthrough(
             custom_llm_provider="vertex_ai_beta",
         )
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "Failed to prepare Vertex AI credentials for live passthrough"
-        )
+        verbose_proxy_logger.exception("Failed to prepare Vertex AI credentials for live passthrough")
         # Log the authentication failure using proxy_logging_obj
         if proxy_logging_obj and user_api_key_dict:
             await proxy_logging_obj.post_call_failure_hook(
@@ -2350,9 +2203,7 @@ async def vertex_ai_live_websocket_passthrough(
 
     host_location = resolved_location or vertex_llm_base.get_default_vertex_location()
     host = get_vertex_base_url(host_location).removeprefix("https://").rstrip("/")
-    service_url = (
-        f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
-    )
+    service_url = f"wss://{host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
     upstream_headers = {
         "Authorization": f"Bearer {access_token}",
@@ -2476,13 +2327,9 @@ async def gigachat_proxy_route(
 
     model = request_body.get("model")
     if model:
-        is_router_model = is_passthrough_request_using_router_model(
-            request_body, llm_router
-        )
+        is_router_model = is_passthrough_request_using_router_model(request_body, llm_router)
     elif any(word in endpoint for word in ("completions", "embeddings")):
-        raise HTTPException(
-            status_code=400, detail={"error": "Model is required in request body"}
-        )
+        raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
 
     # If router model, use dedicated router passthrough handler
     # This uses the same common processing path as non-router models
@@ -2508,9 +2355,7 @@ async def gigachat_proxy_route(
         )
 
     # Fall back to existing implementation for direct GigaChat models
-    verbose_proxy_logger.debug(
-        f"Gigachat passthrough: Using direct Gigachat model '{model}' for endpoint '{endpoint}'"
-    )
+    verbose_proxy_logger.debug(f"Gigachat passthrough: Using direct Gigachat model '{model}' for endpoint '{endpoint}'")
 
     data: Dict[str, Any] = {}
 
@@ -2608,25 +2453,13 @@ async def handle_gigachat_passthrough_router_model(
     if user_api_key_dict is not None:
         if data.get("metadata") is None:
             data["metadata"] = {}
-        if (
-            hasattr(user_api_key_dict, "user_id")
-            and user_api_key_dict.user_id is not None
-        ):
+        if hasattr(user_api_key_dict, "user_id") and user_api_key_dict.user_id is not None:
             data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
-        if (
-            hasattr(user_api_key_dict, "team_id")
-            and user_api_key_dict.team_id is not None
-        ):
+        if hasattr(user_api_key_dict, "team_id") and user_api_key_dict.team_id is not None:
             data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
-        if (
-            hasattr(user_api_key_dict, "org_id")
-            and user_api_key_dict.org_id is not None
-        ):
+        if hasattr(user_api_key_dict, "org_id") and user_api_key_dict.org_id is not None:
             data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
-        if (
-            hasattr(user_api_key_dict, "agent_id")
-            and user_api_key_dict.agent_id is not None
-        ):
+        if hasattr(user_api_key_dict, "agent_id") and user_api_key_dict.agent_id is not None:
             data["metadata"]["agent_id"] = user_api_key_dict.agent_id
 
     verbose_proxy_logger.debug(
@@ -2729,9 +2562,7 @@ async def watsonx_proxy_route(
     )
 
     if provider_config is None:
-        raise HTTPException(
-            status_code=404, detail="Watsonx passthrough config not found"
-        )
+        raise HTTPException(status_code=404, detail="Watsonx passthrough config not found")
 
     # Get complete URL with version parameter
     complete_url, _ = provider_config.get_complete_url(
