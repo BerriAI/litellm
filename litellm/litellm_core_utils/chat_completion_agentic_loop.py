@@ -34,21 +34,9 @@ def _gate_overridden(callback: CustomLogger) -> bool:
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
 
 
-def _chat_completion_gate_overridden(callback: CustomLogger) -> bool:
-    base = CustomLogger.async_should_run_chat_completion_agentic_loop
-    func = type(callback).async_should_run_chat_completion_agentic_loop
-    return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
-
-
 def _build_plan_overridden(callback: CustomLogger) -> bool:
     base = CustomLogger.async_build_agentic_loop_plan
     func = type(callback).async_build_agentic_loop_plan
-    return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
-
-
-def _chat_completion_build_plan_overridden(callback: CustomLogger) -> bool:
-    base = CustomLogger.async_build_chat_completion_agentic_loop_plan
-    func = type(callback).async_build_chat_completion_agentic_loop_plan
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
 
 
@@ -219,8 +207,7 @@ async def maybe_run_chat_completion_agentic_loop(
         if not isinstance(callback, CustomLogger):
             continue
 
-        use_chat_hooks = _chat_completion_gate_overridden(callback)
-        if not use_chat_hooks and not _gate_overridden(callback):
+        if not _gate_overridden(callback):
             continue
 
         hook_kwargs = {
@@ -229,12 +216,7 @@ async def maybe_run_chat_completion_agentic_loop(
             "custom_llm_provider": custom_llm_provider,
         }
         try:
-            gate = (
-                callback.async_should_run_chat_completion_agentic_loop
-                if use_chat_hooks
-                else callback.async_should_run_agentic_loop
-            )
-            should_run, tool_calls = await gate(
+            should_run, tool_calls = await callback.async_should_run_agentic_loop(
                 response=response,
                 model=model,
                 messages=messages,
@@ -262,31 +244,8 @@ async def maybe_run_chat_completion_agentic_loop(
         )
 
         try:
-            if use_chat_hooks and not _chat_completion_build_plan_overridden(callback):
-                return await callback.async_run_chat_completion_agentic_loop(
-                    tools=tool_calls,
-                    model=model,
-                    messages=messages,
-                    response=response,
-                    optional_params=optional_params,
-                    logging_obj=logging_obj,
-                    stream=stream,
-                    kwargs=hook_kwargs,
-                )
-
-            if use_chat_hooks:
-                plan = await callback.async_build_chat_completion_agentic_loop_plan(
-                    tools=tool_calls,
-                    model=model,
-                    messages=messages,
-                    response=response,
-                    optional_params=optional_params,
-                    logging_obj=logging_obj,
-                    stream=stream,
-                    kwargs=hook_kwargs,
-                )
-            else:
-                plan = await callback.async_build_agentic_loop_plan(
+            if not _build_plan_overridden(callback):
+                return await callback.async_run_agentic_loop(
                     tools=tool_calls,
                     model=model,
                     messages=messages,
@@ -297,6 +256,18 @@ async def maybe_run_chat_completion_agentic_loop(
                     stream=stream,
                     kwargs=hook_kwargs,
                 )
+
+            plan = await callback.async_build_agentic_loop_plan(
+                tools=tool_calls,
+                model=model,
+                messages=messages,
+                response=response,
+                anthropic_messages_provider_config=None,
+                anthropic_messages_optional_request_params=optional_params,
+                logging_obj=logging_obj,
+                stream=stream,
+                kwargs=hook_kwargs,
+            )
 
             if plan.response_override is not None:
                 return plan.response_override
