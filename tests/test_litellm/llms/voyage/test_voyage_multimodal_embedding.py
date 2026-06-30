@@ -10,12 +10,8 @@ class TestVoyageMultimodalEmbeddings:
             VoyageMultimodalEmbeddingConfig,
         )
 
-        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
-            "voyage-multimodal-3.5"
-        )
-        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
-            "voyage-multimodal-3"
-        )
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings("voyage-multimodal-3.5")
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings("voyage-multimodal-3")
         assert not VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings("voyage-4")
 
     def test_multimodal_embedding_url_generation(self):
@@ -29,9 +25,7 @@ class TestVoyageMultimodalEmbeddings:
             == "https://api.voyageai.com/v1/multimodalembeddings"
         )
         assert (
-            config.get_complete_url(
-                "https://custom.api.com", None, "voyage-multimodal-3.5", {}, {}
-            )
+            config.get_complete_url("https://custom.api.com", None, "voyage-multimodal-3.5", {}, {})
             == "https://custom.api.com/multimodalembeddings"
         )
         assert (
@@ -87,9 +81,7 @@ class TestVoyageMultimodalEmbeddings:
         )
 
         config = VoyageMultimodalEmbeddingConfig()
-        request = config.transform_embedding_request(
-            "voyage-multimodal-3.5", "hello", {}, {}
-        )
+        request = config.transform_embedding_request("voyage-multimodal-3.5", "hello", {}, {})
         assert request["inputs"] == [{"content": [{"type": "text", "text": "hello"}]}]
 
     def test_multimodal_embedding_response_transformation(self):
@@ -176,9 +168,7 @@ class TestVoyageMultimodalEmbeddings:
         )
 
         config = VoyageMultimodalEmbeddingConfig()
-        headers = config.validate_environment(
-            {}, "voyage-multimodal-3.5", [], {}, {}, api_key="test-key"
-        )
+        headers = config.validate_environment({}, "voyage-multimodal-3.5", [], {}, {}, api_key="test-key")
         assert headers == {"Authorization": "Bearer test-key"}
 
     def test_validate_environment_uses_secret_fallback(self, monkeypatch):
@@ -192,9 +182,7 @@ class TestVoyageMultimodalEmbeddings:
 
         monkeypatch.setattr(module, "get_secret_str", fake_get_secret)
         config = VoyageMultimodalEmbeddingConfig()
-        headers = config.validate_environment(
-            {}, "voyage-multimodal-3.5", [], {}, {}, api_key=None
-        )
+        headers = config.validate_environment({}, "voyage-multimodal-3.5", [], {}, {}, api_key=None)
         assert headers == {"Authorization": "Bearer secret-key"}
 
     def test_validate_environment_raises_without_api_key(self, monkeypatch):
@@ -206,9 +194,7 @@ class TestVoyageMultimodalEmbeddings:
         monkeypatch.setattr(module, "get_secret_str", lambda name: None)
         config = VoyageMultimodalEmbeddingConfig()
         with pytest.raises(ValueError) as exc_info:
-            config.validate_environment(
-                {}, "voyage-multimodal-3.5", [], {}, {}, api_key=None
-            )
+            config.validate_environment({}, "voyage-multimodal-3.5", [], {}, {}, api_key=None)
         assert "VOYAGE_API_KEY" in str(exc_info.value)
 
     def test_normalize_image_url_dict_missing_url_raises(self):
@@ -226,15 +212,9 @@ class TestVoyageMultimodalEmbeddings:
             VoyageMultimodalEmbeddingConfig,
         )
 
-        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
-            "voyage-multimodal-3"
-        )
-        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
-            "VOYAGE-MULTIMODAL-3.5"
-        )
-        assert not VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
-            "voyage-3.5"
-        )
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings("voyage-multimodal-3")
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings("VOYAGE-MULTIMODAL-3.5")
+        assert not VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings("voyage-3.5")
 
     def test_utils_routing_via_provider_config_and_dimensions(self):
         import litellm
@@ -310,9 +290,7 @@ class TestVoyageMultimodalEmbeddings:
         )
 
         config = VoyageMultimodalEmbeddingConfig()
-        request = config.transform_embedding_request(
-            "voyage-multimodal-3.5", [{"foo": "bar"}], {}, {}
-        )
+        request = config.transform_embedding_request("voyage-multimodal-3.5", [{"foo": "bar"}], {}, {})
         assert request["inputs"] == [{"foo": "bar"}]
 
     def test_error_response_transformation_and_error_class(self):
@@ -329,9 +307,7 @@ class TestVoyageMultimodalEmbeddings:
         raw_response.text = "bad request"
 
         with pytest.raises(VoyageMultimodalEmbeddingError) as exc_info:
-            config.transform_embedding_response(
-                "voyage-multimodal-3.5", raw_response, EmbeddingResponse(), MagicMock()
-            )
+            config.transform_embedding_response("voyage-multimodal-3.5", raw_response, EmbeddingResponse(), MagicMock())
         assert exc_info.value.status_code == 400
         assert exc_info.value.message == "bad request"
 
