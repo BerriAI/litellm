@@ -1,4 +1,5 @@
 #### CRUD ENDPOINTS for UI Settings #####
+import asyncio
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 from urllib.parse import urlparse
@@ -599,12 +600,18 @@ async def _update_litellm_setting(
     await proxy_config.save_config(new_config=config)
 
     if user_api_key_dict is not None:
-        await create_config_audit_log(
-            param_name=settings_key,
-            action="updated",
-            before_value=before_value,
-            after_value=in_memory_var,
-            user_api_key_dict=user_api_key_dict,
+        # Fire-and-forget so an audit-log failure (transient DB blip, etc.)
+        # never surfaces as a 500 after save_config has already committed,
+        # matching the create_object_audit_log pattern used elsewhere
+        # (e.g. model_management_endpoints).
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name=settings_key,
+                action="updated",
+                before_value=before_value,
+                after_value=in_memory_var,
+                user_api_key_dict=user_api_key_dict,
+            )
         )
 
     return {

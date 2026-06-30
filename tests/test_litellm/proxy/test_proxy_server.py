@@ -8740,3 +8740,29 @@ async def test_create_config_audit_log_noop_when_store_audit_logs_disabled(monke
         UserAPIKeyAuth(api_key="k", user_id="u"),
     )
     fake.db.litellm_auditlog.create.assert_not_called()
+
+
+def test_dump_redacted_config_serializes_non_json_native_values():
+    """YAML-loaded config can contain datetime/date/custom values that plain
+    json.dumps refuses. Without default=str the audit write turns into a 500
+    after the config change has already committed; the sibling audit-log
+    serializers in team_endpoints.py use default=str for the same reason."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.proxy_server import _dump_redacted_config
+
+    out = _dump_redacted_config({"updated_at": datetime(2026, 6, 30, tzinfo=timezone.utc)})
+    assert out is not None
+    restored = json.loads(out)
+    assert "2026-06-30" in restored["updated_at"]
+
+
+def test_dump_redacted_config_redacts_non_dict_when_redact_all_values():
+    """The redact_all_values branch must not silently fall through to the
+    key-name matcher for non-dict inputs, or a future caller storing the
+    section as a list/scalar would leak plaintext."""
+    from litellm.proxy.proxy_server import _dump_redacted_config
+
+    list_value = ["DATABASE_URL=postgresql://u:p@db/x"]
+    assert _dump_redacted_config(list_value, redact_all_values=True) == '"REDACTED"'
+    assert _dump_redacted_config("postgresql://u:p@db/x", redact_all_values=True) == '"REDACTED"'

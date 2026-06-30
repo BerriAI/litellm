@@ -14208,11 +14208,20 @@ def _redact_general_setting_value(field_name: str, value: JsonValue, is_full_adm
 
 
 def _dump_redacted_config(value: Optional[JsonValue], *, redact_all_values: bool = False) -> Optional[str]:
+    # `default=str` matches the sibling audit-log serializers in
+    # team_endpoints.py and the LiteLLM_AuditLogs validator, so a YAML-loaded
+    # value with a non-JSON-native leaf (datetime, custom object) cannot turn
+    # an audit write into a 500.
     if value is None:
         return None
-    if redact_all_values and isinstance(value, dict):
-        return json.dumps({key: "REDACTED" for key in value})
-    return json.dumps(_redact_secret_values_in_obj(value))
+    if redact_all_values:
+        if isinstance(value, dict):
+            return json.dumps({key: "REDACTED" for key in value}, default=str)
+        # Defensive fallback if a future caller stores this section as a
+        # non-dict: redact wholesale rather than silently leaking through the
+        # key-name matcher below.
+        return json.dumps("REDACTED")
+    return json.dumps(_redact_secret_values_in_obj(value), default=str)
 
 
 async def create_config_audit_log(

@@ -1922,3 +1922,41 @@ def test_update_internal_user_settings_writes_audit_log(mock_proxy_config, monke
         assert after["max_budget"] == 999.0
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_update_internal_user_settings_returns_200_when_audit_write_raises(
+    mock_proxy_config, monkeypatch
+):
+    """The settings change is already committed by save_config, so an
+    audit-log failure must never surface as a 500. Scheduling via
+    asyncio.create_task keeps the audit call off the request path; this
+    test asserts that contract by making the audit helper raise."""
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+
+    async def _raise(**_kwargs):
+        raise RuntimeError("audit prisma blip")
+
+    monkeypatch.setattr(proxy_server_module, "create_config_audit_log", _raise)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/internal_user_settings", json={"max_budget": 42.0}
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "success"
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
