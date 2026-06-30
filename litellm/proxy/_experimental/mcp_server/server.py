@@ -3473,6 +3473,18 @@ if MCP_AVAILABLE:
                     headers={"www-authenticate": authorization_uri},
                 )
 
+            # token_exchange (OBO): the caller supplied no subject token. Challenge at connect
+            # (transport level, where WWW-Authenticate survives) with the RFC 9728 resource_metadata
+            # so the client discovers the IdP, SSOs, and retries with a subject token, which LiteLLM
+            # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
+            # header lost, so the discovery flow needs this pre-emptive challenge.
+            if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                    raise_token_exchange_challenge,
+                )
+
+                raise_token_exchange_challenge(server)
+
             # Pass-through OAuth: when the admin has opted a server into
             # forwarding the client's bearer token (is_oauth_passthrough) and
             # the client hasn't supplied one, fail fast with 401 and point

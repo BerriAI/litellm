@@ -1924,7 +1924,11 @@ class MCPServerManager:
         # forward an arbitrary bearer upstream, so we keep the v2 spec and ignore the override for
         # both; the REST tools preview supplies its not-yet-persisted token through the resolver
         # (cred_provider), never this path.
-        if spec is not None and mcp_auth_header and not isinstance(spec.config, (AuthorizationCodeConfig, TokenExchangeConfig)):
+        if (
+            spec is not None
+            and mcp_auth_header
+            and not isinstance(spec.config, (AuthorizationCodeConfig, TokenExchangeConfig))
+        ):
             spec = None
         auth_value = (
             await resolve_mcp_auth(server, mcp_auth_header, subject_token=subject_token) if spec is None else None
