@@ -7,7 +7,7 @@ Use this to route requests between Teams
 """
 
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 
 from litellm._logging import verbose_logger
 from litellm.types.router import RouterErrors
@@ -43,7 +43,9 @@ def _is_valid_deployment_tag_regex(
     return None
 
 
-def is_valid_deployment_tag(deployment_tags: List[str], request_tags: List[str], match_any: bool = True) -> bool:
+def is_valid_deployment_tag(
+    deployment_tags: List[str], request_tags: List[str], match_any: bool = True
+) -> bool:
     """
     Check if a tag is valid, the matching can be either any or all based on `match_any` flag
     """
@@ -107,11 +109,34 @@ def _match_deployment(
     deployment_has_plain_tags = deployment_tags is not None and len(deployment_tags) > 0
     strict_tag_check_failed = not match_any and deployment_has_plain_tags
     if deployment_tag_regex and header_strings and not strict_tag_check_failed:
-        regex_match = _is_valid_deployment_tag_regex(deployment_tag_regex, header_strings)
+        regex_match = _is_valid_deployment_tag_regex(
+            deployment_tag_regex, header_strings
+        )
         if regex_match is not None:
             return {"matched_via": "tag_regex", "matched_value": regex_match}
 
     return None
+
+
+def _compile_negation_pattern(pattern_str: str) -> Optional[re.Pattern[str]]:
+    try:
+        return re.compile(pattern_str)
+    except re.error:
+        verbose_logger.warning(
+            "tag negation: invalid regex pattern %r — skipping", pattern_str
+        )
+        return None
+
+
+def _split_tags(tags: List[str]) -> Tuple[List[str], List[re.Pattern[str]]]:
+    positive = [t for t in tags if not t.startswith("!")]
+    excluded_patterns = [
+        p
+        for tag in tags
+        if tag.startswith("!")
+        if (p := _compile_negation_pattern(tag[1:])) is not None
+    ]
+    return positive, excluded_patterns
 
 
 async def get_deployments_for_tag(
@@ -137,15 +162,21 @@ async def get_deployments_for_tag(
         return healthy_deployments
 
     if healthy_deployments is None:
-        verbose_logger.debug("get_deployments_for_tag: healthy_deployments is None returning healthy_deployments")
+        verbose_logger.debug(
+            "get_deployments_for_tag: healthy_deployments is None returning healthy_deployments"
+        )
         return healthy_deployments
 
     # Tag filtering applies only when there is at least one deployment to evaluate.
     if isinstance(healthy_deployments, list) and len(healthy_deployments) == 0:
-        verbose_logger.debug("get_deployments_for_tag: empty candidate set; skipping tag filter")
+        verbose_logger.debug(
+            "get_deployments_for_tag: empty candidate set; skipping tag filter"
+        )
         return healthy_deployments
 
-    verbose_logger.debug("request metadata: %s", request_kwargs.get(metadata_variable_name))
+    verbose_logger.debug(
+        "request metadata: %s", request_kwargs.get(metadata_variable_name)
+    )
     if metadata_variable_name in request_kwargs:
         metadata = request_kwargs[metadata_variable_name]
         request_tags = metadata.get("tags")
@@ -156,28 +187,51 @@ async def get_deployments_for_tag(
         user_agent = metadata.get("user_agent", "")
         header_strings: List[str] = [f"User-Agent: {user_agent}"] if user_agent else []
 
+        positive_tags, excluded_patterns = _split_tags(request_tags or [])
+
+        candidates: List[Any] = (
+            [
+                d
+                for d in healthy_deployments
+                if not any(
+                    p.search(dt)
+                    for dt in (d.get("litellm_params", {}).get("tags") or [])
+                    for p in excluded_patterns
+                )
+            ]
+            if excluded_patterns
+            else list(healthy_deployments)
+        )
+
+        has_regex_deployments = any(
+            d.get("litellm_params", {}).get("tag_regex") for d in candidates
+        )
+        has_tag_filter = bool(positive_tags) or (
+            bool(header_strings) and has_regex_deployments
+        )
+
+        if excluded_patterns and not has_tag_filter:
+            if not candidates:
+                raise ValueError(
+                    f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+                )
+            return candidates
+
         new_healthy_deployments: List[Any] = []
         default_deployments: List[Any] = []
 
-        # Only activate header-based regex filtering when at least one deployment in
-        # the candidate set has tag_regex configured.  This preserves existing
-        # behaviour for operators who use plain tags: a request that carries a
-        # User-Agent (all proxy requests do) but targets deployments with no
-        # tag_regex will continue to use the original tag-only code path.
-        has_regex_deployments = any(d.get("litellm_params", {}).get("tag_regex") for d in healthy_deployments)
-        has_tag_filter = bool(request_tags) or (bool(header_strings) and has_regex_deployments)
         if has_tag_filter:
             verbose_logger.debug(
                 "get_deployments_for_tag routing: request_tags=%s user_agent=%s",
                 request_tags,
                 user_agent,
             )
-            for deployment in healthy_deployments:
+            for deployment in candidates:
                 deployment_tags = deployment.get("litellm_params", {}).get("tags")
 
                 match_result = _match_deployment(
                     deployment=deployment,
-                    request_tags=request_tags,
+                    request_tags=positive_tags,
                     header_strings=header_strings,
                     match_any=match_any,
                 )
@@ -189,10 +243,6 @@ async def get_deployments_for_tag(
                         match_result["matched_via"],
                         match_result["matched_value"],
                     )
-                    # Record provenance in metadata so it flows to SpendLogs.
-                    # Written only for the first match — load balancer selects one
-                    # deployment from new_healthy_deployments, so overwriting on
-                    # subsequent matches would produce misleading observability data.
                     if "tag_routing" not in metadata:
                         metadata["tag_routing"] = {
                             "matched_deployment": deployment.get("model_name"),
@@ -211,7 +261,11 @@ async def get_deployments_for_tag(
                     f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
                 )
 
-            return new_healthy_deployments if len(new_healthy_deployments) > 0 else default_deployments
+            return (
+                new_healthy_deployments
+                if len(new_healthy_deployments) > 0
+                else default_deployments
+            )
 
     # for Untagged requests use default deployments if set
     _default_deployments_with_tags = []
