@@ -1749,7 +1749,18 @@ async def ui_view_spend_logs(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    if start_date is None or end_date is None:
+    # Inline import — auth_utils participates in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+    is_v2 = "/spend/logs/v2" in get_request_route(request)
+
+    # request_id is the @id primary key, so it identifies a single row and needs
+    # no time window. The internal UI always sends a 24h window, which is why a
+    # log id copied from an older page could not be found; drop the window for an
+    # id lookup on the UI route so it resolves across all time (LIT-3981).
+    apply_date_window = is_v2 or request_id is None
+
+    if apply_date_window and (start_date is None or end_date is None):
         raise ProxyException(
             message="Start date and end date are required",
             type="bad_request",
@@ -1783,10 +1794,6 @@ async def ui_view_spend_logs(
         )
 
     try:
-        # Inline import — auth_utils participates in a proxy import cycle.
-        from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
-
-        is_v2 = "/spend/logs/v2" in get_request_route(request)
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
         def parse_date(date_str: str) -> datetime:
@@ -1802,17 +1809,16 @@ async def ui_view_spend_logs(
                 detail=f"Invalid date format: {date_str}. Expected: {expected}",
             )
 
-        start_date_obj = parse_date(start_date)
-        end_date_obj = parse_date(end_date)
-
-        # Convert to ISO format strings for Prisma
-        start_date_iso = start_date_obj.isoformat()  # Already in UTC, no need to add Z
-        end_date_iso = end_date_obj.isoformat()  # Already in UTC, no need to add Z
+        start_date_obj = parse_date(start_date) if apply_date_window else None
+        end_date_obj = parse_date(end_date) if apply_date_window else None
 
         # Build where conditions
-        where_conditions: dict[str, Any] = {
-            "startTime": {"gte": start_date_iso, "lte": end_date_iso},
-        }
+        where_conditions: dict[str, Any] = {}
+        if start_date_obj is not None and end_date_obj is not None:
+            where_conditions["startTime"] = {
+                "gte": start_date_obj.isoformat(),  # Already in UTC, no need to add Z
+                "lte": end_date_obj.isoformat(),
+            }
 
         if team_id is not None:
             where_conditions["team_id"] = team_id
@@ -1882,6 +1888,15 @@ async def ui_view_spend_logs(
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
         is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        # The UI request_id lookup drops the date window above, so a non-admin could
+        # otherwise reach any single row by id; require they own it, mirroring the
+        # detail endpoint. Scoped to the UI route so the public v2 contract is unchanged.
+        if request_id is not None and not is_admin_view and not is_v2:
+            await _assert_user_can_view_request_id(
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                request_id=request_id,
+            )
         permitted_team_ids: List[str] | None = None
         if not is_admin_view:
             if team_id is not None:
@@ -1929,15 +1944,16 @@ async def ui_view_spend_logs(
         sql_params: List[Any] = []
         p = 1  # parameter index counter
 
-        # Date range (always present). Wrap the param side with
-        # `AT TIME ZONE 'UTC'` so comparison against the plain `timestamp`
-        # column does not depend on the DB session timezone (see #22529).
-        sql_conditions.append(f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')")
-        sql_params.append(start_date_obj)
-        p += 1
-        sql_conditions.append(f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')")
-        sql_params.append(end_date_obj)
-        p += 1
+        # Date range. Wrap the param side with `AT TIME ZONE 'UTC'` so comparison
+        # against the plain `timestamp` column does not depend on the DB session
+        # timezone (see #22529). Absent for a request_id-only lookup (see above).
+        if start_date_obj is not None and end_date_obj is not None:
+            sql_conditions.append(f"\"startTime\" >= (${p}::timestamptz AT TIME ZONE 'UTC')")
+            sql_params.append(start_date_obj)
+            p += 1
+            sql_conditions.append(f"\"startTime\" <= (${p}::timestamptz AT TIME ZONE 'UTC')")
+            sql_params.append(end_date_obj)
+            p += 1
 
         # Equality filters - read effective values from where_conditions (post-authorization)
         for sql_col, wc_key in [

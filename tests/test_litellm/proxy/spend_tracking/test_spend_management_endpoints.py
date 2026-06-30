@@ -1493,6 +1493,154 @@ async def test_ui_view_spend_logs_date_range_filter(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_request_id_lookup_ignores_date_window(
+    client, monkeypatch
+):
+    """
+    LIT-3981: a request_id lookup on the UI route resolves across all time even
+    when the caller sends a date window that excludes the log (the dashboard
+    always sends a window). The window is dropped and request_id alone scopes
+    the query. Pre-fix the window was always applied, so an id from an older
+    page returned nothing.
+    """
+    today = datetime.datetime.now(timezone.utc)
+    mock_spend_logs = [
+        {
+            "id": "log_old",
+            "request_id": "req-old",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": (today - datetime.timedelta(days=90)).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    captured: dict = {}
+
+    def filter_fn(where):
+        captured["where"] = where
+        rows = _filter_logs_by_date_range(mock_spend_logs, where)
+        if where.get("request_id"):
+            rows = [r for r in rows if r["request_id"] == where["request_id"]]
+        return rows
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn),
+    )
+
+    # A 5-day window that EXCLUDES the 90-day-old log, as the dashboard sends.
+    start_date = (today - datetime.timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
+    end_date = today.strftime("%Y-%m-%d %H:%M:%S")
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "request_id": "req-old",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["data"][0]["request_id"] == "req-old"
+        # Query dropped the time window and scoped solely by the primary key.
+        assert "startTime" not in captured["where"]
+        assert captured["where"]["request_id"] == "req-old"
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_requires_dates_without_request_id(
+    client, monkeypatch
+):
+    """The date window stays mandatory on the UI route when no request_id is set."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([], lambda where: []),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui", headers={"Authorization": "Bearer sk-test"}
+        )
+        assert response.status_code == 400
+        assert "date" in response.text.lower()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_v2_still_requires_dates_with_request_id(client, monkeypatch):
+    """The public /spend/logs/v2 contract is unchanged: dates remain required even
+    when request_id is supplied. Only the internal UI route relaxes the window."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        make_ui_spend_logs_mock_prisma([], lambda where: []),
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    try:
+        response = client.get(
+            "/spend/logs/v2",
+            params={"request_id": "req-old"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 400
+        assert "date" in response.text.lower()
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_request_id_blocks_non_owner(client, monkeypatch):
+    """A non-admin looking up a request_id they do not own is rejected (403), so
+    the relaxed date window cannot read another tenant's log by id."""
+
+    class _ForeignRow:
+        user = "other_user"
+        team_id = None
+
+    class _SpendLogs:
+        async def find_unique(self, where, include=None):
+            return _ForeignRow()
+
+    class _DB:
+        def __init__(self):
+            self.litellm_spendlogs = _SpendLogs()
+
+    class _Prisma:
+        def __init__(self):
+            self.db = _DB()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _Prisma())
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={"request_id": "foreign-req"},
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_unauthorized(client):
     # Test without authorization header
     response = client.get("/spend/logs/ui")
