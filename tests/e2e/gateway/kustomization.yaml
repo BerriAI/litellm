@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Renders this directory's litellm proxy config into the litellm-gateway-config
+# ConfigMap the deployed gateway mounts as /app/config.yaml. A gitops overlay
+# (e.g. litellm-ops) points an ArgoCD source at this path so the live model_list
+# and the rest of the proxy config track litellm-config.yml directly, instead of
+# a hand-mirrored copy. Redis connection is intentionally env-driven in the
+# config (REDIS_HOST or REDIS_CLUSTER_NODES), so the same ConfigMap serves every
+# environment.
+namespace: litellm
+
+configMapGenerator:
+  - name: litellm-gateway-config
+    files:
+      - config.yaml=litellm-config.yml
+
+# The gateway Deployment mounts a fixed ConfigMap name, so don't append the
+# content-hash suffix kustomize adds by default.
+generatorOptions:
+  disableNameSuffixHash: true

@@ -46,11 +46,12 @@ litellm_settings:
   json_logs: true
   store_audit_logs: True
   cache: true
+  # Redis connection is supplied per environment via env vars, not pinned here, so
+  # one config serves every consumer: REDIS_HOST/REDIS_PORT for a standalone redis
+  # (local docker-compose), REDIS_CLUSTER_NODES + REDIS_SSL for cluster-mode
+  # ElastiCache (stage). litellm reads these when host is absent from cache_params.
   cache_params:
     type: redis
-    host: redis
-    port: 6379
-    password: os.environ/REDIS_PASSWORD
     namespace: litellm.caching
     ttl: 16600
   # max_budget: 1000000000.0 # (float) sets max budget in dollars across the entire proxy across all API keys. Note, the budget does not apply to the master key. That is the only exception.
