@@ -265,3 +265,86 @@ async def test_fetch_tools_from_gateway_managed_swallows_errors():
     )
     assert tools == []
     mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+
+
+def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        url=f"https://{name}/mcp",
+        transport=MCPTransport.http,
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
+    """Regression: across the aggregate (/mcp), a delegate/passthrough server that raises
+    MCPUpstreamAuthError must not empty every other server's tools. Re-raising it on the
+    aggregate path (introduced with the passthrough feature) zeroed the whole list because the
+    fan-out gather propagated it."""
+    from unittest.mock import patch
+
+    from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    delegate = _http_server(
+        "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
+    )
+    working = _http_server("s2", "working_docs", auth_type=MCPAuth.none)
+    good_tool = MCPTool(name="working_docs-read", description="d", inputSchema={"type": "object"})
+
+    async def fake_get_tools(server, **kwargs):
+        if server.server_id == delegate.server_id:
+            raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
+        return [good_tool]
+
+    with patch.object(mcp_server, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate, working])), patch.object(
+        mcp_server, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
+    ), patch.object(mcp_server, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
+        mcp_server, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
+    ), patch.object(
+        mcp_server, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
+    ), patch.object(
+        mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+    ):
+        tools = await mcp_server._get_tools_from_mcp_servers(
+            user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
+            mcp_auth_header=None,
+            mcp_servers=None,
+        )
+
+    assert [t.name for t in tools] == ["working_docs-read"]
+
+
+@pytest.mark.asyncio
+async def test_single_server_list_tools_surfaces_upstream_auth_error():
+    """A single explicitly targeted server still surfaces MCPUpstreamAuthError so the client
+    receives the WWW-Authenticate challenge and runs the upstream OAuth flow."""
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    delegate = _http_server(
+        "s1", "delegate_docs", auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
+    )
+
+    async def fake_get_tools(server, **kwargs):
+        raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
+
+    with patch.object(mcp_server, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
+        mcp_server, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
+    ), patch.object(mcp_server, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
+        mcp_server, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
+    ), patch.object(
+        mcp_server.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+    ):
+        with pytest.raises(MCPUpstreamAuthError):
+            await mcp_server._get_tools_from_mcp_servers(
+                user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
+                mcp_auth_header=None,
+                mcp_servers=["delegate_docs"],
+            )

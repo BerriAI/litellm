@@ -1568,6 +1568,11 @@ if MCP_AVAILABLE:
                 await _prefetch_oauth_creds_for_user(user_api_key_auth) if _has_oauth2_server else {}
             )
 
+            # A single explicitly targeted server surfaces its upstream-auth error so the client
+            # runs the OAuth flow; across the aggregate, one unauthenticated server must not empty
+            # every other server's tools, so its error is absorbed in the fetch below.
+            is_single_server_listing = len(allowed_mcp_servers) == 1
+
             async def _fetch_and_filter_server_tools(
                 server: MCPServer,
             ) -> List[MCPTool]:
@@ -1643,12 +1648,15 @@ if MCP_AVAILABLE:
                     )
                     return filtered_tools
                 except MCPUpstreamAuthError:
-                    # Surface upstream 401/403 to the outer handler so the
-                    # client receives a proper WWW-Authenticate challenge
-                    # instead of a silently empty tool list. Without this
-                    # re-raise the broad ``except Exception`` below would
-                    # swallow the auth error.
-                    raise
+                    # Single-server route: surface so the client gets the WWW-Authenticate
+                    # challenge and runs the upstream OAuth flow. Aggregate route: absorb, so
+                    # one unauthenticated server does not empty every other server's tools.
+                    if is_single_server_listing:
+                        raise
+                    verbose_logger.debug(
+                        f"MCP list_tools: omitting {server.name} from the aggregate; it needs upstream auth"
+                    )
+                    return []
                 except Exception as e:
                     verbose_logger.exception(f"Error getting tools from server {server.name}: {str(e)}")
                     return []
