@@ -265,7 +265,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         try:
             body: object = response.json()
-        except Exception:
+        except ValueError:
             raise HTTPException(
                 status_code=502,
                 detail={
@@ -338,7 +338,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         try:
             body: object = raw_response.json()
-        except Exception:
+        except ValueError:
             return raw_response.text
 
         if _is_str_object_dict(body):
