@@ -2615,7 +2615,44 @@ def test_translate_anthropic_to_openai_with_mixed_tools():
     # tool_name_mapping should be empty for short tool names
     assert tool_name_mapping == {}
 
+BILLING_HEADER_BLOCK = {
+    "type": "text",
+    "text": "x-anthropic-billing-header: cc_version=1.0.abc; cc_entrypoint=cli; cch=00000;",
+}
+    
+def test_translate_anthropic_to_openai_fillter_billing_header():
+    """
+    Test that filter billing header
+    """
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
 
+    anthropic_request = AnthropicMessagesRequest(
+        model="gemini-2.5-flash-lite",
+        max_tokens=4096,
+        messages=[
+            {
+                "role": "user",
+                "content": "Get weather and search the web",
+            }
+        ],
+        system=[
+                BILLING_HEADER_BLOCK,
+                {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude"},
+            ]
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    openai_request, tool_name_mapping = adapter.translate_anthropic_to_openai(
+        anthropic_message_request=anthropic_request
+    )
+
+    #openai_request should be {'model': 'gemini-2.5-flash-lite', 'messages': [{'role': 'system', 'content': [{'type': 'text', 'text': "You are Claude Code, Anthropic's official CLI for Claude"}]}, {'role': 'user', 'content': 'Get weather and search the web'}], 'max_tokens': 4096}
+    assert len(openai_request["messages"]) == 2
+    system_texts = [block["text"] for block in openai_request["messages"][0]["content"]]
+    assert all(not t.startswith("x-anthropic-billing-header:") for t in system_texts)
+    assert "You are Claude Code, Anthropic's official CLI for Claude" in system_texts
+    assert "Get weather and search the web" == openai_request["messages"][1]["content"]
+    
 class TestTranslateAnthropicOutputFormatToOpenAI:
     """Tests for translate_anthropic_output_format_to_openai adding additionalProperties: false."""
 

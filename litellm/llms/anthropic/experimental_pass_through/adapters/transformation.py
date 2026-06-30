@@ -83,6 +83,9 @@ from litellm.llms.anthropic.common_utils import normalize_anthropic_tool_use_id
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    AnthropicMessagesConfig as AnthropicMessagesConfig,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
@@ -864,6 +867,8 @@ class LiteLLMAnthropicMessagesAdapter:
         system_content = anthropic_message_request["system"]
         if not system_content:
             return
+        # Filter billing header from system when translate_anthropic_to_openai
+        system_content = AnthropicMessagesConfig._filter_billing_headers_from_system(system_content)
         # Handle system as string or array of content blocks
         if isinstance(system_content, str):
             new_messages.insert(
