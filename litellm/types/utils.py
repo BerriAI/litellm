@@ -2812,6 +2812,7 @@ class CostBreakdown(TypedDict, total=False):
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
     additional_costs: Dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
