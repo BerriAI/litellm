@@ -797,6 +797,49 @@ async def test_negation_literal_only_no_partial_match():
 
 
 @pytest.mark.asyncio()
+async def test_negation_regex_pattern_treated_as_literal():
+    # "!provider:(anthropic|openai)" looks like a regex but is treated as a literal string.
+    # It does NOT exclude deployments tagged "provider:anthropic" or "provider:openai".
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai"],
+                },
+                "model_info": {"id": "openai-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    # The regex-like string matches no deployment tag literally, so all
+    # candidates survive and both model IDs are reachable.
+    seen_ids = set()
+    for _ in range(10):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:(anthropic|openai)"]},
+            mock_response="hi",
+        )
+        seen_ids.add(response._hidden_params["model_id"])
+
+    assert seen_ids == {"anthropic-model", "openai-model"}
+
+
+@pytest.mark.asyncio()
 async def test_positive_tags_unchanged_by_negation():
     router = litellm.Router(
         model_list=[
