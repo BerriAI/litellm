@@ -332,6 +332,10 @@ REDIS_CONNECTION_POOL_TIMEOUT = int(os.getenv("REDIS_CONNECTION_POOL_TIMEOUT", 5
 REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv("REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD", 5))
 REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = int(os.getenv("REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT", 60))
 REDIS_CIRCUIT_BREAKER_ENABLED = os.getenv("REDIS_CIRCUIT_BREAKER_ENABLED", "true").lower() == "true"
+# Seconds of idle before a Redis cluster connection is validated with a PING and
+# reconnected if dead, so a connection silently dropped by a cluster restart
+# (e.g. ElastiCache Serverless maintenance) is not reused while broken
+REDIS_CLUSTER_HEALTH_CHECK_INTERVAL = 25
 # Default Redis major version to assume when version cannot be determined
 # Using 7 as it's the modern version that supports LPOP with count parameter
 DEFAULT_REDIS_MAJOR_VERSION = int(os.getenv("DEFAULT_REDIS_MAJOR_VERSION", 7))
