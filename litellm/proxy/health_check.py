@@ -182,9 +182,32 @@ async def run_with_timeout(task, timeout):
         return {"error": "Timeout exceeded", "exception": timeout_exception}
 
 
+def _is_semantic_auto_router_deployment(litellm_params: dict) -> bool:
+    """
+    True for semantic auto_router deployments (auto_router/<name>) that are not
+    sub-strategies (complexity_router, adaptive_router, quality_router).
+
+    These are meta-routers that select among real LLM deployments at request time;
+    they have no LLM endpoint to health-check.
+    """
+    model: object = litellm_params.get("model", "")
+    if not isinstance(model, str):
+        return False
+    if not model.startswith("auto_router/"):
+        return False
+    for sub_strategy in ("complexity_router", "adaptive_router", "quality_router"):
+        if model.startswith(f"auto_router/{sub_strategy}"):
+            return False
+    return True
+
+
 async def _run_model_health_check(model: dict):
     litellm_params = model["litellm_params"]
     model_info = model.get("model_info", {})
+
+    if _is_semantic_auto_router_deployment(litellm_params):
+        return {}
+
     mode = _resolve_health_check_mode(
         model_info,
         litellm_params,  # any-ok: untyped router config dict
