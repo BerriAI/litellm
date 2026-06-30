@@ -12,6 +12,9 @@ from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
+from litellm.litellm_core_utils.get_supported_openai_params import (
+    get_supported_openai_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -159,15 +162,17 @@ class LiteLLMCompletionResponsesConfig:
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: Optional[str]) -> bool:
         """
         A Responses ``web_search`` built-in tool is derived into a ``web_search_options`` param.
-        Bedrock Anthropic models have no equivalent (only Nova maps it to a nova_grounding
-        systemTool), so the derived param must be dropped here rather than raising
-        UnsupportedParamsError downstream. Scoped to Bedrock so other providers are untouched.
-        """
-        if custom_llm_provider is None or not custom_llm_provider.startswith("bedrock"):
-            return False
-        from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+        When the resolved provider/model does not support it (e.g. Bedrock Anthropic, where only
+        Nova maps it to a nova_grounding systemTool), the derived param is dropped here instead of
+        raising UnsupportedParamsError downstream. Providers that support it keep it untouched.
 
-        return "web_search_options" not in AmazonConverseConfig().get_supported_openai_params(model=model)
+        Support is read from each provider's own ``get_supported_openai_params`` so this bridge
+        stays provider-agnostic; an unmapped provider (``None``) is treated as "keep".
+        """
+        supported_params: Optional[List[str]] = get_supported_openai_params(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        return supported_params is not None and "web_search_options" not in supported_params
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(

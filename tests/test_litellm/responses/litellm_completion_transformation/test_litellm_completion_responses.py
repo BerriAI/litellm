@@ -1411,7 +1411,7 @@ class TestToolTransformation:
         """
         Regression for LIT-3858: a Responses web_search tool becomes a derived
         web_search_options param. Bedrock Anthropic models do not support it, so on the
-        Bedrock chat-completion bridge it must be dropped (so litellm doesn't raise
+        chat-completion bridge it must be dropped (so litellm doesn't raise
         UnsupportedParamsError) without the caller setting drop_params.
         """
         responses_api_request = {
@@ -1442,8 +1442,8 @@ class TestToolTransformation:
 
         assert result.get("web_search_options") is not None
 
-    def test_non_bedrock_keeps_derived_web_search_options(self):
-        """The drop is scoped to Bedrock; other providers keep the derived param untouched."""
+    def test_supported_provider_keeps_derived_web_search_options(self):
+        """A provider whose config lists web_search_options (e.g. OpenAI) keeps it untouched."""
         responses_api_request = {
             "tools": [{"type": "web_search", "search_context_size": "high"}],
         }
@@ -1456,6 +1456,25 @@ class TestToolTransformation:
         )
 
         assert result.get("web_search_options") is not None
+
+    def test_unsupported_non_bedrock_provider_drops_derived_web_search_options(self):
+        """
+        The drop is provider-agnostic, not hardcoded to Bedrock: any provider whose config
+        does not list web_search_options (e.g. Cohere) drops the derived param. This fails if
+        the drop is ever re-scoped to a single provider.
+        """
+        responses_api_request = {
+            "tools": [{"type": "web_search", "search_context_size": "high"}],
+        }
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="command-r",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="cohere",
+        )
+
+        assert "web_search_options" not in result
 
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
