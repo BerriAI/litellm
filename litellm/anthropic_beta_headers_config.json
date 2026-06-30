@@ -184,5 +184,8 @@
     "token-efficient-tools-2025-02-19": "token-efficient-tools-2025-02-19",
     "web-fetch-2025-09-10": "web-fetch-2025-09-10",
     "web-search-2025-03-05": "web-search-2025-03-05"
+  },
+  "provider_aliases": {
+    "github_copilot": "anthropic"
   }
 }

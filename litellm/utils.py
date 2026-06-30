@@ -7984,6 +7984,12 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            from litellm.llms.github_copilot.messages.transformation import (
+                GithubCopilotMessagesConfig,
+            )
+
+            return GithubCopilotMessagesConfig()
         return None
 
     @staticmethod
