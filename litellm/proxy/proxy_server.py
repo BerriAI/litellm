@@ -20,6 +20,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Awaitable,
     Callable,
     Dict,
     List,
@@ -5763,48 +5764,121 @@ class ProxyConfig:
                 )
             )
 
+    async def _run_startup_db_step(
+        self,
+        name: str,
+        coro_factory: Callable[[], Awaitable[Any]],
+        timeout: float = 30.0,
+    ):
+        """
+        Run one startup DB-load step with timing + a hard timeout.
+
+        A single slow or hanging step (e.g. a large agents/MCP table or a remote
+        model-cost-map fetch) must not block the whole application-startup
+        lifespan — that wedges the ASGI app before it serves /health/liveliness
+        and the container never becomes healthy. On timeout/error we log loudly
+        and continue with that object type unloaded: a degraded-but-live proxy
+        beats a dead deploy, and the timing line pinpoints the culprit.
+        """
+        start = time.time()
+        try:
+            await asyncio.wait_for(coro_factory(), timeout=timeout)
+            verbose_proxy_logger.info(
+                f"[startup] db-load '{name}' ok in {time.time() - start:.1f}s"
+            )
+        except asyncio.TimeoutError:
+            verbose_proxy_logger.error(
+                f"[startup] db-load '{name}' TIMED OUT after {timeout:.0f}s — "
+                "skipping so startup can proceed"
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"[startup] db-load '{name}' failed in {time.time() - start:.1f}s: "
+                f"{e} — skipping"
+            )
+
     async def _init_non_llm_objects_in_db(self, prisma_client: PrismaClient):
         """
         Use this to read non-llm objects from the db and initialize them
 
         ex. Vector Stores, Guardrails, MCP tools, etc.
+
+        Each step is wrapped in `_run_startup_db_step` so a hang in any one
+        cannot wedge application startup / the container healthcheck.
         """
         if self._should_load_db_object(object_type="guardrails"):
-            await self._init_guardrails_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "guardrails",
+                lambda: self._init_guardrails_in_db(prisma_client=prisma_client),
+            )
 
         if self._should_load_db_object(object_type="policies"):
-            await self._init_policies_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "policies",
+                lambda: self._init_policies_in_db(prisma_client=prisma_client),
+            )
 
         if self._should_load_db_object(object_type="vector_stores"):
-            await self._init_vector_stores_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "vector_stores",
+                lambda: self._init_vector_stores_in_db(prisma_client=prisma_client),
+            )
 
         if self._should_load_db_object(object_type="vector_store_indexes"):
-            await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "vector_store_indexes",
+                lambda: self._init_vector_store_indexes_in_db(
+                    prisma_client=prisma_client
+                ),
+            )
 
         if self._should_load_db_object(object_type="mcp"):
-            await self._init_mcp_servers_in_db()
+            await self._run_startup_db_step(
+                "mcp", lambda: self._init_mcp_servers_in_db()
+            )
 
         if self._should_load_db_object(object_type="agents"):
-            await self._init_agents_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "agents", lambda: self._init_agents_in_db(prisma_client=prisma_client)
+            )
 
         if self._should_load_db_object(object_type="pass_through_endpoints"):
-            await self._init_pass_through_endpoints_in_db()
+            await self._run_startup_db_step(
+                "pass_through_endpoints",
+                lambda: self._init_pass_through_endpoints_in_db(),
+            )
 
         if self._should_load_db_object(object_type="prompts"):
-            await self._init_prompts_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "prompts", lambda: self._init_prompts_in_db(prisma_client=prisma_client)
+            )
 
         if self._should_load_db_object(object_type="search_tools"):
-            await self._init_search_tools_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "search_tools",
+                lambda: self._init_search_tools_in_db(prisma_client=prisma_client),
+            )
 
         if self._should_load_db_object(object_type="tools"):
-            await self._init_tool_policy_in_db(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "tools",
+                lambda: self._init_tool_policy_in_db(prisma_client=prisma_client),
+            )
 
         if self._should_load_db_object(object_type="model_cost_map"):
-            await self._check_and_reload_model_cost_map(prisma_client=prisma_client)
+            await self._run_startup_db_step(
+                "model_cost_map",
+                lambda: self._check_and_reload_model_cost_map(
+                    prisma_client=prisma_client
+                ),
+            )
 
         if self._should_load_db_object(object_type="anthropic_beta_headers"):
-            await self._check_and_reload_anthropic_beta_headers(
-                prisma_client=prisma_client
+            await self._run_startup_db_step(
+                "anthropic_beta_headers",
+                lambda: self._check_and_reload_anthropic_beta_headers(
+                    prisma_client=prisma_client
+                ),
             )
 
         if self._should_load_db_object(object_type="sso_settings"):
