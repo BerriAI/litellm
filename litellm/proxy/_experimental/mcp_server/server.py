@@ -1690,8 +1690,7 @@ if MCP_AVAILABLE:
                 try:
                     await litellm_logging_obj.async_success_handler(
                         result=[
-                            tool.model_dump(mode="json") if isinstance(tool, MCPTool) else tool
-                            for tool in all_tools
+                            tool.model_dump(mode="json") if isinstance(tool, MCPTool) else tool for tool in all_tools
                         ],
                         start_time=list_tools_start_time,
                         end_time=end_time,
