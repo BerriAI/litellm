@@ -31,10 +31,11 @@ cat <<EOF
   core.hooksPath = .githooks
   active hooks:  $(ls "$hooks_dir" | tr '\n' ' ')
 
-These hooks enforce Conventional Commits and Conventional Branches, and
-run the CI-equivalent lint (Python, dashboard, API types) on staged files
-before each commit so reds surface locally instead of in CI.
+These hooks enforce Conventional Commits and Conventional Branches.
 Bypass with --no-verify when you need to (e.g. for emergency hotfixes).
+
+The CI-equivalent lint is deliberately not installed as an auto-firing hook
+(it can take minutes); run it on demand with 'make pre-commit' before committing.
 
 To uninstall:  git config --unset core.hooksPath
 EOF

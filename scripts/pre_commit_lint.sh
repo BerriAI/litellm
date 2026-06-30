@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# pre-commit — shift CI lint left.
+# pre_commit_lint.sh — shift CI lint left. Run it (via `make pre-commit`) right
+# before `git commit`; it inspects your staged files and runs only the matching
+# gating CI checks, so a clean run means a green CI lint:
+#   - litellm/ Python staged -> `make lint` (test-linting.yml's lint job)
+#   - dashboard staged        -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
+#   - proxy/types staged      -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
 #
-# Opt-in: runs only after `make install-hooks` points core.hooksPath at .githooks.
-# Mirrors the gating CI jobs so a clean commit means a green CI lint:
-#   - Python staged      -> `make lint` (test-linting.yml's lint job)
-#   - dashboard staged   -> prettier + eslint + lint budgets (test-litellm-ui-build.yml's frontend-lint)
-#   - proxy/types staged -> regenerate dashboard API types and fail on drift (check-ui-api-types.yml)
-#
-# Each block is skipped when no matching files are staged, so unrelated commits stay fast.
-# Bypass when you must: git commit --no-verify.
+# Each block is skipped when no matching files are staged, so unrelated commits stay
+# fast. This is intentionally not auto-installed as a git hook (see scripts/install_git_hooks.sh):
+# the dashboard and basedpyright passes can take minutes, so it's run on demand rather
+# than firing on every human commit. It is hook-compatible if you want that anyway:
+# `ln -s ../../scripts/pre_commit_lint.sh .git/hooks/pre-commit`.
 
 set -eu
 
@@ -30,7 +32,7 @@ fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' |
 # lockfiles, so match that whole trigger set rather than a Python subset.
 spec_files=$(staged_match '^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scripts/gen-api-types\.mjs|package\.json|package-lock\.json|src/lib/http/schema\.d\.ts))$')
 # CI's frontend-lint runs prettier over a wider extension set than eslint; keep that
-# split so the hook flags exactly what the job would.
+# split so this flags exactly what the job would.
 ui_prettier_files=$(staged_match '^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$')
 ui_eslint_files=$(staged_match '^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$')
 
@@ -71,14 +73,14 @@ status=0
 
 if [ -n "$litellm_py_files" ]; then
     echo "pre-commit: linting Python (make lint)"
-    make lint || { echo "✗ Python lint failed. Fix the reds above, then recommit (or: git commit --no-verify)." >&2; status=1; }
+    make lint || { echo "✗ Python lint failed. Fix the reds above, then re-run make pre-commit." >&2; status=1; }
     # `make lint` format-checks files in origin/base...HEAD, which at pre-commit time
     # predates the staged change, so format-check the staged litellm files directly to
     # cover a brand-new commit before it lands.
     if [ -n "$fmt_files" ]; then
         echo "pre-commit: ruff format --check (staged litellm files)"
         printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check --exclude '/enterprise/' \
-            || { echo "✗ Unformatted staged files. Fix with: make format." >&2; status=1; }
+            || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; status=1; }
     fi
 fi
 
@@ -97,7 +99,7 @@ if [ -n "$spec_files" ]; then
         status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then
         if ! git diff --quiet -- ui/litellm-dashboard/src/lib/http/schema.d.ts; then
-            echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and recommit." >&2
+            echo "✗ Dashboard API types are stale; regenerated src/lib/http/schema.d.ts. Stage it and re-run make pre-commit." >&2
             status=1
         fi
     else

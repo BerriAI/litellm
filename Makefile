@@ -8,7 +8,7 @@
 	lint-basedpyright lint-basedpyright-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety
+	install-helm-unittest check-circular-imports check-import-safety pre-commit
 
 # Default target
 help:
@@ -20,6 +20,7 @@ help:
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make install-hooks      - Install git hooks (Conventional Commits + Branches)"
+	@echo "  make pre-commit         - Run CI-equivalent lint on staged files (run before committing)"
 	@echo "  make format             - Apply ruff format code formatting"
 	@echo "  make format-check       - Check ruff format code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
@@ -184,6 +185,13 @@ lint: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-ba
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
+
+# Run the gating CI checks against your staged files right before committing. Mirrors
+# test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
+# check-ui-api-types.yml (API-type drift), skipping any whose files you didn't stage.
+# Not auto-installed as a git hook so it never slows an unrelated human commit.
+pre-commit:
+	./scripts/pre_commit_lint.sh
 
 # Testing targets
 test: install-test-deps
