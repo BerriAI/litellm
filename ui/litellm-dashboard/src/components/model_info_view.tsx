@@ -235,6 +235,9 @@ export default function ModelInfoView({
       try {
         parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
         delete parsedExtraParams.litellm_credential_name;
+        delete parsedExtraParams.vector_store_ids;
+        delete parsedExtraParams.guardrails;
+        delete parsedExtraParams.tags;
       } catch (e) {
         NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
         setIsSaving(false);
@@ -715,7 +718,7 @@ export default function ModelInfoView({
                     litellm_extra_params: JSON.stringify(
                       Object.fromEntries(
                         Object.entries(localModelData.litellm_params || {}).filter(
-                          ([key]) => key !== "litellm_credential_name",
+                          ([key]) => !["litellm_credential_name", "vector_store_ids", "guardrails", "tags"].includes(key),
                         ),
                       ),
                       null,

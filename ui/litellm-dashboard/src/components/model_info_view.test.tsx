@@ -605,6 +605,46 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
   });
 
+  it("should not leak vector_store_ids from JSON textarea when model already has them", async () => {
+    const modelWithVectorStores = {
+      ...defaultModelData,
+      litellm_params: {
+        ...defaultModelData.litellm_params,
+        vector_store_ids: ["vs_abc123"],
+      },
+    };
+
+    mockUseModelsInfo.mockReturnValue({
+      data: {
+        data: [modelWithVectorStores],
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) =>
+          input.tagName === "TEXTAREA" &&
+          (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+      );
+    expect(litellmParamsInput).toBeDefined();
+    if (!litellmParamsInput) {
+      return;
+    }
+    expect((litellmParamsInput as HTMLTextAreaElement).value).not.toContain("vector_store_ids");
+  });
+
   it("should not include input_cost_per_token or output_cost_per_token in update payload when user does not touch cost fields", async () => {
     // Regression: editing a model without touching cost fields used to inject
     // input_cost_per_token: 0 and output_cost_per_token: 0 into litellm_params,
