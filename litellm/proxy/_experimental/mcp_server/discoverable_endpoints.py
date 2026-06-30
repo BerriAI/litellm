@@ -400,9 +400,9 @@ def _raise_if_not_oauth2(mcp_server: MCPServer) -> None:
             "error": "server_not_oauth2",
             "message": (
                 f"MCP server '{mcp_server.server_name or mcp_server.name}' does not use OAuth "
-                f"(auth_type={mcp_server.auth_type}); the gateway only exposes the OAuth client_id, "
-                "authorize, token, and register flow for oauth2 servers. This server is reached using "
-                "its configured auth_type, so no OAuth client registration or authorization is required"
+                f"(auth_type={mcp_server.auth_type}). This server does not support the authorization-code "
+                "flow; it has no client_id, authorize, token, or registration endpoint. "
+                "Access is controlled by the server's configured auth_type and access groups"
             ),
         },
     )
