@@ -60,7 +60,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
-from litellm.types.files import ResumableChunkedUploadConfig
+from litellm.types.files import StreamingMediaUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse
 from litellm.types.utils import LlmProviders, ModelResponse
 
@@ -380,19 +380,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        _, content_type = extract_file_metadata(file_data)
         object_name = self.get_object_name(file_data, purpose)
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name = encode_gcs_object_name_for_url(object_name)
-        # Batch jsonl is streamed via a resumable session (bounded memory on
-        # large uploads); everything else is a single simple-media upload.
-        upload_type = (
-            "resumable"
-            if FilesAPIUtils.is_batch_jsonl_request(create_file_data=data, content_type=content_type)
-            else "media"
-        )
-        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType={upload_type}&name={encoded_object_name}"
+        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
         api_base = api_base or "https://storage.googleapis.com"
         if not api_base:
             raise ValueError("api_base is required")
@@ -442,8 +434,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         2 Cases:
         1. Handle basic file upload
-        2. Handle batch file upload (.jsonl), streamed to a GCS resumable
-           session so large uploads stay memory-bounded.
+        2. Handle batch file upload (.jsonl), staged to a temp file and uploaded
+           in a single media request so large uploads stay memory-bounded without
+           the per-chunk round-trips of a resumable session.
         """
         file_data = create_file_data.get("file")
         if file_data is None:
@@ -455,14 +448,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             content_type=content_type,
         ):
             return {
-                "resumable_chunked_upload": ResumableChunkedUploadConfig(
+                "streaming_media_upload": StreamingMediaUploadConfig(
                     body_stream=_OpenAIToVertexBatchUploadStream(
                         file_data,
                         self._map_openai_to_vertex_params,
                     ),
-                    initiate_headers={
-                        "X-Upload-Content-Type": "application/json",
-                    },
+                    content_type="application/json",
                 )
             }
 
