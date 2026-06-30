@@ -230,3 +230,126 @@ def test_pydantic_base_model():
     assert len(result["healthy_endpoints"]) == 2
     assert result["healthy_endpoints"][0]["name"] == "test"
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
+
+
+# --- single-pass fast path: equivalence with the recursive sanitizer ---
+
+import random
+
+from pydantic import BaseModel
+
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+
+def _reference_safe_dumps(data, max_depth=DEFAULT_MAX_RECURSE_DEPTH):
+    """The pre-optimization recursive sanitizer, kept verbatim as a test oracle."""
+
+    def _serialize(obj, seen, depth):
+        if depth > max_depth:
+            return "MaxDepthExceeded"
+        if isinstance(obj, str):
+            return obj.replace("\x00", "") if "\x00" in obj else obj
+        if isinstance(obj, (int, float, bool, type(None))):
+            return obj
+        if id(obj) in seen:
+            return "CircularReference Detected"
+        seen.add(id(obj))
+        if isinstance(obj, dict):
+            result = {}
+            for k, v in obj.items():
+                if isinstance(k, str):
+                    clean_k = k.replace("\x00", "") if "\x00" in k else k
+                    result[clean_k] = _serialize(v, seen, depth + 1)
+            seen.remove(id(obj))
+            return result
+        elif isinstance(obj, list):
+            result = [_serialize(item, seen, depth + 1) for item in obj]
+            seen.remove(id(obj))
+            return result
+        elif isinstance(obj, tuple):
+            result = tuple(_serialize(item, seen, depth + 1) for item in obj)
+            seen.remove(id(obj))
+            return result
+        elif isinstance(obj, set):
+            result = sorted([_serialize(item, seen, depth + 1) for item in obj])
+            seen.remove(id(obj))
+            return result
+        elif isinstance(obj, BaseModel):
+            dumped = obj.model_dump()
+            result = _serialize(dumped, seen, depth + 1)
+            seen.remove(id(obj))
+            return result
+        else:
+            try:
+                return strip_null_bytes(str(obj))
+            except Exception:
+                return "Unserializable Object"
+
+    return json.dumps(_serialize(data, set(), 0), default=str)
+
+
+class _FuzzModel(BaseModel):
+    a: int
+    b: str
+    c: list
+
+
+def _random_payload(rng, depth):
+    if depth >= 5:
+        return rng.choice([rng.randint(-9, 9), "leaf", None, True, "with\x00nul"])
+    kind = rng.choice(
+        ["int", "float", "str", "nul_str", "none", "bool", "list", "tuple", "dict", "set", "model"]
+    )
+    if kind == "int":
+        return rng.randint(-1000, 1000)
+    if kind == "float":
+        return rng.random() * 100
+    if kind == "str":
+        return rng.choice(["hello", "", "a b c", "unicode_é", 'quote"here', "tab\tnl\n"])
+    if kind == "nul_str":
+        return rng.choice(["pre\x00post", "\x00lead", "trail\x00", "lit \\u0000 text"])
+    if kind == "none":
+        return None
+    if kind == "bool":
+        return rng.choice([True, False])
+    if kind == "list":
+        return [_random_payload(rng, depth + 1) for _ in range(rng.randint(0, 4))]
+    if kind == "tuple":
+        return tuple(_random_payload(rng, depth + 1) for _ in range(rng.randint(0, 3)))
+    if kind == "dict":
+        # string keys only (the realistic shape; non-str keys are covered separately)
+        return {f"k{i}\x00x" if rng.random() < 0.2 else f"k{i}": _random_payload(rng, depth + 1) for i in range(rng.randint(0, 4))}
+    if kind == "set":
+        return set(rng.sample(range(30), rng.randint(0, 4)))  # one comparable type, sortable
+    return _FuzzModel(a=rng.randint(0, 9), b=rng.choice(["x", "y\x00z"]), c=[rng.randint(0, 3)])
+
+
+def test_fuzz_matches_reference_sanitizer():
+    """The single-pass path must be byte-identical to the recursive sanitizer for
+    realistic (string-keyed) payloads, including NUL bytes, sets, tuples, models,
+    and nesting."""
+    rng = random.Random(20240630)
+    for _ in range(600):
+        data = _random_payload(rng, 0)
+        assert safe_dumps(data) == _reference_safe_dumps(data)
+
+
+def test_tightened_max_depth_still_truncates():
+    """A caller-tightened max_depth must bypass the fast path and truncate exactly."""
+    data = {"a": {"b": {"c": {"d": "deep"}}}}
+    assert "MaxDepthExceeded" in safe_dumps(data, max_depth=2)
+    assert safe_dumps(data, max_depth=2) == _reference_safe_dumps(data, max_depth=2)
+
+
+def test_non_string_primitive_keys_are_kept():
+    """With the single-pass path, dict keys json can stringify (int/bool/None) are
+    kept with their JSON key form instead of being silently dropped. Keys json
+    cannot encode still fall back to the sanitizer and are dropped."""
+    assert json.loads(safe_dumps({1: "a", "b": "c"})) == {"1": "a", "b": "c"}
+
+    class Unhashable:
+        def __str__(self):
+            return "obj"
+
+    # object key -> json raises -> sanitizer fallback drops it (legacy behavior)
+    assert json.loads(safe_dumps({Unhashable(): "v", "ok": 1})) == {"ok": 1}
