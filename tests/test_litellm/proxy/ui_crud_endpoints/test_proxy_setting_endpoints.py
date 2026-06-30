@@ -396,6 +396,7 @@ class TestProxySettingEndpoints:
 
         # Mock the prisma client
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -476,6 +477,7 @@ class TestProxySettingEndpoints:
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
 
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(
@@ -533,6 +535,7 @@ class TestProxySettingEndpoints:
 
         # Mock the prisma client
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
 
@@ -612,6 +615,7 @@ class TestProxySettingEndpoints:
 
         # Mock the prisma client
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
         env_var_entry = MagicMock()
@@ -682,6 +686,7 @@ class TestProxySettingEndpoints:
 
         # Mock the prisma client
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
 
@@ -759,6 +764,7 @@ class TestProxySettingEndpoints:
 
         # Mock the prisma client
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -1405,6 +1411,7 @@ class TestProxySettingEndpoints:
         # Mock the prisma client
         mock_prisma = MagicMock()
         upsert_mock = AsyncMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = upsert_mock
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -1484,6 +1491,7 @@ class TestProxySettingEndpoints:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_ssoconfig = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
 
         env_var_entry = MagicMock()
@@ -1535,6 +1543,7 @@ class TestProxySettingEndpoints:
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
         mock_prisma.db.litellm_ssoconfig = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
 
         env_var_entry = MagicMock()
@@ -1706,6 +1715,7 @@ class TestProxySettingEndpoints:
 
         # Mock the prisma client
         mock_prisma = MagicMock()
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
         mock_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
         mock_prisma.db.litellm_config = MagicMock()
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
@@ -2031,6 +2041,8 @@ def test_update_sso_settings_writes_redacted_audit_log(mock_proxy_config, monkey
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_auditlog.create = audit_create
     fake_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+    # No prior SSO row, so before_value resolves to None.
+    fake_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
     fake_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
@@ -2071,6 +2083,90 @@ def test_update_sso_settings_writes_redacted_audit_log(mock_proxy_config, monkey
         assert after["google_client_id"] == "client-id-123"
         assert after["google_client_secret"] == "REDACTED"
         assert "super-secret-xyz" not in written["updated_values"]
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_update_sso_settings_audit_captures_redacted_before_snapshot(
+    mock_proxy_config, monkeypatch
+):
+    """An auditor reviewing an SSO secret rotation needs to see a real
+    before/after diff in the audit row, not before_value=None. The endpoint
+    reads the existing (encrypted) SSO row, decrypts it, and lets the audit
+    helper redact the *_client_secret fields before persistence so neither
+    the old nor the new plaintext secret is recorded."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    audit_create = AsyncMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = audit_create
+    fake_prisma.db.litellm_ssoconfig.upsert = AsyncMock()
+
+    # Pre-existing SSO row contains the *prior* secret (would be ciphertext in
+    # production; the test patches _decrypt_db_variables to pass through).
+    existing_record = MagicMock()
+    existing_record.sso_settings = {
+        "google_client_id": "old-client-id",
+        "google_client_secret": "OLD-SUPER-SECRET",
+    }
+    fake_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=existing_record)
+    fake_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+    monkeypatch.setattr(
+        proxy_server_module.proxy_config,
+        "_encrypt_env_variables",
+        lambda environment_variables: environment_variables,
+    )
+    # Pretend the stored value is already plaintext for the test (production
+    # decrypts via Fernet); the audit helper still has to redact it.
+    monkeypatch.setattr(
+        proxy_server_module.proxy_config,
+        "_decrypt_db_variables",
+        lambda variables_dict: dict(variables_dict),
+    )
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="audit-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.patch(
+            "/update/sso_settings",
+            json={
+                "google_client_id": "new-client-id",
+                "google_client_secret": "NEW-SUPER-SECRET",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        audit_create.assert_awaited_once()
+        written = audit_create.await_args.kwargs["data"]
+        before = json.loads(written["before_value"])
+        after = json.loads(written["updated_values"])
+
+        # Non-secret field shows the diff
+        assert before["google_client_id"] == "old-client-id"
+        assert after["google_client_id"] == "new-client-id"
+
+        # Secret field is redacted in BOTH snapshots — auditor sees the
+        # rotation event without ever seeing either plaintext secret.
+        assert before["google_client_secret"] == "REDACTED"
+        assert after["google_client_secret"] == "REDACTED"
+        assert "OLD-SUPER-SECRET" not in written["before_value"]
+        assert "NEW-SUPER-SECRET" not in written["updated_values"]
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
 

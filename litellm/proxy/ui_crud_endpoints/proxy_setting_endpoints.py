@@ -846,6 +846,20 @@ async def update_sso_settings(
         "proxy_base_url": "PROXY_BASE_URL",
     }
 
+    # Read the existing SSO row first so the audit log captures a real
+    # before/after diff. Stored values are encrypted; decrypt them so the
+    # before-snapshot has the same shape as after_value, and rely on
+    # create_config_audit_log's secret-name redaction to mask the
+    # *_client_secret fields before the audit row is written.
+    existing_sso_record = await SSOConfigRepository(prisma_client).table.find_unique(where={"id": "sso_config"})
+    before_sso_data: Optional[Dict[str, Any]] = None
+    if existing_sso_record and existing_sso_record.sso_settings:
+        stored = existing_sso_record.sso_settings
+        if isinstance(stored, str):
+            stored = json.loads(stored)
+        if isinstance(stored, dict):
+            before_sso_data = proxy_config._decrypt_db_variables(stored)
+
     # Load existing config
     config = await proxy_config.get_config()
 
@@ -887,7 +901,7 @@ async def update_sso_settings(
     await create_config_audit_log(
         param_name="sso_config",
         action="updated",
-        before_value=None,
+        before_value=before_sso_data,
         after_value=sso_data,
         user_api_key_dict=user_api_key_dict,
         table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
