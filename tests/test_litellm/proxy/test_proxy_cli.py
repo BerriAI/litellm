@@ -968,6 +968,69 @@ class TestProxyInitializationHelpers:
             mock_proxy_module.save_worker_config.assert_called_once()
             call_kwargs = mock_proxy_module.save_worker_config.call_args[1]
             assert call_kwargs["api_version"] == litellm.AZURE_DEFAULT_API_VERSION
+            assert call_kwargs["api_version_explicit"] is False
+
+    @patch("uvicorn.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch(
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_proxy_explicit_api_version_marked_explicit(
+        self, mock_should_update, mock_setup_db, mock_atexit_register, mock_uvicorn_run
+    ):
+        """An explicitly-passed --api_version is forwarded with api_version_explicit=True
+        so initialize() can override an operator-set AZURE_API_VERSION env var."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL")
+        }
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+            result = runner.invoke(
+                run_server,
+                [
+                    "--api_version",
+                    "2099-12-01-preview",
+                    "--local",
+                    "--skip_server_startup",
+                ],
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_proxy_module.save_worker_config.assert_called_once()
+            call_kwargs = mock_proxy_module.save_worker_config.call_args[1]
+            assert call_kwargs["api_version"] == "2099-12-01-preview"
+            assert call_kwargs["api_version_explicit"] is True
 
     @patch("uvicorn.run")
     @patch("builtins.print")

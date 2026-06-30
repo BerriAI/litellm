@@ -934,11 +934,18 @@ def run_server(
     else:
         if headers:
             headers = json.loads(headers)
+        # Whether --api_version was actually supplied on the CLI vs left at its
+        # click default. initialize() uses this to decide if it may override an
+        # operator-set AZURE_API_VERSION env var.
+        api_version_explicit = (
+            click.get_current_context().get_parameter_source("api_version") != click.core.ParameterSource.DEFAULT
+        )
         save_worker_config(
             model=model,
             alias=alias,
             api_base=api_base,
             api_version=api_version,
+            api_version_explicit=api_version_explicit,
             debug=debug,
             detailed_debug=detailed_debug,
             temperature=temperature,
