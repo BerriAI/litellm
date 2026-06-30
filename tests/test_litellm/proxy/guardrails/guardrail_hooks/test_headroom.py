@@ -398,6 +398,7 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
     assert "not found" in tool_result["content"] or "expired" in tool_result["content"]
 
 
+@pytest.mark.asyncio
 async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request(
     guardrail: HeadroomGuardrail,
 ):
@@ -440,6 +441,7 @@ async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request
     assert "was not produced by the current request" in tool_result["content"]
 
 
+@pytest.mark.asyncio
 async def test_async_build_agentic_loop_plan_rejects_hash_never_issued_by_compress(
     guardrail: HeadroomGuardrail,
 ):
@@ -487,6 +489,7 @@ async def test_async_build_agentic_loop_plan_rejects_hash_never_issued_by_compre
     assert "was not produced by the current request" in tool_result["content"]
 
 
+@pytest.mark.asyncio
 async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_items(
     guardrail: HeadroomGuardrail,
 ):
