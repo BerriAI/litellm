@@ -14,6 +14,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    TokenEndpointAuthConfigError,
+    build_token_endpoint_client_auth,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
@@ -398,6 +402,14 @@ async def exchange_token_with_server(
 
     resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
     resolved_client_secret = mcp_server.client_secret if mcp_server.client_secret else client_secret
+    try:
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=mcp_server.token_endpoint_auth_method,
+            client_id=resolved_client_id,
+            client_secret=resolved_client_secret,
+        )
+    except TokenEndpointAuthConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if grant_type == "refresh_token":
         if not refresh_token:
@@ -408,10 +420,8 @@ async def exchange_token_with_server(
         token_data: dict = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": resolved_client_id,
+            **client_auth.body,
         }
-        if resolved_client_secret is not None:
-            token_data["client_secret"] = resolved_client_secret
         if scope:
             token_data["scope"] = scope
     else:
@@ -423,19 +433,17 @@ async def exchange_token_with_server(
         proxy_base_url = get_request_base_url(request)
         token_data = {
             "grant_type": "authorization_code",
-            "client_id": resolved_client_id,
             "code": code,
             "redirect_uri": f"{proxy_base_url}/callback",
+            **client_auth.body,
         }
-        if resolved_client_secret is not None:
-            token_data["client_secret"] = resolved_client_secret
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
         mcp_server.token_url,
-        headers={"Accept": "application/json"},
+        headers={"Accept": "application/json", **client_auth.headers},
         data=token_data,
     )
     if response is None:

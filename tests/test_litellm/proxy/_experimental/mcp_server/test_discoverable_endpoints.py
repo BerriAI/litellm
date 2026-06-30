@@ -2733,3 +2733,128 @@ async def test_token_exchange_passes_through_upstream_expires_in():
         {"access_token": "tok", "token_type": "Bearer", "expires_in": 43200}
     )
     assert body["expires_in"] == 43200
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_uses_client_secret_basic_when_configured():
+    """LIT-4091: a server with token_endpoint_auth_method=client_secret_basic must send the
+    credentials as an HTTP Basic Authorization header and omit client_secret from the body;
+    providers requiring Basic rejected body credentials with invalid_client."""
+    import base64
+    from unittest.mock import AsyncMock
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        token_endpoint,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="basic_mcp",
+        name="basic_mcp",
+        server_name="basic_mcp",
+        alias="basic_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="basic-client",
+        client_secret="basic-secret",
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/oauth2/token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "at",
+        "token_type": "Bearer",
+        "expires_in": 3599,
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_async_client = MagicMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_async_client
+
+        await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="basic-client",
+            mcp_server_name="basic_mcp",
+            client_secret="basic-secret",
+            code_verifier="verifier",
+        )
+
+    call_args = mock_async_client.post.call_args
+    expected = "Basic " + base64.b64encode(b"basic-client:basic-secret").decode()
+    assert call_args[1]["headers"]["Authorization"] == expected
+    assert "client_secret" not in call_args[1]["data"]
+    assert "client_id" not in call_args[1]["data"]
+    assert call_args[1]["data"]["grant_type"] == "authorization_code"
+    assert call_args[1]["data"]["code"] == "auth-code"
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_client_secret_basic_without_secret_returns_400():
+    """A server configured client_secret_basic but missing its secret is a misconfiguration; the
+    inbound /token endpoint surfaces it as a 400 rather than silently posting a downgraded request."""
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        token_endpoint,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="basic_no_secret",
+        name="basic_no_secret",
+        server_name="basic_no_secret",
+        alias="basic_no_secret",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="basic-client",
+        client_secret=None,
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/oauth2/token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="basic-client",
+            mcp_server_name="basic_no_secret",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert exc_info.value.status_code == 400
