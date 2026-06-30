@@ -197,7 +197,8 @@ async def get_deployments_for_tag(
         if excluded_set and not has_tag_filter:
             if not candidates:
                 raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+                    f"{RouterErrors.no_deployments_with_tag_routing.value}."
+                    f" Passed model={model} and tags={request_tags}"
                 )
             return candidates
 
@@ -242,7 +243,8 @@ async def get_deployments_for_tag(
 
             if len(new_healthy_deployments) == 0 and len(default_deployments) == 0:
                 raise ValueError(
-                    f"{RouterErrors.no_deployments_with_tag_routing.value}. Passed model={model} and tags={request_tags}"
+                    f"{RouterErrors.no_deployments_with_tag_routing.value}."
+                    f" Passed model={model} and tags={request_tags}"
                 )
 
             return (

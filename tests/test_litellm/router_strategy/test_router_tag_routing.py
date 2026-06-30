@@ -247,8 +247,6 @@ async def test_error_from_tag_routing():
     """
     Tests the correct error raised when no deployments found for tag
     """
-    import logging
-
     verbose_logger.setLevel(logging.DEBUG)
     router = litellm.Router(
         model_list=[
@@ -282,7 +280,7 @@ async def test_error_from_tag_routing():
     )
 
     try:
-        response = await router.acompletion(
+        await router.acompletion(
             model="gpt-4",
             messages=[{"role": "user", "content": "Tell me a joke."}],
             metadata={"tags": ["paid"]},

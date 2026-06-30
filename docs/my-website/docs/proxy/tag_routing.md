@@ -1,119 +1,221 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Tag-Based Routing
-
-Route requests to specific deployments based on tags sent in request metadata or the `x-litellm-tags` header. Use this to enforce cost tiers, provider preferences, or team-level isolation without maintaining separate proxy endpoints.
+# Tag Based Routing
 
 ## Quick Start
 
-### 1. Tag your deployments in config.yaml
+### 1. Define tags on config.yaml
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: gpt-4
     litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-      tags: ["free"]
-
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["free"] # 👈 Key Change
   - model_name: gpt-4
     litellm_params:
-      model: openai/gpt-4o-mini
+      model: openai/gpt-4o
       api_key: os.environ/OPENAI_API_KEY
-      tags: ["paid"]
+      tags: ["paid"] # 👈 Key Change
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["default"] # OPTIONAL - All untagged requests will get routed to this
 
 router_settings:
-  enable_tag_filtering: true
+  enable_tag_filtering: True # 👈 Key Change
+
+general_settings:
+  master_key: sk-1234
 ```
 
-### 2. Send a request with a tag
+### 2. Make Request with `tags=["free"]`
 
-<Tabs>
-<TabItem value="curl" label="curl">
-
-```bash showLineNumbers title="Tag via metadata"
-curl http://localhost:4000/v1/chat/completions \
+```bash
+curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Authorization: Bearer sk-1234" \
   -d '{
     "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "metadata": {"tags": ["paid"]}
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ],
+    "tags": ["free"]
   }'
 ```
 
-</TabItem>
-<TabItem value="header" label="x-litellm-tags header">
+**Response:**
 
-```bash showLineNumbers title="Tag via header"
-curl http://localhost:4000/v1/chat/completions \
+```json
+{
+  "id": "chatcmpl-33c534e3d70148218e2d62496b81270b",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "\n\nHello there, how may I assist you today?",
+        "role": "assistant"
+      }
+    }
+  ],
+  "model": "gpt-3.5-turbo-0125",
+  "object": "chat.completion",
+  "usage": {"completion_tokens": 12, "prompt_tokens": 9, "total_tokens": 21}
+}
+```
+
+### 3. Make Request with `tags=["paid"]`
+
+```bash
+curl -i http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $LITELLM_KEY" \
-  -H "x-litellm-tags: paid" \
-  -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}'
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ],
+    "tags": ["paid"]
+  }'
 ```
 
-</TabItem>
-<TabItem value="python" label="Python SDK">
+**Response:**
 
-```python showLineNumbers title="Tag via Python SDK"
-import litellm
-
-response = litellm.completion(
-    model="gpt-4",
-    messages=[{"role": "user", "content": "Hello"}],
-    metadata={"tags": ["paid"]},
-)
+```json
+{
+  "id": "chatcmpl-9maCcqQYTqdJrtvfakIawMOIUbEZx",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Good morning! How can I assist you today?",
+        "role": "assistant"
+      }
+    }
+  ],
+  "model": "gpt-4o-2024-05-13",
+  "object": "chat.completion",
+  "usage": {"completion_tokens": 10, "prompt_tokens": 12, "total_tokens": 22}
+}
 ```
 
-</TabItem>
-</Tabs>
+## Calling via Request Header
 
-The router picks only deployments whose `tags` list intersects the request tags. If no match is found and no default deployment is configured, the request fails with a `no_deployments_with_tag_routing` error.
+```bash
+curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
+-H 'Content-Type: application/json' \
+-H 'Authorization: Bearer sk-1234' \
+-H 'x-litellm-tags: free,my-custom-tag' \
+-d '{
+  "model": "gpt-4",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hey, how'\''s it going?"
+    }
+  ]
+}'
+```
 
-## Default Deployments
+## Setting Default Tags
 
-Tag a deployment `default` to use it for requests that carry no tags. Requests with an explicit `default` tag also route here.
+### 1. Set default tag on yaml
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  - model_name: gpt-4
+  - model_name: fake-openai-endpoint
     litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
-      tags: ["default"]
-
-  - model_name: gpt-4
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-      tags: ["paid"]
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["default"] # 👈 Key Change - All untagged requests will get routed to this
+    model_info:
+      id: "default-model"
 ```
 
-Untagged requests use the `default` deployment; requests tagged `paid` use the paid deployment.
+### 2. Start proxy
+
+```bash
+$ litellm --config /path/to/config.yaml
+```
+
+### 3. Make request with no tags
+
+```bash
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello, Claude gm!"}
+    ]
+  }'
+```
 
 ## Negation Tags (Denylist)
 
-Prefix any tag with `!` to exclude deployments that carry that exact tag. This is useful when you want to ban a provider or model family from a request without having to enumerate every allowed alternative.
+Prefix any tag with `!` to **exclude** deployments that carry that exact tag. This is useful when you want to avoid a specific provider or model family without listing every allowed alternative.
 
-```bash showLineNumbers title="Exclude a provider"
+### Quick example
+
+```bash
 curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
   -d '{
-    "model": "chat",
+    "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello"}],
     "metadata": {"tags": ["!provider:anthropic"]}
   }'
 ```
 
-Any deployment tagged `provider:anthropic` is removed from the candidate pool before routing begins. All remaining deployments are eligible.
+Any deployment tagged `provider:anthropic` is removed from the candidate pool before routing. All remaining deployments are eligible.
+
+### Config example
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: chat
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+      api_key: os.environ/ANTHROPIC_API_KEY
+      tags: ["provider:anthropic"]
+
+  - model_name: chat
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      tags: ["provider:openai"]
+
+  - model_name: chat
+    litellm_params:
+      model: vertex_ai/gemini-2.0-flash
+      api_key: os.environ/VERTEX_API_KEY
+      tags: ["provider:vertex"]
+
+router_settings:
+  enable_tag_filtering: true
+
+general_settings:
+  master_key: sk-1234
+```
 
 ### Combining positive and negation tags
 
-```bash showLineNumbers title="Paid tier, not Anthropic"
+Use positive tags to select a tier and negation tags to exclude a provider within that tier:
+
+```bash
 curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
   -d '{
     "model": "chat",
     "messages": [{"role": "user", "content": "Hello"}],
@@ -121,15 +223,14 @@ curl http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-Positive tags (`paid`) still run the normal inclusion filter after the exclusion pass. Only paid-tier, non-Anthropic deployments are returned.
-
 ### Excluding multiple providers
 
 Send multiple `!` tags to exclude more than one deployment group:
 
-```bash showLineNumbers title="Exclude multiple providers"
+```bash
 curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer $LITELLM_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
   -d '{
     "model": "chat",
     "messages": [{"role": "user", "content": "Hello"}],
@@ -137,21 +238,13 @@ curl http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-### Negation semantics
+Only the vertex deployment remains eligible.
 
-| Behavior | Detail |
-|----------|--------|
-| Matching | Exact tag string match. `!provider:anthropic` removes only deployments tagged exactly `provider:anthropic`, not `provider:anthropic-haiku` |
-| Ban-only request | If the request carries only `!` tags and no positive tags, all non-banned deployments are eligible (no inclusion filter runs) |
-| All excluded | If negation tags remove every deployment, the request fails with `no_deployments_with_tag_routing` |
-| Untagged deployments | Deployments with no `tags` field are never excluded by negation tags |
-| Bare `!` | A tag that is exactly `!` (nothing after it) is silently ignored |
+### Negation with fallback chains
 
-## Fallback Chains with Negation
+When the primary model group is banned, the router falls through to the configured fallback automatically:
 
-When the primary model group is banned by a negation tag, the router falls through to the configured fallback automatically — no extra configuration needed.
-
-```yaml showLineNumbers title="config.yaml with fallbacks"
+```yaml showLineNumbers title="config.yaml"
 model_list:
   - model_name: primary
     litellm_params:
@@ -169,29 +262,182 @@ router_settings:
   enable_tag_filtering: true
   fallbacks:
     - {"primary": ["fallback"]}
+
+general_settings:
+  master_key: sk-1234
 ```
 
-A request with `!provider:anthropic` on `primary` raises `no_deployments_with_tag_routing`, which triggers the fallback to `fallback` (tagged `provider:openai`).
+```bash
+curl http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "primary",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "metadata": {"tags": ["!provider:anthropic"]}
+  }'
+# primary is banned -> falls through to fallback (provider:openai)
+```
 
-## Reference
+### Negation semantics
 
-### Router settings
+| Behavior | Detail |
+|----------|--------|
+| Matching | Exact tag string match. `!provider:anthropic` removes only deployments tagged exactly `provider:anthropic` |
+| Ban-only request | If the request carries only `!` tags and no positive tags, all non-banned deployments are eligible |
+| All excluded | If negation tags remove every candidate, the request fails with `no_deployments_with_tag_routing` |
+| Untagged deployments | Deployments with no `tags` field are never excluded by negation tags |
+| Header | Negation tags work via `x-litellm-tags` header too: `-H 'x-litellm-tags: !provider:anthropic'` |
 
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `enable_tag_filtering` | `bool` | `false` | Enable tag-based routing. Must be `true` for any tag filtering to apply |
-| `tag_filtering_match_any` | `bool` | `true` | `true`: route if any request tag matches a deployment tag. `false`: all request tags must be present on the deployment |
+## Regex-based tag routing (`tag_regex`)
 
-### Deployment config
+Use `tag_regex` on a deployment to match incoming requests by their headers (e.g. `User-Agent`) — without requiring the client to send explicit tags. Patterns are operator-configured and compiled server-side, not supplied by callers.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `tags` | `List[str]` | Tags this deployment accepts. Positive request tags are matched against this list. Negation request tags check for exact membership in this list |
-| `tag_regex` | `List[str]` | Operator-configured regex patterns matched against request headers (e.g. `User-Agent`). Independent of `tags` matching; runs after tag filtering |
+:::caution
+User-Agent is a client-supplied header and can be set to any value. Use `tag_regex` for traffic classification, not access-control enforcement.
+:::
 
-### Request metadata
+### 1. Config
 
-| Field | Description |
-|-------|-------------|
-| `metadata.tags` | List of tag strings. Prefix with `!` to exclude deployments carrying that exact tag |
-| `x-litellm-tags` header | Comma-separated tags, equivalent to `metadata.tags` |
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  # Claude Code traffic → dedicated deployment, matched by User-Agent
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/converse/anthropic-claude-sonnet-4-6
+      aws_region_name: us-east-1
+      aws_role_name: arn:aws:iam::111122223333:role/LiteLLMClaudeCode
+      tag_regex:
+        - "^User-Agent: claude-code\\/"   # matches claude-code/1.x, 2.x, etc.
+    model_info:
+      id: claude-code-deployment
+  # All other traffic falls back to the default deployment
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/converse/anthropic-claude-sonnet-4-6
+      aws_region_name: us-east-1
+      aws_role_name: arn:aws:iam::444455556666:role/LiteLLMDefault
+      tags:
+        - default
+    model_info:
+      id: regular-deployment
+
+router_settings:
+  enable_tag_filtering: true
+  tag_filtering_match_any: true
+
+general_settings:
+  master_key: sk-1234
+```
+
+### 2. Verify routing
+
+```bash
+# Claude Code request (User-Agent set automatically by Claude Code)
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer sk-1234" \
+  -H "User-Agent: claude-code/1.2.3" \
+  -d '{"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}'
+# -> x-litellm-model-id: claude-code-deployment
+
+# Any other client (no matching User-Agent) -> default deployment
+curl http://localhost:4000/v1/chat/completions \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}'
+# -> x-litellm-model-id: regular-deployment
+```
+
+### Observability
+
+```json
+{
+  "tag_routing": {
+    "matched_via": "tag_regex",
+    "matched_value": "^User-Agent: claude-code\\/",
+    "user_agent": "claude-code/1.2.3",
+    "request_tags": []
+  }
+}
+```
+
+## Team based tag routing (Enterprise)
+
+### Configuration
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["teamA"] # 👈 Key Change
+    model_info:
+      id: "team-a-model"
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["teamB"] # 👈 Key Change
+    model_info:
+      id: "team-b-model"
+  - model_name: fake-openai-endpoint
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+      api_base: https://exampleopenaiendpoint-production.up.railway.app/
+      tags: ["default"] # OPTIONAL - All untagged requests will get routed to this
+
+router_settings:
+  enable_tag_filtering: True # 👈 Key Change
+
+general_settings:
+  master_key: sk-1234
+```
+
+### Create teams with tags
+
+```bash
+# Create Team A
+curl -X POST http://0.0.0.0:4000/team/new \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{"tags": ["teamA"]}'
+
+# Create Team B
+curl -X POST http://0.0.0.0:4000/team/new \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{"tags": ["teamB"]}'
+```
+
+### Generate keys for team members
+
+```bash
+# Generate key for Team A
+curl -X POST http://0.0.0.0:4000/key/generate \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id": "team_a_id_here"}'
+
+# Generate key for Team B
+curl -X POST http://0.0.0.0:4000/key/generate \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{"team_id": "team_b_id_here"}'
+```
+
+### Verify routing
+
+```bash
+curl -i -X POST http://0.0.0.0:4000/chat/completions \
+  -H "Authorization: Bearer team_a_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "fake-openai-endpoint",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'
+```
