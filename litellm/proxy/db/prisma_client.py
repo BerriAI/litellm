@@ -12,10 +12,13 @@ import urllib
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Union
+from typing import TYPE_CHECKING, Any, Callable, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.secret_managers.main import str_to_bool
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 
 @dataclass(frozen=True)
@@ -90,7 +93,7 @@ class PrismaWrapper:
 
     def __init__(
         self,
-        original_prisma: Any,
+        original_prisma: "Prisma",
         iam_token_db_auth: bool,
         *,
         db_url_env_var: str = "DATABASE_URL",
@@ -139,8 +142,7 @@ class PrismaWrapper:
     def _get_engine_pid(self) -> int:
         """Get the PID of the current Prisma engine subprocess, or 0 if unavailable."""
         try:
-            engine = self._original_prisma._engine
-            process = getattr(engine, "process", None) if engine is not None else None
+            process = getattr(self._original_prisma._engine, "process", None)
             if process is not None:
                 pid = process.pid
                 if isinstance(pid, int):
