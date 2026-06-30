@@ -54,6 +54,7 @@ from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
@@ -340,6 +341,16 @@ class PrometheusLogger(CustomLogger):
                 "litellm_overhead_latency_metric",
                 "Latency overhead (milliseconds) added by LiteLLM processing",
                 labelnames=self.get_labels_for_metric("litellm_overhead_latency_metric"),
+                buckets=self.latency_buckets,
+            )
+
+            self.litellm_total_overhead_latency_metric = self._histogram_factory(
+                "litellm_total_overhead_latency_metric",
+                "Total internal latency (seconds) added by LiteLLM, including "
+                "pre/post-call guardrails (excludes the LLM API call)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_total_overhead_latency_metric"
+                ),
                 buckets=self.latency_buckets,
             )
 
@@ -994,6 +1005,90 @@ class PrometheusLogger(CustomLogger):
 
         self._cached_metric_labels[metric_name] = filtered_labels
         return filtered_labels
+
+    @staticmethod
+    def _get_guardrail_overhead_seconds(
+        standard_logging_payload: StandardLoggingPayload,
+    ) -> float:
+        """Additive guardrail execution time (seconds) on the payload.
+
+        Counts only ``pre_call`` and ``post_call`` guardrails: they run
+        sequentially around the LLM call and block the user-facing response, so
+        their durations add to LiteLLM's overhead. All other modes are excluded:
+        ``during_call`` (moderation) runs concurrently with the LLM call,
+        ``logging_only`` hooks are fire-and-forget and never block the response,
+        and the MCP-specific modes are not part of the chat-completion path.
+
+        ``guardrail_mode`` may be a single ``GuardrailEventHooks``, a plain
+        string, a ``GuardrailMode``, or a list of any of those; a duration is
+        counted only when every mode it carries is an additive (pre/post) phase,
+        so a list such as ``["pre_call", "during_call"]`` is excluded.
+        """
+        additive_modes = {
+            GuardrailEventHooks.pre_call.value,
+            GuardrailEventHooks.post_call.value,
+        }
+        guardrail_information = (
+            standard_logging_payload.get("guardrail_information") or []
+        )
+        # Most guardrails record a list of entries, but some (e.g. xecguard) assign
+        # a single dict to guardrail_information. Normalize to a list so we iterate
+        # entries, not dict keys (which would pass strings into the loop below and
+        # raise AttributeError on info.get(...)).
+        if isinstance(guardrail_information, dict):
+            guardrail_information = [guardrail_information]
+        total = 0.0
+        for info in guardrail_information:
+            if not isinstance(info, dict):
+                continue
+            mode = info.get("guardrail_mode")
+            modes = mode if isinstance(mode, list) else [mode]
+            # A mode may be a GuardrailEventHooks, a plain string, a GuardrailMode
+            # dict (unhashable at runtime), or a list of these. Resolve each to its
+            # string value and keep only strings, so an unhashable type (dict) can
+            # never enter the set and raise TypeError (which would abort the rest of
+            # success-event logging). Non-string modes are ignored, not counted.
+            mode_values = set()
+            for m in modes:
+                value = getattr(m, "value", m)
+                if isinstance(value, str):
+                    mode_values.add(value)
+            if mode_values and mode_values <= additive_modes:
+                total += float(info.get("duration") or 0.0)
+        return total
+
+    def _set_total_overhead_metric(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
+    ) -> None:
+        """Record ``litellm_total_overhead_latency_metric`` (seconds).
+
+        Value is SDK overhead (``litellm_overhead_time_ms``) + pre/post-call
+        guardrail time. Recorded independently of the SDK-overhead gate used by
+        ``litellm_overhead_latency_metric`` so guardrail-only overhead is still
+        captured when ``litellm_overhead_time_ms`` is ``0`` or absent.
+        """
+        hidden_params = standard_logging_payload.get("hidden_params") or {}
+        litellm_overhead_time_ms = hidden_params.get("litellm_overhead_time_ms")
+        guardrail_overhead_seconds = self._get_guardrail_overhead_seconds(
+            standard_logging_payload
+        )
+        if litellm_overhead_time_ms is None and guardrail_overhead_seconds <= 0:
+            return
+        total_overhead_labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_total_overhead_latency_metric"
+            ),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        self.litellm_total_overhead_latency_metric.labels(
+            **total_overhead_labels
+        ).observe(
+            ((litellm_overhead_time_ms or 0.0) / 1000) + guardrail_overhead_seconds
+        )  # set as seconds
 
     def _track_end_user_metric_series(
         self,
@@ -2339,6 +2434,15 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_overhead_latency_metric.labels(**_labels).observe(
                     litellm_overhead_time_ms / 1000
                 )  # set as seconds
+
+            # Total internal overhead = SDK overhead + pre/post-call guardrails.
+            # Recorded outside the SDK-overhead gate above so guardrail-only
+            # overhead is still captured when litellm_overhead_time_ms is 0/absent.
+            self._set_total_overhead_metric(
+                standard_logging_payload=standard_logging_payload,
+                enum_values=enum_values,
+                label_context=label_context,
+            )
 
             if remaining_requests:
                 """
