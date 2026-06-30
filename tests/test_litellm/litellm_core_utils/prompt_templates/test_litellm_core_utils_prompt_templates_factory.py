@@ -1553,6 +1553,69 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
     assert tool_spec["name"] == "get_weather"
 
 
+def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
+    """
+    Regression for LIT-3858: Responses built-in tools (image_generation, namespace,
+    tool_search, custom) have no Bedrock toolSpec equivalent. They must be dropped, not
+    emitted as junk ``litellm_unnamed_tool_N`` toolSpecs the model can hallucinate calls to.
+    Mappable ``function`` and Anthropic ``input_schema`` tools must survive untouched.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "noop",
+                "description": "x",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {"type": "image_generation", "output_format": "png"},
+        {"type": "namespace", "name": "grp", "description": "g", "tools": []},
+        {"type": "custom", "name": "free_form"},
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["noop"]
+    assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
+
+
+def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
+    """
+    The drop guard for unmappable tools must not regress Anthropic Messages format tools,
+    which carry an ``input_schema`` instead of an OpenAI ``function`` key.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "image_generation",
+            "output_format": "png",
+        },
+        {
+            "name": "lookup",
+            "description": "look something up",
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["lookup"]
+
+
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
     Test that cache_control is properly applied to image content in tool results.
