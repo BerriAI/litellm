@@ -5022,9 +5022,7 @@ async def get_team_daily_activity(
 
     # Convert comma-separated tags string to list if provided
     team_ids_list = team_ids.split(",") if team_ids else None
-    exclude_team_ids_list: Optional[List[str]] = (
-        exclude_team_ids.split(",") if exclude_team_ids else None
-    )
+    exclude_team_ids_list: Optional[List[str]] = exclude_team_ids.split(",") if exclude_team_ids else None
 
     is_admin_view = _user_has_admin_view(user_api_key_dict)
     member_team_ids: Set[str] = set()
@@ -5048,9 +5046,7 @@ async def get_team_daily_activity(
         if team_ids_list is None:
             team_ids_list = list(member_team_ids)
         else:
-            unauthorized_team = next(
-                (t for t in team_ids_list if t not in member_team_ids), None
-            )
+            unauthorized_team = next((t for t in team_ids_list if t not in member_team_ids), None)
             if unauthorized_team is not None:
                 raise HTTPException(
                     status_code=404,
@@ -5088,9 +5084,9 @@ async def get_team_daily_activity(
             for team_alias in team_aliases
         )
         if not has_full_team_view:
-            user_keys = await VerificationTokenRepository(
-                prisma_client
-            ).table.find_many(where={"user_id": user_api_key_dict.user_id})
+            user_keys = await VerificationTokenRepository(prisma_client).table.find_many(
+                where={"user_id": user_api_key_dict.user_id}
+            )
             user_api_keys = [key.token for key in user_keys if key.token] or [""]
 
     # If api_key parameter is provided, use it; otherwise use user_api_keys if set
