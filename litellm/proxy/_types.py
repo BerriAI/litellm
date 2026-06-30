@@ -3882,6 +3882,7 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
 
     spend_logs_metadata: Optional[dict]
     agent_id: Optional[str]
+    geo_bucket: Optional[str]
     trace_id: Optional[str]
     session_id: Optional[str]
 

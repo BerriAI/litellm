@@ -52,6 +52,8 @@ _LEGACY_GEO_ALIAS = {
     "geo-ca": "ca",
     "geo-default": "default",
 }
+_KNOWN_GEO_BUCKETS = frozenset({"us-south", "us-east", "ca", "default"})
+_US_SOUTH_REGION_CODES = frozenset({"CA", "TX", "OK", "AR", "LA", "NM", "KS", "MO"})
 
 
 def _sanitize_for_log(value: Any) -> str:
@@ -422,6 +424,56 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
     )
+
+
+def _normalize_region_subdivision(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = value.strip().upper().replace("_", "-")
+    if "-" in normalized:
+        normalized = normalized.rsplit("-", 1)[-1]
+    if len(normalized) == 4 and normalized.startswith("US"):
+        normalized = normalized[2:]
+    if len(normalized) == 2 and normalized.isalpha():
+        return normalized
+    return None
+
+
+def _canonicalize_geo_route(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    normalized = value.strip().lower()
+    normalized = _LEGACY_GEO_ALIAS.get(normalized, normalized)
+    if normalized in _KNOWN_GEO_BUCKETS:
+        return normalized
+    return None
+
+
+def get_geo_bucket_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
+    if not headers:
+        return None
+
+    normalized = {
+        key.lower(): value.strip()
+        for key, value in headers.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+    explicit_route = _canonicalize_geo_route(normalized.get("x-geo-route"))
+    if explicit_route:
+        return explicit_route
+
+    country = normalized.get("cf-ipcountry", "").upper()
+    if country == "CA":
+        return "ca"
+    if country == "US":
+        region = _normalize_region_subdivision(normalized.get("x-geo-state"))
+        if region in _US_SOUTH_REGION_CODES:
+            return "us-south"
+        return "us-east"
+    if country:
+        return "default"
+    return None
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:
@@ -986,6 +1038,13 @@ class LiteLLMProxyRequestSetup:
         )
         if spend_logs_metadata is not None:
             metadata_from_headers["spend_logs_metadata"] = spend_logs_metadata
+
+        if isinstance(data.get(_metadata_variable_name), dict):
+            data[_metadata_variable_name].pop("geo_bucket", None)
+
+        geo_bucket = get_geo_bucket_from_headers(headers)
+        if geo_bucket is not None:
+            metadata_from_headers["geo_bucket"] = geo_bucket
 
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`
