@@ -6,8 +6,8 @@ COPY server.py /app/server.py
 
 WORKDIR /app
 
-EXPOSE 8787
+EXPOSE 10000
 
-ENV PORT=8787
+ENV PORT=10000
 
 CMD ["python", "server.py"]
