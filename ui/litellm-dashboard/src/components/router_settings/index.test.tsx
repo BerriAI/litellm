@@ -147,7 +147,7 @@ describe("RouterSettings", () => {
     expect(NotificationsManager.success).toHaveBeenCalledWith("router settings updated successfully");
   });
 
-  it("should not render or save routing_groups (owned by the Routing Groups tab) (LIT-4057)", async () => {
+  it("should not render or save routing_groups (owned by the Routing Groups tab)", async () => {
     const user = userEvent.setup();
     vi.mocked(getCallbacksCall).mockResolvedValue({
       router_settings: {
@@ -165,13 +165,14 @@ describe("RouterSettings", () => {
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    const payload = vi.mocked(setCallbacksCall).mock.calls[0][1] as {
-      router_settings: Record<string, unknown>;
-    };
-    expect(payload.router_settings).not.toHaveProperty("routing_groups");
+    await waitFor(() =>
+      expect(setCallbacksCall).toHaveBeenCalledWith("test-token", {
+        router_settings: expect.not.objectContaining({ routing_groups: expect.anything() }),
+      }),
+    );
   });
 
-  it("should surface an error and not claim success when saving fails (LIT-4057)", async () => {
+  it("should surface an error and not claim success when saving fails", async () => {
     const user = userEvent.setup();
     vi.mocked(setCallbacksCall).mockRejectedValue(new Error("422 Unprocessable Entity"));
     renderWithProviders(<RouterSettings {...defaultProps} />);
