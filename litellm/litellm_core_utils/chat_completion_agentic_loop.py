@@ -34,9 +34,21 @@ def _gate_overridden(callback: CustomLogger) -> bool:
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
 
 
+def _chat_completion_gate_overridden(callback: CustomLogger) -> bool:
+    base = CustomLogger.async_should_run_chat_completion_agentic_loop
+    func = type(callback).async_should_run_chat_completion_agentic_loop
+    return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
+
+
 def _build_plan_overridden(callback: CustomLogger) -> bool:
     base = CustomLogger.async_build_agentic_loop_plan
     func = type(callback).async_build_agentic_loop_plan
+    return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
+
+
+def _chat_completion_build_plan_overridden(callback: CustomLogger) -> bool:
+    base = CustomLogger.async_build_chat_completion_agentic_loop_plan
+    func = type(callback).async_build_chat_completion_agentic_loop_plan
     return getattr(func, "__func__", func) is not getattr(base, "__func__", base)
 
 
@@ -54,11 +66,7 @@ def _agentic_loop_settings(kwargs: dict[str, object]) -> tuple[int, int, list[st
     depth = _coerce_int(kwargs.get("_agentic_loop_depth"), 0)
     max_loops = max(_coerce_int(kwargs.get("max_agentic_loops"), 3), 1)
     raw_fingerprints = kwargs.get("_agentic_loop_fingerprints")
-    fingerprints = (
-        [str(fp) for fp in raw_fingerprints]
-        if isinstance(raw_fingerprints, list)
-        else []
-    )
+    fingerprints = [str(fp) for fp in raw_fingerprints] if isinstance(raw_fingerprints, list) else []
     return depth, max_loops, fingerprints
 
 
@@ -78,9 +86,7 @@ def _check_agentic_loop_safety(
 ) -> str:
     fingerprint = _fingerprint_tools(tool_calls)
     if fingerprint in fingerprints:
-        raise ValueError(
-            "Agentic loop detected repeated tool-call fingerprint; aborting rerun"
-        )
+        raise ValueError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
     if depth >= max_loops:
         raise ValueError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
     return fingerprint
@@ -102,11 +108,7 @@ def _add_agentic_loop_metadata(kwargs_for_followup: dict[str, object]) -> None:
     metadata = kwargs_for_followup.get("litellm_metadata")
     metadata = dict(metadata) if isinstance(metadata, dict) else {}
     for key, value in kwargs_for_followup.items():
-        if (
-            key.startswith("_agentic_loop")
-            or key == "max_agentic_loops"
-            or is_interception_internal_key(key)
-        ):
+        if key.startswith("_agentic_loop") or key == "max_agentic_loops" or is_interception_internal_key(key):
             metadata[key] = value
     kwargs_for_followup["litellm_metadata"] = metadata
 
@@ -115,9 +117,7 @@ def _filter_followup_kwargs(source: dict[str, object]) -> dict[str, object]:
     return {
         k: v
         for k, v in source.items()
-        if not is_interception_internal_key(
-            k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES
-        )
+        if not is_interception_internal_key(k, prefixes=NON_CODE_INTERPRETER_INTERCEPTION_INTERNAL_PREFIXES)
         and k not in _FOLLOWUP_INTERNAL_PARAMS
     }
 
@@ -154,11 +154,7 @@ async def _execute_chat_completion_agentic_plan(
 
     kwargs_for_followup = _filter_followup_kwargs(kwargs)
     kwargs_for_followup.update(
-        {
-            k: v
-            for k, v in _filter_followup_kwargs(patch.kwargs).items()
-            if k not in optional_params_for_followup
-        }
+        {k: v for k, v in _filter_followup_kwargs(patch.kwargs).items() if k not in optional_params_for_followup}
     )
     kwargs_for_followup["_agentic_loop_depth"] = depth + 1
     kwargs_for_followup["max_agentic_loops"] = max_loops
@@ -174,10 +170,8 @@ async def _execute_chat_completion_agentic_plan(
         )
         if _post_hook_overridden(callback):
             try:
-                response_followup = (
-                    await callback.async_post_agentic_loop_response_hook(
-                        response=response_followup, plan=plan, kwargs=kwargs
-                    )
+                response_followup = await callback.async_post_agentic_loop_response_hook(
+                    response=response_followup, plan=plan, kwargs=kwargs
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
@@ -197,8 +191,7 @@ async def _execute_chat_completion_agentic_plan(
         except Exception as e:
             _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
             verbose_logger.exception(
-                "LiteLLM.AgenticHookError: Exception in "
-                "async_agentic_loop_cleanup_hook [call_id=%s model=%s]: %s",
+                "LiteLLM.AgenticHookError: Exception in async_agentic_loop_cleanup_hook [call_id=%s model=%s]: %s",
                 _call_id,
                 model,
                 str(e),
@@ -218,16 +211,14 @@ async def maybe_run_chat_completion_agentic_loop(
 ) -> ModelResponse | CustomStreamWrapper | None:
     import litellm
 
-    callbacks = litellm.callbacks + (
-        getattr(logging_obj, "dynamic_success_callbacks", None) or []
-    )
+    callbacks = litellm.callbacks + (getattr(logging_obj, "dynamic_success_callbacks", None) or [])
     depth, max_loops, fingerprints = _agentic_loop_settings(kwargs)
     tools = optional_params.get("tools", [])
 
     for callback in callbacks:
         if not isinstance(callback, CustomLogger):
             continue
-        if not _gate_overridden(callback):
+        if not _chat_completion_gate_overridden(callback):
             continue
 
         gate_kwargs = {
@@ -236,7 +227,7 @@ async def maybe_run_chat_completion_agentic_loop(
             "custom_llm_provider": custom_llm_provider,
         }
         try:
-            should_run, tool_calls = await callback.async_should_run_agentic_loop(
+            should_run, tool_calls = await callback.async_should_run_chat_completion_agentic_loop(
                 response=response,
                 model=model,
                 messages=messages,
@@ -269,26 +260,24 @@ async def maybe_run_chat_completion_agentic_loop(
                 "_agentic_loop_api_surface": CHAT_COMPLETION_AGENTIC_SURFACE,
                 "custom_llm_provider": custom_llm_provider,
             }
-            if not _build_plan_overridden(callback):
-                return await callback.async_run_agentic_loop(
+            if not _chat_completion_build_plan_overridden(callback):
+                return await callback.async_run_chat_completion_agentic_loop(
                     tools=tool_calls,
                     model=model,
                     messages=messages,
                     response=response,
-                    anthropic_messages_provider_config=None,
-                    anthropic_messages_optional_request_params=optional_params,
+                    optional_params=optional_params,
                     logging_obj=logging_obj,
                     stream=stream,
                     kwargs=plan_kwargs,
                 )
 
-            plan = await callback.async_build_agentic_loop_plan(
+            plan = await callback.async_build_chat_completion_agentic_loop_plan(
                 tools=tool_calls,
                 model=model,
                 messages=messages,
                 response=response,
-                anthropic_messages_provider_config=None,
-                anthropic_messages_optional_request_params=optional_params,
+                optional_params=optional_params,
                 logging_obj=logging_obj,
                 stream=stream,
                 kwargs=plan_kwargs,
@@ -320,11 +309,7 @@ async def maybe_run_chat_completion_agentic_loop(
                 str(e),
             )
 
-    if (
-        kwargs.get("_code_interpreter_interception_converted_stream")
-        and not depth
-        and hasattr(response, "choices")
-    ):
+    if kwargs.get("_code_interpreter_interception_converted_stream") and not depth and hasattr(response, "choices"):
         return cast(
             "ModelResponse | CustomStreamWrapper",
             _wrap_response_as_fake_stream(response),
