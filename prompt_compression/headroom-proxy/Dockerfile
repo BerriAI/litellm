@@ -10,7 +10,7 @@ RUN curl -Lo /tmp/rustup-init \
       https://static.rust-lang.org/rustup/archive/1.28.1/x86_64-unknown-linux-gnu/rustup-init \
     && curl -Lo /tmp/rustup-init.sha256 \
       https://static.rust-lang.org/rustup/archive/1.28.1/x86_64-unknown-linux-gnu/rustup-init.sha256 \
-    && sha256sum --check /tmp/rustup-init.sha256 \
+    && cd /tmp && sha256sum --check rustup-init.sha256 \
     && chmod +x /tmp/rustup-init \
     && /tmp/rustup-init -y --profile minimal --default-toolchain 1.87.0 --no-modify-path \
     && rm /tmp/rustup-init /tmp/rustup-init.sha256
