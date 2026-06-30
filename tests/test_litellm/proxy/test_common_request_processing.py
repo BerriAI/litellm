@@ -4070,13 +4070,14 @@ class TestAllmPassthroughStreamingProviderGate:
 
 class TestResponseCostHeaderForTypedDictResponses:
     """
-    Regression for LIT-4076. Anthropic /v1/messages and Google :generateContent
-    return TypedDict results that are plain dicts at runtime and therefore cannot
-    hold _hidden_params. ResponseMetadata.apply() drops the computed response_cost
-    for those results, so x-litellm-response-cost went missing on those two routes
-    even though it appeared on /chat/completions and /responses. The non-streaming
-    header build now recovers the cost from the logging object for such results,
-    while leaving object responses (ModelResponse etc.) untouched.
+    Regression for LIT-4076. x-litellm-response-cost went missing on Anthropic
+    /v1/messages and Google :generateContent even though it appeared on
+    /chat/completions and /responses. /v1/messages returns a TypedDict that cannot
+    hold _hidden_params at all, and :generateContent carries _hidden_params but no
+    synchronously-populated response_cost. In both cases the raw response_cost is
+    empty at header-build time. The non-streaming header build now recovers the cost
+    from the logging object whenever the response itself never recorded one, while
+    leaving object responses (ModelResponse etc.) untouched.
     """
 
     def _build_logging_obj(self, *, model_call_details, response_cost_calculator):
@@ -4188,6 +4189,70 @@ class TestResponseCostHeaderForTypedDictResponses:
         assert fastapi_response.headers["x-litellm-response-cost"] == "0.00456"
         recompute.assert_called_once()
         assert recompute.call_args.kwargs["result"] is response
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_emits_cost_header(self, monkeypatch):
+        """
+        Models the real :generateContent response: it DOES carry a _hidden_params
+        attribute (which is why x-litellm-model-group / x-litellm-model-api-base
+        appear), but no response_cost is populated synchronously at header-build
+        time. The cost is only available on the logging object. The previous
+        ``not hasattr(response, "_hidden_params")`` guard skipped recovery here, so
+        x-litellm-response-cost went missing even though the cost was computed.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0004521},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert fastapi_response.headers["x-litellm-response-cost"] == "0.0004521"
+        assert fastapi_response.headers["x-litellm-model-group"] == "gemini-2.5-flash"
+        recompute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_generate_content_with_hidden_params_zero_cost_drops_header(self, monkeypatch):
+        """
+        A recovered cost of 0 must normalize to a dropped header, exactly like
+        /chat/completions, so :generateContent does not start emitting
+        x-litellm-response-cost: 0.0 where nothing was emitted before.
+        """
+        from types import SimpleNamespace
+
+        response = SimpleNamespace(
+            _hidden_params={
+                "additional_headers": {"x-litellm-model-group": "gemini-2.5-flash"},
+            }
+        )
+        recompute = MagicMock(return_value=999.0)
+        logging_obj = self._build_logging_obj(
+            model_call_details={"response_cost": 0.0},
+            response_cost_calculator=recompute,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        assert "x-litellm-response-cost" not in fastapi_response.headers
+        recompute.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_object_response_with_hidden_params_is_unaffected(self, monkeypatch):

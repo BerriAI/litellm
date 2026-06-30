@@ -1191,11 +1191,12 @@ class ProxyBaseLLMRequestProcessing:
         logging_obj: LiteLLMLoggingObj,
     ) -> float | str:
         """
-        Recover the response cost for TypedDict results (Anthropic /v1/messages,
-        Google :generateContent) that cannot hold ``_hidden_params``. For those
-        results ``ResponseMetadata.apply()`` drops the computed cost, so the cost
-        is read back from the logging object instead, recomputing from the same
-        calculator only when it has not been stored yet.
+        Recover the response cost when the response never recorded one in its
+        ``_hidden_params``: Anthropic /v1/messages returns a TypedDict that cannot
+        hold the attribute at all, and Google :generateContent carries
+        ``_hidden_params`` but no synchronously-populated ``response_cost``. In both
+        cases the cost is read back from the logging object instead, recomputing from
+        the same calculator only when it has not been stored yet.
         """
         stored_cost = logging_obj.model_call_details.get("response_cost")
         if isinstance(stored_cost, (int, float)):
@@ -1706,9 +1707,10 @@ class ProxyBaseLLMRequestProcessing:
         hidden_params = getattr(response, "_hidden_params", {}) or {}  # get any updated response headers
         additional_headers = hidden_params.get("additional_headers", {}) or {}
 
+        recover_response_cost = not response_cost and hidden_params.get("response_cost") is None
         response_cost_for_headers = (
-            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj)
-            if (not response_cost and not hasattr(response, "_hidden_params"))
+            self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
+            if recover_response_cost
             else response_cost
         )
 
