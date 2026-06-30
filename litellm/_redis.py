@@ -23,7 +23,11 @@ from litellm._redis_credential_provider import (
     GCPIAMCredentialProvider,
     _generate_gcp_iam_access_token,
 )
-from litellm.constants import REDIS_CONNECTION_POOL_TIMEOUT, REDIS_SOCKET_TIMEOUT
+from litellm.constants import (
+    REDIS_CLUSTER_HEALTH_CHECK_INTERVAL,
+    REDIS_CONNECTION_POOL_TIMEOUT,
+    REDIS_SOCKET_TIMEOUT,
+)
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 from ._logging import verbose_logger
@@ -102,6 +106,8 @@ def _get_redis_cluster_kwargs(client=None):
         "max_connections",
         "socket_timeout",
         "socket_connect_timeout",
+        "health_check_interval",
+        "socket_keepalive",
     }
 
     return available_args
@@ -578,6 +584,13 @@ def get_redis_async_client(
         for item in redis_kwargs["startup_nodes"]:
             new_startup_nodes.append(ClusterNode(**item))
         cluster_kwargs.pop("startup_nodes", None)
+
+        # Default to a periodic health check + TCP keepalive so a connection silently dropped
+        # by a cluster restart (e.g. ElastiCache Serverless maintenance) is revalidated and
+        # reconnected before reuse instead of stalling in re-initialization; an explicit value
+        # from config still wins.
+        cluster_kwargs.setdefault("health_check_interval", REDIS_CLUSTER_HEALTH_CHECK_INTERVAL)
+        cluster_kwargs.setdefault("socket_keepalive", True)
 
         # Create async RedisCluster with IAM token as password if available
         cluster_client = async_redis.RedisCluster(
