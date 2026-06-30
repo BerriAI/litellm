@@ -2319,9 +2319,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if json_extra_content:
             merged_text = merged_text + json_extra_content if merged_text else json_extra_content
 
+        message_content: Optional[str] = merged_text or None
+        if tool_calls_for_message:
+            # OpenAI chat completions require content to be null when tool_calls exist.
+            message_content = None
         _message = litellm.Message(
             tool_calls=tool_calls_for_message,
-            content=merged_text or None,
+            content=message_content,
             provider_specific_fields=provider_specific_fields,
             thinking_blocks=thinking_blocks,
             reasoning_content=reasoning_content,

@@ -629,6 +629,57 @@ def test_stream_chunk_builder_accepts_dict_snapshot_chunks():
     assert response.choices[0].message.content == "Hello world"
 
 
+def test_stream_chunk_builder_tool_calls_nulls_content():
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-123",
+        created=1,
+        model="claude-sonnet-4-5-20250929",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Let me check.", role="assistant"),
+            )
+        ],
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-123",
+        created=2,
+        model="claude-sonnet-4-5-20250929",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="tool_calls",
+                index=0,
+                delta=Delta(
+                    content=None,
+                    role=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_1",
+                            function=Function(
+                                arguments='{"city":"Toronto"}',
+                                name="get_weather",
+                            ),
+                            type="function",
+                            index=0,
+                        )
+                    ],
+                ),
+            )
+        ],
+    )
+
+    response = stream_chunk_builder(chunks=[chunk1, chunk2])
+
+    assert response is not None
+    message = response.choices[0].message
+    assert message.tool_calls is not None
+    assert len(message.tool_calls) == 1
+    assert message.content is None
+
+
 def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     chunk = ModelResponseStream(
         id="chatcmpl-123",

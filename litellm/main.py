@@ -8425,7 +8425,8 @@ def stream_chunk_builder(
             and chunk["choices"][0]["delta"]["tool_calls"] is not None
         ]
 
-        if len(tool_call_chunks) > 0:
+        has_tool_calls = len(tool_call_chunks) > 0
+        if has_tool_calls:
             tool_calls_list = processor.get_combined_tool_content(tool_call_chunks)
             _choice = cast(Choices, response.choices[0])
             _choice.message.content = None
@@ -8439,7 +8440,8 @@ def stream_chunk_builder(
             and chunk["choices"][0]["delta"]["function_call"] is not None
         ]
 
-        if len(function_call_chunks) > 0:
+        has_function_calls = len(function_call_chunks) > 0
+        if has_function_calls:
             _choice = cast(Choices, response.choices[0])
             _choice.message.content = None
             _choice.message.function_call = processor.get_combined_function_call_content(function_call_chunks)
@@ -8452,8 +8454,10 @@ def stream_chunk_builder(
             and chunk["choices"][0]["delta"]["content"] is not None
         ]
 
-        if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = processor.get_combined_content(content_chunks)
+        if len(content_chunks) > 0 and not has_tool_calls and not has_function_calls:
+            response["choices"][0]["message"]["content"] = (
+                processor.get_combined_content(content_chunks)
+            )
 
         thinking_blocks = [
             chunk
