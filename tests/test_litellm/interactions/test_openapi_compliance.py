@@ -159,13 +159,13 @@ class TestResponseCompliance:
         # schema no longer carries `steps`. Keep this aligned with the live spec.
         schema = spec_dict["components"]["schemas"]["Interaction"]
 
-        # Output fields (readOnly).
+        # Output fields (readOnly). `role` was removed from the `Interaction`
+        # schema by Google; it now lives only on `Turn`.
         output_fields = [
             "id",
             "status",
             "created",
             "updated",
-            "role",
             "steps",
             "usage",
         ]
