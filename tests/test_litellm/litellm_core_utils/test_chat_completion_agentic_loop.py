@@ -228,7 +228,7 @@ class _GateOnlyLogger(CustomLogger):
         self._tool_calls = tool_calls
         self.cleanup_calls = 0
 
-    async def async_should_run_agentic_loop(
+    async def async_should_run_chat_completion_agentic_loop(
         self,
         response: Any,
         model: str,
@@ -240,14 +240,13 @@ class _GateOnlyLogger(CustomLogger):
     ) -> Tuple[bool, Dict[str, Any]]:
         return True, self._tool_calls
 
-    async def async_build_agentic_loop_plan(
+    async def async_build_chat_completion_agentic_loop_plan(
         self,
         tools: Dict[str, Any],
         model: str,
         messages: List[Dict[str, Any]],
         response: Any,
-        anthropic_messages_provider_config: Any,
-        anthropic_messages_optional_request_params: Dict[str, Any],
+        optional_params: Dict[str, Any],
         logging_obj: Any,
         stream: bool,
         kwargs: Dict[str, Any],
