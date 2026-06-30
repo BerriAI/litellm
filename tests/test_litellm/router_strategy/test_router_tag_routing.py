@@ -473,3 +473,308 @@ def test_get_tags_from_request_kwargs_various_inputs():
 
     # No relevant keys present
     assert _get_tags_from_request_kwargs({"foo": "bar"}) == []
+
+
+# --- _split_tags unit tests ---
+
+
+def test_split_tags_positive_only():
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    positive, excluded = _split_tags(["paid", "teamA"])
+    assert positive == ["paid", "teamA"]
+    assert excluded == []
+
+
+def test_split_tags_negation_only():
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    positive, excluded = _split_tags(["!provider:anthropic"])
+    assert positive == []
+    assert len(excluded) == 1
+    assert excluded[0].search("provider:anthropic") is not None
+    assert excluded[0].search("provider:openai") is None
+
+
+def test_split_tags_mixed():
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    positive, excluded = _split_tags(
+        ["paid", "!provider:anthropic", "!inference:cerebras"]
+    )
+    assert positive == ["paid"]
+    assert len(excluded) == 2
+
+
+def test_split_tags_invalid_regex_skipped(caplog):
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        positive, excluded = _split_tags(["paid", "!provider:[invalid"])
+
+    assert positive == ["paid"]
+    assert excluded == []
+
+
+def test_split_tags_empty():
+    from litellm.router_strategy.tag_based_routing import _split_tags
+
+    positive, excluded = _split_tags([])
+    assert positive == []
+    assert excluded == []
+
+
+# --- get_deployments_for_tag negation integration tests ---
+
+
+@pytest.mark.asyncio()
+async def test_negation_excludes_matching_deployments():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic", "model:claude-sonnet-4-6"],
+                },
+                "model_info": {"id": "anthropic-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai", "model:gpt-4o"],
+                },
+                "model_info": {"id": "openai-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "openai-model"
+
+
+@pytest.mark.asyncio()
+async def test_negation_regex_alternation():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai"],
+                },
+                "model_info": {"id": "openai-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:vertex"],
+                },
+                "model_info": {"id": "vertex-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:(anthropic|openai)"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "vertex-model"
+
+
+@pytest.mark.asyncio()
+async def test_negation_with_positive_tag():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid", "provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-paid"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid", "provider:openai"],
+                },
+                "model_info": {"id": "openai-paid"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["free", "provider:openai"],
+                },
+                "model_info": {"id": "openai-free"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["paid", "!provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "openai-paid"
+
+
+@pytest.mark.asyncio()
+async def test_negation_all_excluded_raises():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"]},
+            mock_response="hi",
+        )
+
+    from litellm.types.router import RouterErrors
+
+    assert RouterErrors.no_deployments_with_tag_routing.value in str(exc_info.value)
+
+
+@pytest.mark.asyncio()
+async def test_negation_untagged_deployment_kept():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:anthropic"],
+                },
+                "model_info": {"id": "anthropic-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                },
+                "model_info": {"id": "untagged-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["!provider:anthropic"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "untagged-model"
+
+
+@pytest.mark.asyncio()
+async def test_negation_invalid_regex_doesnt_fail_request():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["provider:openai"],
+                },
+                "model_info": {"id": "openai-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    response = await router.acompletion(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"tags": ["!provider:[invalid"]},
+        mock_response="hi",
+    )
+    assert response._hidden_params["model_id"] == "openai-model"
+
+
+@pytest.mark.asyncio()
+async def test_positive_tags_unchanged_by_negation():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["free"],
+                },
+                "model_info": {"id": "free-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["paid"],
+                },
+                "model_info": {"id": "paid-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+    )
+
+    for _ in range(5):
+        response = await router.acompletion(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"tags": ["free"]},
+            mock_response="hi",
+        )
+        assert response._hidden_params["model_id"] == "free-model"
