@@ -92,6 +92,10 @@ jobs:
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
+      - name: Generate Prisma client
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
       - name: Check basedpyright budget (delta vs base)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
