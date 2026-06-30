@@ -5195,7 +5195,9 @@ class ProxyUpdateSpend:
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
-                            batch_with_dates = [prisma_client.jsonify_object(_strip_null_bytes(entry)) for entry in batch]
+                            batch_with_dates = [
+                                prisma_client.jsonify_object(_strip_null_bytes(entry)) for entry in batch
+                            ]
                             await _create_spend_logs_with_poison_isolation(
                                 SpendLogsRepository(prisma_client),
                                 batch_with_dates,
