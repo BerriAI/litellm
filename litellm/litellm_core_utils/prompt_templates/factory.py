@@ -86,6 +86,81 @@ DEFAULT_ASSISTANT_CONTINUE_MESSAGE = ChatCompletionAssistantMessage(
     ],
 )  # similar to autogen. Only used if `litellm.modify_params=True`.
 
+MessageContent = Union[str, List[OpenAIMessageContentListBlock], None]
+
+
+def _normalize_message_content_to_blocks(
+    content: MessageContent,
+) -> Tuple[OpenAIMessageContentListBlock, ...]:
+    if content is None:
+        return ()
+    if isinstance(content, str):
+        return (ChatCompletionTextObject(type="text", text=content),) if content else ()
+    if isinstance(content, list):
+        return tuple(
+            ChatCompletionTextObject(type="text", text=block)
+            if isinstance(block, str)
+            else cast(OpenAIMessageContentListBlock, block)
+            for block in content
+        )
+    return ()
+
+
+def _extract_text_from_content_blocks(
+    blocks: Tuple[OpenAIMessageContentListBlock, ...],
+) -> str:
+    return " ".join(
+        block["text"]
+        for block in blocks
+        if isinstance(block, dict) and block.get("type") == "text" and block.get("text")
+    )
+
+
+def _prepend_text_to_content_blocks(
+    prefix_text: str,
+    blocks: Tuple[OpenAIMessageContentListBlock, ...],
+) -> List[OpenAIMessageContentListBlock]:
+    if not prefix_text:
+        return list(blocks)
+
+    merged_blocks: List[OpenAIMessageContentListBlock] = []
+    text_merged = False
+    for block in blocks:
+        if (
+            not text_merged
+            and isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        ):
+            merged_blocks.append(ChatCompletionTextObject(type="text", text=f"{prefix_text} {block['text']}"))
+            text_merged = True
+        else:
+            merged_blocks.append(block)
+
+    if not text_merged:
+        merged_blocks.insert(0, ChatCompletionTextObject(type="text", text=prefix_text))
+
+    return merged_blocks
+
+
+def custom_prompt_merge_messages(
+    primary_content: MessageContent,
+    secondary_content: MessageContent,
+) -> Union[str, List[OpenAIMessageContentListBlock]]:
+    if isinstance(primary_content, str) and isinstance(secondary_content, str):
+        if primary_content and secondary_content:
+            return f"{primary_content} {secondary_content}"
+        return primary_content or secondary_content
+
+    primary_blocks = _normalize_message_content_to_blocks(primary_content)
+    secondary_blocks = _normalize_message_content_to_blocks(secondary_content)
+    primary_non_text_blocks = tuple(
+        block for block in primary_blocks if not (isinstance(block, dict) and block.get("type") == "text")
+    )
+    primary_text = _extract_text_from_content_blocks(primary_blocks)
+    merged_secondary_blocks = _prepend_text_to_content_blocks(primary_text, secondary_blocks)
+    return list(primary_non_text_blocks) + merged_secondary_blocks
+
 
 def map_system_message_pt(messages: list) -> list:
     """
@@ -105,8 +180,7 @@ def map_system_message_pt(messages: list) -> list:
                 next_m = messages[i + 1]
                 next_role = next_m["role"]
                 if next_role == "user" or next_role == "assistant":  # Next message is a user or assistant message
-                    # Merge system prompt into the next message
-                    next_m["content"] = m["content"] + " " + next_m["content"]
+                    next_m["content"] = custom_prompt_merge_messages(m["content"], next_m["content"])
                 elif next_role == "system":  # Next message is a system message
                     # Append a user message instead of the system message
                     new_message = {"role": "user", "content": m["content"]}
