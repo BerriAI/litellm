@@ -2110,3 +2110,26 @@ async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
     assert (
         streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
     )
+
+
+@pytest.mark.asyncio
+async def test_log_messages_routes_async_logging_through_bounded_worker():
+    """Realtime success logging must go through GLOBAL_LOGGING_WORKER (bounded
+    queue + per-coroutine timeout), not a bare asyncio.create_task. A bare task
+    has no timeout/concurrency cap, so when a logging callback is slow every
+    realtime turn leaves a suspended task pinning its response in memory -> an
+    unbounded leak. Regression for that fix."""
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj)
+    streaming.messages = [{"type": "session.created"}]
+
+    with (
+        patch("litellm.litellm_core_utils.realtime_streaming.GLOBAL_LOGGING_WORKER") as mock_worker,
+        patch("litellm.litellm_core_utils.realtime_streaming.asyncio.create_task") as mock_create_task,
+        patch("litellm.litellm_core_utils.realtime_streaming.executor.submit"),
+    ):
+        await streaming.log_messages()
+
+        mock_worker.ensure_initialized_and_enqueue.assert_called_once()
+        # the bare create_task path must no longer be used for success logging
+        mock_create_task.assert_not_called()
