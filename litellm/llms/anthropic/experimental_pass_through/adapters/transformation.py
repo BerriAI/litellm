@@ -1406,7 +1406,7 @@ class LiteLLMAnthropicMessagesAdapter:
             elif isinstance(choice, StreamingChoices) and hasattr(
                 choice.delta, "reasoning_content"
             ):
-                if choice.delta.reasoning_content is not None:
+                if choice.delta.reasoning_content:
                     return "thinking", ChatCompletionThinkingBlock(
                         type="thinking", thinking="", signature=""
                     )
@@ -1458,7 +1458,7 @@ class LiteLLMAnthropicMessagesAdapter:
             elif isinstance(choice, StreamingChoices) and hasattr(
                 choice.delta, "reasoning_content"
             ):
-                if choice.delta.reasoning_content is not None:
+                if choice.delta.reasoning_content:
                     reasoning_content += choice.delta.reasoning_content
 
         if reasoning_content and reasoning_signature:

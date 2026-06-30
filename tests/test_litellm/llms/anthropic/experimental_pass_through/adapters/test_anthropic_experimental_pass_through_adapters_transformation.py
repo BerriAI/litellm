@@ -1609,6 +1609,65 @@ def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without
     assert content_block_delta["thinking"] == "I need to analyze this carefully..."
 
 
+def test_translate_streaming_openai_chunk_to_anthropic_content_block_empty_reasoning_content():
+    """Empty reasoning_content must not open a thinking block without thinking_delta."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        block_type,
+        content_block_start,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "text"
+    assert content_block_start == {"type": "text", "text": ""}
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_empty_reasoning_content_no_thinking_delta():
+    """Empty reasoning_content must not emit thinking_delta on a text block."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    assert type_of_content == "text_delta"
+    assert content_block_delta["type"] == "text_delta"
+    assert content_block_delta["text"] == ""
+
+
 def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     """
     Test the full response translation when only reasoning_content is present

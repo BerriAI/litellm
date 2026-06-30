@@ -198,6 +198,26 @@ class TestInitialBlockTypePeek:
         assert content_block_start["type"] == "content_block_start"
         assert content_block_start["content_block"]["type"] == "text"
 
+    def test_sync_empty_reasoning_content_first_chunk_opens_text_block(self):
+        """Empty reasoning_content placeholder must not open a thinking block."""
+        chunks = [
+            _make_thinking_chunk(""),
+            _make_text_chunk("Hello"),
+            _make_stop_chunk(),
+        ]
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=MockSyncStream(chunks), model="glm-5"
+        )
+        events = _collect_all_events(wrapper)
+
+        content_block_start = events[1]
+        assert content_block_start["type"] == "content_block_start"
+        assert content_block_start["content_block"]["type"] == "text"
+
+        first_delta = events[2]
+        assert first_delta["type"] == "content_block_delta"
+        assert first_delta["delta"]["type"] == "text_delta"
+
     @pytest.mark.asyncio
     async def test_async_thinking_first_chunk(self):
         chunks = [
