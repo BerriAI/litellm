@@ -8925,7 +8925,15 @@ def test_update_config_redacts_all_environment_variable_values(
     secret must never reach LiteLLM_AuditLog."""
     import litellm.proxy.proxy_server as proxy_server_module
 
-    client, prisma, restore = _update_config_setup()
+    # DATABASE_URL is the bug class: an uppercase env key that key-name secret
+    # matching does NOT flag, so only whole-section value redaction protects it.
+    client, prisma, restore = _update_config_setup(
+        initial_rows={
+            "environment_variables": {
+                "DATABASE_URL": "enc:postgresql://OLDsecret@old.host:5432/db"
+            }
+        }
+    )
     audit_create = AsyncMock()
     prisma.db.litellm_auditlog.create = audit_create
     monkeypatch.setattr(proxy_server_module, "premium_user", True)
@@ -8947,9 +8955,18 @@ def test_update_config_redacts_all_environment_variable_values(
             for c in audit_create.await_args_list
             if c.kwargs["data"]["object_id"] == "environment_variables"
         )
-        after = json.loads(env_call.kwargs["data"]["updated_values"])
+        data = env_call.kwargs["data"]
+
+        # the pre-existing secret must be redacted in the before snapshot
+        before = json.loads(data["before_value"])
+        assert before == {"DATABASE_URL": "REDACTED"}
+        assert "OLDsecret" not in data["before_value"]
+        assert "old.host" not in data["before_value"]
+
+        # the newly-written values must be redacted in the after snapshot
+        after = json.loads(data["updated_values"])
         assert after == {"DATABASE_URL": "REDACTED", "LOG_LEVEL": "REDACTED"}
-        assert "postgresql://" not in env_call.kwargs["data"]["updated_values"]
-        assert "db.internal" not in env_call.kwargs["data"]["updated_values"]
+        assert "postgresql://" not in data["updated_values"]
+        assert "db.internal" not in data["updated_values"]
     finally:
         restore()
