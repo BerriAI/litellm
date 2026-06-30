@@ -3305,6 +3305,51 @@ class TestStreamingClientDisconnectLogging:
         assert "client_disconnected" not in request_data["metadata"]
 
     @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_handles_none_metadata(self):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {
+            "litellm_params": {"metadata": None},
+            "metadata": None,
+        }
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        request_data = {
+            "litellm_call_id": "test-call-id",
+            "litellm_logging_obj": mock_logging_obj,
+            "metadata": {},
+            "litellm_params": {"metadata": {}},
+        }
+
+        recorded = await _record_streaming_client_disconnect_if_needed(
+            mock_request, request_data
+        )
+
+        assert recorded is True
+        assert request_data["metadata"]["client_disconnected"] is True
+        assert (
+            mock_logging_obj.model_call_details["litellm_params"]["metadata"][
+                "client_disconnected"
+            ]
+            is True
+        )
+        assert (
+            mock_logging_obj.model_call_details["metadata"]["client_disconnected"]
+            is True
+        )
+
+    @pytest.mark.asyncio
+    async def test_apply_client_disconnect_metadata_none_returns_early(self):
+        from litellm.proxy.common_request_processing import (
+            _apply_client_disconnect_metadata,
+        )
+
+        _apply_client_disconnect_metadata(None)
+
+    @pytest.mark.asyncio
     async def test_finalize_streaming_generator_cleanup_fires_deferred_logging(
         self, monkeypatch
     ):
