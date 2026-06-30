@@ -4191,6 +4191,63 @@ class TestResponseCostHeaderForTypedDictResponses:
         assert recompute.call_args.kwargs["result"] is response
 
     @pytest.mark.asyncio
+    async def test_generate_content_emits_real_nonzero_cost_header_from_usage_metadata(self, monkeypatch):
+        """
+        End-to-end regression for LIT-4076 using the real cost calculator (not a
+        mock). A native :generateContent body reports tokens under usageMetadata,
+        which the cost calculator did not read, so the synchronously-recovered
+        cost was 0.0 and the header was dropped even though the async logging path
+        billed a real non-zero amount. The header must now carry the true cost.
+        """
+        from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+        from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+        from litellm.types.utils import ModelResponse, Usage
+
+        response = GenerateContentResponseBody(
+            candidates=[{"content": {"parts": [{"text": "hi"}], "role": "model"}, "finishReason": "STOP"}],
+            usageMetadata={
+                "promptTokenCount": 1000,
+                "candidatesTokenCount": 500,
+                "totalTokenCount": 1500,
+            },
+        )
+
+        real_logging = LiteLLMLoggingObj(
+            model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="agenerate_content",
+            start_time=None,
+            litellm_call_id="call-lit4076-real",
+            function_id="fn",
+        )
+        real_logging.model_call_details["custom_llm_provider"] = "gemini"
+        real_logging.optional_params = {}
+
+        logging_obj = self._build_logging_obj(
+            model_call_details={},
+            response_cost_calculator=real_logging._response_cost_calculator,
+        )
+
+        fastapi_response = await self._drive_non_streaming(
+            monkeypatch=monkeypatch,
+            response=response,
+            logging_obj=logging_obj,
+            route_type="agenerate_content",
+        )
+
+        expected_cost = litellm.completion_cost(
+            completion_response=ModelResponse(
+                model="gemini-2.5-flash",
+                usage=Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+            model="gemini-2.5-flash",
+            custom_llm_provider="gemini",
+        )
+        assert expected_cost > 0
+        assert float(fastapi_response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+    @pytest.mark.asyncio
     async def test_generate_content_with_hidden_params_emits_cost_header(self, monkeypatch):
         """
         Models the real :generateContent response: it DOES carry a _hidden_params
