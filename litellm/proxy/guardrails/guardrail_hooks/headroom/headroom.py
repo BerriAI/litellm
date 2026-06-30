@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException
@@ -396,12 +396,12 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         response: Any,
         model: str,
-        messages: List[Dict],
-        tools: Optional[List[Dict]],
+        messages: list[dict],
+        tools: Optional[list[dict]],
         stream: bool,
         custom_llm_provider: str,
-        kwargs: Dict,
-    ) -> Tuple[bool, Dict]:
+        kwargs: dict,
+    ) -> Tuple[bool, dict]:
         if not has_headroom_retrieve_tool(tools):
             return False, {}
 
@@ -413,15 +413,15 @@ class HeadroomGuardrail(CustomGuardrail):
 
     async def async_build_agentic_loop_plan(
         self,
-        tools: Dict,
+        tools: dict,
         model: str,
-        messages: List[Dict],
+        messages: list[dict],
         response: Any,
         anthropic_messages_provider_config: Any,
-        anthropic_messages_optional_request_params: Dict,
+        anthropic_messages_optional_request_params: dict,
         logging_obj: Any,
         stream: bool,
-        kwargs: Dict,
+        kwargs: dict,
     ) -> AgenticLoopPlan:
         tool_calls: list[dict[str, object]] = tools.get("tool_calls", [])  # type: ignore[assignment]
 
