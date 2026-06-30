@@ -9,7 +9,14 @@ sys.path.insert(
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    RESPONSE_FORMAT_TOOL_NAME,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -1886,6 +1893,89 @@ def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(mod
     assert AnthropicConfig._model_supports_effort_param(model) is False
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-4-6-20260205",
+        "claude-opus-4-7-20260416",
+    ],
+)
+def test_anthropic_model_supports_speed_param_recognizes_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-fable-5",
+        "claude-3-haiku-20240307",
+        "vertex_ai/claude-opus-4-8",
+        "azure_ai/claude-opus-4-8",
+        "anthropic.claude-opus-4-8",
+    ],
+)
+def test_anthropic_model_supports_speed_param_rejects_non_supporting_models(model):
+    assert AnthropicConfig._model_supports_speed_param(model) is False
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "azure_ai", "bedrock"])
+def test_anthropic_model_supports_speed_param_rejects_non_anthropic_providers(
+    custom_llm_provider,
+):
+    """Fast mode is direct-Anthropic-only. Vertex/Azure/Bedrock strip their prefix
+    before the shared transform runs, so the bare Opus id must still be rejected."""
+    assert (
+        AnthropicConfig._model_supports_speed_param(
+            "claude-opus-4-8", custom_llm_provider
+        )
+        is False
+    )
+    assert (
+        AnthropicConfig._model_supports_speed_param("claude-opus-4-8", "anthropic")
+        is True
+    )
+
+
+def test_vertex_anthropic_drops_speed_for_opus_with_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus must drop ``speed`` even though the prefix-stripped
+    ``claude-opus-4-8`` maps to a fast-mode-capable direct-Anthropic entry."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    result = VertexAIAnthropicConfig().transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"speed": "fast", "max_tokens": 1024},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "speed" not in result
+
+
+def test_vertex_anthropic_raises_on_speed_without_drop_params(monkeypatch):
+    """Regression: vertex_ai Opus raises rather than forwarding an unsupported
+    ``speed`` when neither global nor per-request drop_params is set."""
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+        VertexAIAnthropicConfig,
+    )
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        VertexAIAnthropicConfig().map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-opus-4-8",
+            drop_params=False,
+        )
+
+
 def test_translate_system_message_skips_empty_string_content():
     """
     Test that translate_system_message skips system messages with empty string content.
@@ -2353,7 +2443,59 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        # explicit cost-map entries, across provider routes / separators / date suffix
+        ("claude-opus-4-8", True),
+        ("anthropic.claude-opus-4-8", True),
+        ("vertex_ai/claude-opus-4-6@default", True),
+        ("openrouter/anthropic/claude-opus-4.7", True),
+        ("us.anthropic.claude-sonnet-4-6", True),
+        ("claude-opus-4-6-20260205", True),
+        # unmapped future models -> anthropic-claude fallback rule
+        ("claude-opus-4-9", True),
+        ("claude-sonnet-5-0", True),
+        # Claude 4.0 (dated): "4-20250514" must not be read as minor 4.20250514
+        ("claude-opus-4-20250514", False),
+        ("us.anthropic.claude-opus-4-20250514-v1:0", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-20250514", False),
+        # sub-4.6 and legacy names
+        ("claude-opus-4-5", False),
+        ("claude-sonnet-4-5-20250929", False),
+        ("claude-3-7-sonnet", False),
+        ("claude-3-opus-20240229", False),
+        ("gpt-4o", False),
+    ],
+)
+def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
+    local_model_cost_map, model, expected
+):
+    """Adaptive thinking resolves from the cost map first (an explicit
+    supports_adaptive_thinking entry, or the anthropic-claude fallback rule for unmapped
+    future Claudes), then from a date-safe opus/sonnet/haiku >= 4.6 name version as a
+    fallback for ids the cost map cannot resolve. The dated Claude 4.0 names stay
+    non-adaptive because the date suffix is not read as a minor version, while 4.8/4.9/5.x
+    are covered without a code change."""
+    assert AnthropicConfig._is_adaptive_thinking_model(model) is expected
+
+
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
+    local_model_cost_map,
+):
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()
 
@@ -2363,8 +2505,12 @@ def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     assert "reasoning_effort" in params
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
-    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias(
+    local_model_cost_map,
+):
+    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported
+    params. The anthropic-claude fallback rule accepts a dotted minor (4.6) as well as
+    a dashed one, so an unmapped dotted alias still degrades to adaptive thinking."""
     config = AnthropicConfig()
 
     params = config.get_supported_openai_params(model="claude-sonnet-4.6")
@@ -2410,9 +2556,9 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
 
     # ``minimal`` floors at ANTHROPIC_MIN_THINKING_BUDGET_TOKENS (1024).
     test_cases = [
-        ("low", 1024),
-        ("medium", 2048),
-        ("high", 4096),
+        ("low", DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET),
+        ("medium", DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET),
+        ("high", DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET),
         ("minimal", 1024),
     ]
 
@@ -2737,7 +2883,10 @@ def test_reasoning_effort_garbage_raises_bad_request(effort):
 
 @pytest.mark.parametrize(
     "effort,expected_budget",
-    [("xhigh", 8192), ("max", 16384)],
+    [
+        ("xhigh", DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET),
+        ("max", DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET),
+    ],
 )
 def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
     effort, expected_budget
@@ -3807,6 +3956,61 @@ def test_fast_mode_parameter_mapping():
 
     assert "speed" in result
     assert result["speed"] == "fast"
+
+
+def test_anthropic_drop_params_strips_speed_for_unsupported_models():
+    """``drop_params=True`` strips unsupported ``speed`` for non-Opus models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-sonnet-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "speed" not in result
+
+
+def test_anthropic_drop_params_keeps_speed_for_supporting_models():
+    """``drop_params=True`` must not strip ``speed`` on Opus fast-mode models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params={"speed": "fast", "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("speed") == "fast"
+
+
+def test_speed_raises_clean_error_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"speed": "fast"},
+            optional_params={},
+            model="claude-sonnet-4-6",
+            drop_params=False,
+        )
 
 
 def test_map_openai_params_max_tokens_normalized_to_int():

@@ -8,10 +8,23 @@ and uses LiteLLM auth.
 """
 
 from copy import deepcopy
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping
 
-# Protocol version LiteLLM speaks. Bump when the proxy's A2A surface changes.
+# Protocol versions LiteLLM can serve to A2A clients. The admin pins one per agent;
+# responses are normalized to it regardless of the upstream agent's own version.
+SUPPORTED_A2A_PROTOCOL_VERSIONS = ("0.3", "1.0")
+
+# Default served version when the agent card does not pin one.
 LITELLM_A2A_PROTOCOL_VERSION = "1.0"
+
+
+def resolve_served_protocol_version(card: Mapping[str, Any] | None) -> str:
+    """Return the validated protocol version an agent card pins, else the default."""
+    version = card.get("protocolVersion") if card else None
+    if version in SUPPORTED_A2A_PROTOCOL_VERSIONS:
+        return version
+    return LITELLM_A2A_PROTOCOL_VERSION
+
 
 # Security scheme exposed by the LiteLLM-fronted agent card. Always replaces
 # whatever upstream advertised — the client must authenticate to the proxy,
@@ -97,9 +110,7 @@ def _filter_capabilities(upstream_capabilities: Any) -> Dict[str, Any]:
     if not isinstance(upstream_capabilities, dict):
         return {}
     return {
-        key: value
-        for key, value in upstream_capabilities.items()
-        if key in _ALLOWED_CAPABILITY_KEYS and bool(value)
+        key: value for key, value in upstream_capabilities.items() if key in _ALLOWED_CAPABILITY_KEYS and bool(value)
     }
 
 
@@ -108,12 +119,12 @@ def _default_litellm_provider(proxy_base_url: str) -> Dict[str, str]:
 
 
 def merge_agent_card(
-    upstream_card: Optional[Mapping[str, Any]],
+    upstream_card: Mapping[str, Any] | None,
     *,
     proxy_url: str,
     proxy_base_url: str,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
+    name: str | None = None,
+    description: str | None = None,
 ) -> Dict[str, Any]:
     """
     Build the LiteLLM-fronted agent card.
@@ -141,7 +152,8 @@ def merge_agent_card(
     # proxy requests. The public well-known endpoint rewrites this field
     # to the proxy URL before exposing the card to clients.
 
-    base["protocolVersion"] = LITELLM_A2A_PROTOCOL_VERSION
+    served_version = resolve_served_protocol_version(upstream_card)
+    base["protocolVersion"] = served_version
 
     if name:
         base["name"] = name
@@ -167,7 +179,7 @@ def merge_agent_card(
         {
             "url": proxy_url,
             "protocolBinding": "JSONRPC",
-            "protocolVersion": LITELLM_A2A_PROTOCOL_VERSION,
+            "protocolVersion": served_version,
         }
     ]
 

@@ -31,6 +31,7 @@ verbose_logger.setLevel(logging.DEBUG)
 
 ignored_keys = [
     "request_id",
+    "metadata.litellm_call_id",
     "session_id",
     "startTime",
     "endTime",

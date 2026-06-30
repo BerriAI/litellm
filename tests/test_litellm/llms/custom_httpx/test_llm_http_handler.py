@@ -6,9 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 import litellm
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
@@ -39,9 +37,7 @@ def test_prepare_fake_stream_request():
     }
     fake_stream = True
 
-    result_stream, result_data = handler._prepare_fake_stream_request(
-        stream=stream, data=data, fake_stream=fake_stream
-    )
+    result_stream, result_data = handler._prepare_fake_stream_request(stream=stream, data=data, fake_stream=fake_stream)
 
     # Verify that stream is set to False
     assert result_stream is False
@@ -60,9 +56,7 @@ def test_prepare_fake_stream_request():
     }
     fake_stream = False
 
-    result_stream, result_data = handler._prepare_fake_stream_request(
-        stream=stream, data=data, fake_stream=fake_stream
-    )
+    result_stream, result_data = handler._prepare_fake_stream_request(stream=stream, data=data, fake_stream=fake_stream)
 
     # Verify that stream remains True
     assert result_stream is True
@@ -77,9 +71,7 @@ def test_prepare_fake_stream_request():
     data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}]}
     fake_stream = True
 
-    result_stream, result_data = handler._prepare_fake_stream_request(
-        stream=stream, data=data, fake_stream=fake_stream
-    )
+    result_stream, result_data = handler._prepare_fake_stream_request(stream=stream, data=data, fake_stream=fake_stream)
 
     # Verify that stream is set to False
     assert result_stream is False
@@ -165,9 +157,7 @@ def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
     assert response is final_response
     hook_mock.assert_awaited_once()
     assert hook_mock.call_args.kwargs["api_surface"] == "responses"
-    assert hook_mock.call_args.kwargs["messages"] == [
-        {"role": "user", "content": "hi"}
-    ]
+    assert hook_mock.call_args.kwargs["messages"] == [{"role": "user", "content": "hi"}]
 
 
 def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
@@ -226,9 +216,7 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
     tools = transform_kwargs["response_api_optional_request_params"]["tools"]
     assert not any(tool.get("type") == "code_interpreter" for tool in tools)
     assert any(
-        tool.get("type") == "function"
-        and tool.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME
-        for tool in tools
+        tool.get("type") == "function" and tool.get("name") == LITELLM_CODE_EXECUTION_TOOL_NAME for tool in tools
     )
     hook_litellm_params = transform_kwargs["litellm_params"]
     assert hook_litellm_params.get(_ACTIVE_KEY) is True
@@ -363,9 +351,7 @@ def test_fingerprint_agentic_tools_is_deterministic():
     tools_a = {"tool_calls": [{"id": "1", "input": {"q": "abc"}, "name": "web_search"}]}
     tools_b = {"tool_calls": [{"name": "web_search", "input": {"q": "abc"}, "id": "1"}]}
 
-    assert handler._fingerprint_agentic_tools(
-        tools_a
-    ) == handler._fingerprint_agentic_tools(tools_b)
+    assert handler._fingerprint_agentic_tools(tools_a) == handler._fingerprint_agentic_tools(tools_b)
 
 
 @pytest.mark.asyncio
@@ -587,9 +573,7 @@ async def test_async_anthropic_messages_handler_forwards_router_model_info():
     mock_logging_obj.update_from_kwargs.assert_called_once()
     call_kwargs = mock_logging_obj.update_from_kwargs.call_args
     litellm_params_arg = (
-        call_kwargs.kwargs.get(
-            "litellm_params", call_kwargs[1].get("litellm_params", {})
-        )
+        call_kwargs.kwargs.get("litellm_params", call_kwargs[1].get("litellm_params", {}))
         if call_kwargs.kwargs
         else call_kwargs[1].get("litellm_params", {})
     )
@@ -661,6 +645,85 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
 
 
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_drops_top_level_and_nested_params():
+    """
+    Regression for LIT-3988 / GitHub #25931: on the /v1/messages path,
+    additional_drop_params must strip plain top-level keys (e.g. `thinking`,
+    `context_management`) before the provider transform runs, not only nested
+    dotted paths. Bedrock rejects these fields, so leaving them in produces a 400.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+
+    captured = {}
+
+    def capture_transform(*args, **kwargs):
+        captured["optional_params"] = kwargs["anthropic_messages_optional_request_params"]
+        return {"model": "claude-opus-4-7", "messages": []}
+
+    mock_config.transform_anthropic_messages_request = capture_transform
+
+    mock_client = AsyncMock()
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "claude-opus-4-7",
+        "stop_reason": "end_turn",
+    }
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    optional_params = {
+        "max_tokens": 1024,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "context_management": {"edits": [{"type": "clear_thinking_20251015"}]},
+        "metadata": {"user_id": "u1", "drop_me": "x"},
+    }
+
+    with patch(
+        "litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers"
+    ) as mock_provider_headers:
+        mock_provider_headers.return_value = None
+        try:
+            await handler.async_anthropic_messages_handler(
+                model="claude-opus-4-7",
+                messages=[{"role": "user", "content": "Hello"}],
+                anthropic_messages_provider_config=mock_config,
+                anthropic_messages_optional_request_params=optional_params,
+                custom_llm_provider="bedrock",
+                litellm_params=GenericLiteLLMParams(
+                    additional_drop_params=[
+                        "thinking",
+                        "context_management",
+                        "metadata.drop_me",
+                    ]
+                ),
+                logging_obj=mock_logging_obj,
+                client=mock_client,
+            )
+        except Exception:
+            pass  # drop runs before the mocked sign_request; the capture is what we assert on
+
+    transformed = captured["optional_params"]
+    assert "thinking" not in transformed
+    assert "context_management" not in transformed
+    assert transformed["max_tokens"] == 1024
+    assert transformed["metadata"] == {"user_id": "u1"}
+
+
 def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():
     logging_obj = Mock()
     logging_obj.get_router_model_id = Mock(return_value="router-model-id")
@@ -672,10 +735,7 @@ def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():
         response_headers=httpx.Headers({"x-ratelimit-remaining": "10"}),
     )
     assert from_model_info["model_id"] == "info-id"
-    assert (
-        from_model_info["api_base"]
-        == "https://generativelanguage.googleapis.com/v1beta"
-    )
+    assert from_model_info["api_base"] == "https://generativelanguage.googleapis.com/v1beta"
     assert isinstance(from_model_info["additional_headers"], dict)
 
     from_router = _google_genai_streaming_hidden_params(
@@ -729,9 +789,7 @@ def test_async_delete_responses_omits_body_for_azure():
 
     assert "json" not in captured
     assert "data" not in captured
-    assert captured["url"].endswith(
-        "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
-    )
+    assert captured["url"].endswith("/openai/responses/resp_xyz?api-version=2025-03-01-preview")
 
 
 def test_sync_delete_responses_omits_body_for_azure():
@@ -749,9 +807,7 @@ def test_sync_delete_responses_omits_body_for_azure():
 
     assert "json" not in captured
     assert "data" not in captured
-    assert captured["url"].endswith(
-        "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
-    )
+    assert captured["url"].endswith("/openai/responses/resp_xyz?api-version=2025-03-01-preview")
 
 
 def _content_type(headers: dict) -> str:
@@ -889,9 +945,7 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     prebuilt = _json.dumps(request_body)
 
     err_resp = Mock()
-    http_error = httpx.HTTPStatusError(
-        "bad", request=Mock(), response=Mock(status_code=400)
-    )
+    http_error = httpx.HTTPStatusError("bad", request=Mock(), response=Mock(status_code=400))
     err_resp.raise_for_status = Mock(side_effect=http_error)
     ok_resp = Mock()
     ok_resp.raise_for_status = Mock(return_value=None)
@@ -903,9 +957,7 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
 
     provider_config = Mock()
     provider_config.max_retry_on_anthropic_messages_http_error = 2
-    provider_config.should_retry_anthropic_messages_on_http_error = Mock(
-        return_value=True
-    )
+    provider_config.should_retry_anthropic_messages_on_http_error = Mock(return_value=True)
     provider_config.transform_anthropic_messages_request_on_http_error = _mutate
     # Re-sign returns no signed body (native anthropic path) -> must re-dump.
     provider_config.sign_request = Mock(return_value=({}, None))
@@ -968,9 +1020,7 @@ def _make_responses_handler_call(signed_body):
 
     provider_config = MagicMock()
     provider_config.validate_environment.return_value = {}
-    provider_config.get_complete_url.return_value = (
-        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
-    )
+    provider_config.get_complete_url.return_value = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
     provider_config.transform_responses_api_request.return_value = {"input": "hi"}
     provider_config.should_fake_stream.return_value = False
     provider_config.sign_request.return_value = ({"X-Signed": "1"}, signed_body)
@@ -1026,9 +1076,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
 
     provider_config = MagicMock()
     provider_config.validate_environment.return_value = {}
-    provider_config.get_complete_url.return_value = (
-        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
-    )
+    provider_config.get_complete_url.return_value = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
     provider_config.transform_responses_api_request.return_value = {
         "input": "hi",
         "stream": True,
@@ -1091,9 +1139,7 @@ def _make_compact_handler_call(signed_body, is_async):
     compact_url = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses/compact"
     provider_config = MagicMock()
     provider_config.validate_environment.return_value = {}
-    provider_config.get_complete_url.return_value = (
-        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
-    )
+    provider_config.get_complete_url.return_value = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
     provider_config.transform_compact_response_api_request.return_value = (
         compact_url,
         {"model": "openai.gpt-5.5", "input": "hi"},
@@ -1127,9 +1173,7 @@ def _make_compact_handler_call(signed_body, is_async):
 
 def test_compact_handler_sends_json_when_not_signed():
     """No-op provider on compact (signed_body is None) -> posts json=data, no data= bytes."""
-    provider_config, kwargs = _make_compact_handler_call(
-        signed_body=None, is_async=False
-    )
+    provider_config, kwargs = _make_compact_handler_call(signed_body=None, is_async=False)
     provider_config.sign_request.assert_called_once()
     assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
     assert "data" not in kwargs
@@ -1148,9 +1192,7 @@ def test_compact_handler_sends_signed_bytes_when_signed():
     assert "json" not in kwargs
     assert kwargs["headers"] == {"X-Signed": "1"}
     # signing must use the compact endpoint as api_base, not the create URL
-    assert provider_config.sign_request.call_args.kwargs["api_base"].endswith(
-        "/openai/v1/responses/compact"
-    )
+    assert provider_config.sign_request.call_args.kwargs["api_base"].endswith("/openai/v1/responses/compact")
 
 
 def test_async_compact_handler_sends_signed_bytes_when_signed():
@@ -1165,8 +1207,93 @@ def test_async_compact_handler_sends_signed_bytes_when_signed():
 
 def test_async_compact_handler_sends_json_when_not_signed():
     """Async no-op provider on compact -> posts json=data, no data= bytes."""
-    _provider_config, kwargs = _make_compact_handler_call(
-        signed_body=None, is_async=True
-    )
+    _provider_config, kwargs = _make_compact_handler_call(signed_body=None, is_async=True)
     assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
     assert "data" not in kwargs
+
+
+class _FakeWSExceptions:
+    class WebSocketException(Exception):
+        pass
+
+    class InvalidStatusCode(WebSocketException):
+        def __init__(self) -> None:
+            super().__init__("HTTP 403")
+
+    # websockets>=15 raises InvalidStatus (not InvalidStatusCode) for a rejected
+    # client handshake; both must be treated as deterministic.
+    class InvalidStatus(WebSocketException):
+        def __init__(self) -> None:
+            super().__init__("HTTP 401")
+
+
+class _FakeWebsocketsModule:
+    """Stand-in for the ``websockets`` module so the realtime backend-open retry
+    can be exercised without a real network handshake (dependency injection,
+    no monkeypatching)."""
+
+    def __init__(self, outcomes):
+        # outcomes: list where each item is either an Exception to raise or a
+        # sentinel object to return as the "connected" websocket.
+        self._outcomes = list(outcomes)
+        self.exceptions = _FakeWSExceptions
+        self.attempts = 0
+        self.open_timeouts: list = []
+
+    async def connect(self, *args, **kwargs):
+        self.attempts += 1
+        self.open_timeouts.append(kwargs.get("open_timeout"))
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+@pytest.mark.asyncio
+async def test_realtime_backend_open_retries_then_succeeds():
+    """A hung/slow open handshake is retried; a later fresh attempt connects.
+
+    Regression for intermittent ``1011 timed out during opening handshake``:
+    the proxy used to surface a single slow upstream handshake to the caller as
+    a fatal 1011 with no retry.
+    """
+    sentinel = object()
+    fake = _FakeWebsocketsModule([TimeoutError("timed out during opening handshake"), sentinel])
+
+    result = await BaseLLMHTTPHandler._open_realtime_backend_ws(
+        fake, "wss://backend.example/live", {"Authorization": "Bearer x"}, None
+    )
+
+    assert result is sentinel
+    assert fake.attempts == 2
+    # Each attempt must be bounded by a finite open_timeout (not the default/None).
+    assert all(t is not None and t > 0 for t in fake.open_timeouts)
+
+
+@pytest.mark.asyncio
+async def test_realtime_backend_open_raises_after_max_attempts():
+    """When every attempt times out, the final error propagates (so the caller
+    still closes the client socket) rather than looping forever."""
+    fake = _FakeWebsocketsModule([TimeoutError("hang")] * 2)
+
+    with pytest.raises(TimeoutError):
+        await BaseLLMHTTPHandler._open_realtime_backend_ws(fake, "wss://backend.example/live", {}, None, max_attempts=2)
+
+    assert fake.attempts == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rejection",
+    [_FakeWSExceptions.InvalidStatusCode, _FakeWSExceptions.InvalidStatus],
+)
+async def test_realtime_backend_open_does_not_retry_auth_failure(rejection):
+    """A deterministic handshake-status rejection (auth/4xx) must not be retried;
+    retrying cannot help and the upstream status must surface, not a 1011. Both
+    the websockets<15 (InvalidStatusCode) and >=15 (InvalidStatus) shapes apply."""
+    fake = _FakeWebsocketsModule([rejection()])
+
+    with pytest.raises(_FakeWSExceptions.WebSocketException):
+        await BaseLLMHTTPHandler._open_realtime_backend_ws(fake, "wss://backend.example/live", {}, None)
+
+    assert fake.attempts == 1

@@ -101,9 +101,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
             "stop",
         ]  # Bedrock doesn't support stopSequences
 
-        base_openai_params = super(
-            MoonshotChatConfig, self
-        ).get_supported_openai_params(model=model)
+        base_openai_params = super(MoonshotChatConfig, self).get_supported_openai_params(model=model)
         final_params: List[str] = []
         for param in base_openai_params:
             if param not in excluded_params:
@@ -168,9 +166,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
             headers=headers,
         )
 
-    def _extract_reasoning_from_content(
-        self, content: str
-    ) -> tuple[Optional[str], str]:
+    def _extract_reasoning_from_content(self, content: str) -> tuple[Optional[str], str]:
         """
         Extract reasoning content from <reasoning> tags in the response.
 
@@ -187,9 +183,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
             return None, content
 
         # Match <reasoning>...</reasoning> tags
-        reasoning_match = re.match(
-            r"<reasoning>(.*?)</reasoning>\s*(.*)", content, re.DOTALL
-        )
+        reasoning_match = re.match(r"<reasoning>(.*?)</reasoning>\s*(.*)", content, re.DOTALL)
 
         if reasoning_match:
             reasoning_content = reasoning_match.group(1).strip()
@@ -241,11 +235,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         if model_response.choices and len(model_response.choices) > 0:
             for choice in model_response.choices:
                 # Only process Choices (not StreamingChoices) which have message attribute
-                if (
-                    isinstance(choice, Choices)
-                    and choice.message
-                    and choice.message.content
-                ):
+                if isinstance(choice, Choices) and choice.message and choice.message.content:
                     (
                         reasoning_content,
                         main_content,
