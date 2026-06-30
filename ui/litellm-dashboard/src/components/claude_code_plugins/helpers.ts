@@ -23,25 +23,47 @@ const GITHUB_HOST = "github.com";
 
 const SKILL_FILE_EXTENSION_REGEX = /\.(md|markdown|txt|json|ya?ml|toml)$/i;
 
-const stripScheme = (raw: string): { scheme: string; rest: string } => {
-  const match = raw.match(/^(https?):\/\//i);
-  const scheme = match ? match[1].toLowerCase() : "https";
-  const rest = raw
-    .replace(/^https?:\/\//i, "")
-    .replace(/[?#].*$/, "")
-    .replace(/\/+$/, "");
-  return { scheme, rest };
-};
+// WHATWG normalizes obfuscated IPv4 (e.g. 2130706433, 0x7f.0.0.1) to dotted-decimal, so this
+// catches every IPv4 form; bracketed IPv6 is rejected separately.
+const IPV4_HOST_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
 
-const splitHost = (rest: string): { host: string; remainder: string } => {
-  const slashIndex = rest.indexOf("/");
-  if (slashIndex === -1) {
-    return { host: rest, remainder: "" };
+const GITHUB_ORG_REGEX = /^[A-Za-z0-9-]+$/;
+const GITHUB_REPO_REGEX = /^[A-Za-z0-9._-]+$/;
+
+const buildRepoUrl = (url: URL): string => `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
+
+const pathSegments = (url: URL): string[] => url.pathname.split("/").filter((seg) => seg !== "");
+
+/**
+ * Validate and normalize a repository URL into a parsed URL, or null. Enforces https (rejects
+ * http/ssh/git/etc.), rejects embedded credentials, and requires a dotted host, so the public
+ * skill feeds never serve an insecure or credentialed clone URL. Everything downstream parses
+ * this normalized object rather than the raw string.
+ */
+const parseRepoUrl = (raw: string): URL | null => {
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.startsWith("//")) {
+    return null;
   }
-  return { host: rest.slice(0, slashIndex), remainder: rest.slice(slashIndex + 1) };
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return null;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    !url.hostname.includes(".") ||
+    url.hostname.startsWith("[") ||
+    IPV4_HOST_REGEX.test(url.hostname)
+  ) {
+    return null;
+  }
+  return url;
 };
-
-const normalizeHost = (host: string): string => host.toLowerCase().replace(/^www\./, "");
 
 const lastSegment = (path: string): string => {
   const segments = path.split("/").filter((seg) => seg !== "");
@@ -55,14 +77,17 @@ const toKebabCase = (value: string): string =>
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-const parseGitHubSource = (remainder: string, subPath?: string): SkillSourcePreview | null => {
-  const parts = remainder.split("/").filter((seg) => seg !== "");
+const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | null => {
+  const parts = pathSegments(url);
   if (parts.length < 2) {
     return null;
   }
 
   const org = parts[0];
   const repoBase = parts[1].replace(/\.git$/, "");
+  if (!GITHUB_ORG_REGEX.test(org) || !GITHUB_REPO_REGEX.test(repoBase)) {
+    return null;
+  }
   const repoFull = `${org}/${repoBase}`;
   const repoUrl = `https://github.com/${repoFull}`;
   const repoPreview: SkillSourcePreview = {
@@ -109,17 +134,12 @@ const parseGitHubSource = (remainder: string, subPath?: string): SkillSourcePrev
   return repoPreview;
 };
 
-const parseRawGitSource = (scheme: string, rest: string, subPath?: string): SkillSourcePreview | null => {
-  const { host, remainder } = splitHost(rest);
-  // Reject embedded credentials (user:token@host) — skill sources are served on public feeds.
-  if (!host.includes(".") || host.includes("@")) {
-    return null;
-  }
-  if (remainder.split("/").filter((seg) => seg !== "").length < 2) {
+const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | null => {
+  if (pathSegments(url).length < 2) {
     return null;
   }
 
-  const url = `${scheme}://${rest}`;
+  const repoUrl = buildRepoUrl(url);
 
   const normalized = normalizeSubPath(subPath ?? "");
   if (normalized !== "") {
@@ -127,16 +147,16 @@ const parseRawGitSource = (scheme: string, rest: string, subPath?: string): Skil
       return null;
     }
     return {
-      parsed: { source: "git-subdir", url, path: normalized },
-      label: `Git subdir — ${url} @ ${normalized}`,
+      parsed: { source: "git-subdir", url: repoUrl, path: normalized },
+      label: `Git subdir — ${repoUrl} @ ${normalized}`,
       suggestedName: toKebabCase(lastSegment(normalized)),
     };
   }
 
   return {
-    parsed: { source: "url", url },
-    label: `Git repo — ${url}`,
-    suggestedName: toKebabCase(lastSegment(rest).replace(/\.git$/, "")),
+    parsed: { source: "url", url: repoUrl },
+    label: `Git repo — ${repoUrl}`,
+    suggestedName: toKebabCase(lastSegment(url.pathname).replace(/\.git$/, "")),
   };
 };
 
@@ -146,15 +166,14 @@ const parseRawGitSource = (scheme: string, rest: string, subPath?: string): Skil
  * treated as a raw repo URL, with an optional subfolder turning it into git-subdir.
  */
 export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
-  const { scheme, rest } = stripScheme(rawUrl.trim());
-  if (rest === "") {
+  const url = parseRepoUrl(rawUrl);
+  if (!url) {
     return null;
   }
-  const { host, remainder } = splitHost(rest);
-  if (normalizeHost(host) === GITHUB_HOST) {
-    return parseGitHubSource(remainder, subPath);
+  if (url.hostname.replace(/^www\./, "") === GITHUB_HOST) {
+    return parseGitHubSource(url, subPath);
   }
-  return parseRawGitSource(scheme, rest, subPath);
+  return parseRawGitSource(url, subPath);
 };
 
 /**

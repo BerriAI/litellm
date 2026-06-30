@@ -505,6 +505,57 @@ describe("parseSkillSource", () => {
   });
 });
 
+// Skill sources are served on the unauthenticated public feeds and cloned by clients, so the
+// parser must never publish an insecure, credentialed, internal, or malformed clone URL.
+describe("parseSkillSource — security boundary", () => {
+  it("rejects non-https schemes", () => {
+    for (const url of [
+      "http://gitlab.com/org/repo",
+      "HTTP://gitlab.com/org/repo",
+      "ssh://gitlab.com/org/repo",
+      "git://gitlab.com/org/repo",
+      "ftp://gitlab.com/org/repo",
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "data:text/plain,hi",
+      "//gitlab.com/org/repo",
+    ]) {
+      expect(parseSkillSource(url)).toBeNull();
+    }
+  });
+
+  it("rejects URLs with embedded credentials", () => {
+    expect(parseSkillSource("https://user:token@gitlab.com/org/repo")).toBeNull();
+    expect(parseSkillSource("https://user@gitlab.com/org/repo")).toBeNull();
+    // userinfo confusion: the real host is evil.com, not github.com
+    expect(parseSkillSource("https://github.com@evil.com/org/repo")).toBeNull();
+  });
+
+  it("rejects IP-literal hosts (loopback, private, metadata, obfuscated, IPv6)", () => {
+    for (const url of [
+      "https://127.0.0.1/org/repo",
+      "https://10.0.0.5/org/repo",
+      "https://169.254.169.254/org/repo",
+      "https://2130706433/org/repo",
+      "https://[::ffff:127.0.0.1]/org/repo",
+    ]) {
+      expect(parseSkillSource(url)).toBeNull();
+    }
+  });
+
+  it("does not grant GitHub shorthand to a look-alike host", () => {
+    expect(parseSkillSource("https://github.com.evil.com/org/repo")?.parsed).toEqual({
+      source: "url",
+      url: "https://github.com.evil.com/org/repo",
+    });
+  });
+
+  it("rejects GitHub org/repo segments with illegal characters", () => {
+    expect(parseSkillSource("github.com/o@x/repo")).toBeNull();
+    expect(parseSkillSource("github.com/org/..%2f..%2fx")).toBeNull();
+  });
+});
+
 describe("isValidSubPath", () => {
   it("accepts relative segment paths", () => {
     expect(isValidSubPath("plugins/x")).toBe(true);
