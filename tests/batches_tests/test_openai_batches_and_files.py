@@ -27,7 +27,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.utils import StandardLoggingPayload
 import socket
 import httpx
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 def _can_resolve_openai():
@@ -513,10 +513,27 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_response.status_code = 200
         return mock_response
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        side_effect=mock_side_effect,
-    ) as mock_global_post:
+    # Batch jsonl creation now stages the body to a temp file and issues a single
+    # uploadType=media POST against the raw httpx.AsyncClient (client.client) inside
+    # _astage_and_upload_media, not AsyncHTTPHandler.post. Patch that raw POST so the
+    # real staging/upload + response transform run while the GCS object response is
+    # mocked; AsyncHTTPHandler.post still handles the batch-prediction call.
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            side_effect=mock_side_effect,
+        ),
+        patch.object(
+            httpx.AsyncClient,
+            "post",
+            new_callable=AsyncMock,
+            return_value=httpx.Response(
+                200,
+                json=mock_file_response,
+                request=httpx.Request("POST", "https://storage.googleapis.com/upload"),
+            ),
+        ) as mock_gcs_upload,
+    ):
         litellm.set_verbose = True
         litellm._turn_on_debug()
         file_name = "vertex_batch_completions.jsonl"
@@ -534,6 +551,15 @@ async def test_avertex_batch_prediction(monkeypatch):
         assert (
             file_obj.id
             == "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/5f7b99ad-9203-4430-98bf-3b45451af4cb"
+        )
+
+        mock_gcs_upload.assert_awaited_once()
+        upload_url = str(mock_gcs_upload.call_args.args[0])
+        assert "uploadType=media" in upload_url
+        assert "/b/litellm-local/o" in upload_url
+        assert (
+            mock_gcs_upload.call_args.kwargs["headers"]["Content-Type"]
+            == "application/json"
         )
 
         # Create batch

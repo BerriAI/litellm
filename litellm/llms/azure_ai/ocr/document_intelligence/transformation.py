@@ -11,7 +11,7 @@ The operation location must be polled until the analysis completes.
 import asyncio
 import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from urllib.parse import quote
 
 import httpx
@@ -35,6 +35,8 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.secret_managers.main import get_secret_str
 
+AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR = "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
+
 
 class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
     """
@@ -53,6 +55,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def __init__(self) -> None:
         super().__init__()
+
+    def get_api_key_env_var(self) -> str | None:
+        return AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR
 
     def get_supported_ocr_params(self, model: str) -> list:
         """
@@ -121,9 +126,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 raise ValueError("`pages` must be integers, not booleans")
             if all(isinstance(p, int) for p in pages):
                 if any(p < 0 for p in pages):
-                    raise ValueError(
-                        "`pages` integers must be >= 0 (Mistral 0-based indices)"
-                    )
+                    raise ValueError("`pages` integers must be >= 0 (Mistral 0-based indices)")
                 # Mistral 0-based -> Azure 1-based.
                 return ",".join(str(p + 1) for p in sorted(set(pages)))
             if all(isinstance(p, str) for p in pages):
@@ -135,18 +138,15 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                     )
                 return joined
 
-        raise ValueError(
-            "`pages` must be a list[int] (0-based, Mistral-style) or a "
-            "string like '1-3,5,7-9'."
-        )
+        raise ValueError("`pages` must be a list[int] (0-based, Mistral-style) or a string like '1-3,5,7-9'.")
 
     def validate_environment(
         self,
         headers: Dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> Dict:
         """
@@ -156,7 +156,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         # Get API key from environment if not provided
         if api_key is None:
-            api_key = get_secret_str("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
+            api_key = get_secret_str(AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV_VAR)
 
         if api_key is None:
             raise ValueError(
@@ -182,10 +182,10 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Optional[dict] = None,
+        litellm_params: dict | None = None,
         **kwargs,
     ) -> str:
         """
@@ -289,9 +289,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         Returns:
             OCRRequestData with JSON data
         """
-        verbose_logger.debug(
-            f"Azure Document Intelligence transform_ocr_request - model: {model}"
-        )
+        verbose_logger.debug(f"Azure Document Intelligence transform_ocr_request - model: {model}")
 
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
@@ -305,9 +303,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         elif doc_type == "image_url":
             document_url = document.get("image_url", "")
         else:
-            raise ValueError(
-                f"Invalid document type: {doc_type}. Must be 'document_url' or 'image_url'"
-            )
+            raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url' or 'image_url'")
 
         if not document_url:
             raise ValueError("Document URL is required")
@@ -354,9 +350,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         # Join with newlines to preserve structure
         return "\n".join(text_lines)
 
-    def _convert_dimensions(
-        self, width: float, height: float, unit: str
-    ) -> OCRPageDimensions:
+    def _convert_dimensions(self, width: float, height: float, unit: str) -> OCRPageDimensions:
         """
         Convert Azure DI dimensions to pixels.
 
@@ -395,9 +389,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             TimeoutError: If operation has exceeded timeout
         """
         if time.time() - start_time > timeout_secs:
-            raise TimeoutError(
-                f"Azure Document Intelligence operation polling timed out after {timeout_secs} seconds"
-            )
+            raise TimeoutError(f"Azure Document Intelligence operation polling timed out after {timeout_secs} seconds")
 
     @staticmethod
     def _get_retry_after(response: httpx.Response) -> int:
@@ -438,9 +430,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 return "succeeded"
             elif status == "failed":
                 error_msg = result.get("error", {}).get("message", "Unknown error")
-                raise ValueError(
-                    f"Azure Document Intelligence analysis failed: {error_msg}"
-                )
+                raise ValueError(f"Azure Document Intelligence analysis failed: {error_msg}")
             elif status in ["running", "notStarted"]:
                 return "running"
             else:
@@ -591,16 +581,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         try:
             # Check if we got 202 Accepted (async operation started)
             if raw_response.status_code == 202:
-                verbose_logger.debug(
-                    "Azure DI returned 202 Accepted, polling operation..."
-                )
+                verbose_logger.debug("Azure DI returned 202 Accepted, polling operation...")
 
                 # Get Operation-Location header
                 operation_url = raw_response.headers.get("Operation-Location")
                 if not operation_url:
-                    raise ValueError(
-                        "Azure Document Intelligence returned 202 but no Operation-Location header found"
-                    )
+                    raise ValueError("Azure Document Intelligence returned 202 but no Operation-Location header found")
 
                 # Reject cross-origin polling URLs — the auth headers
                 # below would otherwise leak to whatever URL the upstream
@@ -608,15 +594,11 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 try:
                     assert_same_origin(operation_url, str(raw_response.request.url))
                 except SSRFError as ssrf_err:
-                    raise ValueError(
-                        f"Azure Document Intelligence: rejected polling URL ({ssrf_err})"
-                    )
+                    raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
 
                 # Get headers for polling (need auth)
                 poll_headers = {
-                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get(
-                        "Ocp-Apim-Subscription-Key", ""
-                    )
+                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")
                 }
 
                 # Get timeout from kwargs or use default
@@ -632,16 +614,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             # Now parse the completed response
             response_json = raw_response.json()
 
-            verbose_logger.debug(
-                f"Azure Document Intelligence response status: {response_json.get('status')}"
-            )
+            verbose_logger.debug(f"Azure Document Intelligence response status: {response_json.get('status')}")
 
             # Check if request succeeded
             status = response_json.get("status")
             if status != "succeeded":
-                raise ValueError(
-                    f"Azure Document Intelligence analysis failed with status: {status}"
-                )
+                raise ValueError(f"Azure Document Intelligence analysis failed with status: {status}")
 
             # Extract analyze result
             analyze_result = response_json.get("analyzeResult", {})
@@ -660,20 +638,14 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 width = azure_page.get("width", 8.5)
                 height = azure_page.get("height", 11)
                 unit = azure_page.get("unit", "inch")
-                dimensions = self._convert_dimensions(
-                    width=width, height=height, unit=unit
-                )
+                dimensions = self._convert_dimensions(width=width, height=height, unit=unit)
 
                 # Build OCR page
-                ocr_page = OCRPage(
-                    index=index, markdown=markdown, dimensions=dimensions
-                )
+                ocr_page = OCRPage(index=index, markdown=markdown, dimensions=dimensions)
                 mistral_pages.append(ocr_page)
 
             # Build usage info
-            usage_info = OCRUsageInfo(
-                pages_processed=len(mistral_pages), doc_size_bytes=None
-            )
+            usage_info = OCRUsageInfo(pages_processed=len(mistral_pages), doc_size_bytes=None)
 
             # Return Mistral OCR response
             return OCRResponse(
@@ -684,9 +656,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             )
 
         except Exception as e:
-            verbose_logger.error(
-                f"Error parsing Azure Document Intelligence response: {e}"
-            )
+            verbose_logger.error(f"Error parsing Azure Document Intelligence response: {e}")
             raise e
 
     async def async_transform_ocr_response(
@@ -713,30 +683,22 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         try:
             # Check if we got 202 Accepted (async operation started)
             if raw_response.status_code == 202:
-                verbose_logger.debug(
-                    "Azure DI returned 202 Accepted, polling operation (async)..."
-                )
+                verbose_logger.debug("Azure DI returned 202 Accepted, polling operation (async)...")
 
                 # Get Operation-Location header
                 operation_url = raw_response.headers.get("Operation-Location")
                 if not operation_url:
-                    raise ValueError(
-                        "Azure Document Intelligence returned 202 but no Operation-Location header found"
-                    )
+                    raise ValueError("Azure Document Intelligence returned 202 but no Operation-Location header found")
 
                 # Reject cross-origin polling URLs (see sync path). VERIA-51.
                 try:
                     assert_same_origin(operation_url, str(raw_response.request.url))
                 except SSRFError as ssrf_err:
-                    raise ValueError(
-                        f"Azure Document Intelligence: rejected polling URL ({ssrf_err})"
-                    )
+                    raise ValueError(f"Azure Document Intelligence: rejected polling URL ({ssrf_err})")
 
                 # Get headers for polling (need auth)
                 poll_headers = {
-                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get(
-                        "Ocp-Apim-Subscription-Key", ""
-                    )
+                    "Ocp-Apim-Subscription-Key": raw_response.request.headers.get("Ocp-Apim-Subscription-Key", "")
                 }
 
                 # Get timeout from kwargs or use default
@@ -752,16 +714,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             # Now parse the completed response
             response_json = raw_response.json()
 
-            verbose_logger.debug(
-                f"Azure Document Intelligence response status: {response_json.get('status')}"
-            )
+            verbose_logger.debug(f"Azure Document Intelligence response status: {response_json.get('status')}")
 
             # Check if request succeeded
             status = response_json.get("status")
             if status != "succeeded":
-                raise ValueError(
-                    f"Azure Document Intelligence analysis failed with status: {status}"
-                )
+                raise ValueError(f"Azure Document Intelligence analysis failed with status: {status}")
 
             # Extract analyze result
             analyze_result = response_json.get("analyzeResult", {})
@@ -780,20 +738,14 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 width = azure_page.get("width", 8.5)
                 height = azure_page.get("height", 11)
                 unit = azure_page.get("unit", "inch")
-                dimensions = self._convert_dimensions(
-                    width=width, height=height, unit=unit
-                )
+                dimensions = self._convert_dimensions(width=width, height=height, unit=unit)
 
                 # Build OCR page
-                ocr_page = OCRPage(
-                    index=index, markdown=markdown, dimensions=dimensions
-                )
+                ocr_page = OCRPage(index=index, markdown=markdown, dimensions=dimensions)
                 mistral_pages.append(ocr_page)
 
             # Build usage info
-            usage_info = OCRUsageInfo(
-                pages_processed=len(mistral_pages), doc_size_bytes=None
-            )
+            usage_info = OCRUsageInfo(pages_processed=len(mistral_pages), doc_size_bytes=None)
 
             # Return Mistral OCR response
             return OCRResponse(
@@ -804,7 +756,5 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             )
 
         except Exception as e:
-            verbose_logger.error(
-                f"Error parsing Azure Document Intelligence response (async): {e}"
-            )
+            verbose_logger.error(f"Error parsing Azure Document Intelligence response (async): {e}")
             raise e

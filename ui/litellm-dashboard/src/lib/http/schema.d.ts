@@ -2479,6 +2479,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/migrate-encryption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Migrate Encryption Endpoint
+         * @description Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+         *
+         *     Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+         *     Idempotent and resumable — re-running skips already-migrated values. Pass
+         *     ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+         */
+        post: operations["migrate_encryption_endpoint_credentials_migrate_encryption_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/migrate-encryption/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check Encryption Endpoint
+         * @description Read-only residual scan for compliance attestation. Reports how many at-rest
+         *     values are still in the legacy format. ``residual_legacy == 0`` attests no
+         *     legacy ciphertext remains. Admin only; performs no writes.
+         */
+        get: operations["check_encryption_endpoint_credentials_migrate_encryption_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/{credential_name}": {
         parameters: {
             query?: never;
@@ -6480,7 +6526,7 @@ export interface paths {
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated (regenerated)
          *     - rotation_interval: Optional[str] - How often to auto-rotate this key (e.g., '30s', '30m', '30h', '30d'). Required if auto_rotate=True.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          *
@@ -6868,7 +6914,7 @@ export interface paths {
          *     - auto_rotate: Optional[bool] - Whether this key should be automatically rotated
          *     - rotation_interval: Optional[str] - How often to rotate this key (e.g., '30d', '90d'). Required if auto_rotate=True
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
-         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
          *
@@ -13517,7 +13563,7 @@ export interface paths {
          *     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
@@ -13697,7 +13743,7 @@ export interface paths {
          *     Example - update team TPM Limit
          *     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
          *     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
+         *     - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
          *     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the team. Access groups define which models the team can access. Example - ["access_group_1", "access_group_2"].
          *     - enforced_file_expires_after: Optional[dict] - Enforced file expiration policy for the team. Keys created under this team will inherit this policy for file uploads. Example - {"anchor": "created_at", "days": 30}.
          *     - enforced_batch_output_expires_after: Optional[dict] - Enforced batch output file expiration policy for the team. Keys created under this team will inherit this policy for batch output files. Example - {"anchor": "created_at", "days": 30}.
@@ -17230,6 +17276,29 @@ export interface paths {
         get: operations["get_response_input_items_v1_responses__response_id__input_items_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/rust_control_plane/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ingest Callback Logs
+         * @description Replay a batch of finished logging payloads through the callback fan-out.
+         *
+         *     Admin-only: the payloads write spend logs and trigger every callback, so this
+         *     is a trusted internal route, not a public surface.
+         */
+        post: operations["ingest_callback_logs_v1_rust_control_plane_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21102,10 +21171,9 @@ export interface components {
             };
             /**
              * Mode
-             * @description The mode to test the model with
-             * @default chat
+             * @description The mode to test the model with. If not provided, auto-detected from model capabilities.
              */
-            mode: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "ocr") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -21511,6 +21579,54 @@ export interface components {
         CallbackDelete: {
             /** Callback Name */
             callback_name: string;
+        };
+        /**
+         * CallbackLogFailure
+         * @description A record that failed to replay, identified by its index in the batch.
+         */
+        CallbackLogFailure: {
+            /** Error */
+            error: string;
+            /** Index */
+            index: number;
+        };
+        /**
+         * CallbackLogRecord
+         * @description A single finished logging event to replay through the callbacks.
+         */
+        CallbackLogRecord: {
+            /** Error */
+            error?: string | null;
+            /** Standard Logging Payload */
+            standard_logging_payload: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "success" | "failure";
+        };
+        /**
+         * CallbackLogsRequest
+         * @description A batch of logging events posted by an external producer.
+         */
+        CallbackLogsRequest: {
+            /** Records */
+            records: components["schemas"]["CallbackLogRecord"][];
+        };
+        /**
+         * CallbackLogsResponse
+         * @description Per-batch result: counts plus per-record failure detail so the caller can
+         *     distinguish a transient callback error from a structurally bad payload.
+         */
+        CallbackLogsResponse: {
+            /** Failed */
+            failed: number;
+            /** Failures */
+            failures?: components["schemas"]["CallbackLogFailure"][];
+            /** Processed */
+            processed: number;
         };
         /** CallbacksByType */
         CallbacksByType: {
@@ -22355,6 +22471,11 @@ export interface components {
              * @description CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.
              */
             mcp_trusted_proxy_ranges?: string[] | null;
+            /**
+             * Mcp Xff Num Trusted Hops
+             * @description Number of trusted reverse proxies/load balancers in front of the gateway that append to X-Forwarded-For. When set (and mcp_trusted_proxy_ranges validates the direct peer), the client IP for MCP access control is read this many entries from the right of the chain instead of the spoofable leftmost value, defeating append-style X-Forwarded-For forgery.
+             */
+            mcp_xff_num_trusted_hops?: number | null;
             /**
              * Otel
              * @description [BETA] OpenTelemetry support - this might change, use with caution.
@@ -29715,6 +29836,27 @@ export interface components {
             total: number;
         };
         /**
+         * RetryPolicy
+         * @description Use this to set a custom number of retries per exception type
+         *     If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
+         *     Mapping of Exception type to number of retries
+         *     https://docs.litellm.ai/docs/exception_mapping
+         */
+        RetryPolicy: {
+            /** Authenticationerrorretries */
+            AuthenticationErrorRetries?: number | null;
+            /** Badrequesterrorretries */
+            BadRequestErrorRetries?: number | null;
+            /** Contentpolicyviolationerrorretries */
+            ContentPolicyViolationErrorRetries?: number | null;
+            /** Internalservererrorretries */
+            InternalServerErrorRetries?: number | null;
+            /** Ratelimiterrorretries */
+            RateLimitErrorRetries?: number | null;
+            /** Timeouterrorretries */
+            TimeoutErrorRetries?: number | null;
+        };
+        /**
          * RoleMappings
          * @description Configuration for mapping SSO groups to LiteLLM roles.
          *
@@ -30768,6 +30910,11 @@ export interface components {
              */
             allowed_models?: string[] | null;
             /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
+            /**
              * Max Budget In Team
              * @description Maximum budget allocated to this user within the team. If not set, user has unlimited budget within team limits
              */
@@ -31698,12 +31845,13 @@ export interface components {
             } | null;
             /** Model Group Retry Policy */
             model_group_retry_policy?: {
-                [key: string]: unknown;
+                [key: string]: components["schemas"]["RetryPolicy"];
             } | null;
             /** Num Retries */
             num_retries?: number | null;
             /** Retry After */
             retry_after?: number | null;
+            retry_policy?: components["schemas"]["RetryPolicy"] | null;
             /** Routing Groups */
             routing_groups?: components["schemas"]["RoutingGroup"][] | null;
             /** Routing Strategy */
@@ -32225,6 +32373,11 @@ export interface components {
             end_user_tpm_limit?: number | null;
             /** Expires */
             expires?: string | null;
+            /**
+             * Is Session Token
+             * @default false
+             */
+            is_session_token: boolean;
             /** Jwt Claims */
             jwt_claims?: {
                 [key: string]: unknown;
@@ -37015,6 +37168,58 @@ export interface operations {
             };
         };
     };
+    migrate_encryption_endpoint_credentials_migrate_encryption_post: {
+        parameters: {
+            query?: {
+                /** @description If true, scan and report without writing any changes. */
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_encryption_endpoint_credentials_migrate_encryption_check_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_credential_credentials__credential_name__delete: {
         parameters: {
             query?: never;
@@ -41702,6 +41907,8 @@ export interface operations {
                 project_id?: string | null;
                 /** @description Filter keys by access group ID */
                 access_group_id?: string | null;
+                /** @description Filter keys by agent ID */
+                agent_id?: string | null;
                 /** @description If true (proxy admins only), match user_id/key_alias as case-insensitive substrings instead of exact values. Defaults to false: /key/list matched these exactly before substring search was added, and an exact user_id/key_alias filter must never return another user's keys. */
                 substring_matching?: boolean;
             };
@@ -54673,6 +54880,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ingest_callback_logs_v1_rust_control_plane_logs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CallbackLogsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallbackLogsResponse"];
                 };
             };
             /** @description Validation Error */
