@@ -128,6 +128,35 @@ def _extract_headroom_tool_calls(
                 )
             return result
 
+    # Responses API format: output list with type=function_call items
+    output = getattr(response, "output", None)
+    if isinstance(output, list):
+        for item in output:
+            item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            item_name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
+            if item_type != "function_call" or item_name != HEADROOM_RETRIEVE_TOOL_NAME:
+                continue
+            if isinstance(item, dict):
+                args_str: object = item.get("arguments", "{}")
+                item_id: object = item.get("id") or item.get("call_id")
+            else:
+                args_str = getattr(item, "arguments", "{}")
+                item_id = getattr(item, "id", None) or getattr(item, "call_id", None)
+            try:
+                arguments = json.loads(args_str) if isinstance(args_str, str) else {}
+            except (json.JSONDecodeError, TypeError):
+                arguments = {}
+            result.append(
+                {
+                    "id": item_id,
+                    "type": "function",
+                    "name": item_name,
+                    "arguments": arguments,
+                }
+            )
+        if result:
+            return result
+
     # Anthropic messages format: content blocks with type=tool_use
     content = getattr(response, "content", None)
     if isinstance(content, list):

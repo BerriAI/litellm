@@ -699,3 +699,36 @@ async def test_async_should_run_agentic_loop_detects_anthropic_content_block_for
     assert should_run is True
     assert len(ctx["tool_calls"]) == 1
     assert ctx["tool_calls"][0]["arguments"]["hash"] == "b573993006976af767214fac"
+
+
+@pytest.mark.asyncio
+async def test_async_should_run_agentic_loop_detects_responses_api_output_format(
+    guardrail: HeadroomGuardrail,
+):
+    retrieve_tool_def = [{"type": "function", "function": {"name": HEADROOM_RETRIEVE_TOOL_NAME}}]
+
+    response = MagicMock()
+    response.choices = None
+    response.content = None
+    response.output = [
+        {
+            "type": "function_call",
+            "id": "fc_abc123",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": json.dumps({"hash": "b573993006976af767214fac"}),
+        }
+    ]
+
+    should_run, ctx = await guardrail.async_should_run_agentic_loop(
+        response=response,
+        model="gpt-4o",
+        messages=[],
+        tools=retrieve_tool_def,
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={},
+    )
+
+    assert should_run is True
+    assert len(ctx["tool_calls"]) == 1
+    assert ctx["tool_calls"][0]["arguments"]["hash"] == "b573993006976af767214fac"
