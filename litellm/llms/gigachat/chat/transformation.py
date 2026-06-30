@@ -272,6 +272,36 @@ class GigaChatConfig(BaseConfig):
             verbose_logger.error(f"Failed to upload image: {e}")
             return None
 
+    def _transform_list_content(self, content: list) -> tuple[str, list[str]]:
+        """
+        Extract text and image attachments from a multimodal message content list.
+
+        Args:
+            content: List of content parts (OpenAI multimodal format)
+
+        Returns:
+            Tuple of (combined text, list of attachment file ids)
+        """
+        texts = []
+        attachments = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    texts.append(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    # Extract image URL and upload to GigaChat
+                    image_url = part.get("image_url", {})
+                    if isinstance(image_url, str):
+                        url = image_url
+                    else:
+                        url = image_url.get("url", "")
+                    if url:
+                        file_id = self._upload_image(url)
+                        if file_id:
+                            attachments.append(file_id)
+        text = "\n".join(texts) if texts else ""
+        return text, attachments
+
     def transform_request(
         self,
         model: str,
@@ -340,24 +370,7 @@ class GigaChatConfig(BaseConfig):
             # Handle list content (multimodal) - extract text and images
             content = message.get("content")
             if isinstance(content, list):
-                texts = []
-                attachments = []
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "text":
-                            texts.append(part.get("text", ""))
-                        elif part.get("type") == "image_url":
-                            # Extract image URL and upload to GigaChat
-                            image_url = part.get("image_url", {})
-                            if isinstance(image_url, str):
-                                url = image_url
-                            else:
-                                url = image_url.get("url", "")
-                            if url:
-                                file_id = self._upload_image(url)
-                                if file_id:
-                                    attachments.append(file_id)
-                message["content"] = "\n".join(texts) if texts else ""
+                message["content"], attachments = self._transform_list_content(content)
                 if attachments:
                     message["attachments"] = attachments
 
