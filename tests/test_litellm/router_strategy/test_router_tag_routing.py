@@ -1,29 +1,17 @@
 #### What this tests ####
 # This tests litellm router
 
-import asyncio
 import os
 import sys
-import time
-import traceback
 
-import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import logging
 import os
-from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
-from dotenv import load_dotenv
 
 import litellm
-from litellm import Router
 from litellm._logging import verbose_logger
 
 
@@ -259,7 +247,6 @@ async def test_error_from_tag_routing():
     """
     import logging
 
-    from litellm._logging import verbose_logger
 
     verbose_logger.setLevel(logging.DEBUG)
     router = litellm.Router(
@@ -332,16 +319,10 @@ def test_tag_routing_with_list_of_tags_match_all():
     from litellm.router_strategy.tag_based_routing import is_valid_deployment_tag
 
     assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA"], match_any=False)
-    assert is_valid_deployment_tag(
-        ["teamA", "teamB"], ["teamA", "teamB"], match_any=False
-    )
-    assert not is_valid_deployment_tag(
-        ["teamA", "teamB", "teamC"], ["teamA", "teamD"], match_any=False
-    )
+    assert is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamB"], match_any=False)
+    assert not is_valid_deployment_tag(["teamA", "teamB", "teamC"], ["teamA", "teamD"], match_any=False)
     assert not is_valid_deployment_tag(["teamA"], ["teamA", "teamB"], match_any=False)
-    assert not is_valid_deployment_tag(
-        ["teamA", "teamB"], ["teamA", "teamC"], match_any=False
-    )
+    assert not is_valid_deployment_tag(["teamA", "teamB"], ["teamA", "teamC"], match_any=False)
     assert not is_valid_deployment_tag(["teamA", "teamB"], [], match_any=False)
     assert not is_valid_deployment_tag(["default"], ["teamA"], match_any=False)
 
@@ -455,9 +436,7 @@ def test_get_tags_from_request_kwargs_various_inputs():
     assert _get_tags_from_request_kwargs({"metadata": None}) == []
 
     # Indirect via "litellm_params" - metadata inside
-    assert _get_tags_from_request_kwargs(
-        {"litellm_params": {"metadata": {"tags": ["paid"]}}}
-    ) == ["paid"]
+    assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": {"tags": ["paid"]}}}) == ["paid"]
     assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
     assert _get_tags_from_request_kwargs({"litellm_params": {}}) == []
 
@@ -499,9 +478,7 @@ def test_split_tags_negation_only():
 def test_split_tags_mixed():
     from litellm.router_strategy.tag_based_routing import _split_tags
 
-    positive, excluded = _split_tags(
-        ["paid", "!provider:anthropic", "!inference:cerebras"]
-    )
+    positive, excluded = _split_tags(["paid", "!provider:anthropic", "!inference:cerebras"])
     assert positive == ["paid"]
     assert len(excluded) == 2
 
