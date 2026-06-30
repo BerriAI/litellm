@@ -1434,6 +1434,31 @@ def _get_cors_config(
 origins, allow_cors_credentials = _get_cors_config()
 
 
+def _restructure_ui_html_files(ui_root: str) -> None:
+    """Ensure each exported HTML route is available as <route>/index.html."""
+
+    for current_root, _, files in os.walk(ui_root):
+        rel_root = os.path.relpath(current_root, ui_root)
+        first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
+
+        if first_segment in {"_next", "litellm-asset-prefix"}:
+            continue
+
+        for filename in files:
+            if not filename.endswith(".html") or filename == "index.html":
+                continue
+
+            file_path = os.path.join(current_root, filename)
+            target_dir = os.path.splitext(file_path)[0]
+            target_path = os.path.join(target_dir, "index.html")
+
+            os.makedirs(target_dir, exist_ok=True)
+            try:
+                os.replace(file_path, target_path)
+            except FileNotFoundError:
+                continue
+
+
 # get current directory
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1668,43 +1693,17 @@ try:
     # # Mount the _next directory at the root level
     app.mount(
         "/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        StaticFiles(directory=os.path.join(ui_path, "_next"), check_dir=False),
         name="next_static",
     )
     app.mount(
         f"{litellm_asset_prefix}/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        StaticFiles(directory=os.path.join(ui_path, "_next"), check_dir=False),
         name="next_static",
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-
-    def _restructure_ui_html_files(ui_root: str) -> None:
-        """Ensure each exported HTML route is available as <route>/index.html."""
-
-        for current_root, _, files in os.walk(ui_root):
-            rel_root = os.path.relpath(current_root, ui_root)
-            first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
-
-            # Ignore Next.js asset directories
-            if first_segment in {"_next", "litellm-asset-prefix"}:
-                continue
-
-            for filename in files:
-                if not filename.endswith(".html") or filename == "index.html":
-                    continue
-
-                file_path = os.path.join(current_root, filename)
-                target_dir = os.path.splitext(file_path)[0]
-                target_path = os.path.join(target_dir, "index.html")
-
-                os.makedirs(target_dir, exist_ok=True)
-                try:
-                    os.replace(file_path, target_path)
-                except FileNotFoundError:
-                    # Another process may have already moved this file.
-                    continue
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True, check_dir=False), name="ui")
 
     # Handle HTML file restructuring
     # Only restructure if:
@@ -13604,7 +13603,9 @@ async def get_favicon():
     )
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    default_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
+    built_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
+    bundled_favicon = os.path.join(current_dir, "swagger", "favicon.ico")
+    default_favicon = built_favicon if os.path.exists(built_favicon) else bundled_favicon
 
     favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
 
