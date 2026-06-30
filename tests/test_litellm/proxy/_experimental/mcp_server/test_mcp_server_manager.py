@@ -5587,5 +5587,128 @@ def test_should_strip_caller_authorization_for_token_exchange():
     )
 
 
+class _UpstreamAuthError(Exception):
+    """Mimics a wrapped upstream 401 the way _extract_upstream_auth_failure detects it."""
+
+    def __init__(self, status_code: int = 401) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.response = httpx.Response(status_code)
+
+
+class _RetryFakeClient:
+    """A fake MCPClient whose call_tool fails on the first attempt and (optionally) succeeds after."""
+
+    def __init__(self, *, raises=None, result=None) -> None:
+        from litellm.experimental_mcp_client.client import MCPClient
+
+        self._raises = raises
+        self._result = result
+        self._MCPClient = MCPClient
+        self.attempts = 0
+
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+        self.attempts += 1
+        if self._raises is not None:
+            if raise_on_error:
+                raise self._raises
+            return self._MCPClient.error_tool_result(self._raises)
+        return self._result
+
+
+def _obo_server() -> MCPServer:
+    return MCPServer(
+        server_id="obo-srv",
+        name="obo",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.sse,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret="csec",
+    )
+
+
+class TestOBOCallToolRetry:
+    """The token_exchange (OBO) tool-call path re-mints the exchanged token once on an upstream 401."""
+
+    def _manager(self):
+        manager = MCPServerManager()
+        manager._cred_provider = MagicMock()
+        manager._cred_provider.invalidate_credentials = AsyncMock()
+        return manager
+
+    @pytest.mark.asyncio
+    async def test_upstream_401_invalidates_and_retries_once(self):
+        manager = self._manager()
+        success = CallToolResult(content=[], isError=False)
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        retry = _RetryFakeClient(result=success)
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result is success
+        manager._cred_provider.invalidate_credentials.assert_awaited_once()
+        manager._create_mcp_client.assert_awaited_once()
+        assert first.attempts == 1 and retry.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_non_auth_error_does_not_retry(self):
+        manager = self._manager()
+        first = _RetryFakeClient(raises=ValueError("tool blew up"))
+        manager._create_mcp_client = AsyncMock()
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result.isError is True
+        manager._cred_provider.invalidate_credentials.assert_not_awaited()
+        manager._create_mcp_client.assert_not_awaited()
+        assert first.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_second_401_degrades_without_looping(self):
+        manager = self._manager()
+        first = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        # The retry client still fails; with raise_on_error defaulting False it returns isError.
+        retry = _RetryFakeClient(raises=_UpstreamAuthError(401))
+        manager._create_mcp_client = AsyncMock(return_value=retry)
+
+        result = await manager._obo_call_tool_with_retry(
+            client=first,
+            call_tool_params=MagicMock(),
+            host_progress_callback=None,
+            mcp_server=_obo_server(),
+            server_auth_header=None,
+            extra_headers=None,
+            stdio_env=None,
+            subject_token="caller-jwt",
+            user_api_key_auth=None,
+        )
+
+        assert result.isError is True
+        manager._create_mcp_client.assert_awaited_once()
+        assert first.attempts == 1 and retry.attempts == 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

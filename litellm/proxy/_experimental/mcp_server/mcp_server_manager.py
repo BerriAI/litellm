@@ -3326,6 +3326,46 @@ class MCPServerManager:
         async with semaphore:
             yield
 
+    async def _obo_call_tool_with_retry(
+        self,
+        *,
+        client: MCPClient,
+        call_tool_params: MCPCallToolRequestParams,
+        host_progress_callback: Optional[Callable],
+        mcp_server: MCPServer,
+        server_auth_header: Optional[Union[str, dict[str, str]]],
+        extra_headers: Optional[dict[str, str]],
+        stdio_env: Optional[dict[str, str]],
+        subject_token: Optional[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> CallToolResult:
+        """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
+
+        The exchanged token is baked into the client at build time, so the retry invalidates the
+        cached exchange and rebuilds the client (which re-exchanges). One retry only: a non-auth
+        failure or a second auth failure degrades to the normal ``isError`` result, and a re-exchange
+        that now fails surfaces its own 401 challenge from ``_create_mcp_client``.
+        """
+        try:
+            return await client.call_tool(
+                call_tool_params, host_progress_callback=host_progress_callback, raise_on_error=True
+            )
+        except Exception as exc:
+            if _extract_upstream_auth_failure(exc) is None:
+                return MCPClient.error_tool_result(exc)
+            spec = to_server_spec(mcp_server)
+            if spec is not None:
+                await self._cred_provider.invalidate_credentials(to_subject(user_api_key_auth, subject_token), spec)
+            retry_client = await self._create_mcp_client(
+                server=mcp_server,
+                mcp_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
+            )
+            return await retry_client.call_tool(call_tool_params, host_progress_callback=host_progress_callback)
+
     async def _call_regular_mcp_tool(
         self,
         mcp_server: MCPServer,
@@ -3484,11 +3524,30 @@ class MCPServerManager:
             arguments=arguments,
         )
 
-        async def _call_tool_via_client(client, params):
-            async with self._limit_outbound_concurrency(mcp_server):
-                return await client.call_tool(params, host_progress_callback=host_progress_callback)
+        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange and subject_token:
+            # OBO: the exchanged token may have been revoked/rotated upstream since it was cached, so
+            # an upstream 401 gets one re-mint + retry. Gated to this mode; all others keep the plain
+            # single call below.
+            tool_call_coro = self._obo_call_tool_with_retry(
+                client=client,
+                call_tool_params=call_tool_params,
+                host_progress_callback=host_progress_callback,
+                mcp_server=mcp_server,
+                server_auth_header=server_auth_header,
+                extra_headers=extra_headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                user_api_key_auth=user_api_key_auth,
+            )
+        else:
 
-        tasks.append(asyncio.create_task(_call_tool_via_client(client, call_tool_params)))
+            async def _call_tool_via_client(client, params):
+                async with self._limit_outbound_concurrency(mcp_server):
+                    return await client.call_tool(params, host_progress_callback=host_progress_callback)
+
+            tool_call_coro = _call_tool_via_client(client, call_tool_params)
+
+        tasks.append(asyncio.create_task(tool_call_coro))
 
         _timeout = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
         try:

@@ -155,6 +155,43 @@ async def test_rotated_caller_token_re_exchanges():
 
 
 @pytest.mark.asyncio
+async def test_same_token_different_tenant_does_not_share_cache():
+    # Two tenants presenting the same opaque token (e.g. a shared/service token) must not collide on
+    # one cache entry: tenant_id is part of the key, so each tenant gets its own exchange.
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
+    assert len(post.calls) == 2
+    # Same tenant + token still hits the cache.
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_forces_re_exchange():
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.invalidate("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_targets_only_the_matching_tenant():
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
+    await exchanger.invalidate("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    # globex's entry survives; only acme re-exchanges.
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    assert len(post.calls) == 3
+
+
+@pytest.mark.asyncio
 async def test_rotated_config_re_exchanges_before_ttl():
     # Same caller token + server, but the operator rotated the audience/scope: the cached token was
     # minted for the old config, so it must re-exchange (not serve the stale token) before TTL.

@@ -21,6 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     InProcessRefreshCoordinator,
@@ -83,22 +84,27 @@ class TokenExchanger(Protocol):
     """Exchanges a caller token for an upstream-bound one, per the server's token_exchange config."""
 
     async def exchange(
-        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
     ) -> Result[OAuthToken, CredError]: ...
 
+    async def invalidate(
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
+    ) -> None: ...
 
-def _cache_key(subject_token: str, config: TokenExchangeConfig) -> str:
-    """Bind the cache entry to the caller token AND the exchange config that minted it.
 
-    A rotated caller token, endpoint, audience, scope, client_id, secret, auth method, or
-    subject_token_type all change the key, so a config change forces a fresh exchange instead of
-    serving a token minted for the old config until TTL. Everything is hashed, so no secret is held
-    in the key.
+def _cache_key(subject_token: str, tenant_id: str, config: TokenExchangeConfig) -> str:
+    """Bind the cache entry to the caller token, the tenant, AND the exchange config that minted it.
+
+    A rotated caller token, a different tenant, endpoint, audience, scope, client_id, secret, auth
+    method, or subject_token_type all change the key, so two tenants behind the same opaque token
+    never share an entry and a config change forces a fresh exchange instead of serving a token
+    minted for the old config until TTL. Everything is hashed, so no secret is held in the key.
     """
     secret = config.client_secret.get_secret_value() if config.client_secret else ""
     material = "\x00".join(
         (
             subject_token,
+            tenant_id,
             config.token_exchange_endpoint or "",
             config.audience or "",
             config.subject_token_type,
@@ -169,7 +175,7 @@ class Rfc8693TokenExchanger:
         self._expiry_buffer_seconds = expiry_buffer_seconds
 
     async def exchange(
-        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
     ) -> Result[OAuthToken, CredError]:
         endpoint = config.token_exchange_endpoint
         client_id = config.client_id
@@ -181,10 +187,11 @@ class Rfc8693TokenExchanger:
                 )
             )
 
-        cache_key = _cache_key(subject_token, config)
+        cache_key = _cache_key(subject_token, tenant_id, config)
         server_id = server.server_id
         cached = await self._cache.get(cache_key, server_id)
         if cached is not None:
+            verbose_logger.debug("MCP token exchange cache hit for server %s", server_id)
             return Ok(cached)
 
         client_auth = build_token_endpoint_client_auth(
@@ -206,6 +213,9 @@ class Rfc8693TokenExchanger:
             fresh = await self._cache.get(cache_key, server_id)
             if fresh is not None:
                 return fresh
+            verbose_logger.debug(
+                "Exchanging token for MCP server %s at %s (audience=%s)", server_id, endpoint, config.audience
+            )
             body = await self._http_post(endpoint, form, client_auth.headers)
             if body is None:
                 return None
@@ -213,6 +223,7 @@ class Rfc8693TokenExchanger:
             if token is None:
                 return None
             await self._cache.set(cache_key, server_id, token, self._ttl_seconds(token))
+            verbose_logger.info("Token exchange succeeded for MCP server %s", server_id)
             return token
 
         async def reread() -> OAuthToken | None:
@@ -227,6 +238,12 @@ class Rfc8693TokenExchanger:
         if token is None:
             return Error(CredError.of_upstream_unavailable("token exchange did not return a usable access token"))
         return Ok(token)
+
+    async def invalidate(
+        self, subject_token: str, server: ServerSpec, config: TokenExchangeConfig, *, tenant_id: str = ""
+    ) -> None:
+        """Drop the cached exchanged token so the next call re-exchanges (e.g. after an upstream 401)."""
+        await self._cache.delete(_cache_key(subject_token, tenant_id, config), server.server_id)
 
     def _token_from_body(self, body: dict[str, object]) -> OAuthToken | None:
         access_token = body.get("access_token")
