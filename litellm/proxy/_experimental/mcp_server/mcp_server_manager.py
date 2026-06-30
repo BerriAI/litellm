@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Callable, Literal, Optional, Union, cast
 from urllib.parse import urlparse
 
 import anyio
+import httpx
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -77,6 +78,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
+    ServerSpec,
     TokenExchangeConfig,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -110,7 +112,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import ProxyLogging, get_server_root_path
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
@@ -1681,8 +1683,7 @@ class MCPServerManager:
     def _obo_subject_token(
         self,
         server: MCPServer,
-        raw_headers: Optional[Dict[str, str]],
-        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[dict[str, str]],
     ) -> Optional[str]:
         """The caller's bearer as the token_exchange (OBO) subject token, for that mode only.
 
@@ -1692,7 +1693,7 @@ class MCPServerManager:
         """
         if server.auth_type != MCPAuth.oauth2_token_exchange:
             return None
-        return self._extract_bearer_token(oauth2_headers, raw_headers)
+        return self._extract_bearer_token(None, raw_headers)
 
     def _build_stdio_env(
         self,
@@ -1884,6 +1885,54 @@ class MCPServerManager:
         _write_user_env_vars_cache(user_id, server.server_id, values)
         return values
 
+    async def _resolve_v2_auth(
+        self,
+        *,
+        server: MCPServer,
+        spec: ServerSpec,
+        provider: UpstreamCredentialProvider,
+        subject_token: Optional[str],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        extra_headers: Optional[dict[str, str]],
+    ) -> tuple[Optional[httpx.Auth], Optional[dict[str, str]]]:
+        """Resolve a v2-owned server's upstream credential into ``(resolved_auth, extra_headers)``.
+
+        On a missing/rejected per-user credential this raises the mode's discovery challenge
+        (authorization_code's browser-OAuth 401, token_exchange's RFC 9728 challenge) or maps any
+        other ``CredError`` onto its public HTTP status; it never returns an error as a value.
+        """
+        match await provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
+            case Ok(auth):
+                # NoOpAuth has no header_name and so never conflicts.
+                header_name = getattr(auth, "header_name", None)
+                conflicts = bool(
+                    header_name and extra_headers and any(key.lower() == header_name.lower() for key in extra_headers)
+                )
+                if not conflicts:
+                    return auth, extra_headers
+                if isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig)):
+                    # The resolver owns the per-user credential here (token_exchange's exchanged
+                    # token, authorization_code's stored token). It is authoritative: a guardrail such
+                    # as MCPJWTSigner, static_headers, or any other injected Authorization must NOT
+                    # shadow it (otherwise the upstream gets e.g. the signer's JWT instead of the
+                    # exchanged token and rejects it). Drop the conflicting header so the resolved
+                    # token reaches upstream.
+                    return auth, _without_authorization(extra_headers)
+                # Other modes: an Authorization already supplied via extra_headers (a forwarded caller
+                # header or static_headers) is intentional and wins; v1 applies those last.
+                return None, extra_headers
+            case Error(err):
+                if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
+                    # authorization_code's missing per-user token -> the per-server browser-OAuth
+                    # challenge, built here where the full MCPServer is in hand.
+                    raise_user_oauth_challenge(server, root_path=get_server_root_path())
+                if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
+                    # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
+                    # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
+                    # 401. No gateway-side browser flow.
+                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                raise_public(err)
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -1994,40 +2043,14 @@ class MCPServerManager:
             server_url = server.url or ""
 
             if spec is not None:
-                match await provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
-                    case Ok(auth):
-                        resolved_auth = auth
-                        # NoOpAuth has no header_name and so never conflicts.
-                        header_name = getattr(resolved_auth, "header_name", None)
-                        conflicts = bool(
-                            header_name
-                            and extra_headers
-                            and any(key.lower() == header_name.lower() for key in extra_headers)
-                        )
-                        if conflicts and isinstance(spec.config, (TokenExchangeConfig, AuthorizationCodeConfig)):
-                            # The resolver owns the per-user credential here (token_exchange's
-                            # exchanged token, authorization_code's stored token). It is
-                            # authoritative: a guardrail such as MCPJWTSigner, static_headers, or any
-                            # other injected Authorization must NOT shadow it (otherwise the upstream
-                            # gets e.g. the signer's JWT instead of the exchanged token and rejects
-                            # it). Drop the conflicting header so the resolved token reaches upstream.
-                            extra_headers = _without_authorization(extra_headers)
-                        elif conflicts:
-                            # Other modes: an Authorization already supplied via extra_headers (a
-                            # forwarded caller header or static_headers) is intentional and wins; v1
-                            # applies those last.
-                            resolved_auth = None
-                    case Error(err):
-                        if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
-                            # authorization_code's missing per-user token -> the per-server
-                            # browser-OAuth challenge, built here where the full MCPServer is in hand.
-                            raise_user_oauth_challenge(server)
-                        if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
-                            # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728
-                            # challenge pointing at the IdP the client must SSO with to obtain one,
-                            # rather than an opaque 401. No gateway-side browser flow.
-                            raise_token_exchange_challenge(server)
-                        raise_public(err)
+                resolved_auth, extra_headers = await self._resolve_v2_auth(
+                    server=server,
+                    spec=spec,
+                    provider=provider,
+                    subject_token=subject_token,
+                    user_api_key_auth=user_api_key_auth,
+                    extra_headers=extra_headers,
+                )
                 return MCPClient(
                     server_url=server_url,
                     transport_type=transport,

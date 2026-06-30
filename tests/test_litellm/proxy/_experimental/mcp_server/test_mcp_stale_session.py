@@ -294,15 +294,9 @@ async def test_stale_mcp_session_id_is_stripped():
 
     # Verify the mcp-session-id header was stripped
     header_names = [k for k, v in captured_scope.get("headers", [])]
-    assert (
-        b"mcp-session-id" not in header_names
-    ), "Stale mcp-session-id header should have been stripped from the scope"
-    assert (
-        stateless_handle_request.called
-    ), "Stale non-initialize requests should route stateless"
-    assert (
-        not stateful_handle_request.called
-    ), "Stale non-initialize requests should not route stateful"
+    assert b"mcp-session-id" not in header_names, "Stale mcp-session-id header should have been stripped from the scope"
+    assert stateless_handle_request.called, "Stale non-initialize requests should route stateless"
+    assert not stateful_handle_request.called, "Stale non-initialize requests should not route stateful"
 
 
 @pytest.mark.asyncio
@@ -366,9 +360,7 @@ async def test_delete_stale_mcp_session_returns_success():
         await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify session manager was NOT called (request was handled early)
-    assert (
-        not mock_handle_request.called
-    ), "Session manager should not be called for DELETE on non-existent session"
+    assert not mock_handle_request.called, "Session manager should not be called for DELETE on non-existent session"
 
     # Verify a success response was sent
     assert send.called, "A response should have been sent"
@@ -523,9 +515,7 @@ async def test_valid_mcp_session_id_is_preserved():
 
     # Verify the mcp-session-id header was preserved
     header_names = [k for k, v in captured_scope.get("headers", [])]
-    assert (
-        b"mcp-session-id" in header_names
-    ), "Valid mcp-session-id header should have been preserved"
+    assert b"mcp-session-id" in header_names, "Valid mcp-session-id header should have been preserved"
 
 
 @pytest.mark.asyncio
@@ -967,9 +957,7 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_returns
     challenge = exc_info.value.headers["www-authenticate"]
     assert "resource_metadata=" in challenge
     assert "authorization_uri=" not in challenge
-    assert (
-        "/.well-known/oauth-protected-resource/delegated_oauth_server/mcp" in challenge
-    )
+    assert "/.well-known/oauth-protected-resource/delegated_oauth_server/mcp" in challenge
 
 
 @pytest.mark.asyncio
@@ -1053,5 +1041,10 @@ async def test_handle_streamable_http_mcp_token_exchange_without_subject_returns
     assert exc_info.value.status_code == 401
     headers = {k.lower(): v for k, v in (exc_info.value.headers or {}).items()}
     challenge = headers["www-authenticate"]
-    assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo_server"' in challenge
+    # Structural invariants only: the exact root-path prefix is exercised in the adapter's
+    # oauth_protected_resource_path unit test, so this handler test stays hermetic w.r.t.
+    # SERVER_ROOT_PATH (which other tests in the shard may have left set in the environment).
+    assert "resource_metadata=" in challenge
+    assert "/.well-known/oauth-protected-resource" in challenge
+    assert challenge.split('resource_metadata="', 1)[1].split('"', 1)[0].endswith("/mcp/obo_server")
     assert 'error="invalid_token"' in challenge

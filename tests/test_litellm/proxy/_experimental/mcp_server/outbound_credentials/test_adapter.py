@@ -7,12 +7,12 @@ maps each CredError onto its HTTP status. These pin the parity-critical mapping 
 
 import base64
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+    oauth_protected_resource_path,
     raise_public,
     raise_user_oauth_challenge,
     to_server_spec,
@@ -245,29 +245,17 @@ def test_raise_public_plain_unauthorized_has_no_challenge():
     assert exc.headers is None
 
 
-_ROOT_PATH = "litellm.proxy.utils.get_server_root_path"
-
-
-def test_raise_user_oauth_challenge_points_at_per_server_prm():
-    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
-        raise_user_oauth_challenge(_server(alias="my-srv"))
-    exc = exc_info.value
-    assert exc.status_code == 401
-    assert (
-        exc.headers["WWW-Authenticate"] == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/my-srv"'
-    )
-
-
-def test_raise_user_oauth_challenge_includes_server_root_path():
-    with (
-        patch(_ROOT_PATH, return_value="/api/v1"),
-        pytest.raises(HTTPException) as exc_info,
-    ):
-        raise_user_oauth_challenge(_server(alias="my-srv"))
-    assert (
-        exc_info.value.headers["WWW-Authenticate"]
-        == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"'
-    )
+@pytest.mark.parametrize(
+    "root_path, expected_prefix",
+    [
+        ("/", ""),  # "/" means no prefix
+        ("", ""),  # empty means no prefix
+        ("/api/v1", "/api/v1"),  # a real root path is prepended verbatim
+    ],
+)
+def test_oauth_protected_resource_path_honors_root_path(root_path, expected_prefix):
+    path = oauth_protected_resource_path(root_path, _server(alias="my-srv"))
+    assert path == f"/.well-known/oauth-protected-resource{expected_prefix}/mcp/my-srv"
 
 
 @pytest.mark.parametrize(
@@ -278,10 +266,27 @@ def test_raise_user_oauth_challenge_includes_server_root_path():
         ({}, "n"),  # then the name field (server_id is the last fallback)
     ],
 )
-def test_raise_user_oauth_challenge_name_fallback(kwargs, expected_name):
-    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
-        raise_user_oauth_challenge(_server(**kwargs))
-    assert f'/mcp/{expected_name}"' in exc_info.value.headers["WWW-Authenticate"]
+def test_oauth_protected_resource_path_name_fallback(kwargs, expected_name):
+    assert oauth_protected_resource_path("/", _server(**kwargs)).endswith(f"/mcp/{expected_name}")
+
+
+def test_raise_user_oauth_challenge_points_at_per_server_prm():
+    with pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(alias="my-srv"), root_path="/")
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert (
+        exc.headers["WWW-Authenticate"] == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/my-srv"'
+    )
+
+
+def test_raise_user_oauth_challenge_includes_server_root_path():
+    with pytest.raises(HTTPException) as exc_info:
+        raise_user_oauth_challenge(_server(alias="my-srv"), root_path="/api/v1")
+    assert (
+        exc_info.value.headers["WWW-Authenticate"]
+        == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/my-srv"'
+    )
 
 
 def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
@@ -289,8 +294,8 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
         raise_token_exchange_challenge,
     )
 
-    with patch(_ROOT_PATH, return_value="/"), pytest.raises(HTTPException) as exc_info:
-        raise_token_exchange_challenge(_server(alias="obo-srv"))
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/")
     exc = exc_info.value
     www = exc.headers["WWW-Authenticate"]
     assert exc.status_code == 401
@@ -298,3 +303,14 @@ def test_raise_token_exchange_challenge_is_rfc9728_invalid_token():
     assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
     assert 'error="invalid_token"' in www
     assert "error_description=" in www
+
+
+def test_raise_token_exchange_challenge_includes_server_root_path():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/api/v1")
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/obo-srv"' in www

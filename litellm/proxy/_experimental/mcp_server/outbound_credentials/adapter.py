@@ -178,21 +178,27 @@ def raise_public(error: CredError) -> NoReturn:
     assert_never(error.tag)
 
 
-def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
+def oauth_protected_resource_path(root_path: str, server: MCPServer) -> str:
+    """The server's RFC 9728 Protected Resource Metadata path, the shared anchor of both challenges.
+
+    ``root_path`` is the proxy's ``SERVER_ROOT_PATH``, resolved by the caller (the imperative shell)
+    so this stays a pure function of its inputs; ``"/"`` and ``""`` both mean no prefix. The path is
+    relative, so it resolves against the caller's own host (correct even behind a reverse proxy).
+    """
+    prefix = "" if root_path == "/" else root_path
+    name = server.alias or server.server_name or server.name or server.server_id
+    return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+
+
+def raise_user_oauth_challenge(server: MCPServer, *, root_path: str) -> NoReturn:
     """Raise the 401 an ``authorization_code`` server returns at egress when the user has no token.
 
-    Points at the server's RFC 9728 Protected Resource Metadata (``resource_metadata``), which names
-    the upstream authorization server the client must complete OAuth with. The URL is per-server and
-    relative, so it resolves against the caller's own host (correct even behind a reverse proxy)
-    without needing request context. The listing-phase 401 still emits the RFC 8414 ``authorization_uri``
-    form pending the format unification; both target the same server, so the difference is cosmetic.
+    Points at the server's RFC 9728 Protected Resource Metadata, which names the upstream
+    authorization server the client must complete OAuth with. The listing-phase 401 still emits the
+    RFC 8414 ``authorization_uri`` form pending the format unification; both target the same server,
+    so the difference is cosmetic.
     """
-    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
-
-    root = get_server_root_path()
-    prefix = "" if root == "/" else root
-    name = server.alias or server.server_name or server.name or server.server_id
-    resource_metadata = f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    resource_metadata = oauth_protected_resource_path(root_path, server)
     raise HTTPException(
         status_code=401,
         detail="Unauthorized",
@@ -200,23 +206,17 @@ def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
     )
 
 
-def raise_token_exchange_challenge(server: MCPServer) -> NoReturn:
+def raise_token_exchange_challenge(server: MCPServer, *, root_path: str) -> NoReturn:
     """Raise the RFC 9728 / RFC 6750 challenge an OBO (``token_exchange``) server returns when the
     caller's subject token is missing or the IdP rejected it.
 
-    Points at the server's Protected Resource Metadata (``resource_metadata``), whose
-    ``authorization_servers`` names the IdP the client must SSO with to obtain a subject token;
-    ``error="invalid_token"`` tells a spec-compliant MCP client to discover that AS and retry with a
-    fresh bearer. Mirrors ``raise_user_oauth_challenge`` but for the exchange flow: there is no
-    gateway-side browser OAuth — the client re-authenticates directly with the IdP, and LiteLLM then
-    exchanges the resulting token.
+    Points at the server's Protected Resource Metadata, whose ``authorization_servers`` names the IdP
+    the client must SSO with to obtain a subject token; ``error="invalid_token"`` tells a
+    spec-compliant MCP client to discover that AS and retry with a fresh bearer. Mirrors
+    ``raise_user_oauth_challenge`` but for the exchange flow: there is no gateway-side browser OAuth —
+    the client re-authenticates directly with the IdP, and LiteLLM then exchanges the resulting token.
     """
-    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
-
-    root = get_server_root_path()
-    prefix = "" if root == "/" else root
-    name = server.alias or server.server_name or server.name or server.server_id
-    resource_metadata = f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    resource_metadata = oauth_protected_resource_path(root_path, server)
     www_authenticate = (
         f'Bearer resource_metadata="{resource_metadata}", '
         'error="invalid_token", '

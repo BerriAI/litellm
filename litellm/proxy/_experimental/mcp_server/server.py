@@ -3482,8 +3482,9 @@ if MCP_AVAILABLE:
                 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
                     raise_token_exchange_challenge,
                 )
+                from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
 
-                raise_token_exchange_challenge(server)
+                raise_token_exchange_challenge(server, root_path=get_server_root_path())
 
             # Pass-through OAuth: when the admin has opted a server into
             # forwarding the client's bearer token (is_oauth_passthrough) and
