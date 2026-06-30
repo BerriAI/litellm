@@ -1,9 +1,7 @@
-import { Button, Form, Modal, Tooltip, Typography } from "antd";
+import { Button, Form, Input, Modal, Tooltip, Typography } from "antd";
 import { useState } from "react";
-import ProviderSpecificFields from "./add_model/provider_specific_fields";
 import { modelPatchUpdateCall } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Providers } from "./provider_info_helpers";
 
 const { Link, Text } = Typography;
 
@@ -12,21 +10,14 @@ interface UpdateModelCredentialsModalProps {
   onCancel: () => void;
   accessToken: string;
   modelId: string;
-  provider: Providers;
   onUpdated: () => void;
 }
-
-const filterFilledFields = (values: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(
-    Object.entries(values).filter(([, value]) => value !== "" && value !== undefined && value !== null),
-  );
 
 export default function UpdateModelCredentialsModal({
   open,
   onCancel,
   accessToken,
   modelId,
-  provider,
   onUpdated,
 }: UpdateModelCredentialsModalProps) {
   const [form] = Form.useForm();
@@ -37,35 +28,40 @@ export default function UpdateModelCredentialsModal({
     onCancel();
   };
 
-  const handleSubmit = async (values: Record<string, unknown>) => {
-    const filled = filterFilledFields(values);
-    if (Object.keys(filled).length === 0) {
-      NotificationsManager.fromBackend("Enter at least one field to update");
+  const handleSubmit = async (values: { api_key?: string }) => {
+    const apiKey = values.api_key?.trim();
+    if (!apiKey) {
+      NotificationsManager.fromBackend("Enter a new API key");
       return;
     }
     setIsSaving(true);
     try {
-      await modelPatchUpdateCall(accessToken, { litellm_params: filled, model_info: { id: modelId } }, modelId);
-      NotificationsManager.success("Credentials updated");
+      await modelPatchUpdateCall(
+        accessToken,
+        { litellm_params: { api_key: apiKey }, model_info: { id: modelId } },
+        modelId,
+      );
+      NotificationsManager.success("API key updated");
       form.resetFields();
       onUpdated();
       onCancel();
     } catch (error) {
-      console.error("Error updating credentials:", error);
-      NotificationsManager.fromBackend("Failed to update credentials");
+      console.error("Error updating API key:", error);
+      NotificationsManager.fromBackend("Failed to update API key");
     } finally {
       setIsSaving(false);
     }
   };
 
   return (
-    <Modal title="Update Credentials" open={open} onCancel={close} footer={null} width={600} destroyOnHidden={true}>
+    <Modal title="Update API Key" open={open} onCancel={close} footer={null} width={520} destroyOnHidden={true}>
       <Text className="block mb-4 text-gray-500">
-        Enter a new value for any field you want to rotate. Only the fields you fill in are sent; everything else on the
-        model is left untouched. Leave a field blank to keep its current value.
+        Rotate this model&apos;s API key. Only the new key is sent; the rest of the deployment is left untouched.
       </Text>
       <Form form={form} onFinish={handleSubmit} layout="vertical">
-        <ProviderSpecificFields selectedProvider={provider} disableRequired />
+        <Form.Item label="New API Key" name="api_key" rules={[{ required: true, message: "Enter a new API key" }]}>
+          <Input.Password placeholder="Enter the new API key" autoComplete="new-password" />
+        </Form.Item>
         <div className="flex justify-between items-center mt-4">
           <Tooltip title="Get help on our github">
             <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
@@ -75,7 +71,7 @@ export default function UpdateModelCredentialsModal({
               Cancel
             </Button>
             <Button htmlType="submit" loading={isSaving}>
-              Update Credentials
+              Update API Key
             </Button>
           </div>
         </div>

@@ -1,27 +1,13 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ReactNode } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
-import { Providers } from "./provider_info_helpers";
 import * as networking from "./networking";
 
 vi.mock("./networking", async () => {
   const actual = await vi.importActual("./networking");
   return {
     ...actual,
-    getProviderCreateMetadata: vi.fn().mockResolvedValue([
-      {
-        provider: "OpenAI",
-        provider_display_name: "OpenAI",
-        litellm_provider: "openai",
-        credential_fields: [
-          { key: "api_base", label: "API Base", field_type: "text", placeholder: "https://api.openai.com/v1" },
-          { key: "api_key", label: "OpenAI API Key", field_type: "password", required: true },
-        ],
-      },
-    ]),
     modelPatchUpdateCall: vi.fn().mockResolvedValue({}),
   };
 });
@@ -48,60 +34,49 @@ beforeAll(() => {
   });
 });
 
-const createQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-
-const renderModal = (overrides: Partial<Parameters<typeof UpdateModelCredentialsModal>[0]> = {}) => {
-  const queryClient = createQueryClient();
-  const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-  );
-  return render(
+const renderModal = (overrides: Partial<Parameters<typeof UpdateModelCredentialsModal>[0]> = {}) =>
+  render(
     <UpdateModelCredentialsModal
       open
       onCancel={vi.fn()}
       accessToken="test-token"
       modelId="model-123"
-      provider={Providers.OpenAI}
       onUpdated={vi.fn()}
       {...overrides}
     />,
-    { wrapper },
   );
-};
 
 describe("UpdateModelCredentialsModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("sends a minimal PATCH with only the fields the user typed", async () => {
+  it("sends a minimal PATCH with only the new api_key", async () => {
     const user = userEvent.setup();
     const onUpdated = vi.fn();
     const onCancel = vi.fn();
     renderModal({ onUpdated, onCancel });
 
-    const apiKey = await screen.findByLabelText("OpenAI API Key");
-    await user.type(apiKey, "sk-rotated-9988");
-    await user.click(screen.getByRole("button", { name: /update credentials/i }));
+    await user.type(screen.getByLabelText(/new api key/i), "sk-rotated-9988");
+    await user.click(screen.getByRole("button", { name: /update api key/i }));
 
     await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledTimes(1));
     const [token, payload, modelId] = mockModelPatchUpdateCall.mock.calls[0];
     expect(token).toBe("test-token");
     expect(modelId).toBe("model-123");
-    // Exact match: only the typed field is sent; the blank api_base is never included.
+    // Exactly the new key plus the id — nothing else from the deployment.
     expect(payload).toEqual({ litellm_params: { api_key: "sk-rotated-9988" }, model_info: { id: "model-123" } });
     expect(onUpdated).toHaveBeenCalledTimes(1);
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it("does not call the update API when every field is left blank", async () => {
+  it("does not call the update API when the field is left blank", async () => {
     const user = userEvent.setup();
     renderModal();
 
-    await screen.findByLabelText("OpenAI API Key");
-    await user.click(screen.getByRole("button", { name: /update credentials/i }));
+    await user.click(screen.getByRole("button", { name: /update api key/i }));
 
-    // Give the submit handler a chance to run before asserting it did nothing.
+    // Required-field validation blocks submit; give it a tick then assert no call.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(mockModelPatchUpdateCall).not.toHaveBeenCalled();
   });

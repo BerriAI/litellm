@@ -10,11 +10,6 @@ const { Link } = Typography;
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
   uploadProps?: UploadProps;
-  // Drop the "required" validation rule from every rendered field. Used by the
-  // credential-rotation modal, where every field renders blank ("leave blank to
-  // keep") — a required rule would block onFinish even when the user only wants
-  // to rotate one secret.
-  disableRequired?: boolean;
 }
 
 interface ProviderCredentialField {
@@ -109,11 +104,7 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
-  selectedProvider,
-  uploadProps,
-  disableRequired,
-}) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
   const form = Form.useFormInstance(); // Get form instance from context
 
@@ -254,7 +245,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({
           <Form.Item
             label={field.label}
             name={field.key}
-            rules={field.required && !disableRequired ? [{ required: true, message: "Required" }] : undefined}
+            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >

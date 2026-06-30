@@ -40,7 +40,7 @@ import {
   tagListCall,
   testConnectionRequest,
 } from "./networking";
-import { getProviderLogoAndName, Providers } from "./provider_info_helpers";
+import { getProviderLogoAndName } from "./provider_info_helpers";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import NumericalInput from "./shared/numerical_input";
 import { Tag } from "./tag_management/types";
@@ -61,8 +61,8 @@ interface ModelInfoViewProps {
 // the backend would encrypt the asterisks and overwrite the real secret. A run of
 // 2+ mask chars only appears in masker output (real config — incl. wildcard model
 // names like "openai/*" — carries at most a single "*"), so this reliably detects a
-// redacted value without a provider-metadata lookup. Credential rotation goes through
-// UpdateModelCredentialsModal instead, which sends only the fields the user types.
+// redacted value without a provider-metadata lookup. API-key rotation goes through
+// UpdateModelCredentialsModal instead, which sends only the new key.
 const isMaskedSecret = (value: unknown): boolean => typeof value === "string" && /\*{2,}/.test(value);
 
 const stripMaskedSecrets = (params: Record<string, unknown>): Record<string, unknown> =>
@@ -129,11 +129,6 @@ export default function ModelInfoView({
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
-
-  // Provider used to render the credential-rotation modal's auth fields.
-  const modelProvider = (localModelData?.litellm_params?.custom_llm_provider ||
-    modelData?.litellm_params?.custom_llm_provider ||
-    modelData?.provider) as Providers;
 
   // Initialize localModelData from modelData when available
   useEffect(() => {
@@ -548,16 +543,15 @@ export default function ModelInfoView({
             Test Connection
           </TremorButton>
 
-          <TremorButton
-            icon={KeyIcon}
-            variant="secondary"
+          <Button
+            icon={<KeyIcon className="h-4 w-4" />}
             onClick={() => setIsUpdateCredentialsModalOpen(true)}
             className="flex items-center"
             disabled={!canEditModel}
-            data-testid="update-credentials-button"
+            data-testid="update-api-key-button"
           >
-            Update Credentials
-          </TremorButton>
+            Update API Key
+          </Button>
 
           <TremorButton
             icon={KeyIcon}
@@ -1419,7 +1413,6 @@ export default function ModelInfoView({
           onCancel={() => setIsUpdateCredentialsModalOpen(false)}
           accessToken={accessToken}
           modelId={modelId}
-          provider={modelProvider}
           onUpdated={() => {
             queryClient.invalidateQueries({ queryKey: ["models", "list"] });
           }}
