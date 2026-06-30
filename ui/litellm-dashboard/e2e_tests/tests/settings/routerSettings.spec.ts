@@ -3,10 +3,15 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { Role, users } from "../../fixtures/users";
-// Type-only import of the OpenAPI-generated backend schema; esbuild erases it at
-// runtime, so the round-trip below is checked against the real /config/update and
-// /router/settings contracts without bundling the 2 MB definition file.
+// Type-only import of the OpenAPI-generated backend schema. esbuild erases it at
+// runtime; the round-trip below is enforced by the `typecheck:e2e` CI step (tsc over
+// e2e_tests), so a drift in the /config/update or /router/settings contract fails the
+// build rather than silently passing here.
 import type { components } from "../../../src/lib/http/schema";
+
+// These tests mutate the proxy's shared router_settings, and the Loadbalancing save
+// echoes the whole settings object, so they must not run concurrently.
+test.describe.configure({ mode: "serial" });
 
 const PRIMARY = "fake-openai-gpt-4";
 const FALLBACK = "fake-anthropic-claude";
@@ -111,32 +116,33 @@ const BASE_URL = "http://localhost:4000";
 const ADMIN_AUTH = { Authorization: `Bearer ${users[Role.ProxyAdmin].password}` };
 
 /**
- * Merge a router_settings patch into the live config through the typed
- * /config/update contract, preserving any other settings already present.
+ * Apply a router_settings patch through the typed /config/update contract. The
+ * server merges it over existing settings (request wins), so only the passed keys
+ * change. Fails loudly if the write is rejected instead of leaving a silent bad seed.
  */
 async function patchRouterSettings(
   request: import("@playwright/test").APIRequestContext,
   patch: Partial<NonNullable<ConfigYAML["router_settings"]>>,
 ) {
-  const current = await request.get(`${BASE_URL}/get/config/callbacks`, { headers: ADMIN_AUTH });
-  const existing = current.ok() ? (await current.json())?.router_settings ?? {} : {};
-  const payload = { router_settings: { ...(existing as Record<string, unknown>), ...patch } };
-  await request.post(`${BASE_URL}/config/update`, { headers: ADMIN_AUTH, data: payload });
+  const res = await request.post(`${BASE_URL}/config/update`, {
+    headers: ADMIN_AUTH,
+    data: { router_settings: patch },
+  });
+  expect(res.ok(), `seed /config/update failed: ${res.status()} ${await res.text()}`).toBeTruthy();
 }
 
 test.describe("Router Settings - Loadbalancing", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  // Seed a present routing_groups array (the LIT-4057 trigger) plus a known
-  // num_retries so the UI assertions are deterministic across reruns.
-  const ROUTING_GROUP = { group_name: "e2e-lit-4057", models: [PRIMARY], routing_strategy: "simple-shuffle" };
-
+  // Pin num_retries and an empty routing_groups so the assertions are deterministic.
+  // Empty already reproduces LIT-4057: the old tab serialized [] to the string "[]"
+  // and the save 422'd.
   test.beforeEach(async ({ request }) => {
-    await patchRouterSettings(request, { num_retries: 3, routing_groups: [ROUTING_GROUP] });
+    await patchRouterSettings(request, { num_retries: 3, routing_groups: [] });
   });
 
   test.afterEach(async ({ request }) => {
-    await patchRouterSettings(request, { num_retries: 3, routing_groups: [] });
+    await patchRouterSettings(request, { num_retries: 3 });
   });
 
   test("saves the Loadbalancing tab without a 422 when routing_groups is present, and persists", async ({
