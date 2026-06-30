@@ -11,4 +11,4 @@ EXPOSE 10000
 
 ENV HEADROOM_TELEMETRY=off
 
-CMD ["headroom", "proxy", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["headroom", "proxy", "--host", "0.0.0.0", "--port", "10000", "--no-optimize"]
