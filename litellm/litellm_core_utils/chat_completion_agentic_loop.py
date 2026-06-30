@@ -149,8 +149,8 @@ async def _execute_chat_completion_agentic_plan(
     optional_params_for_followup = {**optional_params, **patch.optional_params}
     if patch.tools is not None:
         optional_params_for_followup["tools"] = patch.tools
-        if "tool_choice" not in patch.optional_params:
-            optional_params_for_followup.pop("tool_choice", None)
+    if "tool_choice" not in patch.optional_params:
+        optional_params_for_followup.pop("tool_choice", None)
 
     kwargs_for_followup = _filter_followup_kwargs(kwargs)
     kwargs_for_followup.update(
