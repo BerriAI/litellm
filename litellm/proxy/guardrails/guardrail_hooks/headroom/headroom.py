@@ -455,15 +455,24 @@ class HeadroomGuardrail(CustomGuardrail):
     ) -> AgenticLoopPlan:
         tool_calls: list[dict[str, object]] = tools.get("tool_calls", [])  # type: ignore[assignment]
 
+        valid_hashes = frozenset(extract_hashes_from_messages(messages))
+
         tool_results: list[dict[str, object]] = []
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
             hash_value = arguments.get("hash", "") if isinstance(arguments, dict) else ""
             query = arguments.get("query") if isinstance(arguments, dict) else None
-            content = await self._call_retrieve(
-                hash_value=str(hash_value),
-                query=str(query) if query else None,
-            )
+            if str(hash_value) not in valid_hashes:
+                verbose_proxy_logger.warning(
+                    "Headroom CCR: rejecting hash=%s not produced by current request compression",
+                    hash_value,
+                )
+                content = f"[Headroom: hash={hash_value} was not produced by the current request]"
+            else:
+                content = await self._call_retrieve(
+                    hash_value=str(hash_value),
+                    query=str(query) if query else None,
+                )
             verbose_proxy_logger.debug("Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content))
             tool_results.append(
                 {

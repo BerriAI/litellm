@@ -365,6 +365,13 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
         tool_id="call_xyz",
     )
 
+    messages = [
+        {
+            "role": "user",
+            "content": "Retrieve more: hash=deadbeef000000000000dead",
+        }
+    ]
+
     with patch.object(
         guardrail.async_handler,
         "get",
@@ -374,7 +381,7 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
         plan = await guardrail.async_build_agentic_loop_plan(
             tools={"tool_calls": tool_calls},
             model="gpt-4o",
-            messages=[],
+            messages=messages,
             response=response,
             anthropic_messages_provider_config=None,
             anthropic_messages_optional_request_params={},
@@ -387,6 +394,48 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
     tool_result = next((m for m in follow_up if m.get("role") == "tool"), None)
     assert tool_result is not None
     assert "not found" in tool_result["content"] or "expired" in tool_result["content"]
+
+
+async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request(
+    guardrail: HeadroomGuardrail,
+):
+    tool_calls = [
+        {
+            "id": "call_xyz",
+            "type": "function",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": {"hash": "deadbeef000000000000dead"},
+        }
+    ]
+    response = _make_openai_response_with_tool_call(
+        tool_name=HEADROOM_RETRIEVE_TOOL_NAME,
+        arguments={"hash": "deadbeef000000000000dead"},
+        tool_id="call_xyz",
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+    ) as mock_get:
+        plan = await guardrail.async_build_agentic_loop_plan(
+            tools={"tool_calls": tool_calls},
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "no hash markers here"}],
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            stream=False,
+            kwargs={},
+        )
+
+    mock_get.assert_not_called()
+
+    follow_up = plan.request_patch.messages  # type: ignore[union-attr]
+    tool_result = next((m for m in follow_up if m.get("role") == "tool"), None)
+    assert tool_result is not None
+    assert "was not produced by the current request" in tool_result["content"]
 
 
 def test_extract_hashes_from_messages_finds_hashes():
