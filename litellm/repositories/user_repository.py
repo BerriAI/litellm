@@ -70,9 +70,7 @@ class UserRepository(BaseRepository[LiteLLM_UserTable]):
         from prisma import Json  # pyright: ignore[reportUnknownVariableType]
 
         total = await self.count()
-        deactivated = await self.count(
-            where={"metadata": {"path": ["scim_active"], "equals": Json(False)}}
-        )
+        deactivated = await self.count(where={"metadata": {"path": ["scim_active"], "equals": Json(False)}})
         return max(0, total - deactivated)
 
     async def create_user(

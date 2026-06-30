@@ -3056,9 +3056,7 @@ class PrometheusLogger(CustomLogger):
 
             billable_users = await UserRepository(prisma_client).count_billable_users()
             self.litellm_active_users_metric.set(billable_users)
-            verbose_logger.debug(
-                f"Prometheus: set litellm_active_users to {billable_users}"
-            )
+            verbose_logger.debug(f"Prometheus: set litellm_active_users to {billable_users}")
 
             # Get total team count
             total_teams = await TeamRepository(prisma_client).table.count()
