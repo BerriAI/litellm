@@ -19,7 +19,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
 )
-from litellm.exceptions import GuardrailRaisedException
+from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
 
@@ -2207,11 +2207,12 @@ async def test_apply_to_output_streaming_unknown_events_passthrough():
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
+async def test_apply_to_output_streaming_mixed_chunks_preserve_order():
     """
-    Regression test for mixed stream shape:
-    a buffered ModelResponseStream chunk followed by unknown responses-style
-    events should be preserved, and masking skip should be visible via warnings.
+    Regression test for mixed stream shape: a ModelResponseStream chat chunk
+    followed by an unknown responses-style event must be forwarded in order.
+    Incremental masking forwards chat chunks as they arrive, so a responses
+    event after them does not buffer or drop anything.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
@@ -2238,26 +2239,14 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
 
     mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
     received = []
-    with patch(
-        "litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger"
-    ) as mock_logger:
-        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=mock_user_api_key,
-            response=mock_stream(),
-            request_data={},
-        ):
-            received.append(chunk)
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        received.append(chunk)
 
-        # Preserve original ordering across mixed stream types.
-        assert received == [model_chunk, response_completed]
-
-        # Two warnings are expected:
-        # 1) mixed stream detected + unmasked flush
-        # 2) passthrough mode skipped output masking
-        assert mock_logger.warning.call_count == 2
-        warning_messages = [call.args[0] for call in mock_logger.warning.call_args_list]
-        assert any("mixed stream detected" in msg for msg in warning_messages)
-        assert any("unknown event objects" in msg for msg in warning_messages)
+    assert received == [model_chunk, response_completed]
 
 
 # ---------------------------------------------------------------------------
@@ -2849,3 +2838,678 @@ async def test_stream_pii_unmasking_passthrough_when_no_tokens(mock_user_api_key
         chunks.append(chunk)
 
     assert chunks == [raw_chunk]
+
+
+# ---------------------------------------------------------------------------
+# LIT-3222: incremental SSE streaming for Presidio output masking / unmasking
+# ---------------------------------------------------------------------------
+
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Delta,
+    Function,
+    StreamingChoices,
+)
+
+
+def _content_chunk(text, index=0, finish_reason=None):
+    return ModelResponseStream(
+        id="chatcmpl-lit3222",
+        created=1,
+        model="gpt-4o-mini",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=index, delta=Delta(content=text), finish_reason=finish_reason
+            )
+        ],
+    )
+
+
+def _non_empty_content(chunks):
+    out = []
+    for chunk in chunks:
+        for choice in chunk.choices:
+            piece = getattr(choice.delta, "content", None)
+            if piece:
+                out.append(piece)
+    return out
+
+
+async def _drive(guardrail, stream, request_data):
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=stream,
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+    return collected
+
+
+@pytest.mark.asyncio
+async def test_unmask_streaming_is_incremental_not_buffered():
+    """
+    output_parse_pii streaming must forward each content chunk as it arrives
+    (unmasked), not collapse the whole completion into a single end-of-stream
+    chunk. The buffering implementation yielded exactly one content chunk.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    request_data = {"metadata": {"pii_tokens": {"<PERSON_1>": "John Smith"}}}
+
+    pieces = ["Hello ", "<PERSON_1>", " is here."]
+
+    async def stream():
+        for i, piece in enumerate(pieces):
+            yield _content_chunk(piece)
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), request_data)
+    content = _non_empty_content(collected)
+
+    assert len(content) >= 3, f"expected progressive chunks, got {content}"
+    assert "".join(content) == "Hello John Smith is here."
+    assert all("<PERSON_1>" not in piece for piece in content)
+
+
+@pytest.mark.asyncio
+async def test_unmask_streaming_token_split_across_chunks():
+    """
+    A placeholder token split across SSE chunks (``<PER`` + ``SON_1>``) must
+    still be unmasked atomically via the cross-chunk carry buffer.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    request_data = {"metadata": {"pii_tokens": {"<PERSON_1>": "John Smith"}}}
+
+    pieces = ["Hi ", "<PER", "SON_1>", "!"]
+
+    async def stream():
+        for piece in pieces:
+            yield _content_chunk(piece)
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), request_data)
+    reassembled = "".join(_non_empty_content(collected))
+
+    assert reassembled == "Hi John Smith!"
+    assert "<PER" not in reassembled and "SON_1>" not in reassembled
+
+
+@pytest.mark.asyncio
+async def test_unmask_streaming_independent_per_choice_buffers():
+    """
+    With n>1 each choice keeps its own carry buffer, so a token split across
+    chunks on choice 1 does not corrupt choice 0 and vice versa.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    request_data = {
+        "metadata": {
+            "pii_tokens": {"<PERSON_1>": "John", "<PERSON_2>": "Jane"}
+        }
+    }
+
+    def two_choice_chunk(c0, c1):
+        return ModelResponseStream(
+            id="chatcmpl-lit3222",
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content=c0)),
+                StreamingChoices(index=1, delta=Delta(content=c1)),
+            ],
+        )
+
+    async def stream():
+        yield two_choice_chunk("<PERSON", "<PER")
+        yield two_choice_chunk("_1> ok", "SON_2>!")
+        yield two_choice_chunk("", "")
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=stream(),
+        request_data=request_data,
+    ):
+        collected.append(chunk)
+
+    per_choice = {0: "", 1: ""}
+    for chunk in collected:
+        for choice in chunk.choices:
+            if choice.delta.content:
+                per_choice[choice.index] += choice.delta.content
+
+    assert per_choice[0] == "John ok"
+    assert per_choice[1] == "Jane!"
+
+
+@pytest.mark.asyncio
+async def test_unmask_streaming_tool_call_arguments_unmasked_at_finish():
+    """
+    Tool-call argument fragments carrying a placeholder token must be
+    reassembled and unmasked (the tool would otherwise receive ``<EMAIL...>``).
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    request_data = {
+        "metadata": {"pii_tokens": {"<EMAIL_ADDRESS_1>": "real@example.com"}}
+    }
+
+    def tool_chunk(*, id=None, name=None, args, finish_reason=None):
+        return ModelResponseStream(
+            id="chatcmpl-lit3222",
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                index=0,
+                                id=id,
+                                type="function" if id else None,
+                                function=Function(name=name, arguments=args),
+                            )
+                        ]
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    async def stream():
+        yield tool_chunk(id="call_1", name="send_email", args="")
+        yield tool_chunk(args='{"to": "<EMAIL_ADD')
+        yield tool_chunk(args='RESS_1>"}')
+        yield ModelResponseStream(
+            id="chatcmpl-lit3222",
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")
+            ],
+        )
+
+    collected = await _drive(guardrail, stream(), request_data)
+
+    tool_calls = [
+        tc
+        for chunk in collected
+        for choice in chunk.choices
+        for tc in (getattr(choice.delta, "tool_calls", None) or [])
+    ]
+    assert len(tool_calls) == 1
+    assert tool_calls[0].id == "call_1"
+    assert tool_calls[0].function.name == "send_email"
+    assert tool_calls[0].function.arguments == '{"to": "real@example.com"}'
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_is_incremental_per_sentence():
+    """
+    apply_to_output streaming must mask and emit a completed sentence once enough
+    following context confirms it, instead of buffering the whole completion into
+    one chunk. A small safety margin keeps the test content short.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+    guardrail._stream_mask_margin = 4
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("secret@example.com", "<EMAIL>")
+
+    guardrail.check_pii = mock_check_pii
+
+    pieces = ["My email is ", "secret@example.com. ", "Call me later."]
+
+    async def stream():
+        for piece in pieces:
+            yield _content_chunk(piece)
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    content = _non_empty_content(collected)
+
+    assert len(content) >= 2, f"expected per-sentence chunks, got {content}"
+    reassembled = "".join(content)
+    assert reassembled == "My email is <EMAIL>. Call me later."
+    assert "secret@example.com" not in reassembled
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_tool_call_arguments_masked_at_finish():
+    """
+    Model-generated PII inside streamed tool-call arguments must be masked
+    before reaching the client, not passed through unmasked.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("secret@example.com", "<EMAIL>")
+
+    guardrail.check_pii = mock_check_pii
+
+    def tool_chunk(*, id=None, name=None, args, finish_reason=None):
+        return ModelResponseStream(
+            id="chatcmpl-lit3222",
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                index=0,
+                                id=id,
+                                type="function" if id else None,
+                                function=Function(name=name, arguments=args),
+                            )
+                        ]
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    async def stream():
+        yield tool_chunk(id="call_1", name="save", args='{"email": "sec')
+        yield tool_chunk(args='ret@example.com"}')
+        yield ModelResponseStream(
+            id="chatcmpl-lit3222",
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=Delta(), finish_reason="tool_calls")
+            ],
+        )
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+
+    all_args = [
+        tc.function.arguments
+        for chunk in collected
+        for choice in chunk.choices
+        for tc in (getattr(choice.delta, "tool_calls", None) or [])
+    ]
+    assert all_args == ['{"email": "<EMAIL>"}']
+    assert all("secret@example.com" not in args for args in all_args)
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_flushes_buffered_content_before_passthrough_event():
+    """
+    Regression test (Greptile 4/5 finding): in the apply_to_output path, masked
+    content held in the buffer (no sentence boundary yet) must be flushed BEFORE
+    a non-chat passthrough event (e.g. a /v1/responses completion) is forwarded,
+    so the client never observes stream completion ahead of the final text.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("secret@example.com", "<EMAIL>")
+
+    guardrail.check_pii = mock_check_pii
+
+    class FakeResponsesEvent:
+        def __init__(self, event_type: str):
+            self.type = event_type
+
+    completed = FakeResponsesEvent("response.completed")
+
+    async def stream():
+        # No sentence terminator -> held in the mask buffer, not yet emitted.
+        yield _content_chunk("My email is secret@example.com")
+        yield completed
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+
+    event_index = collected.index(completed)
+    masked_indexes = [
+        i
+        for i, chunk in enumerate(collected)
+        if not isinstance(chunk, FakeResponsesEvent)
+        and any(getattr(c.delta, "content", None) for c in chunk.choices)
+    ]
+    assert masked_indexes, "buffered masked content was never emitted"
+    assert max(masked_indexes) < event_index, "masked content must precede the event"
+
+    masked_text = "".join(
+        c.delta.content
+        for chunk in collected
+        if not isinstance(chunk, FakeResponsesEvent)
+        for c in chunk.choices
+        if getattr(c.delta, "content", None)
+    )
+    assert masked_text == "My email is <EMAIL>"
+    assert "secret@example.com" not in masked_text
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_does_not_split_entity_on_long_unpunctuated_run():
+    """
+    A long punctuation-free run must never force-flush mid-entity. The old
+    fixed-window fallback emitted at the last whitespace once the buffer grew
+    past a cap, so a space-bearing entity (SSN, phone) straddling that cut was
+    analyzed in two halves and leaked unmasked. Content past the last sentence
+    boundary is now held until a boundary or end-of-stream so each analyze call
+    sees the whole entity.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("123 45 6789", "<US_SSN>")
+
+    guardrail.check_pii = mock_check_pii
+
+    filler = "data " * 90  # >400 chars, spaces only, no .!?\n boundary
+    async def stream():
+        yield _content_chunk(filler + "my ssn is 123 45 6789")
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    reassembled = "".join(_non_empty_content(collected))
+
+    assert "<US_SSN>" in reassembled
+    assert "123 45 6789" not in reassembled
+    assert "456789" not in reassembled
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_preserves_stream_on_check_pii_error():
+    """
+    A transient Presidio failure mid-stream must not truncate the response. The
+    failing run is dropped (fail closed, never leaking the PII it could not mask)
+    while content that already flushed safely, later chunks, and the finish chunk
+    still reach the client.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+    guardrail._stream_mask_margin = 4
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        if "boom@example.com" in text:
+            raise RuntimeError("presidio down")
+        return text.replace("ok@example.com", "<EMAIL>")
+
+    guardrail.check_pii = mock_check_pii
+
+    pieces = [
+        "First ok@example.com. ",
+        "filler text here. ",
+        "Second boom@example.com. ",
+        "Third part here.",
+    ]
+
+    async def stream():
+        for piece in pieces:
+            yield _content_chunk(piece)
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    reassembled = "".join(_non_empty_content(collected))
+
+    assert "<EMAIL>" in reassembled
+    assert "boom@example.com" not in reassembled
+    assert "Third part" in reassembled, "stream truncated after a masking error"
+    assert any(
+        getattr(choice, "finish_reason", None)
+        for chunk in collected
+        for choice in getattr(chunk, "choices", [])
+    ), "finish chunk dropped after a masking error"
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_error_preserves_tool_call_accumulators():
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        if "bad@example.com" in text:
+            raise RuntimeError("presidio down")
+        return text.replace("secret@example.com", "<EMAIL>")
+
+    guardrail.check_pii = mock_check_pii
+
+    def tool_chunk(*, id=None, name=None, args=None, finish_reason=None):
+        return ModelResponseStream(
+            id="chatcmpl-lit3222",
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=1,
+                    delta=(
+                        Delta(
+                            tool_calls=[
+                                ChatCompletionDeltaToolCall(
+                                    index=0,
+                                    id=id,
+                                    type="function" if id else None,
+                                    function=Function(name=name, arguments=args),
+                                )
+                            ]
+                        )
+                        if args is not None
+                        else Delta()
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    async def stream():
+        yield tool_chunk(
+            id="call_1",
+            name="save",
+            args='{"email": "secret@example.com"}',
+        )
+        yield _content_chunk("bad@example.com", index=0, finish_reason="stop")
+        yield tool_chunk(finish_reason="tool_calls")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    tool_args = [
+        tc.function.arguments
+        for chunk in collected
+        for choice in chunk.choices
+        for tc in (getattr(choice.delta, "tool_calls", None) or [])
+    ]
+
+    assert tool_args == ['{"email": "<EMAIL>"}']
+
+
+@pytest.mark.asyncio
+async def test_mask_emit_decision_caps_buffer_when_stability_fails():
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+    guardrail._stream_mask_margin = 3
+    guardrail._stream_mask_max_buffer = 6
+
+    async def unstable_transform(text):
+        return text[::-1]
+
+    emitted, held = await guardrail._mask_emit_decision(
+        "abcdefghij", False, unstable_transform
+    )
+
+    assert emitted == ""
+    assert held == "hij"
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [
+        BlockedPiiEntityError(entity_type="EMAIL_ADDRESS", guardrail_name="presidio"),
+        GuardrailRaisedException(guardrail_name="presidio", message="invalid response"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_mask_streaming_propagates_guardrail_interventions(exception):
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        raise exception
+
+    guardrail.check_pii = mock_check_pii
+
+    async def stream():
+        yield _content_chunk("blocked", finish_reason="stop")
+
+    with pytest.raises(type(exception)):
+        await _drive(guardrail, stream(), {"metadata": {}})
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_holds_terminator_at_chunk_end_until_whitespace():
+    """
+    A sentence terminator at the very end of a chunk is not a safe boundary: the
+    next chunk may continue the token. "Contact jane." followed by
+    "doe@example.com" must mask the whole email rather than flushing "jane." and
+    analyzing the two halves separately, which would leak the address.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("jane.doe@example.com", "<EMAIL>")
+
+    guardrail.check_pii = mock_check_pii
+
+    async def stream():
+        yield _content_chunk("Contact jane.")
+        yield _content_chunk("doe@example.com")
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    reassembled = "".join(_non_empty_content(collected))
+
+    assert "<EMAIL>" in reassembled
+    assert "jane.doe@example.com" not in reassembled
+    assert "jane." not in reassembled
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_does_not_split_entity_across_sentence_boundary():
+    """
+    An entity that straddles a sentence boundary (a name with a middle initial,
+    an address across a newline) must not be flushed in halves. The stability
+    check holds the prefix until masking it alone matches masking the whole
+    buffer, so the straddling entity is analyzed and masked as one unit instead
+    of leaking the part before the boundary.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+    guardrail._stream_mask_margin = 8
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("John Q. Public", "<PERSON>")
+
+    guardrail.check_pii = mock_check_pii
+
+    async def stream():
+        yield _content_chunk("Please greet John Q. Public warmly when they arrive.")
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    reassembled = "".join(_non_empty_content(collected))
+
+    assert "<PERSON>" in reassembled
+    assert "John Q. Public" not in reassembled
+    assert "John Q." not in reassembled
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_caps_runaway_buffer_without_splitting_entity():
+    """
+    A punctuation-free run past the buffer cap must be flushed to bound memory,
+    but the forced flush still cuts a margin back from the end so a PII value
+    split exactly at the cap (``secret@`` in one chunk, ``example.com`` in the
+    next) stays buffered and is masked whole instead of leaking its raw halves.
+    The early flush plus the terminal flush yields more than one content chunk.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+    guardrail._stream_mask_margin = 8
+    guardrail._stream_mask_max_buffer = 20
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("secret@example.com", "<EMAIL>")
+
+    guardrail.check_pii = mock_check_pii
+
+    async def stream():
+        yield _content_chunk("please email me at secret@")  # 26 > cap, email cut
+        yield _content_chunk("example.com now")
+        yield _content_chunk("", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    content = _non_empty_content(collected)
+    reassembled = "".join(content)
+
+    assert "<EMAIL>" in reassembled
+    assert "secret@example.com" not in reassembled
+    assert "secret@" not in reassembled
+    assert len(content) >= 2, f"cap did not flush before end of stream, got {content}"
+
+
+@pytest.mark.asyncio
+async def test_mask_streaming_preserves_finish_reason_when_terminal_chunk_fails():
+    """
+    When the masking call fails on the terminal chunk itself, that chunk must be
+    redacted in place (content dropped, fail closed) but keep its finish_reason,
+    so the client still receives the completion signal instead of a stream that
+    ends without one.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True)
+    guardrail._stream_mask_margin = 4
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        if "boom@example.com" in text:
+            raise RuntimeError("presidio down")
+        return text
+
+    guardrail.check_pii = mock_check_pii
+
+    async def stream():
+        yield _content_chunk("Hello world. ")
+        yield _content_chunk("more text here. ")
+        yield _content_chunk("boom@example.com", finish_reason="stop")
+
+    collected = await _drive(guardrail, stream(), {"metadata": {}})
+    reassembled = "".join(_non_empty_content(collected))
+
+    assert "boom@example.com" not in reassembled
+    assert "Hello world" in reassembled
+    finish_reasons = [
+        choice.finish_reason
+        for chunk in collected
+        for choice in getattr(chunk, "choices", [])
+        if getattr(choice, "finish_reason", None)
+    ]
+    assert "stop" in finish_reasons, "finish_reason dropped when terminal chunk failed"
+
+
+@pytest.mark.asyncio
+async def test_unmask_streaming_flushes_held_content_before_bytes():
+    """
+    When a held placeholder prefix is buffered and the next upstream item is a
+    raw SSE byte chunk, the held chat text must be flushed before the bytes so
+    the client never sees the byte chunk ahead of earlier content.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    request_data = {"metadata": {"pii_tokens": {"<PERSON_1>": "Jane"}}}
+
+    async def stream():
+        yield _content_chunk("Hi <PERSON")  # "<PERSON" held as a partial token
+        yield b"data: {\"type\": \"ping\"}\n\n"
+
+    collected = await _drive(guardrail, stream(), request_data)
+
+    bytes_index = next(
+        i for i, chunk in enumerate(collected) if isinstance(chunk, bytes)
+    )
+    held_index = next(
+        i
+        for i, chunk in enumerate(collected)
+        if not isinstance(chunk, bytes)
+        and any("Jane" in (getattr(c.delta, "content", None) or "") for c in chunk.choices)
+    )
+    assert held_index < bytes_index, "raw bytes were sent before held chat content"
