@@ -1,6 +1,6 @@
 import { Tag } from "antd";
 import { ColumnsType } from "antd/es/table";
-import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import TableIconActionButton from "@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { SearchTool } from "./types";
 
 export const searchToolColumns = (

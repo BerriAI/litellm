@@ -1,8 +1,8 @@
 import { InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, Divider, Typography } from "antd";
 import React, { useEffect, useState } from "react";
-import NotificationsManager from "../molecules/notifications_manager";
-import { testSearchToolConnection } from "../networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { testSearchToolConnection } from "@/components/networking";
 
 const { Text } = Typography;
 
