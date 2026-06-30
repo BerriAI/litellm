@@ -148,4 +148,35 @@ def extract_text_from_a2a_response(
             first_artifact, depth=0, max_depth=max_depth
         )
 
-    return ""
+    # Fallback: some agent backends (e.g. XCity's xct-agent-gateway) are
+    # OpenAI-compatible and return a chat.completion(.chunk) envelope instead of
+    # an A2A JSON-RPC `result`. Pull the assistant text from
+    # choices[].message.content (non-stream) or choices[].delta.content (stream)
+    # so these agents aren't silently turned into empty responses.
+    return extract_text_from_openai_envelope(response_dict)
+
+
+def extract_text_from_openai_envelope(response_dict: Dict[str, Any]) -> str:
+    """
+    Extract assistant text from an OpenAI chat.completion / chat.completion.chunk
+    envelope.
+
+    Fallback for "A2A" agent backends that are actually OpenAI-compatible and
+    respond with `choices[]` rather than a JSON-RPC `result`.
+
+    Returns "" when no OpenAI-shaped content is present.
+    """
+    choices = response_dict.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    # non-streaming uses `message`, streaming chunks use `delta`
+    container = first.get("message")
+    if not isinstance(container, dict):
+        container = first.get("delta")
+    if not isinstance(container, dict):
+        return ""
+    content = container.get("content")
+    return content if isinstance(content, str) else ""

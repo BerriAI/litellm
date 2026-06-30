@@ -103,4 +103,13 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
         if chunk.get("done") is True:
             return "stop"
 
+        # OpenAI-compatible agent backends stream chat.completion.chunk objects
+        # whose terminal chunk carries choices[].finish_reason instead of an A2A
+        # task state. Honor it so the stream terminates correctly.
+        choices = chunk.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            openai_finish = choices[0].get("finish_reason")
+            if openai_finish:
+                return openai_finish
+
         return None
