@@ -4649,6 +4649,122 @@
           "title": "RegisterPluginRequest",
           "type": "object"
         },
+        "UpdatePluginRequest": {
+          "description": "Request body for replacing an existing plugin.\n\nThe plugin name is the resource identity and is supplied as the path\nparameter, so it cannot be changed here. This is a full replace: omitted\nfields reset to their defaults, so version is cleared rather than\ndefaulting to the create-time \"1.0.0\".",
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin author"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin category",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill domain (e.g., 'Productivity')",
+              "title": "Domain"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin homepage URL",
+              "title": "Homepage"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search keywords",
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill namespace within domain (e.g., 'workflows')",
+              "title": "Namespace"
+            },
+            "source": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Git source reference. Supported formats:\n- GitHub: {'source': 'github', 'repo': 'org/repo'}\n- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}",
+              "title": "Source",
+              "type": "object"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Semantic version; cleared if omitted",
+              "title": "Version"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "title": "UpdatePluginRequest",
+          "type": "object"
+        },
         "ValidationError": {
           "properties": {
             "loc": {
@@ -4754,7 +4870,7 @@
           ]
         },
         "post": {
-          "description": "Register a plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket. Claude Code will clone from the git source\nwhen users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -4882,6 +4998,60 @@
             }
           ],
           "summary": "Get Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        },
+        "put": {
+          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default (e.g. an omitted version is cleared, not kept).\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Git source reference (github, url, or git-subdir format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdatePluginRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Plugin",
           "tags": [
             "claude_code_marketplace"
           ]
