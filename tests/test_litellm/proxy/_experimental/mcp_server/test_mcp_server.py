@@ -6447,3 +6447,54 @@ class TestStreamableHttpAuthErrorMapping:
             m.get("type") == "http.response.start" and m.get("status") == 500
             for m in sent
         )
+
+
+class TestMCPMetaTraceCarrier:
+    """`_mcp_meta_trace_carrier` extracts the W3C trace context the MCP client
+    propagated in the request's params._meta (SEP-414) so the otel_v2 MCP span can
+    parent to the client's span. Exercises the real MCP SDK `RequestParams.Meta`
+    shape (extra='allow' preserves the unprefixed keys), not just an injected
+    carrier."""
+
+    def test_extracts_trace_context_and_excludes_baggage_and_other_meta(self):
+        """Only traceparent/tracestate are carried. The client's W3C ``baggage`` is
+        deliberately dropped even though it rides in params._meta: it is
+        caller-controlled, and the otel baggage processor stamps allowlisted baggage
+        keys onto the span, so honoring it would let a client spoof a span's identity
+        (e.g. ``litellm.team.id``). Dropping it at the source is the regression guard."""
+        from types import SimpleNamespace
+
+        from mcp.types import RequestParams
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_meta_trace_carrier,
+        )
+
+        meta = RequestParams.Meta.model_validate(
+            {
+                "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+                "tracestate": "rojo=1",
+                "baggage": "litellm.team.id=spoofed-team,litellm.metadata.user_api_key_user_id=attacker",
+                "progressToken": "p1",
+            }
+        )
+        carrier = _mcp_meta_trace_carrier(SimpleNamespace(meta=meta))
+        assert carrier == {
+            "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+            "tracestate": "rojo=1",
+        }
+        assert "baggage" not in carrier
+
+    def test_none_when_no_trace_context(self):
+        from types import SimpleNamespace
+
+        from mcp.types import RequestParams
+
+        from litellm.proxy._experimental.mcp_server.server import (
+            _mcp_meta_trace_carrier,
+        )
+
+        assert _mcp_meta_trace_carrier(None) is None
+        assert _mcp_meta_trace_carrier(SimpleNamespace(meta=None)) is None
+        only_progress = RequestParams.Meta.model_validate({"progressToken": "p1"})
+        assert _mcp_meta_trace_carrier(SimpleNamespace(meta=only_progress)) is None
