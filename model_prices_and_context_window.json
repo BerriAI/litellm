@@ -43184,32 +43184,7 @@
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
-    "bedrock/us-east-1/minimax.minimax-m2.5": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "bedrock",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
-    },
-    "bedrock/us-west-2/minimax.minimax-m2.5": {
-        "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
-        "litellm_provider": "bedrock",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
-        "mode": "chat",
-        "supports_function_calling": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
-    },
+
     "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_creation_input_token_cost_above_1hr": 2.4e-06,
