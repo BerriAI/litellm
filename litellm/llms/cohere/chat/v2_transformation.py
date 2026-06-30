@@ -120,6 +120,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             "stream",
             "temperature",
             "max_tokens",
+            "max_completion_tokens",
             "top_p",
             "frequency_penalty",
             "presence_penalty",
@@ -143,7 +144,9 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" and "max_completion_tokens" not in non_default_params:
+                optional_params["max_tokens"] = value
+            if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
                 optional_params["num_generations"] = value
@@ -172,9 +175,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         """
         Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
         """
-        data = super().transform_request(
-            model, messages, optional_params, litellm_params, headers
-        )
+        data = super().transform_request(model, messages, optional_params, litellm_params, headers)
 
         return data
 
@@ -195,9 +196,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         try:
             raw_response_json = raw_response.json()
         except Exception:
-            raise CohereError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
         try:
             cohere_v2_chat_response = CohereV2ChatResponse(**raw_response_json)  # type: ignore
@@ -207,21 +206,14 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
         cohere_content = cohere_v2_chat_response["message"].get("content", None)
         if cohere_content is not None:
             model_response.choices[0].message.content = "".join(  # type: ignore
-                [
-                    content.get("text", "")
-                    for content in cohere_content
-                    if content is not None
-                ]
+                [content.get("text", "") for content in cohere_content if content is not None]
             )
 
         ## ADD CITATIONS AS ANNOTATIONS
         annotations: Optional[List[ChatCompletionAnnotation]] = None
         citations = None
 
-        if (
-            "message" in cohere_v2_chat_response
-            and "citations" in cohere_v2_chat_response["message"]
-        ):
+        if "message" in cohere_v2_chat_response and "citations" in cohere_v2_chat_response["message"]:
             citations = cohere_v2_chat_response["message"]["citations"]
 
         if citations:
@@ -298,9 +290,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
     ) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)
 
-    def _translate_citations_to_openai_annotations(
-        self, citations: List[dict]
-    ) -> List[ChatCompletionAnnotation]:
+    def _translate_citations_to_openai_annotations(self, citations: List[dict]) -> List[ChatCompletionAnnotation]:
         """
         Transform Cohere citations to OpenAI annotations format.
 

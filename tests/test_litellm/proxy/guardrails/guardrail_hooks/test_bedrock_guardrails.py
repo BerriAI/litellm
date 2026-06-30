@@ -2073,6 +2073,226 @@ def test_get_http_exception_includes_assessments_and_identifier():
     assert exc.detail["assessments"][0]["matches"][0]["match"] == "[REDACTED]"
 
 
+def test_extract_violation_category_names_mixed_policies():
+    """Topic names, content-filter types, PII types, and managed-word types
+    flatten into a single category-name list — using only the operator-
+    defined `name`/`type` labels."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [
+                        {"name": "Fiduciary Advice", "action": "BLOCKED"},
+                        {"name": "Tax Advice", "action": "BLOCKED"},
+                    ]
+                },
+                "contentPolicy": {
+                    "filters": [{"type": "VIOLENCE", "action": "BLOCKED"}]
+                },
+                "wordPolicy": {
+                    "managedWordLists": [{"type": "PROFANITY", "action": "BLOCKED"}],
+                },
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "EMAIL", "action": "BLOCKED"}]
+                },
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert "Fiduciary Advice" in names
+    assert "Tax Advice" in names
+    assert "VIOLENCE" in names
+    assert "PROFANITY" in names
+    assert "EMAIL" in names
+
+
+def test_extract_violation_category_names_does_not_leak_user_input():
+    """SECURITY: customWords.match is the raw user-submitted word that
+    triggered the rule, and an unnamed regex match is the actual sensitive
+    value (e.g. a credit-card number). Neither must appear in
+    violation_categories — otherwise the content the guardrail blocked
+    leaks straight into telemetry backends."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "wordPolicy": {
+                    "customWords": [
+                        {"match": "secret-codeword-abc-123", "action": "BLOCKED"}
+                    ],
+                },
+                "sensitiveInformationPolicy": {
+                    "regexes": [{"match": "4111-1111-1111-1111", "action": "BLOCKED"}]
+                },
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert "secret-codeword-abc-123" not in names
+    assert "4111-1111-1111-1111" not in names
+    assert names == []
+
+
+def test_extract_violation_category_names_named_regex_uses_name():
+    """A regex with a `name` field surfaces that operator-defined label
+    (safe to log), not the matched value."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "regexes": [
+                        {
+                            "name": "credit-card-pattern",
+                            "match": "4111-1111-1111-1111",
+                            "action": "BLOCKED",
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+    names = g._extract_violation_category_names(response)
+    assert names == ["credit-card-pattern"]
+
+
+def test_extract_violation_category_names_skips_anonymized():
+    """ANONYMIZED entries are not blocks — they must not contribute to the
+    violation_categories list."""
+    g = _make_guardrail()
+    response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [{"type": "NAME", "action": "ANONYMIZED"}]
+                }
+            }
+        ],
+    }
+    assert g._extract_violation_category_names(response) == []
+
+
+def test_extract_violation_category_names_no_assessments():
+    """Empty / missing assessments → empty list, not an error."""
+    g = _make_guardrail()
+    assert g._extract_violation_category_names({"action": "NONE"}) == []
+    assert g._extract_violation_category_names({"assessments": None}) == []
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_forwards_guardrail_action():
+    """Bedrock's top-level ``action`` string must be propagated through
+    ``tracing_detail`` so downstream loggers (OTEL, ...) can surface the
+    raw provider verdict as a queryable attribute without re-parsing the
+    redacted guardrail_response blob."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [{"name": "Fiduciary Advice", "action": "BLOCKED"}]
+                }
+            }
+        ],
+    }
+
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+        patch.object(
+            guardrail,
+            "_get_http_exception_for_blocked_guardrail",
+            return_value=Exception("blocked"),
+        ),
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        with pytest.raises(Exception):
+            await guardrail.make_bedrock_api_request(
+                source="INPUT",
+                messages=request_data["messages"],
+                request_data=request_data,
+            )
+
+        tracing_detail = mock_log.call_args.kwargs["tracing_detail"]
+        assert tracing_detail is not None
+        assert tracing_detail["guardrail_action"] == "GUARDRAIL_INTERVENED"
+
+
+@pytest.mark.asyncio
+async def test_make_bedrock_api_request_omits_guardrail_action_when_missing():
+    """If the Bedrock response omits ``action`` (older / partial payloads),
+    the field must be left off ``tracing_detail`` rather than written as
+    ``None`` — downstream code expects strings or absence, not nulls."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "k"
+    mock_credentials.secret_key = "s"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {"assessments": []}
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+        patch.object(
+            guardrail,
+            "add_standard_logging_guardrail_information_to_request_data",
+        ) as mock_log,
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hi"}],
+            request_data={"model": "gpt-4o", "messages": []},
+        )
+
+        tracing_detail = mock_log.call_args.kwargs["tracing_detail"]
+        # No violation categories and no action ⇒ tracing_detail stays None
+        # (the hook collapses an empty dict before forwarding).
+        if tracing_detail is not None:
+            assert "guardrail_action" not in tracing_detail
+
+
 def test_get_http_exception_no_blocked_assessments_omits_field():
     """L3: when no assessments are blocked, the `assessments` key is omitted entirely."""
     g = _make_guardrail()
@@ -2283,3 +2503,267 @@ async def test_post_call_success_hook_only_runs_output_scan():
         mock_make.call_args.kwargs.get("logging_event_type")
         == GuardrailEventHooks.post_call
     )
+
+
+# ---------------------------------------------------------------------------
+# Contextual grounding: request-side qualifiers
+# ---------------------------------------------------------------------------
+#
+# Bedrock contextual grounding tags each ApplyGuardrail content block with a
+# `qualifiers` array (grounding_source / query / guard_content). A caller marks
+# message content blocks `{"type": "grounding_source", ...}` / `{"type": "query", ...}`;
+# at post_call the hook assembles one source="OUTPUT" call carrying the source +
+# query + the model response (as guard_content). A request without these tags
+# produces the plain-text payload with no qualifiers.
+
+_GROUNDING_SOURCE_TEXT = "Tokyo is the capital of Japan."
+_GROUNDING_QUERY_TEXT = "What is the capital of Japan?"
+_GROUNDING_RESPONSE_TEXT = "The capital of Japan is Tokyo."
+
+
+def _grounding_guardrail() -> BedrockGuardrail:
+    return BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+
+def _grounding_messages() -> list:
+    return [
+        {
+            "role": "system",
+            "content": [{"type": "grounding_source", "text": _GROUNDING_SOURCE_TEXT}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "query", "text": _GROUNDING_QUERY_TEXT}],
+        },
+    ]
+
+
+def _model_response(content: str) -> ModelResponse:
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    return ModelResponse(
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content=content),
+                finish_reason="stop",
+            )
+        ]
+    )
+
+
+# Expected OUTPUT content blocks, keyed by their grounding qualifier, so the
+# per-test assertions read as the block sequence they expect.
+_GROUNDING_SOURCE_BLOCK = {
+    "text": {"text": _GROUNDING_SOURCE_TEXT, "qualifiers": ["grounding_source"]}
+}
+_QUERY_BLOCK = {"text": {"text": _GROUNDING_QUERY_TEXT, "qualifiers": ["query"]}}
+_GUARD_BLOCK = {
+    "text": {"text": _GROUNDING_RESPONSE_TEXT, "qualifiers": ["guard_content"]}
+}
+
+
+def _input_request(messages: list) -> dict:
+    """Arrange a guardrail and act: build the Bedrock INPUT payload."""
+    return _grounding_guardrail().convert_to_bedrock_format(
+        source="INPUT", messages=messages
+    )
+
+
+def _output_request(messages: list, response=None) -> dict:
+    """Arrange a guardrail and act: build the Bedrock OUTPUT payload."""
+    return _grounding_guardrail().convert_to_bedrock_format(
+        source="OUTPUT", response=response, messages=messages
+    )
+
+
+def test_grounding_input_strips_grounding_and_query_qualifiers():
+    """Grounding is OUTPUT-only: tagged source/query reach Bedrock as plain text on an
+    INPUT scan, so a tag cannot change how input-safety policies scan content (no bypass).
+    """
+    expected_request = {
+        "source": "INPUT",
+        "content": [
+            {"text": {"text": _GROUNDING_SOURCE_TEXT}},
+            {"text": {"text": _GROUNDING_QUERY_TEXT}},
+        ],
+    }
+
+    actual_request = _input_request(_grounding_messages())
+
+    assert actual_request == expected_request
+
+
+def test_grounding_input_leaves_existing_guarded_text_unqualified():
+    """An existing guarded_text input block keeps its legacy unqualified payload."""
+    expected_request = {"source": "INPUT", "content": [{"text": {"text": "policy"}}]}
+
+    actual_request = _input_request(
+        [{"role": "user", "content": [{"type": "guarded_text", "text": "policy"}]}]
+    )
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_assembles_source_query_and_response():
+    """OUTPUT emits grounding_source + query (from the request) then the response as
+    guard_content, so Bedrock can grade the response against the source and query."""
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
+
+    actual_request = _output_request(
+        _grounding_messages(), _model_response(_GROUNDING_RESPONSE_TEXT)
+    )
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_keeps_legacy_payload_without_tags():
+    """Without grounding tags the OUTPUT payload is the legacy single response block."""
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [{"text": {"text": "Hi there."}}],
+    }
+
+    actual_request = _output_request(
+        [{"role": "user", "content": "hello"}], _model_response("Hi there.")
+    )
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_combines_multiple_sources():
+    """Every grounding_source block is emitted; Bedrock combines them into one corpus."""
+    uk_source_text = "London is the capital of UK."
+    uk_source_block = {
+        "text": {"text": uk_source_text, "qualifiers": ["grounding_source"]}
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "grounding_source", "text": uk_source_text},
+                {"type": "grounding_source", "text": _GROUNDING_SOURCE_TEXT},
+            ],
+        },
+        {"role": "user", "content": [{"type": "query", "text": _GROUNDING_QUERY_TEXT}]},
+    ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [
+            uk_source_block,
+            _GROUNDING_SOURCE_BLOCK,
+            _QUERY_BLOCK,
+            _GUARD_BLOCK,
+        ],
+    }
+
+    actual_request = _output_request(
+        messages, _model_response(_GROUNDING_RESPONSE_TEXT)
+    )
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_keeps_grounding_for_non_model_response():
+    """Harvested grounding blocks survive a non-ModelResponse output instead of being
+    silently dropped (regression guard for the unconditional content assignment)."""
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK],
+    }
+
+    actual_request = _output_request(_grounding_messages(), response=None)
+
+    assert actual_request == expected_request
+
+
+@pytest.mark.parametrize(
+    "role, is_trusted",
+    [
+        ("system", True),
+        ("developer", True),
+        ("tool", False),
+        ("function", False),
+        ("user", False),
+        ("assistant", False),
+    ],
+)
+def test_grounding_source_trusted_only_from_app_roles(role, is_trusted):
+    """grounding_source is honored only from app-authored roles (system/developer). A
+    tag on a user, tool, function or assistant message is ignored, so neither a forwarded
+    end user nor an externally-influenced tool result can supply fake evidence for the
+    grounding check to grade the response against; query is always collected."""
+    messages = [
+        {
+            "role": role,
+            "content": [{"type": "grounding_source", "text": _GROUNDING_SOURCE_TEXT}],
+        },
+        {"role": "user", "content": [{"type": "query", "text": _GROUNDING_QUERY_TEXT}]},
+    ]
+    expected_content = [_QUERY_BLOCK, _GUARD_BLOCK]
+    if is_trusted:
+        expected_content = [_GROUNDING_SOURCE_BLOCK, *expected_content]
+
+    actual_request = _output_request(
+        messages, _model_response(_GROUNDING_RESPONSE_TEXT)
+    )
+
+    assert actual_request == {"source": "OUTPUT", "content": expected_content}
+
+
+@pytest.mark.asyncio
+async def test_grounding_output_blocked_raises_400():
+    """A BLOCKED contextualGroundingPolicy filter raises HTTP 400."""
+    guardrail = _grounding_guardrail()
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {
+        "action": "GUARDRAIL_INTERVENED",
+        "assessments": [
+            {
+                "contextualGroundingPolicy": {
+                    "filters": [
+                        {
+                            "type": "GROUNDING",
+                            "threshold": 0.7,
+                            "score": 0.1,
+                            "action": "BLOCKED",
+                        }
+                    ]
+                }
+            }
+        ],
+        "outputs": [{"text": "Response blocked: not grounded in the provided source."}],
+    }
+
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(guardrail, "_prepare_request", return_value=MagicMock()),
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.make_bedrock_api_request(
+                source="OUTPUT",
+                response=_model_response("The capital of Japan is Paris."),
+                messages=_grounding_messages(),
+                request_data={"messages": _grounding_messages()},
+            )
+
+    assert exc_info.value.status_code == 400

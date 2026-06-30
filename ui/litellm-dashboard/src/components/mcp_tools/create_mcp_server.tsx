@@ -2,8 +2,18 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer, registerMCPServer } from "../networking";
-import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
+import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "../networking";
+import { setToken } from "@/utils/mcpTokenStore";
+import {
+  AUTH_TYPE,
+  DiscoverableMCPServer,
+  OAUTH_FLOW,
+  MCPServer,
+  MCPServerCostInfo,
+  TRANSPORT,
+  getMcpOAuthMode,
+  MCP_OAUTH2_FLOW_M2M,
+} from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -12,18 +22,21 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
+import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/ui/assets/logos/";
 export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
 
 interface CreateMCPServerProps {
   userRole: string;
+  userID?: string | null;
   accessToken: string | null;
   onCreateSuccess: (newMcpServer: MCPServer) => void;
   isModalVisible: boolean;
@@ -41,12 +54,13 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   if (!Array.isArray(list)) return {};
   return list.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
     const header = entry?.header?.trim();
-    if (header) acc[header] = entry?.value ?? "";
+    if (header) acc[header] = (entry?.value ?? "").trim();
     return acc;
   }, {});
 };
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
+  userID,
   userRole,
   accessToken,
   onCreateSuccess,
@@ -66,6 +80,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
@@ -76,12 +91,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
-  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
-    accessToken,
-    oauthAccessToken,
-    formValues,
-    enabled: true,
-  });
+  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } =
+    useTestMCPConnection({
+      accessToken,
+      oauthAccessToken,
+      formValues,
+      enabled: true,
+    });
 
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
@@ -103,6 +119,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           transportType,
           costConfig,
           allowedTools,
+          hasToolAllowlistInteraction,
           searchValue,
           aliasManuallyEdited,
           logoUrl,
@@ -118,6 +135,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     status: oauthStatus,
     error: oauthError,
     tokenResponse: oauthTokenResponse,
+    reset: resetOAuthFlow,
   } = useMcpOAuthFlow({
     accessToken,
     getCredentials: () => form.getFieldValue("credentials"),
@@ -172,6 +190,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     },
     onBeforeRedirect: persistCreateUiState,
+    flowSource: "create",
   });
 
   React.useEffect(() => {
@@ -200,6 +219,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
       if (parsed.allowedTools) {
         setAllowedTools(parsed.allowedTools);
+      }
+      if (typeof parsed.hasToolAllowlistInteraction === "boolean") {
+        setHasToolAllowlistInteraction(parsed.hasToolAllowlistInteraction);
       }
       if (parsed.searchValue) {
         setSearchValue(parsed.searchValue);
@@ -280,11 +302,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     try {
       const {
         static_headers: staticHeadersList,
+        env_vars: envVarsList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
         delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
+        oauth_passthrough: oauthPassthroughRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -293,6 +317,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const accessGroups = restValues.mcp_access_groups;
 
       const staticHeaders = reduceStaticHeaders(staticHeadersList);
+      const envVars = normalizeEnvVars(envVarsList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -381,20 +406,22 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           description: restValues.description,
           logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
+          tool_allowlist_enforced: hasToolAllowlistInteraction || allowedTools.length > 0,
         },
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
-        allowed_tools: allowedTools.length > 0 ? allowedTools : null,
-        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
-        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
+        allowed_tools: allowedTools,
+        tool_name_to_display_name: toolNameToDisplayName,
+        tool_name_to_description: toolNameToDescription,
         allow_all_keys: Boolean(allowAllKeysRaw),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
+        oauth_passthrough: Boolean(oauthPassthroughRaw),
         static_headers: staticHeaders,
+        env_vars: envVars,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
-      payload.static_headers = staticHeaders;
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
@@ -409,15 +436,46 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? await createMCPServer(accessToken, payload)
           : await registerMCPServer(accessToken, payload);
 
+        // Persist the token obtained via "Authorize & Fetch" once the server
+        // exists (so we have its server_id). OBO holds the per-user token in the
+        // backend, so write it to the DB (has_credentials=True). Passthrough
+        // forwards a browser-held token, so it stays in sessionStorage only.
+        if (oauthTokenResponse?.access_token && response?.server_id) {
+          const oauthMode = getMcpOAuthMode({
+            auth_type: restValues.auth_type,
+            oauth2_flow: values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : null,
+            delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
+          });
+          if (oauthMode === "obo") {
+            const scope = oauthTokenResponse.scope;
+            await storeMCPOAuthUserCredential(accessToken, response.server_id, {
+              access_token: oauthTokenResponse.access_token,
+              refresh_token: oauthTokenResponse.refresh_token,
+              expires_in: oauthTokenResponse.expires_in,
+              scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
+            });
+          } else {
+            setToken(
+              response.server_id,
+              {
+                access_token: oauthTokenResponse.access_token,
+                expires_in: oauthTokenResponse.expires_in,
+                refresh_token: oauthTokenResponse.refresh_token,
+                token_type: oauthTokenResponse.token_type,
+              },
+              userID,
+            );
+          }
+        }
+
         NotificationsManager.success(
-          isAdmin
-            ? "MCP Server created successfully"
-            : "MCP Server submitted for admin review"
+          isAdmin ? "MCP Server created successfully" : "MCP Server submitted for admin review",
         );
         form.resetFields();
         setCostConfig({});
         clearTools();
         setAllowedTools([]);
+        setHasToolAllowlistInteraction(false);
         setAliasManuallyEdited(false);
         setLogoUrl(undefined);
         setModalVisible(false);
@@ -426,7 +484,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       NotificationsManager.fromBackend(
-        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`
+        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`,
       );
     } finally {
       setIsLoading(false);
@@ -439,6 +497,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setCostConfig({});
     clearTools();
     setAllowedTools([]);
+    setHasToolAllowlistInteraction(false);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
     setModalVisible(false);
@@ -497,12 +556,19 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [formValues.server_name]);
 
-  // Clear formValues when modal closes to reset child components
+  // Clear form, tools, and OAuth state when the modal closes so a previous server's
+  // authorization, credentials, or tool list never bleed into the next "Add New MCP
+  // Server" session, including when a parent dismisses the modal without routing
+  // through handleCancel or handleCreate.
   React.useEffect(() => {
     if (!isModalVisible) {
+      form.resetFields();
       setFormValues({});
+      setOauthAccessToken(null);
+      clearTools();
+      resetOAuthFlow();
     }
-  }, [isModalVisible]);
+  }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
   const isAdmin = isAdminRole(userRole);
 
@@ -521,7 +587,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             </button>
           )}
           <img
-            src={mcpLogoImg}
+            src={resolveLogoSrc(mcpLogoImg)}
             alt="MCP Logo"
             className="w-8 h-8 object-contain"
             style={{
@@ -556,8 +622,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         >
           {!isAdmin && (
             <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              Your submission will be sent for admin review before it becomes active.
-              {" "}Note: the request must be made with a team-scoped API key.
+              Your submission will be sent for admin review before it becomes active. Note: the request must be made
+              with a team-scoped API key.
             </div>
           )}
           <div className="grid grid-cols-1 gap-6">
@@ -670,9 +736,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <OpenAPIFormSection
                 form={form}
                 accessToken={isModalVisible ? accessToken : null}
-                onValuesChange={(updates) =>
-                  setFormValues((prev) => ({ ...prev, ...updates }))
-                }
+                onValuesChange={(updates) => setFormValues((prev) => ({ ...prev, ...updates }))}
                 onKeyToolsChange={setKeyTools}
                 onLogoUrlChange={setLogoUrl}
                 onOAuthDocsUrlChange={setOauthDocsUrl}
@@ -697,7 +761,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Switch />
                 </Form.Item>
 
-                <Form.Item noStyle shouldUpdate={(prev, cur) => prev.is_byok !== cur.is_byok || prev.auth_type !== cur.auth_type}>
+                <Form.Item
+                  noStyle
+                  shouldUpdate={(prev, cur) => prev.is_byok !== cur.is_byok || prev.auth_type !== cur.auth_type}
+                >
                   {({ getFieldValue }) =>
                     getFieldValue("is_byok") ? (
                       <>
@@ -721,7 +788,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         {!getFieldValue("auth_type") && (
                           <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
                             <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
-                            <span>Set the <strong>Authentication Type</strong> below to specify how user keys are sent (e.g., Bearer Token, API Key header).</span>
+                            <span>
+                              Set the <strong>Authentication Type</strong> below to specify how user keys are sent
+                              (e.g., Bearer Token, API Key header).
+                            </span>
                           </div>
                         )}
                         <Form.Item
@@ -774,10 +844,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
                     children: (
                       <>
-                        <Form.Item
-                          name="auth_type"
-                          rules={[{ required: true, message: "Please select an auth type" }]}
-                        >
+                        <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
                           <Select placeholder="Select auth type" className="rounded-lg" size="large">
                             <Select.Option value="none">None</Select.Option>
                             <Select.Option value="api_key">API Key</Select.Option>
@@ -841,7 +908,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <>
                 <p className="text-sm text-gray-500 mb-2">
                   For MCP servers hosted on AWS Bedrock AgentCore.{" "}
-                  <a href="https://docs.litellm.ai/docs/mcp_aws_sigv4" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                  <a
+                    href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-500 hover:text-blue-700"
+                  >
                     View docs &rarr;
                   </a>
                 </p>
@@ -894,7 +966,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       validator(_, value) {
                         const secretKey = getFieldValue(["credentials", "aws_secret_access_key"]);
                         if (secretKey && !value) {
-                          return Promise.reject(new Error("Access Key ID is required when Secret Access Key is provided"));
+                          return Promise.reject(
+                            new Error("Access Key ID is required when Secret Access Key is provided"),
+                          );
                         }
                         return Promise.resolve();
                       },
@@ -922,7 +996,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       validator(_, value) {
                         const accessKeyId = getFieldValue(["credentials", "aws_access_key_id"]);
                         if (accessKeyId && !value) {
-                          return Promise.reject(new Error("Secret Access Key is required when Access Key ID is provided"));
+                          return Promise.reject(
+                            new Error("Secret Access Key is required when Access Key ID is provided"),
+                          );
                         }
                         return Promise.resolve();
                       },
@@ -989,6 +1065,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             <StdioConfiguration isVisible={transportType === "stdio"} />
           </div>
 
+          {/* Environment Variables Section */}
+          <div className="mt-8">
+            <EnvVarsSection />
+          </div>
+
           {/* Permission Management / Access Control Section */}
           <div className="mt-8">
             <MCPPermissionManagement
@@ -1017,11 +1098,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <div className="mt-6">
             <MCPToolConfiguration
               accessToken={accessToken}
-              oauthAccessToken={oauthAccessToken}
               formValues={formValues}
               allowedTools={allowedTools}
               existingAllowedTools={null}
               onAllowedToolsChange={setAllowedTools}
+              hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+              onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
               toolNameToDisplayName={toolNameToDisplayName}
               toolNameToDescription={toolNameToDescription}
               onToolNameToDisplayNameChange={setToolNameToDisplayName}

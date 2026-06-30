@@ -23,7 +23,6 @@ from litellm.types.agents import (
     AgentVersionsResponse,
 )
 
-
 # Keys inside litellm_params that should be forwarded to the Gemini
 # create-agent body verbatim.
 _GEMINI_AGENT_BODY_KEYS = ("base_agent", "instructions", "base_environment")
@@ -114,10 +113,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             )
         api_key = GeminiModelInfo.get_api_key(explicit_api_key)
         if not api_key:
-            raise ValueError(
-                "Google API key is required. "
-                "Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key."
-            )
+            raise ValueError("Google API key is required. Set GOOGLE_API_KEY or GEMINI_API_KEY, or pass api_key.")
         headers["x-goog-api-key"] = api_key
         return headers
 
@@ -290,9 +286,7 @@ class GeminiAgentsConfig(BaseAgentsAPIConfig):
             data = raw_response.json()
         except Exception:
             data = {}
-        verbose_logger.debug(
-            "GeminiAgentsConfig list_versions response for '%s': %s", name, data
-        )
+        verbose_logger.debug("GeminiAgentsConfig list_versions response for '%s': %s", name, data)
         return AgentVersionsResponse(
             agent_versions=data.get("agentVersions", []),
             next_page_token=data.get("nextPageToken"),

@@ -28,11 +28,7 @@ interface OpenAPIQuickPickerProps {
   onSelect: (entry: OpenAPIRegistryEntry) => void;
 }
 
-const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
-  accessToken,
-  selectedName,
-  onSelect,
-}) => {
+const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({ accessToken, selectedName, onSelect }) => {
   const [apis, setApis] = useState<OpenAPIRegistryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [imgErrors, setImgErrors] = useState<Set<string>>(new Set());
@@ -96,17 +92,14 @@ const OpenAPIQuickPicker: React.FC<OpenAPIQuickPickerProps> = ({
                   onError={() => handleImgError(api.name)}
                 />
               )}
-              <span className="text-xs text-gray-600 text-center leading-tight font-medium">
-                {api.title}
-              </span>
+              <span className="text-xs text-gray-600 text-center leading-tight font-medium">{api.title}</span>
             </button>
           );
         })}
       </div>
 
       <p className="text-xs text-gray-400 mt-2">
-        Select an API to pre-fill the spec URL and OAuth 2.0 settings, or enter
-        your own spec URL below.
+        Select an API to pre-fill the spec URL and OAuth 2.0 settings, or enter your own spec URL below.
       </p>
     </div>
   );

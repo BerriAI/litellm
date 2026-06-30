@@ -196,10 +196,12 @@ async def _process_binary_request(
     )
     data: Dict[str, Any] = {
         "file_id": file_id,
-        **get_container_forwarding_params(
-            container_id=container_id,
-            original_container_id=original_container_id,
-            custom_llm_provider=resolved_provider,
+        **(
+            await get_container_forwarding_params(
+                container_id=container_id,
+                original_container_id=original_container_id,
+                custom_llm_provider=resolved_provider,
+            )
         ),
     }
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -243,10 +245,7 @@ async def _process_binary_request(
             content_type = "application/pdf"
 
         if not isinstance(content, bytes):
-            raise TypeError(
-                "aretrieve_container_file_content expected bytes, got "
-                f"{type(content).__name__}"
-            )
+            raise TypeError(f"aretrieve_container_file_content expected bytes, got {type(content).__name__}")
 
         return Response(
             content=content,
@@ -316,7 +315,7 @@ async def _process_multipart_upload_request(
     )
 
     data.update(
-        get_container_forwarding_params(
+        await get_container_forwarding_params(
             container_id=container_id,
             original_container_id=original_container_id,
             custom_llm_provider=resolved_provider,
@@ -388,15 +387,16 @@ async def _process_request(
 
     # Validate container_id ownership if present in path_params.
     if "container_id" in path_params:
-        original_container_id, resolved_provider = (
-            await assert_user_can_access_container(
-                container_id=path_params["container_id"],
-                user_api_key_dict=user_api_key_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
+        (
+            original_container_id,
+            resolved_provider,
+        ) = await assert_user_can_access_container(
+            container_id=path_params["container_id"],
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
         )
         data.update(
-            get_container_forwarding_params(
+            await get_container_forwarding_params(
                 container_id=path_params["container_id"],
                 original_container_id=original_container_id,
                 custom_llm_provider=resolved_provider,
@@ -452,9 +452,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
         is_multipart = endpoint_config.get("is_multipart", False)
 
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(
-            path_params, route_type, returns_binary, is_multipart
-        )
+        handler = _create_handler_for_path_params(path_params, route_type, returns_binary, is_multipart)
 
         # Register routes
         route_method = getattr(router, method)

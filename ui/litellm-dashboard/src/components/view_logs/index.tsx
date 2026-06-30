@@ -208,6 +208,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   const deferredData = useDeferredValue(filteredData);
   const isStale = deferredData !== filteredData;
   const isButtonLoading = logsQuery.isFetching || isStale;
+  const isRefiltering = logsQuery.isPlaceholderData;
+  const isLogsLoading = logsQuery.isLoading || isRefiltering;
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
@@ -232,7 +234,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   };
 
   return (
-    <div className="w-full max-w-screen p-6 overflow-x-hidden box-border">
+    <div className="w-full p-6 overflow-x-hidden box-border">
       <TabGroup defaultIndex={0} onIndexChange={(index) => setActiveTab(index === 0 ? "request logs" : "audit logs")}>
         <TabList>
           <Tab>Request Logs</Tab>
@@ -277,7 +279,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     currentPage={currentPage}
                     onCurrentPageChange={setCurrentPage}
                     pageSize={pageSize}
-                    isLoading={logsQuery.isLoading}
+                    isLoading={isLogsLoading}
                     isButtonLoading={isButtonLoading}
                     onRefetch={() => logsQuery.refetch()}
                     filteredLogs={filteredLogs}
@@ -286,7 +288,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     columns={columns}
                     data={deferredData}
                     onRowClick={handleRowClick}
-                    isLoading={logsQuery.isLoading}
+                    isLoading={isLogsLoading}
                   />
                 </div>
               </>

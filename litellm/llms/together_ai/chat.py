@@ -1,5 +1,5 @@
 """
-Support for OpenAI's `/v1/chat/completions` endpoint. 
+Support for OpenAI's `/v1/chat/completions` endpoint.
 
 Calls done in OpenAI/openai.py as TogetherAI is openai-compatible.
 
@@ -29,9 +29,7 @@ class TogetherAIConfig(OpenAIGPTConfig):
         # exception in _get_model_info_helper is hit (~332 deep calls).
         supports_fc: Optional[bool] = None
         try:
-            supports_fc = supports_function_calling(
-                model, custom_llm_provider="together_ai"
-            )
+            supports_fc = supports_function_calling(model, custom_llm_provider="together_ai")
         except Exception as e:
             verbose_logger.debug(f"Error getting supported openai params: {e}")
             pass
@@ -54,12 +52,8 @@ class TogetherAIConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        mapped_openai_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        mapped_openai_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
-        if "response_format" in mapped_openai_params and mapped_openai_params[
-            "response_format"
-        ] == {"type": "text"}:
+        if "response_format" in mapped_openai_params and mapped_openai_params["response_format"] == {"type": "text"}:
             mapped_openai_params.pop("response_format")
         return mapped_openai_params

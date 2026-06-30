@@ -45,6 +45,22 @@ def local_model_cost_map(monkeypatch):
         litellm.get_model_info.cache_clear()
 
 
+def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
+    """supports_adaptive_thinking must flow through get_model_info like every other
+    capability flag: both from an explicit cost-map entry and from a
+    fallback-generalization rule for an unmapped model. Regression: the field shipped
+    in the JSON but was never declared on ModelInfo nor copied during construction, so
+    get_model_info (and _supports_factory) silently dropped it for any provider-prefixed
+    or unmapped name."""
+    explicit = litellm.get_model_info(model="claude-opus-4-8")
+    assert explicit["supports_adaptive_thinking"] is True
+
+    generalized = litellm.get_model_info(
+        model="claude-opus-4-9", custom_llm_provider="anthropic"
+    )
+    assert generalized["supports_adaptive_thinking"] is True
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -599,7 +615,6 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
         "output_cost_per_image_token",
-        "output_cost_per_image_token_batches",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -614,7 +629,6 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_video_per_second_above_8s_interval",
         "input_cost_per_video_per_second_above_15s_interval",
         "input_cost_per_video_per_second_above_128k_tokens",
-        "input_cost_per_token_batch_requests",
         "input_cost_per_token_batches",
         "output_cost_per_token_batches",
         "input_cost_per_token_cache_hit",
@@ -699,13 +713,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
-                "cache_read_input_token_cost_batches": {"type": "number"},
+                "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {
                     "type": "number"
                 },
                 "cache_read_input_audio_token_cost": {"type": "number"},
-                "cache_read_input_token_cost_per_audio_token": {"type": "number"},
-                "cache_read_input_image_token_cost": {"type": "number"},
+                "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -719,6 +732,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_token_above_200k_tokens": {"type": "number"},
                 "input_cost_per_token_above_256k_tokens": {"type": "number"},
                 "input_cost_per_token_above_272k_tokens": {"type": "number"},
+                "input_cost_per_token_above_512k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_flex": {"type": "number"},
                 "cache_read_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens_priority": {
@@ -736,13 +750,14 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "regional_processing_uplift_multiplier_eu": {"type": "number"},
+                "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
                 "input_cost_per_second": {"type": "number"},
                 "input_cost_per_token": {"type": "number"},
                 "input_cost_per_token_above_128k_tokens": {"type": "number"},
-                "input_cost_per_token_batch_requests": {"type": "number"},
                 "input_cost_per_token_batches": {"type": "number"},
                 "input_cost_per_token_cache_hit": {"type": "number"},
                 "input_cost_per_video_per_second": {"type": "number"},
@@ -754,21 +769,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
-                "max_audio_length_hours": {"type": "number"},
-                "max_audio_per_prompt": {"type": "number"},
-                "max_document_chunks_per_query": {"type": "number"},
-                "max_images_per_prompt": {"type": "number"},
                 "max_input_tokens": {"type": "number"},
                 "max_output_tokens": {"type": "number"},
-                "max_pdf_size_mb": {"type": "number"},
-                "max_query_tokens": {"type": "number"},
                 "max_tokens": {"type": "number"},
-                "max_tokens_per_document_chunk": {"type": "number"},
-                "max_video_length": {"type": "number"},
-                "max_videos_per_prompt": {"type": "number"},
                 "metadata": {"type": "object"},
                 "provider_specific_entry": {"type": "object"},
                 "mode": {
@@ -797,7 +804,6 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_character_above_128k_tokens": {"type": "number"},
                 "output_cost_per_image": {"type": "number"},
                 "output_cost_per_image_token": {"type": "number"},
-                "output_cost_per_image_token_batches": {"type": "number"},
                 "output_cost_per_pixel": {"type": "number"},
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
@@ -806,15 +812,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_above_200k_tokens": {"type": "number"},
                 "output_cost_per_token_above_256k_tokens": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens": {"type": "number"},
-                "output_cost_per_image_above_1024_and_1024_pixels": {"type": "number"},
-                "output_cost_per_image_above_1024_and_1024_pixels_and_premium_image": {
-                    "type": "number"
-                },
-                "output_cost_per_image_above_512_and_512_pixels": {"type": "number"},
-                "output_cost_per_image_above_512_and_512_pixels_and_premium_image": {
-                    "type": "number"
-                },
-                "output_cost_per_image_premium_image": {"type": "number"},
+                "output_cost_per_token_above_512k_tokens": {"type": "number"},
                 "output_cost_per_token_batches": {"type": "number"},
                 "output_cost_per_reasoning_token": {"type": "number"},
                 "output_cost_per_video_per_second": {"type": "number"},
@@ -828,9 +826,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
+                "gemini_native_audio": {"type": "boolean"},
+                "gemini_audio_only_live": {"type": "boolean"},
                 "supports_embedding_image_input": {"type": "boolean"},
-                "supports_code_execution": {"type": "boolean"},
-                "supports_file_search": {"type": "boolean"},
                 "supports_function_calling": {"type": "boolean"},
                 "supports_image_input": {"type": "boolean"},
                 "supports_nova_canvas_image_edit": {"type": "boolean"},
@@ -853,9 +851,13 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_xhigh_reasoning_effort": {"type": "boolean"},
                 "supports_max_reasoning_effort": {"type": "boolean"},
                 "supports_adaptive_thinking": {"type": "boolean"},
-                "supports_service_tier": {"type": "boolean"},
-                "supports_preset": {"type": "boolean"},
-                "tool_use_system_prompt_tokens": {"type": "number"},
+                "supports_sampling_params": {"type": "boolean"},
+                "supports_output_config": {"type": "boolean"},
+                "supports_speed": {"type": "boolean"},
+                "bedrock_output_config_effort_ceiling": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max", "xhigh"],
+                },
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
@@ -869,6 +871,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/completions",
                             "/v1/images/generations",
                             "/v1/realtime",
+                            "/v1/realtime/transcription_sessions",
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
@@ -876,6 +879,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/speech",
                             "/v1/ocr",
                             "/vertex_ai/live",
+                            "/v1/realtime/transcription_sessions",
                         ],
                     },
                 },
@@ -913,14 +917,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "enum": ["text", "image", "audio", "code", "video"],
                     },
                 },
-                "supported_resolutions": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                    },
-                },
                 "supports_native_streaming": {"type": "boolean"},
+                "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
+                "use_openai_responses_path": {"type": "boolean"},
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -961,6 +961,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     actual_json.pop(
         "sample_spec", None
     )  # remove the sample, whose schema is inconsistent with the real data
+    actual_json.pop(
+        "fallback_generalizations", None
+    )  # reserved meta key, not a model entry
 
     # Validate schema
     validate(actual_json, INTENDED_SCHEMA)
@@ -1136,6 +1139,32 @@ def test_check_provider_match():
     # Test non-matching provider
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
+
+
+def test_check_provider_match_none_value_matches_any_provider():
+    """
+    A ``litellm_provider`` of None must be treated the same as a missing
+    key: both mean "no provider constraint" and should match any
+    ``custom_llm_provider``.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28336.
+    Before the fix, ``register_model`` persisted ``litellm_provider: None``
+    via ``get_model_info`` for deployments registered without a provider
+    (e.g. ``Router.add_deployment``), which caused ``_check_provider_match``
+    to drop custom pricing intermittently.
+    """
+    # Missing key already returned True; None must behave identically.
+    assert litellm.utils._check_provider_match({}, "openai") is True
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "openai")
+        is True
+    )
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "anthropic")
+        is True
+    )
+    # When custom_llm_provider is also None nothing constrains the match.
+    assert litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
 
 
 def test_get_provider_rerank_config():
@@ -1500,8 +1529,7 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print(
-            """
+        print("""
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1516,8 +1544,7 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """
-        )
+        """)
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1879,8 +1906,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1933,8 +1959,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2148,8 +2173,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2202,8 +2226,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2417,8 +2440,7 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print(
-            """
+        print("""
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2471,8 +2493,7 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """
-        )
+        """)
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -4107,3 +4128,408 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_deepseek_v4_models_in_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in model_prices_and_context_window.json.
+
+    Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
+    - deepseek-v4-flash: $0.14/M input, $0.28/M output
+    - deepseek-v4-pro:   $0.435/M input, $0.87/M output (75% discounted active price)
+
+    Closes https://github.com/BerriAI/litellm/issues/26709
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+
+def test_deepseek_v4_models_in_backup_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in litellm/model_prices_and_context_window_backup.json.
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "litellm" / "model_prices_and_context_window_backup.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 2.8e-09),
+        ("deepseek/deepseek-v4-pro", 4.35e-07, 8.7e-07, 3.625e-09),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from backup JSON"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+
+
+_FIREWORKS_MODELS = [
+    (
+        "accounts/fireworks/models/glm-5p2",
+        1.4e-06,
+        4.4e-06,
+        2.6e-07,
+        1048576,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/glm-5p1",
+        1.4e-06,
+        4.4e-06,
+        2.6e-07,
+        202800,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/glm-5p1-fast",
+        2.8e-06,
+        8.8e-06,
+        5.2e-07,
+        202800,
+        131072,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/qwen3p7-plus",
+        4e-07,
+        1.6e-06,
+        8e-08,
+        262144,
+        65536,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/minimax-m3",
+        3e-07,
+        1.2e-06,
+        6e-08,
+        512000,
+        512000,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/minimax-m2p7",
+        3e-07,
+        1.2e-06,
+        6e-08,
+        196608,
+        196608,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/kimi-k2p7-code",
+        9.5e-07,
+        4e-06,
+        1.9e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/kimi-k2p7-code-fast",
+        1.9e-06,
+        8e-06,
+        3.8e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/kimi-k2p6",
+        9.5e-07,
+        4e-06,
+        1.6e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/routers/kimi-k2p6-fast",
+        2e-06,
+        8e-06,
+        3e-07,
+        262144,
+        262144,
+        True,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/gpt-oss-120b",
+        1.5e-07,
+        6e-07,
+        1.5e-08,
+        131072,
+        32768,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/gpt-oss-20b",
+        7e-08,
+        3e-07,
+        3.5e-08,
+        131072,
+        32768,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/deepseek-v4-pro",
+        1.74e-06,
+        3.48e-06,
+        1.45e-07,
+        1048576,
+        384000,
+        False,
+        True,
+    ),
+    (
+        "accounts/fireworks/models/deepseek-v4-flash",
+        1.4e-07,
+        2.8e-07,
+        2.8e-08,
+        1048576,
+        384000,
+        False,
+        True,
+    ),
+]
+
+_FIREWORKS_SHORT_FORMS = [
+    "glm-5p2",
+    "glm-5p1",
+    "qwen3p7-plus",
+    "minimax-m3",
+    "minimax-m2p7",
+    "kimi-k2p7-code",
+    "kimi-k2p6",
+    "gpt-oss-120b",
+    "gpt-oss-20b",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+]
+
+_FIREWORKS_ROUTER_SHORT_FORMS = [
+    "glm-5p1-fast",
+    "kimi-k2p6-fast",
+    "kimi-k2p7-code-fast",
+]
+
+
+def _assert_fireworks_entry(
+    model_cost,
+    model_path,
+    expected_input,
+    expected_output,
+    expected_cache,
+    expected_max_input,
+    expected_max_output,
+    expected_vision,
+    expected_reasoning,
+):
+    info = model_cost.get(f"fireworks_ai/{model_path}")
+    assert info is not None, f"fireworks_ai/{model_path} missing from model cost map"
+    assert info["litellm_provider"] == "fireworks_ai"
+    assert info["mode"] == "chat"
+    assert info["input_cost_per_token"] == expected_input
+    assert info["output_cost_per_token"] == expected_output
+    assert info["cache_read_input_token_cost"] == expected_cache
+    assert info["max_input_tokens"] == expected_max_input
+    assert info["max_output_tokens"] == expected_max_output
+    assert info["max_tokens"] == expected_max_output
+    assert info["supports_function_calling"] is True
+    assert info["supports_tool_choice"] is True
+    assert info["supports_reasoning"] is expected_reasoning
+    assert info["supports_response_schema"] is True
+    assert info["supports_vision"] is expected_vision
+
+
+def test_fireworks_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for entry in _FIREWORKS_MODELS:
+        _assert_fireworks_entry(model_cost, *entry)
+
+    for short in _FIREWORKS_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+def test_fireworks_models_in_backup_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = (
+        Path(__file__).parents[2]
+        / "litellm"
+        / "model_prices_and_context_window_backup.json"
+    )
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for entry in _FIREWORKS_MODELS:
+        _assert_fireworks_entry(model_cost, *entry)
+
+    for short in _FIREWORKS_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/models/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+    for short in _FIREWORKS_ROUTER_SHORT_FORMS:
+        long_key = f"fireworks_ai/accounts/fireworks/routers/{short}"
+        short_key = f"fireworks_ai/{short}"
+        assert model_cost.get(short_key) == model_cost.get(
+            long_key
+        ), f"short-form {short_key} does not match long-form {long_key}"
+
+
+class TestBedrockBaseModelLabelKeepsTools:
+    """Regression for #29618: a Bedrock deployment whose ``base_model`` is a friendly
+    label must not silently drop ``tools``/``tool_choice`` under ``drop_params``."""
+
+    TOOLS = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    def test_base_model_label_keeps_tools_with_drop_params(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            custom_llm_provider="bedrock",
+            base_model="claude-haiku-4-5",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" in result
+        assert "tool_choice" in result
+
+    def test_base_model_label_alone_drops_tools(self):
+        """Without the real model id the label resolves to no tool support, so passing
+        the label as ``model`` is exactly what dropped tools before the fix."""
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="claude-haiku-4-5",
+            custom_llm_provider="bedrock",
+            tools=self.TOOLS,
+            tool_choice="auto",
+            drop_params=True,
+        )
+
+        assert "tools" not in result
+
+
+def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
+    """`aws_bedrock_project_id` is sent as a bedrock-mantle request header, so it
+    must never reach optional_params (and from there the request body), while
+    other aws_* params keep flowing for boto3 auth."""
+    from litellm.utils import get_optional_params
+
+    result = get_optional_params(
+        model="mantle/anthropic.claude-mythos-preview",
+        custom_llm_provider="bedrock",
+        max_tokens=10,
+        aws_bedrock_project_id="proj_abc123def456",
+        aws_region_name="us-east-1",
+    )
+
+    assert "aws_bedrock_project_id" not in result
+    assert result["aws_region_name"] == "us-east-1"
+

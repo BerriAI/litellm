@@ -26,6 +26,8 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     vcr_config_dict,
 )
 
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
+
 _verbose_state = VerboseReporterState()
 
 
@@ -62,7 +64,10 @@ def pytest_runtest_logreport(report):
 
 
 def pytest_collection_modifyitems(config, items):
-    apply_vcr_auto_marker_to_items(items)
+    apply_vcr_auto_marker_to_items(
+        items,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
+    )
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

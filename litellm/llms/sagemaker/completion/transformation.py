@@ -1,7 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Sagemaker's `/invoke`
 
-In the Huggingface TGI format. 
+In the Huggingface TGI format.
 """
 
 import json
@@ -60,12 +60,8 @@ class SagemakerConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
-        return SagemakerError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: Union[dict, Headers]) -> BaseLLMException:
+        return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
     def get_supported_openai_params(self, model: str) -> List:
         return [
@@ -90,9 +86,7 @@ class SagemakerConfig(BaseConfig):
                 if value == 0.0 or value == 0:
                     # hugging face exception raised when temp==0
                     # Failed: Error occurred: HuggingfaceException - Input validation error: `temperature` must be strictly positive
-                    if not non_default_params.get(
-                        "aws_sagemaker_allow_zero_temp", False
-                    ):
+                    if not non_default_params.get("aws_sagemaker_allow_zero_temp", False):
                         value = 0.01
 
                 optional_params["temperature"] = value
@@ -100,9 +94,7 @@ class SagemakerConfig(BaseConfig):
                 optional_params["top_p"] = value
             if param == "n":
                 optional_params["best_of"] = value
-                optional_params["do_sample"] = (
-                    True  # Need to sample if you want best of for hf inference endpoints
-                )
+                optional_params["do_sample"] = True  # Need to sample if you want best of for hf inference endpoints
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -130,9 +122,7 @@ class SagemakerConfig(BaseConfig):
             model_prompt_details = custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get(
-                    "initial_prompt_value", ""
-                ),
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
                 final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
                 messages=messages,
             )
@@ -141,9 +131,7 @@ class SagemakerConfig(BaseConfig):
             model_prompt_details = custom_prompt_dict[hf_model_name]
             prompt = custom_prompt(
                 role_dict=model_prompt_details.get("roles", None),
-                initial_prompt_value=model_prompt_details.get(
-                    "initial_prompt_value", ""
-                ),
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
                 final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
                 messages=messages,
             )
@@ -175,9 +163,7 @@ class SagemakerConfig(BaseConfig):
         if stream is True:
             data["stream"] = True
 
-        custom_prompt_dict = (
-            litellm_params.get("custom_prompt_dict", None) or litellm.custom_prompt_dict
-        )
+        custom_prompt_dict = litellm_params.get("custom_prompt_dict", None) or litellm.custom_prompt_dict
 
         hf_model_name = litellm_params.get("hf_model_name", None)
 
@@ -199,9 +185,7 @@ class SagemakerConfig(BaseConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        return await asyncify(self.transform_request)(
-            model, messages, optional_params, litellm_params, headers
-        )
+        return await asyncify(self.transform_request)(model, messages, optional_params, litellm_params, headers)
 
     def transform_response(
         self,

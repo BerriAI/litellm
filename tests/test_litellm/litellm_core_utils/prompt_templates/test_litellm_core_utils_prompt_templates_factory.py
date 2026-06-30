@@ -10,14 +10,29 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
+    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
+    make_valid_bedrock_tool_name,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
+
+
+def _get_gemini_function_response_inline_data_parts(result):
+    assert isinstance(result, list), "expected Gemini parts list"
+    assert len(result) == 1, "multimodal function responses should stay in one part"
+    function_response_part = result[0]
+    assert (
+        "inline_data" not in function_response_part
+    ), "inline_data should be nested under function_response.parts"
+    function_response = function_response_part["function_response"]
+    nested_parts = function_response["parts"]
+    return [part["inline_data"] for part in nested_parts if "inline_data" in part]
 
 
 def test_ollama_pt_simple_messages():
@@ -164,6 +179,79 @@ def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
     # toolUse blocks must still be present
     tool_use_blocks = [b for b in assistant_blocks[0]["content"] if "toolUse" in b]
     assert len(tool_use_blocks) == 2
+
+
+@pytest.mark.parametrize(
+    "thinking_block",
+    [
+        {"type": "thinking", "thinking": "oss reasoning", "signature": None},
+        {"type": "thinking", "thinking": "oss reasoning", "signature": ""},
+        {"type": "thinking", "thinking": "oss reasoning"},
+    ],
+    ids=["null_signature", "empty_signature", "missing_signature"],
+)
+def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
+    """Open-source reasoning models (DeepSeek-R1, Qwen, etc.) emit thinking blocks
+    with no Anthropic signature. Anthropic verifies the signature cryptographically,
+    so replaying a null/empty/missing-signature thinking block is rejected with
+    400 ... thinking.signature.str: Input should be a valid string.
+    anthropic_messages_pt must drop the unsignable thinking block while preserving
+    the assistant's answer text. Regression for LIT-4007.
+    """
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "2+2 equals 4.",
+            "thinking_blocks": [thinking_block],
+        },
+        {"role": "user", "content": "Now what is 3+3?"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+    )
+
+    assistant = next(m for m in result if m["role"] == "assistant")
+    content = assistant["content"]
+    assert all(
+        block.get("type") != "thinking" for block in content
+    ), f"unsignable thinking block must be dropped, got {content!r}"
+    assert any(
+        block.get("type") == "text" and block.get("text") == "2+2 equals 4."
+        for block in content
+    ), f"assistant answer text must be preserved, got {content!r}"
+
+
+def test_anthropic_messages_pt_keeps_signed_thinking_block():
+    """A genuine Anthropic round-trip still holds its original signature, so that
+    thinking block must be forwarded unchanged (we only drop unsignable blocks).
+    Regression for LIT-4007.
+    """
+    signed_block = {
+        "type": "thinking",
+        "thinking": "genuine anthropic reasoning",
+        "signature": "ErcBCkgIValidSignatureBytes",
+    }
+    messages = [
+        {"role": "user", "content": "What is 2+2?"},
+        {
+            "role": "assistant",
+            "content": "2+2 equals 4.",
+            "thinking_blocks": [signed_block],
+        },
+        {"role": "user", "content": "Now what is 3+3?"},
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic"
+    )
+
+    assistant = next(m for m in result if m["role"] == "assistant")
+    thinking_blocks = [b for b in assistant["content"] if b.get("type") == "thinking"]
+    assert len(thinking_blocks) == 1
+    assert thinking_blocks[0]["signature"] == "ErcBCkgIValidSignatureBytes"
+    assert thinking_blocks[0]["thinking"] == "genuine anthropic reasoning"
 
 
 def test_convert_to_azure_openai_messages():
@@ -613,8 +701,8 @@ def test_convert_gemini_tool_call_result_with_image_url():
         message=message_str_format,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    # Should have inline_data for the image
-    assert isinstance(result, list) and any("inline_data" in p for p in result)
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
+    assert len(inline_parts) == 1
 
     # Test with dict image_url format (OpenAI standard)
     message_dict_format = ChatCompletionToolMessage(
@@ -633,7 +721,8 @@ def test_convert_gemini_tool_call_result_with_image_url():
         message=message_dict_format,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result2, list) and any("inline_data" in p for p in result2)
+    inline_parts = _get_gemini_function_response_inline_data_parts(result2)
+    assert len(inline_parts) == 1
 
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
@@ -675,11 +764,10 @@ def test_convert_gemini_tool_call_result_with_anthropic_image_block():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1, "expected exactly one inline_data part"
-    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
-    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+    assert inline_parts[0]["mime_type"] == "image/png"
+    assert inline_parts[0]["data"] == tiny_png_b64
 
 
 def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
@@ -732,12 +820,11 @@ def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert (
         len(inline_parts) == 2
     ), f"expected 2 inline_data parts, got {len(inline_parts)}"
-    mime_types = {p["inline_data"]["mime_type"] for p in inline_parts}
+    mime_types = {p["mime_type"] for p in inline_parts}
     assert mime_types == {"image/png", "image/jpeg"}
 
 
@@ -771,13 +858,12 @@ def test_convert_gemini_tool_call_result_with_data_url_string():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert (
         len(inline_parts) == 1
     ), "data-URL image string was not converted to inline_data"
-    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
-    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+    assert inline_parts[0]["mime_type"] == "image/png"
+    assert inline_parts[0]["data"] == tiny_png_b64
 
 
 def test_convert_gemini_tool_call_result_with_data_url_extra_params():
@@ -809,12 +895,11 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1
     assert (
-        inline_parts[0]["inline_data"]["mime_type"] == "image/png"
-    ), f"expected clean 'image/png', got '{inline_parts[0]['inline_data']['mime_type']}'"
+        inline_parts[0]["mime_type"] == "image/png"
+    ), f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
 
 
 def test_bedrock_tools_unpack_defs():
@@ -885,6 +970,61 @@ def test_bedrock_tools_unpack_defs():
     ]
 
     _bedrock_tools_pt(tools=tools)
+
+
+def test_bedrock_tools_pt_strict_parameter():
+    """Regression for strict tools on the Bedrock Converse path.
+
+    Claude on Bedrock honours strict in toolSpec (with additionalProperties, which
+    Bedrock requires alongside strict); without forwarding it the model ignores the
+    enum constraint the caller asked for. Every other Bedrock family (Nova, Llama,
+    GPT-OSS) rejects the strict field, so it must only be forwarded for Claude.
+    """
+    tools_with_strict = [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_sql",
+                "strict": True,
+                "description": "Generate a SQL query",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    result = _bedrock_tools_pt(
+        tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+    assert result[0]["toolSpec"]["strict"] is True
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
+
+    result = _bedrock_tools_pt(tools_with_strict, model="us.amazon.nova-micro-v1:0")
+    assert "strict" not in result[0]["toolSpec"]
+    assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
+
+    tools_without_strict = [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_sql",
+                "description": "Generate a SQL query",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+    result = _bedrock_tools_pt(
+        tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+    assert "strict" not in result[0]["toolSpec"]
+    assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
 
 
 def test_bedrock_image_processor_content_type_fallback_url_extension():
@@ -1486,6 +1626,69 @@ def test_bedrock_tools_pt_does_not_handle_system_tool():
     assert tool_spec["name"] == "get_weather"
 
 
+def test_bedrock_tools_pt_drops_unmappable_responses_builtin_tools():
+    """
+    Regression for LIT-3858: Responses built-in tools (image_generation, namespace,
+    tool_search, custom) have no Bedrock toolSpec equivalent. They must be dropped, not
+    emitted as junk ``litellm_unnamed_tool_N`` toolSpecs the model can hallucinate calls to.
+    Mappable ``function`` and Anthropic ``input_schema`` tools must survive untouched.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "noop",
+                "description": "x",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {"type": "image_generation", "output_format": "png"},
+        {"type": "namespace", "name": "grp", "description": "g", "tools": []},
+        {"type": "custom", "name": "free_form"},
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["noop"]
+    assert not any(name.startswith("litellm_unnamed_tool_") for name in names)
+
+
+def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
+    """
+    The drop guard for unmappable tools must not regress Anthropic Messages format tools,
+    which carry an ``input_schema`` instead of an OpenAI ``function`` key.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "image_generation",
+            "output_format": "png",
+        },
+        {
+            "name": "lookup",
+            "description": "look something up",
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+                "required": ["q"],
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(
+        tools=tools, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    names = [block["toolSpec"]["name"] for block in result if "toolSpec" in block]
+    assert names == ["lookup"]
+
+
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
     Test that cache_control is properly applied to image content in tool results.
@@ -2082,6 +2285,90 @@ def test_bedrock_tool_call_invoke_non_dict_arguments():
     assert result[0]["toolUse"]["input"] == {}
 
 
+def test_make_valid_bedrock_tool_name_preserves_hyphens():
+    assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
+    assert (
+        make_valid_bedrock_tool_name(
+            "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
+        )
+        == "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
+    )
+
+
+def test_bedrock_tool_name_sanitized_consistently_in_tools_and_tool_use():
+    """toolSpec and toolUse names must match after sanitization (issue #5007)."""
+    raw_name = "foo@bar"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": raw_name,
+                "description": "test",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    tool_spec_name = _bedrock_tools_pt(tools)[0]["toolSpec"]["name"]
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": raw_name, "arguments": "{}"},
+        }
+    ]
+    tool_use_name = _convert_to_bedrock_tool_call_invoke(tool_calls)[0]["toolUse"][
+        "name"
+    ]
+
+    assert tool_spec_name == "foo_bar"
+    assert tool_use_name == tool_spec_name
+
+
+def test_bedrock_converse_messages_pt_tool_use_matches_tool_spec_hyphen_name():
+    """Hyphenated tool names are preserved and consistent in multi-turn history."""
+    tool_name = "my-tool"
+    messages = [
+        {"role": "user", "content": "call the tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_hyphen",
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": "{}"},
+                }
+            ],
+        },
+    ]
+    translated = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+    tool_use_blocks = [
+        block
+        for msg in translated
+        for block in msg.get("content", [])
+        if "toolUse" in block
+    ]
+    assert len(tool_use_blocks) == 1
+    assert tool_use_blocks[0]["toolUse"]["name"] == tool_name
+
+    tool_spec_name = _bedrock_tools_pt(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": "test",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+    )[0]["toolSpec"]["name"]
+    assert tool_spec_name == tool_name
+
+
 def test_bedrock_tool_call_invoke_multiple_normal_tools():
     """Multiple separate tool calls (normal parallel calling) work correctly."""
     tool_calls = [
@@ -2657,6 +2944,93 @@ def test_bedrock_converse_messages_pt_document_deterministic_name():
     name1 = result1[0]["content"][0]["document"]["name"]
     name2 = result2[0]["content"][0]["document"]["name"]
     assert name1 == name2
+
+
+def test_bedrock_converse_messages_pt_renames_duplicate_document_names():
+    """
+    The same document in multiple turns must not produce duplicate names;
+    Bedrock rejects requests with "Messages can not contain duplicate
+    document names". The first occurrence keeps its hash-based name and
+    later occurrences get a deterministic positional suffix.
+    """
+    document_block = {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": "dGVzdA==",
+        },
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [document_block, {"type": "text", "text": "summarize this"}],
+        },
+        {"role": "assistant", "content": "It says test."},
+        {
+            "role": "user",
+            "content": [document_block, {"type": "text", "text": "summarize again"}],
+        },
+    ]
+
+    result1 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    result2 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    names1 = [
+        block["document"]["name"]
+        for message in result1
+        for block in message["content"]
+        if "document" in block
+    ]
+    names2 = [
+        block["document"]["name"]
+        for message in result2
+        for block in message["content"]
+        if "document" in block
+    ]
+
+    assert len(names1) == 2
+    assert len(set(names1)) == 2
+    assert names1[1] == f"{names1[0]}_2"
+    assert names1 == names2
+
+    single_turn = _bedrock_converse_messages_pt(
+        [messages[0]], "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    assert names1[0] == single_turn[0]["content"][0]["document"]["name"]
+
+
+def test_rename_duplicate_bedrock_document_names_skips_organic_suffixes():
+    """
+    A renamed duplicate must not collide with a document whose organic name
+    already carries the would-be suffix (e.g. an existing ``report_2``),
+    regardless of whether that document appears before or after the rename.
+    """
+
+    def _contents(names):
+        return [
+            {
+                "role": "user",
+                "content": [{"document": {"name": name}} for name in names],
+            }
+        ]
+
+    def _names(contents):
+        return [block["document"]["name"] for block in contents[0]["content"]]
+
+    organic_first = _rename_duplicate_bedrock_document_names(
+        _contents(["report", "report_2", "report"])
+    )
+    assert _names(organic_first) == ["report", "report_2", "report_3"]
+
+    organic_last = _rename_duplicate_bedrock_document_names(
+        _contents(["report", "report", "report_2"])
+    )
+    assert _names(organic_last) == ["report", "report_3", "report_2"]
 
 
 def test_bedrock_converse_messages_pt_document_rejects_url_source():

@@ -1,9 +1,6 @@
 from typing import AsyncIterator, Dict, Iterator, Literal, NamedTuple, Union
 
-
-FileContentProvider = Literal[
-    "openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"
-]
+FileContentProvider = Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic", "manus"]
 
 
 class FileContentStreamingResult(NamedTuple):

@@ -42,11 +42,7 @@ interface EditHashicorpVaultModalProps {
   onSuccess: () => void;
 }
 
-const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
-  isVisible,
-  onCancel,
-  onSuccess,
-}) => {
+const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({ isVisible, onCancel, onSuccess }) => {
   const [form] = Form.useForm();
   const { accessToken } = useAuthorized();
   const { data } = useHashicorpVaultConfig();
@@ -111,22 +107,11 @@ const EditHashicorpVaultModal: React.FC<EditHashicorpVaultModalProps> = ({
     const isSensitive = SENSITIVE_FIELDS.has(fieldName);
     const existingValue = rawValues[fieldName];
     const hasExistingValue = isSensitive && existingValue != null && existingValue !== "";
-    const placeholder = hasExistingValue
-      ? `Leave blank to keep existing (${existingValue})`
-      : fieldSchema?.description;
+    const placeholder = hasExistingValue ? `Leave blank to keep existing (${existingValue})` : fieldSchema?.description;
 
     return (
-      <Form.Item
-        key={fieldName}
-        name={fieldName}
-        label={FIELD_LABELS[fieldName] ?? fieldName}
-        rules={rules}
-      >
-        {isSensitive ? (
-          <Input.Password placeholder={placeholder} />
-        ) : (
-          <Input placeholder={fieldSchema?.description} />
-        )}
+      <Form.Item key={fieldName} name={fieldName} label={FIELD_LABELS[fieldName] ?? fieldName} rules={rules}>
+        {isSensitive ? <Input.Password placeholder={placeholder} /> : <Input placeholder={fieldSchema?.description} />}
       </Form.Item>
     );
   };

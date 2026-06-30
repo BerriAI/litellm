@@ -145,6 +145,37 @@ def test_batch_cost_calculator_func_uses_custom_model_info():
     ), f"Expected total cost {expected}, got {cost}"
 
 
+@pytest.mark.parametrize("data_residency", ["eu", "us"])
+def test_batch_cost_calculator_applies_data_residency_uplift(
+    data_residency, monkeypatch
+):
+    """batch_cost_calculator should apply the regional uplift multiplier when
+    data_residency is set and the model carries a configured multiplier."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    prev_model_cost = litellm.model_cost
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+        base_prompt, base_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+        )
+        regional_prompt, regional_completion = batch_cost_calculator(
+            usage=usage,
+            model="gpt-5.4",
+            custom_llm_provider="openai",
+            data_residency=data_residency,
+        )
+
+        assert base_prompt > 0 and base_completion > 0
+        assert regional_prompt == pytest.approx(base_prompt * 1.10, rel=1e-9)
+        assert regional_completion == pytest.approx(base_completion * 1.10, rel=1e-9)
+    finally:
+        litellm.model_cost = prev_model_cost
+
+
 @pytest.mark.asyncio
 async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
     """calculate_batch_cost_and_usage should thread model_info."""

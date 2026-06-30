@@ -1,6 +1,7 @@
 import React from "react";
 import { Button, TextInput } from "@tremor/react";
 import { MCPTool, InputSchema, InputSchemaProperty } from "./types";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import { Form, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -14,9 +15,7 @@ function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): a
   }
 
   if (Array.isArray(items)) {
-    return items
-      .map((item) => buildDefaultValue(item))
-      .filter((value) => value !== undefined);
+    return items.map((item) => buildDefaultValue(item)).filter((value) => value !== undefined);
   }
 
   const itemDefault = buildDefaultValue(items);
@@ -182,16 +181,18 @@ export function ToolTestPanel({
 
     Object.entries(values).forEach(([key, value]) => {
       const prop = schemaToUse.properties?.[key];
-      if (prop && value !== null && value !== undefined && value !== "") {
+      // Strip leading/trailing whitespace from string inputs before submitting
+      const normalizedValue = typeof value === "string" ? value.trim() : value;
+      if (prop && normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
         switch (prop.type) {
           case "boolean":
-            convertedValues[key] = value === "true" || value === true;
+            convertedValues[key] = normalizedValue === "true" || normalizedValue === true;
             break;
           case "number":
           case "integer": {
-            const numericValue = Number(value);
+            const numericValue = Number(normalizedValue);
             convertedValues[key] = Number.isNaN(numericValue)
-              ? value
+              ? normalizedValue
               : prop.type === "integer"
                 ? Math.trunc(numericValue)
                 : numericValue;
@@ -200,28 +201,28 @@ export function ToolTestPanel({
           case "object":
           case "array": {
             try {
-              const parsed = typeof value === "string" ? JSON.parse(value) : value;
+              const parsed = typeof normalizedValue === "string" ? JSON.parse(normalizedValue) : normalizedValue;
               const isValidObject =
                 prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
               const isValidArray = prop.type === "array" && Array.isArray(parsed);
               if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
                 convertedValues[key] = parsed;
               } else {
-                convertedValues[key] = value;
+                convertedValues[key] = normalizedValue;
               }
             } catch (err) {
-              convertedValues[key] = value;
+              convertedValues[key] = normalizedValue;
             }
             break;
           }
           case "string":
-            convertedValues[key] = String(value);
+            convertedValues[key] = String(normalizedValue);
             break;
           default:
-            convertedValues[key] = value;
+            convertedValues[key] = normalizedValue;
         }
-      } else if (value !== null && value !== undefined && value !== "") {
-        convertedValues[key] = value;
+      } else if (normalizedValue !== null && normalizedValue !== undefined && normalizedValue !== "") {
+        convertedValues[key] = normalizedValue;
       }
     });
 
@@ -301,7 +302,7 @@ export function ToolTestPanel({
           {tool.mcp_info.logo_url && (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={tool.mcp_info.logo_url}
+              src={resolveLogoSrc(tool.mcp_info.logo_url)}
               alt={`${tool.mcp_info.server_name} logo`}
               className="w-6 h-6 object-contain"
             />
@@ -404,47 +405,50 @@ export function ToolTestPanel({
                         rules={[
                           {
                             required: actualSchema.required?.includes(key),
-                          message: `Please enter ${key}`,
-                        },
-                        ...(prop.type === "object" || prop.type === "array"
-                          ? [
-                              {
-                                validator: (_rule: any, value: any) => {
-                                  if (
-                                    (value === undefined || value === null || value === "") &&
-                                    !actualSchema.required?.includes(key)
-                                  ) {
-                                    return Promise.resolve();
-                                  }
-
-                                  try {
-                                    const parsed = typeof value === "string" ? JSON.parse(value) : value;
-                                    const isValidObject =
-                                      prop.type === "object" &&
-                                      parsed !== null &&
-                                      typeof parsed === "object" &&
-                                      !Array.isArray(parsed);
-                                    const isValidArray = prop.type === "array" && Array.isArray(parsed);
-
-                                    if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
+                            message: `Please enter ${key}`,
+                          },
+                          ...(prop.type === "object" || prop.type === "array"
+                            ? [
+                                {
+                                  validator: (_rule: any, value: any) => {
+                                    if (
+                                      (value === undefined || value === null || value === "") &&
+                                      !actualSchema.required?.includes(key)
+                                    ) {
                                       return Promise.resolve();
                                     }
 
-                                    return Promise.reject(
-                                      new Error(
-                                        prop.type === "object"
-                                          ? "Please enter a JSON object"
-                                          : "Please enter a JSON array",
-                                      ),
-                                    );
-                                  } catch (error) {
-                                    return Promise.reject(new Error("Invalid JSON"));
-                                  }
+                                    try {
+                                      const parsed = typeof value === "string" ? JSON.parse(value) : value;
+                                      const isValidObject =
+                                        prop.type === "object" &&
+                                        parsed !== null &&
+                                        typeof parsed === "object" &&
+                                        !Array.isArray(parsed);
+                                      const isValidArray = prop.type === "array" && Array.isArray(parsed);
+
+                                      if (
+                                        (prop.type === "object" && isValidObject) ||
+                                        (prop.type === "array" && isValidArray)
+                                      ) {
+                                        return Promise.resolve();
+                                      }
+
+                                      return Promise.reject(
+                                        new Error(
+                                          prop.type === "object"
+                                            ? "Please enter a JSON object"
+                                            : "Please enter a JSON array",
+                                        ),
+                                      );
+                                    } catch (error) {
+                                      return Promise.reject(new Error("Invalid JSON"));
+                                    }
+                                  },
                                 },
-                              },
-                            ]
-                          : []),
-                      ]}
+                              ]
+                            : []),
+                        ]}
                         className="mb-3"
                       >
                         {prop.type === "string" && prop.enum && (
@@ -496,7 +500,9 @@ export function ToolTestPanel({
                               rows={prop.type === "object" ? 6 : 4}
                               placeholder={
                                 prop.description ||
-                                (prop.type === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
+                                (prop.type === "object"
+                                  ? `Enter JSON object for ${key}`
+                                  : `Enter JSON array for ${key}`)
                               }
                               defaultValue={(initialValue as string) ?? (prop.type === "object" ? "{}" : "[]")}
                               spellCheck={false}
@@ -504,9 +510,7 @@ export function ToolTestPanel({
                               className="w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm font-mono"
                             />
                             <p className="text-xs text-gray-500">
-                              {prop.type === "object"
-                                ? "Provide a valid JSON object."
-                                : "Provide a valid JSON array."}
+                              {prop.type === "object" ? "Provide a valid JSON object." : "Provide a valid JSON array."}
                             </p>
                           </div>
                         )}
@@ -518,6 +522,7 @@ export function ToolTestPanel({
 
               <div className="pt-3 border-t border-gray-100">
                 <Button
+                  type="button"
                   onClick={() => form.submit()}
                   disabled={isLoading}
                   variant="primary"

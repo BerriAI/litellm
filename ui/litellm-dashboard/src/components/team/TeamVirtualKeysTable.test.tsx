@@ -56,7 +56,7 @@ const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
     max_budget: 100,
     models: ["gpt-4"],
     ...overrides,
-  } as KeyResponse);
+  }) as KeyResponse;
 
 const mockOrganization: Organization = {
   organization_id: "org-123",
@@ -104,7 +104,7 @@ describe("TeamVirtualKeysTable", () => {
         expect.objectContaining({
           teamID: "team-1",
           expand: "user",
-        })
+        }),
       );
     });
   });
@@ -123,9 +123,7 @@ describe("TeamVirtualKeysTable", () => {
       refetch: vi.fn(),
     } as any);
 
-    renderWithProviders(
-      <TeamVirtualKeysTable {...defaultProps} organization={mockOrganization} />
-    );
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} organization={mockOrganization} />);
 
     // Key with org_id should display in table - org-123 from organization
     await waitFor(() => {
@@ -187,17 +185,20 @@ describe("TeamVirtualKeysTable", () => {
 
   it("should fetch page 2 when Next is clicked", async () => {
     const user = userEvent.setup();
-    mockUseKeys.mockImplementation((page: number) => ({
-      data: {
-        keys: page === 1 ? [createMockKey()] : [createMockKey({ token: "sk-page2", key_alias: "page2_key" })],
-        total_count: 100,
-        current_page: page,
-        total_pages: 3,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any));
+    mockUseKeys.mockImplementation(
+      (page: number) =>
+        ({
+          data: {
+            keys: page === 1 ? [createMockKey()] : [createMockKey({ token: "sk-page2", key_alias: "page2_key" })],
+            total_count: 100,
+            current_page: page,
+            total_pages: 3,
+          } as KeysResponse,
+          isPending: false,
+          isFetching: false,
+          refetch: vi.fn(),
+        }) as any,
+    );
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
@@ -209,11 +210,7 @@ describe("TeamVirtualKeysTable", () => {
     await user.click(nextButton);
 
     await waitFor(() => {
-      expect(mockUseKeys).toHaveBeenLastCalledWith(
-        2,
-        50,
-        expect.objectContaining({ teamID: "team-1" })
-      );
+      expect(mockUseKeys).toHaveBeenLastCalledWith(2, 50, expect.objectContaining({ teamID: "team-1" }));
     });
   });
 
@@ -259,15 +256,10 @@ describe("TeamVirtualKeysTable", () => {
     });
 
     // Use unique teamId to avoid cache hit from previous tests (refetchOnMount: false)
-    renderWithProviders(
-      <TeamVirtualKeysTable {...defaultProps} teamId="team-filter-options-test" />
-    );
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} teamId="team-filter-options-test" />);
 
     await waitFor(() => {
-      expect(mockFetchTeamFilterOptions).toHaveBeenCalledWith(
-        "test-token",
-        "team-filter-options-test"
-      );
+      expect(mockFetchTeamFilterOptions).toHaveBeenCalledWith("test-token", "team-filter-options-test");
     });
   });
 

@@ -1,5 +1,5 @@
 """
-Transformation logic from OpenAI /v1/embeddings format to LM Studio's  `/v1/embeddings` format. 
+Transformation logic from OpenAI /v1/embeddings format to LM Studio's  `/v1/embeddings` format.
 
 Why separate file? Make it easy to see how transformation works
 
@@ -44,7 +44,5 @@ class LmStudioEmbeddingConfig:
     def get_supported_openai_params(self) -> List[str]:
         return []
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         return optional_params

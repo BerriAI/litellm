@@ -1,6 +1,8 @@
 import json
 from typing import Any, Dict, Optional
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -269,6 +271,155 @@ class TestExecuteWithMcpClient:
         )
 
     @pytest.mark.asyncio
+    async def test_interactive_oauth_resolves_forwarded_token_via_presented_store(
+        self, monkeypatch
+    ):
+        """Interactive authorization_code preview (oauth2, no client credentials): the forwarded
+        just-authorized token is resolved THROUGH the v2 resolver via a one-shot presented store
+        (cred_provider), not the caller-override path. The bare token (Bearer stripped) is the
+        upstream credential and is not also forwarded in extra_headers."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="linear",
+            url="https://mcp.linear.app/mcp",
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://mcp.linear.app/authorize",
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer forwarded-user-token"},
+        )
+
+        assert result["status"] == "ok"
+        # Resolved via the v2 resolver, never the caller-override header
+        assert captured["mcp_auth_header"] is None
+        provider = captured["cred_provider"]
+        assert provider is not None
+        token = await provider._oauth_token_store.fetch("u", "s")
+        assert token is not None and token.access_token == "forwarded-user-token"
+        # The resolver supplies the bearer, so it is not also forwarded as a caller header
+        extra_headers = captured.get("extra_headers") or {}
+        assert not any(k.lower() == "authorization" for k in extra_headers)
+
+    @pytest.mark.asyncio
+    async def test_m2m_does_not_build_presented_store(self, monkeypatch):
+        """M2M (client_credentials): to_server_spec returns None, so no presented provider is built;
+        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before)."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="m2m-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2,
+            token_url="https://auth.example.com/token",
+            credentials={"client_id": "my-id", "client_secret": "my-secret"},
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer sk-litellm-api-key"},
+        )
+
+        assert result["status"] == "ok"
+        assert captured.get("cred_provider") is None
+        assert captured["mcp_auth_header"] is None
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_does_not_build_presented_store(self, monkeypatch):
+        """OBO / token-exchange (auth_type oauth2_token_exchange, not oauth2): excluded by the
+        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs."""
+        captured: dict = {}
+
+        def fake_build_stdio_env(server, raw_headers):
+            return None
+
+        async def fake_create_client(*args, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_build_stdio_env",
+            fake_build_stdio_env,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_create_mcp_client",
+            fake_create_client,
+            raising=False,
+        )
+
+        async def ok_operation(client):
+            return {"status": "ok"}
+
+        payload = NewMCPServerRequest(
+            server_name="obo-server",
+            url="https://example.com",
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_url="https://auth.example.com/token",
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(
+            payload,
+            ok_operation,
+            oauth2_headers={"Authorization": "Bearer subject-jwt"},
+        )
+
+        assert result["status"] == "ok"
+        assert captured.get("cred_provider") is None
+
+    @pytest.mark.asyncio
     async def test_catches_exception_group(self, monkeypatch):
         """MCP SDK's anyio TaskGroup raises BaseExceptionGroup which does not
         inherit from Exception.  The handler must catch it and return an error
@@ -499,6 +650,7 @@ class TestListToolsRestAPI:
             raw_headers=None,
             user_api_key_auth=None,
             extra_headers=None,
+            apply_tool_filters=True,
         ):
             captured["called"] = True
             captured["server"] = server
@@ -543,6 +695,150 @@ class TestListToolsRestAPI:
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
 
+    async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
+        """include_disabled_tools skips the allowlist filter only for PROXY_ADMIN;
+        a non-admin passing it stays filtered so the REST endpoint can't be used
+        to enumerate deliberately-disabled tools."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = ["tool1"]
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server, server_auth_header, *args, apply_tool_filters=True, **kwargs
+        ):
+            captured["apply_tool_filters"] = apply_tool_filters
+            return ["tool-1"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+
+        await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            include_disabled_tools=True,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert captured["apply_tool_filters"] is False
+
+        await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            include_disabled_tools=True,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        assert captured["apply_tool_filters"] is True
+
+    @pytest.mark.parametrize("upstream_status", [401, 403])
+    async def test_upstream_auth_failure_surfaces_status_and_challenge(
+        self, monkeypatch, upstream_status
+    ):
+        """A single-server pass-through request whose upstream rejects the token
+        must surface the upstream status (401 or 403) plus its WWW-Authenticate
+        challenge, not collapse into a 200 ``unexpected_error`` body."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "passthrough"
+            allowed_tools = None
+            mcp_info = {"server_name": "passthrough"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        challenge = 'Bearer resource_metadata="https://upstream/.well-known"'
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPUpstreamAuthError(
+                status_code=upstream_status,
+                www_authenticate=challenge,
+                server_name="passthrough",
+            )
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == upstream_status
+        assert exc_info.value.headers == {"www-authenticate": challenge}
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""
@@ -575,6 +871,7 @@ class TestListToolsRestAPI:
             raw_headers=None,
             user_api_key_auth=None,
             extra_headers=None,
+            apply_tool_filters=True,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -718,6 +1015,7 @@ class TestListToolsRestAPI:
             raw_headers=None,
             user_api_key_auth=None,
             extra_headers=None,
+            apply_tool_filters=True,
         ):
             captured["server"] = server
             captured["auth_header"] = server_auth_header
@@ -793,6 +1091,25 @@ class TestCallToolRestAPI:
         monkeypatch.setattr(
             "litellm.proxy.proxy_server.add_litellm_data_to_request",
             fake_add_litellm_data_to_request,
+            raising=False,
+        )
+
+        mock_server = MagicMock()
+        mock_server.server_id = "server-1"
+
+        def fake_get_mcp_server_by_id(server_id):
+            return mock_server if server_id == "server-1" else None
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            fake_get_mcp_server_by_id,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda *args, **kwargs: None,
             raising=False,
         )
 
@@ -1191,6 +1508,56 @@ class TestGetToolsForSingleServer:
         assert "tool1" not in tool_names
         assert "tool4" not in tool_names
 
+    async def test_apply_tool_filters_false_returns_full_catalog(self, monkeypatch):
+        """apply_tool_filters=False returns the raw catalog without the server
+        allowed_tools gate, so the config UI can render disabled tools as off."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        class MockTool:
+            def __init__(self, name):
+                self.name = name
+                self.description = name
+                self.inputSchema = {}
+
+        mock_tools = [MockTool("tool1"), MockTool("tool2"), MockTool("tool3")]
+
+        async def fake_get_tools_from_server(**kwargs):
+            return mock_tools
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            fake_get_tools_from_server,
+            raising=False,
+        )
+
+        # Server enforces an allowlist of just tool1.
+        server = MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport=MCPTransport.sse,
+            allowed_tools=["tool1"],
+        )
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", object_permission=None)
+
+        # Runtime default: only the allowed tool comes back.
+        filtered = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+        )
+        assert [t.name for t in filtered] == ["tool1"]
+
+        # Config view: full catalog, including the disabled tools.
+        full = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+            apply_tool_filters=False,
+        )
+        assert {t.name for t in full} == {"tool1", "tool2", "tool3"}
+
 
 class TestStdioCommandAllowlist:
     """Tests for MCP stdio command allowlist validation."""
@@ -1442,9 +1809,9 @@ class TestPreviewOpenAPITools:
         names = [t["name"] for t in result["tools"]]
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in names:
-            assert anthropic_re.match(
-                name
-            ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            assert anthropic_re.match(name), (
+                f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+            )
         assert "actions_download-job-logs-for-workflow-run" in names
         assert "pulls_list-files" in names
 
@@ -1501,9 +1868,7 @@ class TestPreviewOpenAPITools:
 
         registered_summary_to_name: dict = {}
 
-        def fake_create_tool_function(
-            path, method, operation, base_url
-        ):  # noqa: ANN001
+        def fake_create_tool_function(path, method, operation, base_url):  # noqa: ANN001
             def _f():
                 return None
 
@@ -1516,9 +1881,7 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(
-                self, name, description, input_schema, handler
-            ):  # noqa: ANN001
+            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(
@@ -1537,3 +1900,116 @@ class TestPreviewOpenAPITools:
             "order is out of sync, so collision suffixes (_2, _3, ...) "
             "land on different operations"
         )
+
+
+class TestConnectionErrorMessage:
+    """The test-connection endpoints turn raw transport errors into messages.
+
+    The message is returned to an admin in an API response, so it must explain
+    the failure without echoing the raw header value, which can carry a secret
+    (e.g. ``Authorization: Bearer <token>``).
+    """
+
+    def test_local_protocol_error_is_actionable_and_redacted(self):
+        secret = "Bearer sk-super-secret-token"
+        exc = httpx.LocalProtocolError(f"Illegal header value b' {secret}'")
+
+        message = rest_endpoints._connection_error_message(exc)
+
+        assert "header" in message.lower()
+        assert secret not in message
+
+    def test_connect_error_points_at_reachability(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectError("All connection attempts failed")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_timeout_error_message(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectTimeout("timed out")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_http_status_error_includes_status_code(self):
+        response = httpx.Response(status_code=503)
+        exc = httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request("POST", "http://x/"),
+            response=response,
+        )
+        message = rest_endpoints._connection_error_message(exc)
+        assert "503" in message
+
+    def test_unknown_error_falls_back_to_generic(self):
+        message = rest_endpoints._connection_error_message(RuntimeError("weird"))
+        assert "weird" not in message
+        assert "proxy logs" in message.lower()
+
+
+class TestToolResponseMcpInfoEnrichment:
+    """The REST tools/list response must expose the user-facing alias and the
+    server_id alongside the internal server_name so clients (agent builder UIs)
+    can map the internal config key to a friendly name without needing the
+    mcp_routes-gated server listing.
+    """
+
+    def test_enriches_mcp_info_with_alias_and_server_id(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        server = MCPServer(
+            server_id="a1b2c3d4",
+            name="mcpAtlassian",
+            alias="atlassian",
+            server_name="mcpAtlassian",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "mcpAtlassian"},
+        )
+        tools = [
+            MCPTool(
+                name="get_issue",
+                description="Fetch a Jira issue",
+                inputSchema={"type": "object"},
+            )
+        ]
+
+        result = rest_endpoints._create_tool_response_objects(tools, server)
+
+        assert result[0].mcp_info == {
+            "server_name": "mcpAtlassian",
+            "server_id": "a1b2c3d4",
+            "alias": "atlassian",
+        }
+
+    def test_alias_none_is_explicit_in_mcp_info(self):
+        from mcp.types import Tool as MCPTool
+
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        server = MCPServer(
+            server_id="server-uuid",
+            name="no_alias_server",
+            alias=None,
+            server_name="no_alias_server",
+            transport=MCPTransport.http,
+            mcp_info={"server_name": "no_alias_server"},
+        )
+        tools = [
+            MCPTool(
+                name="ping",
+                description="Ping",
+                inputSchema={"type": "object"},
+            )
+        ]
+
+        result = rest_endpoints._create_tool_response_objects(tools, server)
+
+        assert result[0].mcp_info == {
+            "server_name": "no_alias_server",
+            "server_id": "server-uuid",
+            "alias": None,
+        }

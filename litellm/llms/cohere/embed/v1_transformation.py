@@ -27,9 +27,7 @@ class CohereEmbeddingConfig:
     def get_supported_openai_params(self) -> List[str]:
         return ["encoding_format"]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 optional_params["embedding_types"] = v
@@ -110,22 +108,40 @@ class CohereEmbeddingConfig:
             additional_args={"complete_input_dict": data},
             original_response=response_json,
         )
+        return self._populate_embedding_response(
+            response_json=response_json,
+            model_response=model_response,
+            model=model,
+            encoding=encoding,
+            input=input,
+        )
+
+    def _populate_embedding_response(
+        self,
+        response_json: dict,
+        model_response: EmbeddingResponse,
+        model: str,
+        encoding: Any,
+        input: list,
+    ) -> EmbeddingResponse:
         """
-            response 
+        Parse a Cohere embed response body into an OpenAI-style EmbeddingResponse.
+
+        Split out from `_transform_response` so callers that already log
+        `post_call` themselves (e.g. SageMaker's embedding handler) can reuse
+        the parsing without triggering a second `post_call`.
+
+        Response shape:
             {
                 'object': "list",
-                'data': [
-                
-                ]
-                'model', 
-                'usage'
+                'data': [...],
+                'model',
+                'usage',
             }
         """
         embeddings = response_json["embeddings"]
         output_data = []
-        is_embeddings_by_type = (
-            response_json.get("response_type") == "embeddings_by_type"
-        )
+        is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
 
         if isinstance(embeddings, dict):
             is_embeddings_by_type = True
@@ -143,15 +159,10 @@ class CohereEmbeddingConfig:
                     )
         else:
             for idx, embedding in enumerate(embeddings):
-                output_data.append(
-                    {"object": "embedding", "index": idx, "embedding": embedding}
-                )
+                output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model
-        input_tokens = 0
-        for text in input:
-            input_tokens += len(encoding.encode(text))
 
         setattr(
             model_response,
