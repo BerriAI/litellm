@@ -431,9 +431,11 @@ def _count_function_call_tokens(
             function_arguments = tool_call["function"].get("arguments", "")
             total += count_function(str(function_arguments))
         return total
-    if not isinstance(value, Mapping):
-        raise ValueError(f"Unsupported type {type(value)} for key function_call in message {message}")
-    return count_function(str(value.get("arguments", "")))
+    if key == "function_call":
+        if not isinstance(value, Mapping):
+            raise ValueError(f"Unsupported type {type(value)} for key function_call in message {message}")
+        return count_function(str(value.get("arguments", "")))
+    raise ValueError(f"Unexpected key {key!r}; expected 'tool_calls' or 'function_call'")
 
 
 def _count_messages(
