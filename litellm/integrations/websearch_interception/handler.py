@@ -1009,38 +1009,37 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
                 llm_router = None
 
-            # Determine search provider from router's search_tools
+            # Determine search provider and credentials from router's search_tools
             search_provider: Optional[str] = None
+            search_api_key: Optional[str] = None
+            search_api_base: Optional[str] = None
+            search_timeout: Optional[float] = None
+            resolved_tool: Optional[dict] = None
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
-                    # Find specific search tool by name
-                    matching_tools = [
-                        tool
-                        for tool in llm_router.search_tools
-                        if tool.get("search_tool_name") == self.search_tool_name
-                    ]
-                    if matching_tools:
-                        search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get("search_provider")
-                        verbose_logger.debug(
-                            f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
-                            f"with provider '{search_provider}'"
-                        )
+                    resolved_tool = next(
+                        (t for t in llm_router.search_tools if t.get("search_tool_name") == self.search_tool_name),
+                        None,
+                    )
+                    if resolved_tool:
+                        verbose_logger.debug(f"WebSearchInterception: Found search tool '{self.search_tool_name}'")
                     else:
                         verbose_logger.debug(
                             f"WebSearchInterception: Search tool '{self.search_tool_name}' not found in router, "
                             "falling back to first available or perplexity"
                         )
 
-                # If no specific tool or not found, use first available
-                if not search_provider and llm_router.search_tools:
-                    first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get("search_provider")
-                    verbose_logger.debug(
-                        f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
-                    )
+                if resolved_tool is None and llm_router.search_tools:
+                    resolved_tool = llm_router.search_tools[0]
+                    verbose_logger.debug("WebSearchInterception: Using first available search tool")
 
-            # Fallback to perplexity if no router or no search tools configured
+            if resolved_tool is not None:
+                litellm_params = resolved_tool.get("litellm_params", {})
+                search_provider = litellm_params.get("search_provider")
+                search_api_key = litellm_params.get("api_key")
+                search_api_base = litellm_params.get("api_base")
+                search_timeout = litellm_params.get("timeout")
+
             if not search_provider:
                 search_provider = "perplexity"
                 verbose_logger.debug(
@@ -1051,7 +1050,13 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            result = await litellm.asearch(
+                query=query,
+                search_provider=search_provider,
+                api_key=search_api_key,
+                api_base=search_api_base,
+                timeout=search_timeout,
+            )
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
