@@ -11,7 +11,7 @@ const { fetchMock } = vi.hoisted(() => {
 });
 
 const handleError = vi.fn();
-const deriveErrorMessage = vi.fn(() => "derived message");
+const deriveErrorMessage = vi.fn((..._args: unknown[]) => "derived message");
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: () => "http://localhost:4000",
   getGlobalLitellmHeaderName: () => "Authorization",
