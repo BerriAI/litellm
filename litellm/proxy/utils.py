@@ -5539,7 +5539,6 @@ def _strip_null_bytes(payload: dict[str, object]) -> dict[str, object]:
     return {k: _strip_null_bytes_from_value(v) for k, v in payload.items()}
 
 
-
 def _raise_failed_update_spend_exception(e: Exception, start_time: float, proxy_logging_obj: ProxyLogging):
     """
     Raise an exception for failed update spend logs
