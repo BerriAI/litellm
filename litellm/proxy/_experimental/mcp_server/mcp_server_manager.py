@@ -540,6 +540,18 @@ class MCPServerManager:
             return "client_credentials"
         return None
 
+    @staticmethod
+    def _obo_needs_endpoint_discovery(
+        auth_type: Optional[MCPAuthType],
+        token_exchange_endpoint: Optional[str],
+        token_url: Optional[str],
+    ) -> bool:
+        """An ``oauth2_token_exchange`` server with no configured token endpoint can have it
+        discovered (RFC 9728 -> RFC 8414) the same way the ``oauth2`` flow already does; an explicitly
+        configured ``token_exchange_endpoint``/``token_url`` wins and skips the discovery round-trip.
+        """
+        return auth_type == MCPAuth.oauth2_token_exchange and not (token_exchange_endpoint or token_url)
+
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id),
@@ -729,9 +741,17 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
-            if server_url and auth_type is not None and auth_type == MCPAuth.oauth2:
+            if server_url and (
+                auth_type == MCPAuth.oauth2
+                or self._obo_needs_endpoint_discovery(
+                    auth_type,
+                    server_config.get("token_exchange_endpoint"),
+                    server_config.get("token_url"),
+                )
+            ):
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
+                    allow_origin_fallback=auth_type == MCPAuth.oauth2,
                 )
             else:
                 mcp_oauth_metadata = None
@@ -1109,9 +1129,19 @@ class MCPServerManager:
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
-        needs_discovery = bool(server_url) and auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url
+        needs_discovery = bool(server_url) and (
+            (auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url)
+            or self._obo_needs_endpoint_discovery(
+                auth_type,
+                credentials_dict.get("token_exchange_endpoint") if credentials_dict else None,
+                mcp_server.token_url,
+            )
+        )
         mcp_oauth_metadata = (
-            await self._descovery_metadata(server_url=server_url)  # type: ignore[arg-type]
+            await self._descovery_metadata(
+                server_url=server_url,  # type: ignore[arg-type]
+                allow_origin_fallback=auth_type == MCPAuth.oauth2,
+            )
             if needs_discovery
             else None
         )
@@ -2489,8 +2519,17 @@ class MCPServerManager:
     async def _descovery_metadata(
         self,
         server_url: str,
+        *,
+        allow_origin_fallback: bool = True,
     ) -> Optional[MCPOAuthMetadata]:
-        """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery)."""
+        """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery).
+
+        ``allow_origin_fallback`` controls the last-resort guess that treats the resource server's own
+        origin as its authorization server when nothing is advertised. The browser ``oauth2`` flow keeps
+        it (a human sees the redirect), but token_exchange (OBO) sets it False so the gateway never
+        exchanges a subject token against an endpoint it inferred rather than one explicitly configured
+        or authoritatively advertised via RFC 9728 / RFC 8414.
+        """
 
         try:
             client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -2540,7 +2579,7 @@ class MCPServerManager:
                 ) = await self._attempt_well_known_discovery(server_url)
 
             metadata = None
-            if not authorization_servers:
+            if allow_origin_fallback and not authorization_servers:
                 try:
                     parsed_url = urlparse(server_url)
                     if parsed_url.scheme and parsed_url.netloc:

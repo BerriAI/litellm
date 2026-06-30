@@ -1509,8 +1509,10 @@ class TestMCPServerManager:
             registration_url="https://discovered.example.com/register",
         )
 
-        async def fake_discovery(server_url: str):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
             assert server_url == "https://example.com/mcp"
+            # oauth2 (browser flow) keeps the origin fallback; only OBO disables it.
+            assert allow_origin_fallback is True
             return discovered_metadata
 
         manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
@@ -5550,6 +5552,119 @@ class TestOBOCallToolRetry:
         assert result.isError is True
         manager._create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
+
+
+class TestOBOEndpointDiscovery:
+    """An oauth2_token_exchange server with no configured token endpoint discovers it (RFC 9728 ->
+    RFC 8414) like the oauth2 flow does; an explicitly configured endpoint skips discovery."""
+
+    @pytest.mark.parametrize(
+        "auth_type, endpoint, token_url, expected",
+        [
+            (MCPAuth.oauth2_token_exchange, None, None, True),  # OBO, nothing configured -> discover
+            (MCPAuth.oauth2_token_exchange, "https://idp/token", None, False),  # endpoint set -> skip
+            (MCPAuth.oauth2_token_exchange, None, "https://idp/token", False),  # token_url set -> skip
+            (MCPAuth.oauth2, None, None, False),  # not OBO
+            (MCPAuth.none, None, None, False),
+            (None, None, None, False),
+        ],
+    )
+    def test_decision(self, auth_type, endpoint, token_url, expected):
+        assert MCPServerManager._obo_needs_endpoint_discovery(auth_type, endpoint, token_url) is expected
+
+    @pytest.mark.asyncio
+    async def test_config_obo_without_endpoint_discovers_token_endpoint(self):
+        manager = MCPServerManager()
+        discovered = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url=None,
+            token_url="https://discovered.example.com/token",
+            registration_url=None,
+        )
+        seen = []
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            seen.append((server_url, allow_origin_fallback))
+            return discovered
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        await manager.load_servers_from_config(
+            {
+                "obo": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2_token_exchange,
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                }
+            }
+        )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        # OBO discovery runs, and never guesses the resource origin as the IdP (origin fallback off).
+        assert seen == [("https://example.com/mcp", False)]
+        # The discovered token endpoint lands on token_url, which _token_exchange_spec reads.
+        assert server.token_url == "https://discovered.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_config_obo_with_configured_endpoint_skips_discovery(self):
+        manager = MCPServerManager()
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            raise AssertionError("discovery must not run when the endpoint is configured")
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        await manager.load_servers_from_config(
+            {
+                "obo": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2_token_exchange,
+                    "token_exchange_endpoint": "https://configured.example.com/token",
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                }
+            }
+        )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.token_exchange_endpoint == "https://configured.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_does_not_guess_origin_when_disallowed(self):
+        # The authoritative RFC 9728 -> RFC 8414 chain stays, but with allow_origin_fallback=False the
+        # resource origin is never assumed to be the IdP, so no token endpoint is invented.
+        manager = MCPServerManager()
+        server_url = "https://example.com/public/mcp"
+        request = httpx.Request("GET", server_url)
+        response_obj = httpx.Response(
+            status_code=401, request=request, headers={"WWW-Authenticate": 'Bearer scope="read"'}
+        )
+        response_obj.raise_for_status = MagicMock(
+            side_effect=lambda: (_ for _ in ()).throw(
+                httpx.HTTPStatusError("unauthorized", request=request, response=response_obj)
+            )
+        )
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=response_obj)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(manager, "_fetch_oauth_metadata_from_resource", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_attempt_well_known_discovery", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_fetch_authorization_server_metadata", AsyncMock()) as mock_fetch_auth,
+        ):
+            result = await manager._descovery_metadata(server_url, allow_origin_fallback=False)
+
+        # No advertised AS -> with the guess disabled, the AS-metadata fetch is never attempted, so no
+        # token endpoint is discovered (only the scopes parsed from the challenge survive).
+        mock_fetch_auth.assert_not_awaited()
+        assert result is None or result.token_url is None
 
 
 if __name__ == "__main__":
