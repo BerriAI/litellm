@@ -294,7 +294,9 @@ curl http://localhost:4000/v1/chat/completions \
 Use `tag_regex` on a deployment to match incoming requests by their headers (e.g. `User-Agent`) — without requiring the client to send explicit tags. Patterns are operator-configured and compiled server-side, not supplied by callers.
 
 :::caution
-User-Agent is a client-supplied header and can be set to any value. Use `tag_regex` for traffic classification, not access-control enforcement.
+User-Agent is a client-supplied header and can be set to any value by any caller. Use `tag_regex` for traffic classification, not access-control enforcement.
+
+Header-based routing is not a security boundary on its own. It is only meaningful when requests pass through an upstream authentication layer (e.g., an API gateway or reverse proxy that validates credentials and rejects unauthenticated traffic before it reaches LiteLLM). Without such a layer, any client can spoof the User-Agent and be routed to a deployment it should not reach.
 :::
 
 ### 1. Config
