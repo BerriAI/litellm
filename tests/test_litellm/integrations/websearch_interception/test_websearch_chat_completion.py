@@ -494,6 +494,56 @@ async def test_maybe_run_chat_completion_agentic_loop_calls_chat_completion_hook
     assert result is sentinel, "Expected agentic loop to return sentinel final response"
 
 
+@pytest.mark.asyncio
+async def test_execute_chat_completion_agentic_loop_strips_tool_choice():
+    """Regression: _execute_chat_completion_agentic_loop must not forward tool_choice
+    from the original request into the follow-up synthesis call.
+
+    When the original request forces tool_choice to litellm_web_search, merging
+    optional_params into the follow-up params without explicit removal causes the
+    model to call the search tool again instead of synthesizing an answer.
+    """
+    from unittest.mock import patch
+
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
+
+    captured_kwargs: dict = {}
+
+    async def fake_acompletion(**kwargs):
+        captured_kwargs.update(kwargs)
+        return ModelResponse(id="followup", model="gpt-4o", object="chat.completion")
+
+    async def fake_search(query):
+        return ("Bitcoin price is $60,000", None)
+
+    with patch.object(websearch_logger, "_execute_search", side_effect=fake_search):
+        with patch("litellm.acompletion", side_effect=fake_acompletion):
+            await websearch_logger._execute_chat_completion_agentic_loop(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "What is Bitcoin price?"}],
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "litellm_web_search",
+                        "input": {"query": "bitcoin price"},
+                    }
+                ],
+                optional_params={
+                    "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}],
+                    "tool_choice": {"type": "function", "function": {"name": "litellm_web_search"}},
+                    "max_tokens": 512,
+                },
+                logging_obj=MagicMock(),
+                stream=False,
+                kwargs={},
+            )
+
+    assert "tool_choice" not in captured_kwargs, (
+        "tool_choice must not appear in follow-up acompletion kwargs; "
+        "it would force the model to call the search tool again instead of synthesizing"
+    )
+
+
 if __name__ == "__main__":
     # Run with: pytest test_websearch_chat_completion.py -v -s
     pytest.main([__file__, "-v", "-s"])
