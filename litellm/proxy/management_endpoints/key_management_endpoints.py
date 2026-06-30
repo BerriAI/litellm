@@ -80,6 +80,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
+    validate_key_vector_stores_against_team,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
@@ -348,7 +349,21 @@ def _personal_key_membership_check(
     return True
 
 
+def _object_permission_to_dict(
+    object_permission: Optional[LiteLLM_ObjectPermissionBase],
+) -> Optional[ObjectPermissionDict]:
+    if object_permission is None:
+        return None
+    return cast(ObjectPermissionDict, object_permission.model_dump(exclude_unset=True))
+
+
 def _personal_key_generation_check(user_api_key_dict: UserAPIKeyAuth, data: GenerateKeyRequest):
+    TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_table=None,
+        access_group_ids=data.access_group_ids,
+    )
+
     if (
         litellm.key_generation_settings is None
         or litellm.key_generation_settings.get("personal_key_generation") is None
@@ -930,17 +945,24 @@ async def _common_key_generation_helper(
         data_json.pop("tags")
 
     # Validate MCP servers in object_permission are within team scope
+    _is_proxy_admin_caller = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
         prisma_client=prisma_client,
-        is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value,
+        is_proxy_admin=_is_proxy_admin_caller,
     )
     if normalized_object_permission is not None:
         data_json["object_permission"] = normalized_object_permission
     await validate_key_search_tools_against_team(
         object_permission=data_json.get("object_permission"),
         team_obj=team_table,
+        is_proxy_admin=_is_proxy_admin_caller,
+    )
+    await validate_key_vector_stores_against_team(
+        object_permission=data_json.get("object_permission"),
+        team_obj=team_table,
+        is_proxy_admin=_is_proxy_admin_caller,
     )
 
     data_json = await _set_object_permission(
@@ -2143,7 +2165,7 @@ async def _validate_mcp_servers_for_key_update(
     prisma_client: Any,
     user_api_key_cache: Any,
     is_proxy_admin: bool,
-) -> Optional[dict]:
+) -> Optional[ObjectPermissionDict]:
     """Validate MCP servers in object_permission against the effective team."""
     effective_team_obj = team_obj
     # If team_id isn't being changed, resolve the existing key's team
@@ -2154,13 +2176,7 @@ async def _validate_mcp_servers_for_key_update(
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
-    object_permission_dict: Optional[dict] = None
-    if data.object_permission is not None:
-        object_permission_dict = (
-            data.object_permission.model_dump(exclude_unset=True)
-            if hasattr(data.object_permission, "model_dump")
-            else dict(data.object_permission)  # type: ignore[arg-type]
-        )
+    object_permission_dict = _object_permission_to_dict(data.object_permission)
     normalized_object_permission = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
@@ -2170,6 +2186,12 @@ async def _validate_mcp_servers_for_key_update(
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
+        is_proxy_admin=is_proxy_admin,
+    )
+    await validate_key_vector_stores_against_team(
+        object_permission=object_permission_dict,
+        team_obj=effective_team_obj,
+        is_proxy_admin=is_proxy_admin,
     )
     return normalized_object_permission
 
@@ -2301,20 +2323,18 @@ async def _validate_update_key_data(
                 detail=f"Team not found for team_id={data.team_id}. Non-admin users cannot set keys to non-existent teams.",
             )
 
-        # Field-level opt-in: non-admin members may only assign access groups when
-        # the team has enabled KEY_ACCESS_GROUP_ASSIGNMENT.
-        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
-            user_api_key_dict=user_api_key_dict,
-            team_table=team_obj,
-            access_group_ids=data.access_group_ids,
-        )
-
         if team_obj is not None:
             await _check_team_key_limits(
                 team_table=team_obj,
                 data=data,
                 prisma_client=prisma_client,
             )
+
+    TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+        user_api_key_dict=user_api_key_dict,
+        team_table=team_obj,
+        access_group_ids=data.access_group_ids,
+    )
 
     # Validate key against project limits if project_id is being set
     _project_id_to_check = getattr(data, "project_id", None) or getattr(existing_key_row, "project_id", None)
@@ -4623,9 +4643,7 @@ async def regenerate_key_fn(
                 detail={"error": "You are not authorized to regenerate this key"},
             )
 
-        # Gate access_group_ids on regenerate, same as /key/generate and
-        # /key/update. Use the existing key's team since the body may omit it.
-        if data is not None and data.access_group_ids:
+        if data is not None and (data.access_group_ids or data.object_permission is not None):
             regenerate_team_table: Optional[LiteLLM_TeamTableCachedObj] = None
             if _key_in_db.team_id is not None:
                 regenerate_team_table = await get_team_object(
@@ -4634,10 +4652,31 @@ async def regenerate_key_fn(
                     user_api_key_cache=user_api_key_cache,
                     check_db_only=True,
                 )
+            _regen_is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
                 user_api_key_dict=user_api_key_dict,
                 team_table=regenerate_team_table,
                 access_group_ids=data.access_group_ids,
+            )
+            _regen_object_permission_dict = _object_permission_to_dict(data.object_permission)
+            normalized_object_permission = await validate_key_mcp_servers_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                prisma_client=prisma_client,
+                is_proxy_admin=_regen_is_proxy_admin,
+            )
+            if normalized_object_permission is not None:
+                data.object_permission = LiteLLM_ObjectPermissionBase(**normalized_object_permission)
+                _regen_object_permission_dict = normalized_object_permission
+            await validate_key_search_tools_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                is_proxy_admin=_regen_is_proxy_admin,
+            )
+            await validate_key_vector_stores_against_team(
+                object_permission=_regen_object_permission_dict,
+                team_obj=regenerate_team_table,
+                is_proxy_admin=_regen_is_proxy_admin,
             )
 
         verbose_proxy_logger.info(
