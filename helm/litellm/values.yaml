@@ -127,6 +127,11 @@ gateway:
   config:
     create: true
     proxy_config: {}
+    # Mount an existing ConfigMap (key config.yaml) as the gateway+backend config
+    # instead of rendering one from proxy_config. Set create:false alongside this
+    # to let a gitops overlay own the config (e.g. one rendered from the upstream
+    # litellm-config.yml). When empty, the chart renders its own from proxy_config.
+    existingConfigMap: ""
   image:
     repository: ghcr.io/berriai/litellm-gateway
     tag: ""              # defaults to .Chart.AppVersion

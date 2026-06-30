@@ -1,4 +1,4 @@
-{{- if .Values.gateway.config.create }}
+{{- if and .Values.gateway.config.create (not .Values.gateway.config.existingConfigMap) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

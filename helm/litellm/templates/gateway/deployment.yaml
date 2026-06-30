@@ -38,7 +38,7 @@ spec:
               protocol: TCP
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.gateway) | nindent 12 }}
-            {{- if .Values.gateway.config.create }}
+            {{- if include "litellm.gateway.config.enabled" . }}
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml
             {{- end }}
@@ -47,7 +47,7 @@ spec:
               value: {{ .Values.gateway.numWorkers | quote }}
             {{- end }}
           {{- include "litellm.envFrom" .Values.gateway | nindent 10 }}
-          {{- if .Values.gateway.config.create }}
+          {{- if include "litellm.gateway.config.enabled" . }}
           volumeMounts:
             - name: gateway-config
               mountPath: /app/config/config.yaml
@@ -63,11 +63,11 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.gateway.resources | nindent 12 }}
-      {{- if .Values.gateway.config.create }}
+      {{- if include "litellm.gateway.config.enabled" . }}
       volumes:
         - name: gateway-config
           configMap:
-            name: {{ include "litellm.gateway.fullname" . }}-config
+            name: {{ include "litellm.gateway.config.configMapName" . }}
       {{- end }}
       {{- with .Values.gateway.nodeSelector }}
       nodeSelector:

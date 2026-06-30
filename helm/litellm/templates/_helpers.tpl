@@ -19,6 +19,25 @@ Common naming + label helpers shared by gateway, backend, and ui templates.
 {{- printf "%s-gateway" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{/*
+Gateway proxy config. The gateway + backend mount config.yaml when the chart
+renders it from gateway.config.proxy_config (config.create) OR an existing
+ConfigMap is supplied (config.existingConfigMap, e.g. one a gitops overlay
+renders from the upstream litellm-config.yml). configMapName resolves to
+whichever applies.
+*/}}
+{{- define "litellm.gateway.config.enabled" -}}
+{{- if or .Values.gateway.config.create .Values.gateway.config.existingConfigMap -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.config.configMapName" -}}
+{{- if .Values.gateway.config.existingConfigMap -}}
+{{- .Values.gateway.config.existingConfigMap -}}
+{{- else -}}
+{{- include "litellm.gateway.fullname" . }}-config
+{{- end -}}
+{{- end -}}
+
 {{- define "litellm.backend.fullname" -}}
 {{- printf "%s-backend" (include "litellm.fullname" .) | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
