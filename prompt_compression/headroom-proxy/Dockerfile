@@ -7,8 +7,8 @@ RUN apt-get update \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
-EXPOSE 10000
+EXPOSE 8787
 
 ENV HEADROOM_TELEMETRY=off
 
-CMD ["headroom", "proxy", "--host", "0.0.0.0", "--port", "10000", "--no-optimize"]
+CMD ["headroom", "proxy", "--host", "0.0.0.0", "--port", "8787", "--no-optimize"]
