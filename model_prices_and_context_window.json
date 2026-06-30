@@ -18001,6 +18001,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -18042,6 +18043,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -18083,6 +18085,7 @@
         ],
         "supports_function_calling": false,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_vision": true,
@@ -35725,6 +35728,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -35747,6 +35751,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
+        "supports_reasoning": false,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
     },
     "vertex_ai/gemini-3-pro-image-preview": {
@@ -35762,6 +35767,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "output_cost_per_token_batches": 6e-06,
+        "supports_reasoning": false,
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
     },
     "vertex_ai/gemini-3.1-flash-image": {
@@ -35775,6 +35781,7 @@
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
+        "supports_reasoning": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
@@ -35788,6 +35795,7 @@
         "output_cost_per_image": 0.0672,
         "output_cost_per_image_token": 6e-05,
         "output_cost_per_token": 3e-06,
+        "supports_reasoning": false,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
     "vertex_ai/gemini-3.1-flash-lite-preview": {
