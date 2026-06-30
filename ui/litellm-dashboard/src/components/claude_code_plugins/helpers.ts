@@ -111,7 +111,8 @@ const parseGitHubSource = (remainder: string, subPath?: string): SkillSourcePrev
 
 const parseRawGitSource = (scheme: string, rest: string, subPath?: string): SkillSourcePreview | null => {
   const { host, remainder } = splitHost(rest);
-  if (!host.includes(".")) {
+  // Reject embedded credentials (user:token@host) — skill sources are served on public feeds.
+  if (!host.includes(".") || host.includes("@")) {
     return null;
   }
   if (remainder.split("/").filter((seg) => seg !== "").length < 2) {
