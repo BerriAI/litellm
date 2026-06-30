@@ -38,9 +38,7 @@ class FalAIIdeogramV3Config(FalAIBaseConfig):
         "1024x1536": "portrait_16_9",
     }
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
         """
         Ideogram v3 accepts the core OpenAI image parameters.
         """
