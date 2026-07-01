@@ -946,6 +946,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   }}
                 >
+                  <Option key="all-proxy-models" value="all-proxy-models">
+                    All Proxy Models
+                  </Option>
                   {!selectedProjectId && (
                     <Option key="all-team-models" value="all-team-models">
                       All Team Models
