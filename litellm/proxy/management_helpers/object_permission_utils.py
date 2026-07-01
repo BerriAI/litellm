@@ -266,8 +266,11 @@ def _rewrite_object_permission_mcp_servers(
 
     normalized_servers: List[str] = []
     for identifier in mcp_servers:
-        if identifier == SpecialMCPServerNames.no_mcp_servers.value:
-            normalized_servers.append(SpecialMCPServerNames.no_mcp_servers.value)
+        if identifier in (
+            SpecialMCPServerNames.no_mcp_servers.value,
+            SpecialMCPServerNames.all_mcp_servers.value,
+        ):
+            normalized_servers.append(identifier)
             continue
         normalized_servers.extend(sorted(identifier_to_server_ids.get(identifier, [])))
     object_permission["mcp_servers"] = _dedupe_preserving_order(normalized_servers)
@@ -334,6 +337,13 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
+    if SpecialMCPServerNames.all_mcp_servers.value in direct_servers:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        return global_mcp_server_manager.get_all_mcp_server_ids()
+
     access_group_servers: List[str] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
@@ -400,6 +410,7 @@ def _extract_requested_mcp_server_ids(
     if isinstance(mcp_servers, list):
         server_ids.update(mcp_servers)
         server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
+        server_ids.discard(SpecialMCPServerNames.all_mcp_servers.value)
 
     mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
     if isinstance(mcp_tool_permissions, dict):

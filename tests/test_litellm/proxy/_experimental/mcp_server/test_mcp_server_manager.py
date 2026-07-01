@@ -3928,6 +3928,26 @@ class TestMCPServerManagerExpandPermissionList:
 
         assert manager.expand_permission_list(["uuid-1", "a"]) == ["uuid-1"]
 
+    def test_all_mcp_servers_sentinel_returns_all_registry_keys(self):
+        """The all-mcp-servers sentinel expands to every registered server ID"""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["cfg-1"] = self._make_server("cfg-1", server_name="a")
+        manager.registry["reg-1"] = self._make_server("reg-1", server_name="b")
+        manager.registry["reg-2"] = self._make_server("reg-2", server_name="c")
+
+        result = manager.expand_permission_list(["all-mcp-servers"])
+        assert sorted(result) == ["cfg-1", "reg-1", "reg-2"]
+
+    def test_all_mcp_servers_sentinel_ignores_other_entries(self):
+        """When all-mcp-servers is present alongside other IDs, the sentinel
+        dominates and returns all server IDs (the extra entries are a subset)"""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["cfg-1"] = self._make_server("cfg-1", server_name="a")
+        manager.registry["reg-1"] = self._make_server("reg-1", server_name="b")
+
+        result = manager.expand_permission_list(["all-mcp-servers", "cfg-1"])
+        assert sorted(result) == ["cfg-1", "reg-1"]
+
     def test_simulates_cross_region_portability(self):
         """
         Same permission entry "a" resolves to different concrete IDs per region —

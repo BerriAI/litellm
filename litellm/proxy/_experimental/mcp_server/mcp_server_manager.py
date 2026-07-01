@@ -3836,6 +3836,8 @@ class MCPServerManager:
         if not identifiers:
             return []
         registry = self.get_registry()
+        if SpecialMCPServerNames.all_mcp_servers.value in identifiers:
+            return list(registry.keys())
         expanded: Set[str] = set()
         for identifier in identifiers:
             if identifier in registry:
