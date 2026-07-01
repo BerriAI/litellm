@@ -3,6 +3,7 @@ import { Segmented } from "antd";
 import { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { DataTable } from "../../../view_logs/table";
+import { ChartTooltipPortal, useCursorPosition } from "../ChartTooltipPortal";
 
 interface TopModel {
   key: string;
@@ -20,6 +21,7 @@ interface TopModelViewProps {
 
 export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
   const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
+  const { positionRef: modelsCursor, handleMouseMove: handleModelsMouseMove } = useCursorPosition();
 
   const columns = [
     {
@@ -82,7 +84,7 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
         </div>
       </div>
       {modelViewMode === "chart" ? (
-        <div className="relative max-h-[600px] overflow-y-auto">
+        <div className="relative max-h-[600px] overflow-y-auto" onMouseMove={handleModelsMouseMove}>
           <BarChart
             className="mt-4 cursor-pointer hover:opacity-90"
             style={{ height: Math.min(processedTopModels.length, topModelsLimit) * 52 }}
@@ -95,6 +97,20 @@ export default function TopModelView({ topModels, topModelsLimit, setTopModelsLi
             yAxisWidth={200}
             tickGap={5}
             showLegend={false}
+            customTooltip={({ payload, active }) => {
+              const item = payload?.[0]?.payload as TopModel | undefined;
+              return (
+                <ChartTooltipPortal active={!!active && !!item} position={modelsCursor.current}>
+                  <div className="bg-white p-4 shadow-lg rounded-lg border">
+                    <p className="font-bold">{item?.key}</p>
+                    <p className="text-cyan-500">Spend: ${formatNumberWithCommas(item?.spend, 2)}</p>
+                    <p className="text-green-600">Successful: {item?.successful_requests.toLocaleString()}</p>
+                    <p className="text-red-600">Failed: {item?.failed_requests.toLocaleString()}</p>
+                    <p className="text-gray-600">Tokens: {item?.tokens.toLocaleString()}</p>
+                  </div>
+                </ChartTooltipPortal>
+              );
+            }}
           />
         </div>
       ) : (

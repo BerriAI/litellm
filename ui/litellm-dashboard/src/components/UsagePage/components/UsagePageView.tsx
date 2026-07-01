@@ -45,6 +45,7 @@ import ViewUserSpend from "../../view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
+import { ChartTooltipPortal, useCursorPosition } from "./ChartTooltipPortal";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
@@ -146,6 +147,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
+  const { positionRef: topModelsCursor, handleMouseMove: handleTopModelsMouseMove } = useCursorPosition();
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -769,7 +771,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           {loading ? (
                             <ChartLoader isDateChanging={isDateChanging} />
                           ) : (
-                            <div className="relative max-h-[600px] overflow-y-auto">
+                            <div
+                              className="relative max-h-[600px] overflow-y-auto"
+                              onMouseMove={handleTopModelsMouseMove}
+                            >
                               {(() => {
                                 const modelData = modelViewType === "groups" ? topModelGroups : topModels;
                                 return (
@@ -785,25 +790,29 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                     yAxisWidth={200}
                                     showLegend={false}
                                     customTooltip={({ payload, active }) => {
-                                      if (!active || !payload?.[0]) return null;
-                                      const data = payload[0].payload;
+                                      const data = payload?.[0]?.payload;
                                       return (
-                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                          <p className="font-bold">{data.key}</p>
-                                          <p className="text-cyan-500">
-                                            Spend: ${formatNumberWithCommas(data.spend, 2)}
-                                          </p>
-                                          <p className="text-gray-600">
-                                            Total Requests: {data.requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-green-600">
-                                            Successful: {data.successful_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-red-600">
-                                            Failed: {data.failed_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                                        </div>
+                                        <ChartTooltipPortal
+                                          active={!!active && !!data}
+                                          position={topModelsCursor.current}
+                                        >
+                                          <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                            <p className="font-bold">{data?.key}</p>
+                                            <p className="text-cyan-500">
+                                              Spend: ${formatNumberWithCommas(data?.spend, 2)}
+                                            </p>
+                                            <p className="text-gray-600">
+                                              Total Requests: {data?.requests.toLocaleString()}
+                                            </p>
+                                            <p className="text-green-600">
+                                              Successful: {data?.successful_requests.toLocaleString()}
+                                            </p>
+                                            <p className="text-red-600">
+                                              Failed: {data?.failed_requests.toLocaleString()}
+                                            </p>
+                                            <p className="text-gray-600">Tokens: {data?.tokens.toLocaleString()}</p>
+                                          </div>
+                                        </ChartTooltipPortal>
                                       );
                                     }}
                                   />

@@ -9,6 +9,7 @@ import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
 import { DataTable } from "../../../view_logs/table";
 import { TagUsage } from "../../types";
+import { ChartTooltipPortal, useCursorPosition } from "../ChartTooltipPortal";
 
 interface TopKeyViewProps {
   topKeys: any[];
@@ -25,6 +26,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
   const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
+  const { positionRef: keysCursor, handleMouseMove: handleKeysMouseMove } = useCursorPosition();
 
   const toggleTagsExpansion = (apiKey: string) => {
     setExpandedTags((prev) => {
@@ -207,7 +209,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
       </div>
 
       {viewMode === "chart" ? (
-        <div className="relative max-h-[600px] overflow-y-auto">
+        <div className="relative max-h-[600px] overflow-y-auto" onMouseMove={handleKeysMouseMove}>
           <BarChart
             className="mt-4 cursor-pointer hover:opacity-90"
             style={{ height: Math.min(processedTopKeys.length, topKeysLimit) * 52 }}
@@ -222,25 +224,27 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
             onValueChange={(item) => handleKeyClick(item)}
             showTooltip={true}
-            customTooltip={(props) => {
-              const item = props.payload?.[0]?.payload;
+            customTooltip={({ payload, active }) => {
+              const item = payload?.[0]?.payload;
               return (
-                <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
-                  <div className="space-y-1.5">
-                    <div className="text-sm">
-                      <span className="text-gray-300">Key Alias: </span>
-                      <span className="font-mono text-gray-100 break-all">{item?.key_alias}</span>
-                    </div>
-                    <div className="text-sm">
-                      <span className="text-gray-300">Key ID: </span>
-                      <span className="font-mono text-gray-100 break-all">{item?.api_key}</span>
-                    </div>
-                    <div className="text-sm">
-                      <span className="text-gray-300">Spend: </span>
-                      <span className="text-white font-medium">${formatNumberWithCommas(item?.spend, 2)}</span>
+                <ChartTooltipPortal active={!!active && !!item} position={keysCursor.current}>
+                  <div className="p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
+                    <div className="space-y-1.5">
+                      <div className="text-sm">
+                        <span className="text-gray-300">Key Alias: </span>
+                        <span className="font-mono text-gray-100 break-all">{item?.key_alias}</span>
+                      </div>
+                      <div className="text-sm">
+                        <span className="text-gray-300">Key ID: </span>
+                        <span className="font-mono text-gray-100 break-all">{item?.api_key}</span>
+                      </div>
+                      <div className="text-sm">
+                        <span className="text-gray-300">Spend: </span>
+                        <span className="text-white font-medium">${formatNumberWithCommas(item?.spend, 2)}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                </ChartTooltipPortal>
               );
             }}
           />
