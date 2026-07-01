@@ -230,6 +230,20 @@ async def anthropic_messages(
     # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
     messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
 
+    cache_control_injection_points = kwargs.pop("cache_control_injection_points", None)
+    if cache_control_injection_points:
+        from litellm.integrations.anthropic_cache_control_hook import (
+            AnthropicCacheControlHook,
+        )
+
+        messages, system, remaining_cc_points = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=cache_control_injection_points,
+        )
+        if remaining_cc_points:
+            kwargs["cache_control_injection_points"] = remaining_cc_points
+
     original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
     # Execute pre-request hooks to allow CustomLoggers to modify request.
@@ -411,6 +425,20 @@ def anthropic_messages_handler(
     if not kwargs.pop("_litellm_messages_presanitized", False):
         messages = strip_empty_text_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+
+    cache_control_injection_points = kwargs.pop("cache_control_injection_points", None)
+    if cache_control_injection_points:
+        from litellm.integrations.anthropic_cache_control_hook import (
+            AnthropicCacheControlHook,
+        )
+
+        messages, system, remaining_cc_points = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=cache_control_injection_points,
+        )
+        if remaining_cc_points:
+            kwargs["cache_control_injection_points"] = remaining_cc_points
 
     metadata = validate_anthropic_api_metadata(metadata)
 

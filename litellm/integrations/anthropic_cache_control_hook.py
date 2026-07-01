@@ -1,8 +1,11 @@
 """
-This hook is used to inject cache control directives into the messages of a chat completion.
+This hook is used to inject cache control directives into messages.
 
 Users can define
 - `cache_control_injection_points` in the completion params and litellm will inject the cache control directives into the messages at the specified injection points.
+
+Supported for both `v1/chat/completions` (via the prompt-management hook) and
+`v1/messages` (via `apply_to_anthropic_messages_request`).
 
 """
 
@@ -224,6 +227,90 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             if len(message_content) > 0 and isinstance(message_content[-1], dict):
                 message_content[-1]["cache_control"] = control  # type: ignore
         return message
+
+    @staticmethod
+    def _count_system_cache_control_blocks(system: str | list | None) -> int:
+        if system is None:
+            return 0
+        if isinstance(system, str):
+            return 0
+        count = 0
+        for block in system:
+            if isinstance(block, dict) and block.get("cache_control") is not None:
+                count += 1
+        return count
+
+    @staticmethod
+    def _insert_cache_control_in_system(
+        system: str | list,
+        control: ChatCompletionCachedContent,
+    ) -> list:
+        if isinstance(system, str):
+            return [{"type": "text", "text": system, "cache_control": control}]
+        if len(system) > 0 and isinstance(system[-1], dict):
+            system[-1]["cache_control"] = control
+        return system
+
+    @staticmethod
+    def apply_to_anthropic_messages_request(
+        messages: List[Dict],
+        system: str | list | None,
+        injection_points: List[CacheControlInjectionPoint],
+    ) -> Tuple[List[Dict], str | list | None, List[CacheControlInjectionPoint]]:
+        """Apply cache control injection for the v1/messages endpoint.
+
+        Unlike ``get_chat_completion_prompt`` (OpenAI-format messages), this
+        handles the Anthropic Messages format where system is a separate
+        parameter and messages only contain user/assistant roles.
+
+        Returns (messages, system, remaining_non_message_points) so callers
+        can forward tool_config points to provider transforms.
+        """
+        if not injection_points:
+            return messages, system, []
+
+        processed_messages: List[Dict] = copy.deepcopy(messages)
+        processed_system = copy.deepcopy(system) if system is not None else None
+
+        message_points: List[CacheControlMessageInjectionPoint] = []
+        system_points: List[CacheControlMessageInjectionPoint] = []
+        remaining_points: List[CacheControlInjectionPoint] = []
+
+        for point in injection_points:
+            if point.get("location") == "message":
+                msg_point = cast(CacheControlMessageInjectionPoint, point)
+                if msg_point.get("role") == "system":
+                    system_points.append(msg_point)
+                else:
+                    message_points.append(msg_point)
+            else:
+                remaining_points.append(point)
+
+        reserved_blocks = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
+        max_blocks = MAX_CACHE_CONTROL_BLOCKS - reserved_blocks
+
+        used_blocks = AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system)
+        used_blocks += sum(AnthropicCacheControlHook._count_cache_control_blocks(msg) for msg in processed_messages)
+
+        for point in system_points:
+            if used_blocks >= max_blocks:
+                break
+            if processed_system is None:
+                continue
+            if AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system) > 0:
+                continue
+            control = point.get("control") or ChatCompletionCachedContent(type="ephemeral")
+            processed_system = AnthropicCacheControlHook._insert_cache_control_in_system(processed_system, control)
+            used_blocks += 1
+
+        system_blocks_after = AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system)
+        processed_messages = AnthropicCacheControlHook._apply_message_injections(
+            points=message_points,
+            messages=processed_messages,
+            max_blocks=max_blocks - system_blocks_after,
+        )
+
+        return processed_messages, processed_system, remaining_points
 
     @property
     def integration_name(self) -> str:
