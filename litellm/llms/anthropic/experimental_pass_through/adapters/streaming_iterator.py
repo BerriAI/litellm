@@ -105,13 +105,64 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                # Peek at the first chunk to determine the correct initial
+                # content block type.  Models that use reasoning_content
+                # (e.g. GLM-5) start with a thinking block, not text.
+                first_chunk = None
+                for chunk in self.completion_stream:
+                    if chunk == "None" or chunk is None:
+                        continue
+                    first_chunk = chunk
+                    break
+                if first_chunk is not None:
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=first_chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    if block_type == "thinking":
+                        initial_block: dict = {"type": "thinking", "thinking": ""}
+                    elif block_type == "tool_use":
+                        initial_block = dict(content_block_start)
+                    else:
+                        initial_block = {"type": "text", "text": ""}
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": initial_block,
+                        }
+                    )
+                    processed_first = (
+                        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                            response=first_chunk,
+                            current_content_block_index=self.current_content_block_index,
+                        )
+                    )
+                    # Empty / stop-only first chunk: close the block before the
+                    # terminal message_delta so the sequence stays spec-compliant.
+                    if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
+                        self.sent_content_block_finish = True
+                        self.chunk_queue.append(processed_first)
+                    elif self._trigger_delta_has_content(processed_first):
+                        self.chunk_queue.append(processed_first)
+                else:
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": {"type": "text", "text": ""},
+                        }
+                    )
                 return self.chunk_queue.popleft()
 
             for chunk in self.completion_stream:
@@ -128,15 +179,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 if should_start_new_block and not self.sent_content_block_finish:
-                    # Queue the sequence: content_block_stop -> content_block_start
-                    # For text blocks the trigger chunk is not emitted as a separate
-                    # delta because content_block_start carries the information.
-                    # For tool_use blocks we must also emit the trigger chunk's delta
-                    # when it carries input_json_delta data, because some providers
-                    # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                    # chunk as the function name/id.
-
-                    # 1. Stop current content block
                     self.chunk_queue.append(
                         {
                             "type": "content_block_stop",
@@ -144,7 +186,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         }
                     )
 
-                    # 2. Start new content block
                     self.chunk_queue.append(
                         {
                             "type": "content_block_start",
@@ -152,24 +193,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": self.current_content_block_start,
                         }
                     )
-
-                    # 3. If the trigger chunk carries tool argument data, queue it
-                    # so the input_json_delta is not silently dropped.
-                    if (
-                        processed_chunk.get("type") == "content_block_delta"
-                        and isinstance(processed_chunk.get("delta"), dict)
-                        and processed_chunk["delta"].get("type") == "input_json_delta"
-                        and processed_chunk["delta"].get("partial_json")
-                    ):
+                    if self._trigger_delta_has_content(processed_chunk):
                         self.chunk_queue.append(processed_chunk)
-
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
-                if (
-                    processed_chunk["type"] == "message_delta"
-                    and self.sent_content_block_finish is False
-                ):
+                if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                     # Queue both the content_block_stop and the message_delta
                     self.chunk_queue.append(
                         {
@@ -210,9 +239,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return {"type": "message_stop"}
             raise StopIteration
         except Exception as e:
-            verbose_logger.error(
-                "Anthropic Adapter - {}\n{}".format(e, traceback.format_exc())
-            )
+            verbose_logger.error("Anthropic Adapter - {}\n{}".format(e, traceback.format_exc()))
             raise StopAsyncIteration
 
     async def __anext__(self):  # noqa: PLR0915
@@ -245,13 +272,59 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if self.sent_content_block_start is False:
                 self.sent_content_block_start = True
-                self.chunk_queue.append(
-                    {
-                        "type": "content_block_start",
-                        "index": self.current_content_block_index,
-                        "content_block": {"type": "text", "text": ""},
-                    }
-                )
+                first_chunk = None
+                async for chunk in self.completion_stream:
+                    if chunk == "None" or chunk is None:
+                        continue
+                    first_chunk = chunk
+                    break
+                if first_chunk is not None:
+                    (
+                        block_type,
+                        content_block_start,
+                    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+                        choices=first_chunk.choices
+                    )
+                    self.current_content_block_type = block_type
+                    self.current_content_block_start = content_block_start
+                    if block_type == "thinking":
+                        initial_block = {"type": "thinking", "thinking": ""}
+                    elif block_type == "tool_use":
+                        initial_block = dict(content_block_start)
+                    else:
+                        initial_block = {"type": "text", "text": ""}
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": initial_block,
+                        }
+                    )
+                    processed_first = (
+                        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                            response=first_chunk,
+                            current_content_block_index=self.current_content_block_index,
+                        )
+                    )
+                    if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
+                        self.sent_content_block_finish = True
+                        self.chunk_queue.append(processed_first)
+                    elif self._trigger_delta_has_content(processed_first):
+                        self.chunk_queue.append(processed_first)
+                else:
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": {"type": "text", "text": ""},
+                        }
+                    )
                 return self.chunk_queue.popleft()
 
             async for chunk in self.completion_stream:
@@ -269,10 +342,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
-                if (
-                    self.holding_stop_reason_chunk is not None
-                    and getattr(chunk, "usage", None) is not None
-                ):
+                if self.holding_stop_reason_chunk is not None and getattr(chunk, "usage", None) is not None:
                     # Merge usage into the held stop_reason chunk
                     merged_chunk = self.holding_stop_reason_chunk.copy()
                     if "delta" not in merged_chunk:
@@ -280,16 +350,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     # Add usage to the held chunk
                     uncached_input_tokens = chunk.usage.prompt_tokens or 0
-                    if (
-                        hasattr(chunk.usage, "prompt_tokens_details")
-                        and chunk.usage.prompt_tokens_details
-                    ):
-                        cached_tokens = (
-                            getattr(
-                                chunk.usage.prompt_tokens_details, "cached_tokens", 0
-                            )
-                            or 0
-                        )
+                    if hasattr(chunk.usage, "prompt_tokens_details") and chunk.usage.prompt_tokens_details:
+                        cached_tokens = getattr(chunk.usage.prompt_tokens_details, "cached_tokens", 0) or 0
                         uncached_input_tokens -= cached_tokens
 
                     usage_dict: UsageDelta = {
@@ -301,16 +363,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         hasattr(chunk.usage, "_cache_creation_input_tokens")
                         and chunk.usage._cache_creation_input_tokens > 0
                     ):
-                        usage_dict["cache_creation_input_tokens"] = (
-                            chunk.usage._cache_creation_input_tokens
-                        )
-                    if (
-                        hasattr(chunk.usage, "_cache_read_input_tokens")
-                        and chunk.usage._cache_read_input_tokens > 0
-                    ):
-                        usage_dict["cache_read_input_tokens"] = (
-                            chunk.usage._cache_read_input_tokens
-                        )
+                        usage_dict["cache_creation_input_tokens"] = chunk.usage._cache_creation_input_tokens
+                    if hasattr(chunk.usage, "_cache_read_input_tokens") and chunk.usage._cache_read_input_tokens > 0:
+                        usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
                     merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
@@ -323,15 +378,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
-                        # Queue the sequence: content_block_stop -> content_block_start
-                        # For text blocks the trigger chunk is not emitted as a separate
-                        # delta because content_block_start carries the information.
-                        # For tool_use blocks we must also emit the trigger chunk's delta
-                        # when it carries input_json_delta data, because some providers
-                        # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                        # chunk as the function name/id.
-
-                        # 1. Stop current content block
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -347,28 +393,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                                 "content_block": self.current_content_block_start,
                             }
                         )
-
-                        # 3. If the trigger chunk carries tool argument data, queue it
-                        # so the input_json_delta is not silently dropped.
-                        if (
-                            processed_chunk.get("type") == "content_block_delta"
-                            and isinstance(processed_chunk.get("delta"), dict)
-                            and processed_chunk["delta"].get("type")
-                            == "input_json_delta"
-                            and processed_chunk["delta"].get("partial_json")
-                        ):
+                        if self._trigger_delta_has_content(processed_chunk):
                             self.chunk_queue.append(processed_chunk)
-
-                        # Reset state for new block
                         self.sent_content_block_finish = False
 
                         # Return the first queued item
                         return self.chunk_queue.popleft()
 
-                    if (
-                        processed_chunk["type"] == "message_delta"
-                        and self.sent_content_block_finish is False
-                    ):
+                    if processed_chunk["type"] == "message_delta" and self.sent_content_block_finish is False:
                         # Queue both the content_block_stop and the holding chunk
                         self.chunk_queue.append(
                             {
@@ -377,10 +409,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                        if (
-                            processed_chunk.get("delta", {}).get("stop_reason")
-                            is not None
-                        ):
+                        if processed_chunk.get("delta", {}).get("stop_reason") is not None:
                             self.holding_stop_reason_chunk = processed_chunk
                         else:
                             self.chunk_queue.append(processed_chunk)
@@ -461,6 +490,38 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
 
+    @staticmethod
+    def _trigger_delta_has_content(processed_chunk: Dict[str, Any]) -> bool:
+        """Return True if a translated trigger chunk carries a non-empty
+        ``content_block_delta`` payload that must be re-emitted after a
+        block transition.
+
+        When an upstream chunk both *triggers* a new content block (its type
+        differs from the active block) and *carries* delta content, that
+        content belongs to the new block. The synthesized
+        ``content_block_start`` only ever carries an empty body — see
+        ``_translate_streaming_openai_chunk_to_anthropic_content_block``,
+        which returns an empty ``TextBlock``/``ToolUseBlock``/thinking block —
+        so the trigger chunk's delta must be re-queued or the first token of
+        the new block (the first non-empty text/thinking delta, or bundled
+        tool arguments) is silently dropped.
+        """
+        if processed_chunk.get("type") != "content_block_delta":
+            return False
+        delta = processed_chunk.get("delta")
+        if not isinstance(delta, dict):
+            return False
+        delta_type = delta.get("type")
+        if delta_type == "text_delta":
+            return bool(delta.get("text"))
+        if delta_type == "input_json_delta":
+            return bool(delta.get("partial_json"))
+        if delta_type == "thinking_delta":
+            return bool(delta.get("thinking"))
+        if delta_type == "signature_delta":
+            return bool(delta.get("signature"))
+        return False
+
     def _should_start_new_content_block(self, chunk: "ModelResponseStream") -> bool:
         """
         Determine if we should start a new content block based on the processed chunk.
@@ -496,9 +557,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
             if tool_block.get("name"):
                 truncated_name = tool_block["name"]
-                original_name = self.tool_name_mapping.get(
-                    truncated_name, truncated_name
-                )
+                original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
                 tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:
