@@ -4,7 +4,7 @@ import json
 import re
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -16,14 +16,14 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
-    httpxSpecialProvider,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     get_attribute_or_key,
     get_tool_calls_from_response,
     has_tool_with_name,
+)
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
+    httpxSpecialProvider,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
@@ -442,7 +442,7 @@ class HeadroomGuardrail(CustomGuardrail):
         stream: bool,
         custom_llm_provider: str,
         kwargs: dict,
-    ) -> Tuple[bool, dict]:
+    ) -> tuple[bool, dict]:
         if not has_headroom_retrieve_tool(tools):
             return False, {}
 

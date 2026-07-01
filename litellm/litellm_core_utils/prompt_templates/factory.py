@@ -5296,10 +5296,10 @@ def get_attribute_or_key(tool_or_function, attribute, default=None):
 class NormalizedToolCall(TypedDict):
     id: Optional[str]
     name: Optional[str]
-    arguments: Dict[str, Any]
+    arguments: dict[str, Any]
 
 
-def _parse_tool_call_arguments(raw: Any, tool_name: Optional[str], context: str) -> Dict[str, Any]:
+def _parse_tool_call_arguments(raw: Any, tool_name: Optional[str], context: str) -> dict[str, Any]:
     # Anthropic's tool_use blocks already carry a parsed dict in "input";
     # chat completions and the Responses API carry a JSON string that may be
     # truncated by the model, so route those through the repair-aware parser.
@@ -5319,7 +5319,7 @@ def _parse_tool_call_arguments(raw: Any, tool_name: Optional[str], context: str)
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _tool_calls_from_chat_completion_response(response: Any) -> List[NormalizedToolCall]:
+def _tool_calls_from_chat_completion_response(response: Any) -> list[NormalizedToolCall]:
     choices = get_attribute_or_key(response, "choices", None)
     if not (isinstance(choices, list) and choices):
         return []
@@ -5327,7 +5327,7 @@ def _tool_calls_from_chat_completion_response(response: Any) -> List[NormalizedT
     tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
     if not isinstance(tool_calls, list):
         return []
-    result: List[NormalizedToolCall] = []
+    result: list[NormalizedToolCall] = []
     for tc in tool_calls:
         fn = get_attribute_or_key(tc, "function", None)
         if fn is None:
@@ -5347,11 +5347,11 @@ def _tool_calls_from_chat_completion_response(response: Any) -> List[NormalizedT
     return result
 
 
-def _tool_calls_from_responses_api_response(response: Any) -> List[NormalizedToolCall]:
+def _tool_calls_from_responses_api_response(response: Any) -> list[NormalizedToolCall]:
     output = get_attribute_or_key(response, "output", None)
     if not isinstance(output, list):
         return []
-    result: List[NormalizedToolCall] = []
+    result: list[NormalizedToolCall] = []
     for item in output:
         if get_attribute_or_key(item, "type") != "function_call":
             continue
@@ -5370,11 +5370,11 @@ def _tool_calls_from_responses_api_response(response: Any) -> List[NormalizedToo
     return result
 
 
-def _tool_calls_from_anthropic_messages_response(response: Any) -> List[NormalizedToolCall]:
+def _tool_calls_from_anthropic_messages_response(response: Any) -> list[NormalizedToolCall]:
     content = get_attribute_or_key(response, "content", None)
     if not isinstance(content, list):
         return []
-    result: List[NormalizedToolCall] = []
+    result: list[NormalizedToolCall] = []
     for block in content:
         if get_attribute_or_key(block, "type") != "tool_use":
             continue
@@ -5389,7 +5389,7 @@ def _tool_calls_from_anthropic_messages_response(response: Any) -> List[Normaliz
     return result
 
 
-def get_tool_calls_from_response(response: Any) -> List[NormalizedToolCall]:
+def get_tool_calls_from_response(response: Any) -> list[NormalizedToolCall]:
     """
     Extract tool/function calls from a response object into a normalized
     ``{"id", "name", "arguments"}`` shape, regardless of which API surface
