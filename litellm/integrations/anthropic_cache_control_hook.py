@@ -296,6 +296,30 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         return processed_messages, processed_system, remaining_points
 
+    @staticmethod
+    def maybe_inject_cache_control(
+        messages: List[Dict],
+        system: str | list | None,
+        kwargs: Dict[str, Any],
+    ) -> Tuple[List[Dict], str | list | None]:
+        """Extract cache_control_injection_points from kwargs and apply if present.
+
+        Pops the key from kwargs; if remaining (non-message) points exist they
+        are written back so downstream transforms can handle them.
+        """
+        injection_points = kwargs.pop("cache_control_injection_points", None)
+        if not injection_points:
+            return messages, system
+
+        messages, system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            messages=messages,
+            system=system,
+            injection_points=injection_points,
+        )
+        if remaining:
+            kwargs["cache_control_injection_points"] = remaining
+        return messages, system
+
     @property
     def integration_name(self) -> str:
         """Return the integration name for this hook."""
