@@ -74,6 +74,7 @@ class TestVertexAIGeminiImageGenerationConfig:
         assert "aspect_ratio" in supported
         assert "imageSize" in supported
         assert "image_size" in supported
+        assert "imageConfig" in supported
 
     def test_map_openai_params_aspect_ratio_camel_case(self):
         """Test mapping native aspectRatio parameter"""
@@ -102,6 +103,75 @@ class TestVertexAIGeminiImageGenerationConfig:
             {"image_size": "2K"}, {}, "gemini-3-pro-image-preview", False
         )
         assert result["imageSize"] == "2K"
+
+    def test_map_openai_params_image_config_dict_stored_whole(self):
+        """imageConfig dict is stored as-is so all fields survive"""
+        result = self.config.map_openai_params(
+            {"imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"}},
+            {},
+            "gemini-3.1-flash-image",
+            False,
+        )
+        assert result["imageConfig"] == {"aspectRatio": "16:9", "imageSize": "2K"}
+
+    def test_map_openai_params_image_config_all_fields(self):
+        """All ImageConfig fields (personGeneration, imageOutputOptions) pass through"""
+        payload = {
+            "imageConfig": {
+                "aspectRatio": "9:16",
+                "imageSize": "4K",
+                "personGeneration": "DONT_ALLOW",
+                "imageOutputOptions": {
+                    "mimeType": "image/jpeg",
+                    "compressionQuality": 80,
+                },
+            }
+        }
+        result = self.config.map_openai_params(
+            payload, {}, "gemini-3.1-flash-image", False
+        )
+        assert result["imageConfig"] == payload["imageConfig"]
+
+    def test_transform_image_generation_request_from_image_config(self):
+        """Full imageConfig dict is forwarded verbatim into generationConfig"""
+        full_config = {
+            "aspectRatio": "16:9",
+            "imageSize": "2K",
+            "personGeneration": "DONT_ALLOW",
+            "imageOutputOptions": {"mimeType": "image/jpeg", "compressionQuality": 85},
+        }
+        mapped = self.config.map_openai_params(
+            {"imageConfig": full_config},
+            {},
+            "gemini-3.1-flash-image",
+            False,
+        )
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image",
+            prompt="A nano banana on a desk",
+            optional_params=mapped,
+            litellm_params={},
+            headers={},
+        )
+        assert request["generationConfig"]["imageConfig"] == full_config
+
+    def test_transform_image_generation_flat_params_override_image_config(self):
+        """Explicit flat params win over the same key inside imageConfig"""
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image",
+            prompt="A nano banana",
+            optional_params={
+                "imageConfig": {"aspectRatio": "1:1", "personGeneration": "DONT_ALLOW"},
+                "aspectRatio": "16:9",  # should win
+            },
+            litellm_params={},
+            headers={},
+        )
+        assert request["generationConfig"]["imageConfig"]["aspectRatio"] == "16:9"
+        assert (
+            request["generationConfig"]["imageConfig"]["personGeneration"]
+            == "DONT_ALLOW"
+        )
 
     def test_transform_image_generation_request_basic(self):
         """Test basic request transformation"""

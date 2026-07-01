@@ -52,6 +52,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         return [
             "n",
             "size",
+            "imageConfig",
             "aspectRatio",
             "aspect_ratio",
             "imageSize",
@@ -83,7 +84,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    elif k not in ("tools", "web_search_options"):
+                    elif k == "imageConfig" and isinstance(v, dict):
+                        mapped_params["imageConfig"] = v
+                    elif k not in ("tools", "web_search_options", "imageConfig"):
                         mapped_params[k] = v
 
         mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
@@ -153,11 +156,19 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_location are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
-        vertex_location = self.safe_get_vertex_ai_location(litellm_params) or self._resolve_vertex_location()
+        vertex_project = (
+            self.safe_get_vertex_ai_project(litellm_params)
+            or self._resolve_vertex_project()
+        )
+        vertex_location = (
+            self.safe_get_vertex_ai_location(litellm_params)
+            or self._resolve_vertex_location()
+        )
 
         if not vertex_project or not vertex_location:
-            raise ValueError("vertex_project and vertex_location are required for Vertex AI")
+            raise ValueError(
+                "vertex_project and vertex_location are required for Vertex AI"
+            )
 
         base_url = get_vertex_base_url(vertex_location)
 
@@ -183,8 +194,14 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
         # First check litellm_params (where vertex_ai_project/vertex_ai_credentials are passed)
         # then fall back to environment variables and other sources
-        vertex_project = self.safe_get_vertex_ai_project(litellm_params) or self._resolve_vertex_project()
-        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params) or self._resolve_vertex_credentials()
+        vertex_project = (
+            self.safe_get_vertex_ai_project(litellm_params)
+            or self._resolve_vertex_project()
+        )
+        vertex_credentials = (
+            self.safe_get_vertex_ai_credentials(litellm_params)
+            or self._resolve_vertex_credentials()
+        )
         access_token, _ = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -211,16 +228,14 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         # Prepare generation config
         generation_config: Dict[str, Any] = {"responseModalities": ["IMAGE"]}
 
-        # Handle image-specific config parameters
-        image_config: Dict[str, Any] = {}
+        # Seed from user-supplied imageConfig dict; flat params are overlaid for backward compat.
+        image_config: Dict[str, Any] = dict(optional_params.get("imageConfig") or {})
 
-        # Map aspectRatio
         if "aspectRatio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspectRatio"]
         elif "aspect_ratio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspect_ratio"]
 
-        # Map imageSize (for Gemini 3 Pro)
         if "imageSize" in optional_params:
             image_config["imageSize"] = optional_params["imageSize"]
         elif "image_size" in optional_params:
@@ -311,7 +326,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                             ImageObject(
                                 b64_json=inline_data["data"],
                                 url=None,
-                                provider_specific_fields=({"thought_signature": thought_sig} if thought_sig else None),
+                                provider_specific_fields=(
+                                    {"thought_signature": thought_sig}
+                                    if thought_sig
+                                    else None
+                                ),
                             )
                         )
 
