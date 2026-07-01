@@ -4533,3 +4533,26 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
 
+
+def test_get_optional_params_merges_user_extra_body_for_non_openai_compatible_provider():
+    """A provider-set extra_body must survive when the user also passes extra_body.
+
+    mistral is not openai-compatible, so user-supplied extra_body is applied via
+    the non-openai-compatible branch of get_optional_params. That branch
+    overwrote the extra_body the provider had already populated (mistral maps
+    seed to extra_body["random_seed"]), silently dropping the seed whenever a
+    user also passed their own extra_body. The branch now merges, matching the
+    openai-compatible branch above it."""
+    from litellm.utils import get_optional_params
+
+    result = get_optional_params(
+        model="mistral-large-latest",
+        custom_llm_provider="mistral",
+        seed=42,
+        extra_body={"custom_field": "keep_me"},
+    )
+
+    extra_body = result.get("extra_body") or {}
+    assert extra_body.get("random_seed") == 42
+    assert extra_body.get("custom_field") == "keep_me"
+
