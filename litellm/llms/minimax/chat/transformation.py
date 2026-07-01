@@ -2,12 +2,20 @@
 MiniMax OpenAI transformation config - extends OpenAI chat config for MiniMax's OpenAI-compatible API
 """
 
-from typing import List, Optional, Tuple
+import logging
+import re
+from typing import Any, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 import litellm
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai.chat.gpt_transformation import (
+    OpenAIChatCompletionStreamingHandler,
+    OpenAIGPTConfig,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+from litellm.types.utils import ModelResponseStream
 
 
 class MinimaxChatConfig(OpenAIGPTConfig):
@@ -96,3 +104,92 @@ class MinimaxChatConfig(OpenAIGPTConfig):
             pass
 
         return base_params + additional_params
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Any,
+        sync_stream: bool = False,
+        json_mode: Optional[bool] = None,
+    ):
+        return MinimaxChatResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
+    """
+    MiniMax streaming response iterator that handles reasoning_content extraction.
+
+    MiniMax streaming responses can contain:
+    1. reasoning_details array - converts to reasoning_content
+    2. <think>...</think> tags in content - extracts to reasoning_content
+    3. "reasoning" field (alias for reasoning_content) - clears from content
+    """
+
+    started_reasoning_content: bool = False
+    finished_reasoning_content: bool = False
+    pending_reasoning: str = ""
+    plain_chunk_count: int = 0
+    MAX_PLAIN_CHUNKS: int = 30
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            for choice in chunk.get("choices", []):
+                delta = choice.get("delta", {})
+                has_reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+                if has_reasoning:
+                    delta["content"] = None
+                    self.started_reasoning_content = True
+                    self.plain_chunk_count = 0
+                reasoning_details = delta.get("reasoning_details")
+                if reasoning_details and isinstance(reasoning_details, list):
+                    reasoning_text = "".join(
+                        d.get("text", "") for d in reasoning_details if isinstance(d, dict) and d.get("text")
+                    )
+                    if reasoning_text:
+                        delta["reasoning_content"] = reasoning_text
+                        delta["content"] = None
+                        self.started_reasoning_content = True
+                        self.plain_chunk_count = 0
+                content = delta.get("content", "")
+                if content and isinstance(content, str):
+                    if "<think>" in content and "</think>" in content:
+                        reasonings = re.findall(r"<think>(.*?)</think>", content, re.DOTALL)
+                        if reasonings:
+                            self.pending_reasoning += "".join(reasonings)
+                        clean_content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+                        delta["content"] = clean_content if clean_content.strip() else None
+                        if self.pending_reasoning:
+                            delta["reasoning_content"] = self.pending_reasoning
+                            self.started_reasoning_content = True
+                            self.pending_reasoning = ""
+                    elif "<think>" in content and "</think>" not in content:
+                        clean_content = content.replace("<think>", "", 1)
+                        delta["content"] = None
+                        delta["reasoning_content"] = clean_content.strip()
+                        self.started_reasoning_content = True
+                    elif "</think>" in content and "<think>" not in content:
+                        parts = content.split("</think>", 1)
+                        before = parts[0].strip()
+                        after = parts[1] if len(parts) > 1 else ""
+                        if before:
+                            delta["reasoning_content"] = before
+                        delta["content"] = after if after.strip() else ("" if not after else None)
+                        self.finished_reasoning_content = True
+                        self.plain_chunk_count = 0
+                    elif (
+                        not self.finished_reasoning_content
+                        and self.plain_chunk_count < self.MAX_PLAIN_CHUNKS
+                        and content.strip()
+                    ):
+                        if not self.started_reasoning_content:
+                            self.started_reasoning_content = True
+                        self.plain_chunk_count += 1
+                        delta["reasoning_content"] = content
+                        delta["content"] = None
+            return super().chunk_parser(chunk)
+        except Exception as e:
+            logger.exception("MinimaxChatResponseIterator.chunk_parser error: %s", e)
+            return super().chunk_parser(chunk)
