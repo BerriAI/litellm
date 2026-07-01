@@ -1218,7 +1218,6 @@ class ProxyBaseLLMRequestProcessing:
             fallback_models = self._resolve_fallback_models(
                 model=original_model,
                 llm_router=llm_router,
-                proxy_config=proxy_config,
                 user_api_key_dict=user_api_key_dict,
             )
             if not fallback_models:
@@ -1261,14 +1260,13 @@ class ProxyBaseLLMRequestProcessing:
         self,
         model: str,
         llm_router: Router,
-        proxy_config: ProxyConfig,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> Optional[list]:
         from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 
         fallbacks = None
 
-        key_router_settings = getattr(user_api_key_dict, "router_settings", None)
+        key_router_settings = user_api_key_dict.router_settings
         if isinstance(key_router_settings, dict) and "fallbacks" in key_router_settings:
             fallbacks = key_router_settings["fallbacks"]
 
