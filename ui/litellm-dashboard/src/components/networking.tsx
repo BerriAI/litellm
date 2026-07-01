@@ -6755,12 +6755,10 @@ export const testMCPToolsListRequest = async (
       "Content-Type": "application/json",
     };
     if (accessToken) {
-      headers["x-litellm-api-key"] = accessToken;
+      headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
     }
     if (oauthAccessToken) {
       headers["Authorization"] = `Bearer ${oauthAccessToken}`;
-    } else if (accessToken) {
-      headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
     }
 
     const response = await fetch(url, {
@@ -6931,7 +6929,7 @@ export const exchangeMcpOAuthToken = async ({
     "Content-Type": "application/x-www-form-urlencoded",
   };
   if (accessToken) {
-    headers["Authorization"] = `Bearer ${accessToken}`;
+    headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
   }
 
   const response = await fetch(url, {
