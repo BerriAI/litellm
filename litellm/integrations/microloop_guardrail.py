@@ -8,9 +8,12 @@ If the user has not installed `microloop`, this guardrail silently
 disables itself to prevent breaking the LiteLLM deployment.
 """
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any, Dict, Optional, List
+from typing import Any
+
 
 # 1. Graceful import of the Microloop Rust engine
 try:
@@ -37,7 +40,7 @@ class MicroloopGuardrail(CustomGuardrail):
     """
 
     def __init__(
-        self, max_repeats: int = 3, history_window: int = 10, volatile_fields: Optional[List[str]] = None, **kwargs
+        self, max_repeats: int = 3, history_window: int = 10, volatile_fields: list[str] | None = None, **kwargs
     ):
         super().__init__(guardrail_name="microloop", supported_event_hooks=["pre_call"], default_on=True, **kwargs)
 
@@ -48,12 +51,12 @@ class MicroloopGuardrail(CustomGuardrail):
         # Per-session engine isolation.
         # Because the PyO3 binding holds state internally, we instantiate
         # one Rust engine per session_id to prevent cross-tenant contamination.
-        self._engines: Dict[str, Any] = {}
+        self._engines: dict[str, Any] = {}
 
         if not MICROLOOP_AVAILABLE:
             logger.warning("Microloop package not found. Guardrail is disabled. Install it via: pip install microloop")
 
-    def _get_engine(self, session_id: str) -> Optional[Any]:
+    def _get_engine(self, session_id: str) -> Any | None:
         """Lazily initialize the Rust engine for a specific session with bounded memory."""
         if not MICROLOOP_AVAILABLE:
             return None
@@ -75,7 +78,7 @@ class MicroloopGuardrail(CustomGuardrail):
 
         return self._engines[session_id]
 
-    def _extract_all_tool_calls(self, data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_all_tool_calls(self, data: dict[str, Any]) -> List[dict[str, Any]]:
         """Extracts all tool calls, supporting both OpenAI and Anthropic formats."""
         messages = data.get("messages", [])
         if not messages:
@@ -97,7 +100,7 @@ class MicroloopGuardrail(CustomGuardrail):
 
         return tool_calls
 
-    def _get_session_id(self, data: Dict[str, Any]) -> str:
+    def _get_session_id(self, data: dict[str, Any]) -> str:
         """Extract session ID from data, falling back to a per-request UUID
         to prevent cross-tenant poisoning of the shared 'default' engine."""
         metadata = data.get("metadata", {}) or {}
@@ -115,10 +118,10 @@ class MicroloopGuardrail(CustomGuardrail):
     async def async_pre_call_hook(
         self,
         user_api_key_dict: Any,
-        cache: Dict[str, Any],
-        data: Dict[str, Any],
+        cache: dict[str, Any],
+        data: dict[str, Any],
         call_type: Any,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """LiteLLM pre-call hook. Intercepts tool calls to check for loops."""
         if not MICROLOOP_AVAILABLE:
             return  # Fail open if package isn't installed
