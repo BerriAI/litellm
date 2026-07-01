@@ -1,8 +1,9 @@
 """Tests for MicroloopGuardrail — deterministic loop detection for LiteLLM."""
-
 from unittest.mock import MagicMock
 
 import pytest
+
+pytest.importorskip("microloop")
 
 from litellm.integrations.microloop_guardrail import MicroloopGuardrail
 from litellm.exceptions import GuardrailRaisedException
