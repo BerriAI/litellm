@@ -103,7 +103,9 @@ class DataRobotConfig(OpenAILikeChatConfig):
         if "/" not in model:
             return None
         if model.startswith("azure/"):
-            model = re.sub(r"(gpt-\d)-(\d)(?=-|$)", r"\1.\2", model)
+            # dashed version -> dotted (gpt-5-1 -> gpt-5.1); minor capped at 2 digits
+            # so a 4-digit date suffix (gpt-4-2024-08-06) is not misread as a version.
+            model = re.sub(r"(gpt-\d+)-(\d{1,2})(?=-|$)", r"\1.\2", model)
         try:
             # Read-path helper: carries all supports_* flags, and avoids the public
             # get_model_info, which can trigger side effects (e.g. OAuth) per provider.

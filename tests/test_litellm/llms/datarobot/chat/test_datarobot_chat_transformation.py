@@ -152,6 +152,37 @@ class TestDataRobotConfig:
 
         assert captured["model"] == "azure/gpt-4o"  # untouched
 
+    def test_get_provider_info_normalizes_multi_digit_minor(self, handler):
+        captured = {}
+
+        def fake_helper(model, *args, **kwargs):
+            captured["model"] = model
+            return {"supports_function_calling": True}
+
+        with patch(
+            "litellm.llms.datarobot.chat.transformation._get_model_info_helper",
+            side_effect=fake_helper,
+        ):
+            handler.get_provider_info("azure/gpt-5-12")
+
+        assert captured["model"] == "azure/gpt-5.12"  # two-digit minor
+
+    def test_get_provider_info_dated_name_not_read_as_version(self, handler):
+        """A 4-digit date suffix must not be dotted into a version."""
+        captured = {}
+
+        def fake_helper(model, *args, **kwargs):
+            captured["model"] = model
+            return {"supports_function_calling": True}
+
+        with patch(
+            "litellm.llms.datarobot.chat.transformation._get_model_info_helper",
+            side_effect=fake_helper,
+        ):
+            handler.get_provider_info("azure/gpt-4-2024-08-06")
+
+        assert captured["model"] == "azure/gpt-4-2024-08-06"  # untouched
+
     def test_get_provider_info_unknown_model_returns_none(self, handler):
         with patch(
             "litellm.llms.datarobot.chat.transformation._get_model_info_helper",
