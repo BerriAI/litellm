@@ -3114,11 +3114,11 @@ class Router:
 
     async def _establish_response_with_ttft(
         self,
-        response_coro: Awaitable[Union[ModelResponse, CustomStreamWrapper]],
+        response_coro: Awaitable[ModelResponse | CustomStreamWrapper],
         ttft_timeout: float | None,
         model: str,
         llm_provider: str,
-    ) -> tuple[Union[ModelResponse, CustomStreamWrapper], float | None]:
+    ) -> tuple[ModelResponse | CustomStreamWrapper, float | None]:
         """Await the provider dispatch, bounding it by ttft_timeout when set.
 
         ttft_timeout must cover dispatch through first token, so the deadline is armed before
@@ -3249,7 +3249,7 @@ class Router:
                 "litellm_logging_obj", None
             )
 
-            async def _await_response() -> Union[ModelResponse, CustomStreamWrapper]:
+            async def _await_response() -> ModelResponse | CustomStreamWrapper:
                 awaited_response, ttft_deadline = (
                     await self._establish_response_with_ttft(
                         _response,

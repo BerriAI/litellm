@@ -195,6 +195,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_time_to_first_token_metric",
     "litellm_request_total_latency_metric",
     "litellm_overhead_latency_metric",
+    "litellm_overhead_with_guardrails_latency_metric",
     "litellm_remaining_requests_metric",
     "litellm_remaining_tokens_metric",
     "litellm_proxy_total_requests_metric",
@@ -370,6 +371,16 @@ class PrometheusMetricLabels:
     ]
 
     litellm_overhead_latency_metric = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.API_BASE.value,
+        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+    ]
+
+    litellm_overhead_with_guardrails_latency_metric = [
         UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
         UserAPIKeyLabelNames.API_BASE.value,
