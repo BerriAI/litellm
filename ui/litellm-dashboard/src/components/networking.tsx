@@ -2781,8 +2781,8 @@ export const modelPatchUpdateCall = async (
   modelId: string,
 ) => {
   try {
-    console.log("Form Values in modelUpateCall:", formValues); // Log the form values before making the API call
-
+    // Intentionally not logging the payload: it can contain freshly-entered
+    // provider secrets (api_key, vertex_credentials, AWS creds).
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
     const response = await fetch(url, {
       method: "PATCH",
@@ -2802,7 +2802,6 @@ export const modelPatchUpdateCall = async (
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
-    console.log("Update model Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
