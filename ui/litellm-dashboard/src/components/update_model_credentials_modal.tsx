@@ -1,9 +1,9 @@
-import { Button, Form, Input, Modal, Tooltip, Typography } from "antd";
+import { Button, Form, Input, Modal, Typography } from "antd";
 import { useState } from "react";
 import { modelPatchUpdateCall } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
-const { Link, Text } = Typography;
+const { Text } = Typography;
 
 interface UpdateModelCredentialsModalProps {
   open: boolean;
@@ -62,18 +62,13 @@ export default function UpdateModelCredentialsModal({
         <Form.Item label="New API Key" name="api_key" rules={[{ required: true, message: "Enter a new API key" }]}>
           <Input.Password placeholder="Enter the new API key" autoComplete="new-password" />
         </Form.Item>
-        <div className="flex justify-between items-center mt-4">
-          <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
-          </Tooltip>
-          <div>
-            <Button onClick={close} style={{ marginRight: 10 }}>
-              Cancel
-            </Button>
-            <Button htmlType="submit" loading={isSaving}>
-              Update API Key
-            </Button>
-          </div>
+        <div className="flex justify-end items-center mt-4">
+          <Button onClick={close} style={{ marginRight: 10 }}>
+            Cancel
+          </Button>
+          <Button type="primary" htmlType="submit" loading={isSaving}>
+            Update API Key
+          </Button>
         </div>
       </Form>
     </Modal>
