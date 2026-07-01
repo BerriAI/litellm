@@ -20,6 +20,11 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]
     httpxSpecialProvider,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    get_attribute_or_key,
+    get_tool_calls_from_response,
+    has_tool_with_name,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
@@ -97,105 +102,15 @@ def _resolve_call_id(logging_obj: object, request_state: dict[str, object]) -> O
 
 
 def has_headroom_retrieve_tool(tools: object) -> bool:
-    if not isinstance(tools, list):
-        return False
-    for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        function = tool.get("function")
-        if tool.get("type") == "function" and isinstance(function, dict):
-            if function.get("name") == HEADROOM_RETRIEVE_TOOL_NAME:
-                return True
-    return False
-
-
-def _parse_arguments(raw: object) -> dict[str, object]:
-    if isinstance(raw, dict):
-        return raw
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else {}
-        return parsed if isinstance(parsed, dict) else {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-
-
-def _extract_from_chat_completions(response: object) -> list[dict[str, object]]:
-    choices = getattr(response, "choices", None)
-    if not (isinstance(choices, list) and choices):
-        return []
-    message = getattr(choices[0], "message", None)
-    tool_calls = getattr(message, "tool_calls", None) if message else None
-    if not isinstance(tool_calls, list):
-        return []
-    result = []
-    for tc in tool_calls:
-        fn = getattr(tc, "function", None)
-        if fn is None:
-            continue
-        name = getattr(fn, "name", None)
-        if name == HEADROOM_RETRIEVE_TOOL_NAME:
-            result.append(
-                {
-                    "id": getattr(tc, "id", None),
-                    "type": "function",
-                    "name": name,
-                    "arguments": _parse_arguments(getattr(fn, "arguments", "{}")),
-                }
-            )
-    return result
-
-
-def _extract_from_responses_api(response: object) -> list[dict[str, object]]:
-    output = getattr(response, "output", None)
-    if not isinstance(output, list):
-        return []
-    result = []
-    for item in output:
-        item_type = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
-        item_name = item.get("name") if isinstance(item, dict) else getattr(item, "name", None)
-        if item_type != "function_call" or item_name != HEADROOM_RETRIEVE_TOOL_NAME:
-            continue
-        args_raw = item.get("arguments", "{}") if isinstance(item, dict) else getattr(item, "arguments", "{}")
-        item_id = (
-            (item.get("call_id") or item.get("id"))
-            if isinstance(item, dict)
-            else (getattr(item, "call_id", None) or getattr(item, "id", None))
-        )
-        result.append({"id": item_id, "type": "function", "name": item_name, "arguments": _parse_arguments(args_raw)})
-    return result
-
-
-def _extract_from_anthropic_messages(response: object) -> list[dict[str, object]]:
-    content = getattr(response, "content", None)
-    if not isinstance(content, list):
-        return []
-    result = []
-    for block in content:
-        block_type = block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
-        block_name = block.get("name") if isinstance(block, dict) else getattr(block, "name", None)
-        if block_type != "tool_use" or block_name != HEADROOM_RETRIEVE_TOOL_NAME:
-            continue
-        raw_input = block.get("input", {}) if isinstance(block, dict) else getattr(block, "input", {})
-        block_id = block.get("id") if isinstance(block, dict) else getattr(block, "id", None)
-        result.append(
-            {
-                "id": block_id,
-                "type": "function",
-                "name": block_name,
-                "arguments": raw_input if isinstance(raw_input, dict) else {},
-            }
-        )
-    return result
+    return has_tool_with_name(tools, HEADROOM_RETRIEVE_TOOL_NAME)
 
 
 def _extract_headroom_tool_calls(response: object) -> list[dict[str, object]]:
-    chat = _extract_from_chat_completions(response)
-    if chat:
-        return chat
-    responses_api = _extract_from_responses_api(response)
-    if responses_api:
-        return responses_api
-    return _extract_from_anthropic_messages(response)
+    return [
+        {"id": tc["id"], "type": "function", "name": tc["name"], "arguments": tc["arguments"]}
+        for tc in get_tool_calls_from_response(response)
+        if tc["name"] == HEADROOM_RETRIEVE_TOOL_NAME
+    ]
 
 
 def _build_assistant_message_from_response(response: object) -> dict[str, object]:
@@ -225,11 +140,14 @@ def _build_assistant_message_from_response(response: object) -> dict[str, object
 
 
 def _is_responses_api_response(response: object) -> bool:
-    return isinstance(getattr(response, "output", None), list)
+    # Real response objects can be plain dicts at runtime (e.g. TypedDict-based
+    # response types), so getattr alone would silently miss the key -- use the
+    # same dict-or-object accessor as the tool-call extractors.
+    return isinstance(get_attribute_or_key(response, "output", None), list)
 
 
 def _is_anthropic_messages_response(response: object) -> bool:
-    return isinstance(getattr(response, "content", None), list)
+    return isinstance(get_attribute_or_key(response, "content", None), list)
 
 
 def _build_anthropic_followup_messages(

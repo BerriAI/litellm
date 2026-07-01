@@ -580,20 +580,26 @@ async def test_async_build_agentic_loop_plan_builds_anthropic_tool_result_messag
     """For the Anthropic Messages API, follow-up must echo a tool_use content
     block in an assistant message paired with a tool_result content block in a
     user message keyed by the same tool_use_id -- chat-style tool-role
-    messages are not valid Anthropic input."""
+    messages are not valid Anthropic input.
+
+    AnthropicMessagesResponse is a TypedDict, so real responses are plain
+    dicts at runtime; a MagicMock response here would pass even if branch
+    selection used bare getattr() and silently fell through to the
+    chat-completions replay shape for every real Anthropic response.
+    """
     original_content = "This is the full compressed content."
     mock_retrieve = _make_retrieve_response(original_content)
 
-    response = MagicMock()
-    response.choices = None
-    response.content = [
-        {
-            "type": "tool_use",
-            "id": "toolu_abc123",
-            "name": HEADROOM_RETRIEVE_TOOL_NAME,
-            "input": {"hash": "b573993006976af767214fac"},
-        }
-    ]
+    response = {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_abc123",
+                "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                "input": {"hash": "b573993006976af767214fac"},
+            }
+        ]
+    }
 
     tool_calls = [
         {
@@ -671,6 +677,22 @@ def test_extract_hashes_from_list_content_blocks():
     ]
     hashes = extract_hashes_from_messages(messages)
     assert "b573993006976af767214fac" in hashes
+
+
+def test_has_headroom_retrieve_tool_recognizes_anthropic_native_shape():
+    """By the time an Anthropic Messages API response reaches the agentic-loop
+    gate, the OpenAI-shaped tool this guardrail injects (type: "function")
+    has already been transformed into Anthropic's native tool shape
+    (type: "custom", top-level "name", no nested "function" object)."""
+    anthropic_native_tools = [
+        {
+            "type": "custom",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "input_schema": {"type": "object", "properties": {"hash": {"type": "string"}}},
+        }
+    ]
+    assert has_headroom_retrieve_tool(anthropic_native_tools)
+    assert not has_headroom_retrieve_tool([{"type": "custom", "name": "some_other_tool"}])
 
 
 @pytest.mark.asyncio
@@ -928,7 +950,16 @@ async def test_apply_guardrail_sends_model_from_request_data_when_no_config_mode
 async def test_async_should_run_agentic_loop_detects_anthropic_content_block_format(
     guardrail: HeadroomGuardrail,
 ):
-    retrieve_tool_def = [{"type": "function", "function": {"name": HEADROOM_RETRIEVE_TOOL_NAME}}]
+    # Anthropic's native tool format (type: "custom", top-level "name") --
+    # by the time a Messages API response reaches this gate, the OpenAI-shaped
+    # tool this guardrail injects has already been transformed into this shape.
+    retrieve_tool_def = [
+        {
+            "type": "custom",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "input_schema": {"type": "object", "properties": {"hash": {"type": "string"}}},
+        }
+    ]
 
     response = MagicMock()
     response.choices = None
@@ -940,6 +971,47 @@ async def test_async_should_run_agentic_loop_detects_anthropic_content_block_for
             "input": {"hash": "b573993006976af767214fac"},
         }
     ]
+
+    should_run, ctx = await guardrail.async_should_run_agentic_loop(
+        response=response,
+        model="claude-sonnet-4-6",
+        messages=[],
+        tools=retrieve_tool_def,
+        stream=False,
+        custom_llm_provider="anthropic",
+        kwargs={},
+    )
+
+    assert should_run is True
+    assert len(ctx["tool_calls"]) == 1
+    assert ctx["tool_calls"][0]["arguments"]["hash"] == "b573993006976af767214fac"
+
+
+@pytest.mark.asyncio
+async def test_async_should_run_agentic_loop_detects_anthropic_response_as_plain_dict(
+    guardrail: HeadroomGuardrail,
+):
+    """AnthropicMessagesResponse is a TypedDict -- real Messages API responses
+    are plain dicts at runtime, not objects with attribute access. A
+    MagicMock-only test would pass even if detection used bare getattr() and
+    silently treated every real response as having no tool calls."""
+    retrieve_tool_def = [
+        {
+            "type": "custom",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "input_schema": {"type": "object", "properties": {"hash": {"type": "string"}}},
+        }
+    ]
+    response = {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_abc",
+                "name": HEADROOM_RETRIEVE_TOOL_NAME,
+                "input": {"hash": "b573993006976af767214fac"},
+            }
+        ]
+    }
 
     should_run, ctx = await guardrail.async_should_run_agentic_loop(
         response=response,
