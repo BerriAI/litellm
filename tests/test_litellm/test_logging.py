@@ -18,6 +18,10 @@ from litellm._logging import (
     JsonFormatter,
     _initialize_loggers_with_handler,
     _turn_on_json,
+    session_id_var,
+    set_session_id,
+    set_trace_id,
+    trace_id_var,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
@@ -328,3 +332,137 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+class _JsonCapture(logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.formatter = JsonFormatter()
+        self.records: list[dict] = []
+
+    def emit(self, record):
+        self.records.append(json.loads(self.formatter.format(record)))
+
+
+def _make_capture_logger(name: str) -> tuple[logging.Logger, _JsonCapture]:
+    lg = logging.getLogger(name)
+    cap = _JsonCapture()
+    lg.addHandler(cap)
+    lg.setLevel(logging.DEBUG)
+    return lg, cap
+
+
+def test_trace_id_injected_into_json_record():
+    """trace_id set via set_trace_id() appears in every JSON record in that context."""
+    lg, cap = _make_capture_logger("test.trace_inject")
+    set_trace_id("trace-abc-123")
+    try:
+        lg.info("test message")
+        assert len(cap.records) == 1
+        assert cap.records[0]["trace_id"] == "trace-abc-123"
+    finally:
+        trace_id_var.set("")
+
+
+def test_session_id_injected_when_set():
+    """session_id set via set_session_id() appears in JSON record."""
+    lg, cap = _make_capture_logger("test.session_inject")
+    set_session_id("sess-xyz-456")
+    try:
+        lg.info("another message")
+        assert cap.records[0]["session_id"] == "sess-xyz-456"
+    finally:
+        session_id_var.set("")
+
+
+def test_session_id_absent_when_not_set():
+    """session_id must NOT appear in JSON record when not set for this context."""
+    lg, cap = _make_capture_logger("test.no_session")
+    session_id_var.set("")
+    lg.info("no session message")
+    assert "session_id" not in cap.records[0]
+
+
+def test_trace_id_absent_when_not_set():
+    """trace_id must NOT appear when not set."""
+    lg, cap = _make_capture_logger("test.no_trace")
+    trace_id_var.set("")
+    lg.info("no trace message")
+    assert "trace_id" not in cap.records[0]
+
+
+@pytest.mark.asyncio
+async def test_contextvar_isolation_between_tasks():
+    """Two concurrent async tasks each see only their own trace_id."""
+    results: dict[str, str] = {}
+
+    async def task(task_id: str, trace_id: str) -> None:
+        set_trace_id(trace_id)
+        await asyncio.sleep(0)
+        results[task_id] = trace_id_var.get()
+
+    await asyncio.gather(
+        task("A", "trace-for-A"),
+        task("B", "trace-for-B"),
+    )
+
+    assert results["A"] == "trace-for-A"
+    assert results["B"] == "trace-for-B"
+
+
+def test_logging_init_sets_trace_id():
+    """Logging.__init__() must call set_trace_id with self.litellm_trace_id."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    trace_id_var.set("")
+
+    log_obj = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-001",
+        function_id="fn-001",
+        kwargs={},
+    )
+    assert trace_id_var.get() == log_obj.litellm_trace_id
+
+
+def test_logging_init_sets_session_id_when_provided():
+    """Logging.__init__() must call set_session_id when litellm_session_id is in kwargs."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-002",
+        function_id="fn-002",
+        kwargs={"litellm_session_id": "my-session-99"},
+    )
+    assert session_id_var.get() == "my-session-99"
+
+
+def test_logging_init_does_not_set_session_id_when_absent():
+    """Logging.__init__() must NOT mutate session_id_var when no session_id is provided."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    session_id_var.set("preexisting-sid")
+
+    Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=None,
+        litellm_call_id="call-003",
+        function_id="fn-003",
+        kwargs={},
+    )
+    assert session_id_var.get() == "preexisting-sid"
+    session_id_var.set("")
