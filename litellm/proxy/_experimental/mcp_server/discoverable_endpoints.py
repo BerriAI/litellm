@@ -581,12 +581,19 @@ async def register_client_with_server(
     response_types: Optional[list],
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
+    client_redirect_uris: Optional[list] = None,
 ):
     request_base_url = get_request_base_url(request)
+
+    _is_delegated = mcp_server.delegates_interactive_oauth_to_upstream
+    effective_redirect_uris = (
+        client_redirect_uris if _is_delegated and client_redirect_uris else [f"{request_base_url}/callback"]
+    )
+
     dummy_return = {
         "client_id": fallback_client_id or mcp_server.server_name,
         "client_secret": "dummy",
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": effective_redirect_uris,
     }
 
     if mcp_server.client_id and mcp_server.client_secret:
@@ -600,7 +607,7 @@ async def register_client_with_server(
 
     register_data = {
         "client_name": client_name,
-        "redirect_uris": [f"{request_base_url}/callback"],
+        "redirect_uris": effective_redirect_uris,
         "grant_types": grant_types or [],
         "response_types": response_types or [],
         "token_endpoint_auth_method": token_endpoint_auth_method or "",
@@ -1030,38 +1037,61 @@ async def _build_oauth_protected_resource_response(
     else:
         resource_url = f"{request_base_url}/mcp"
 
-    # Pass-through branch: proxy the upstream's own metadata so discovery
-    # directs the client at the real IdP (Okta, Keycloak, …) instead of us.
-    if mcp_server is not None and mcp_server.is_oauth_passthrough:
+    _delegates_to_upstream = mcp_server is not None and (
+        mcp_server.is_oauth_passthrough or mcp_server.delegates_interactive_oauth_to_upstream
+    )
+
+    if _delegates_to_upstream:
+        assert mcp_server is not None  # narrowing for type checker
+        upstream_metadata: Optional[dict] = None
+        fetch_failed = False
         try:
             upstream_metadata = await fetch_upstream_oauth_protected_resource(mcp_server)
         except Exception as exc:
             verbose_logger.warning(
                 "Failed to fetch upstream oauth-protected-resource metadata "
-                f"for pass-through MCP server {mcp_server.name!r}: {exc}"
+                f"for MCP server {mcp_server.name!r}: {exc}"
             )
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"Failed to fetch upstream oauth-protected-resource metadata for MCP server {mcp_server.name!r}"
-                ),
-            )
+            if mcp_server.is_oauth_passthrough:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Failed to fetch upstream oauth-protected-resource metadata "
+                        f"for MCP server {mcp_server.name!r}"
+                    ),
+                )
+            fetch_failed = True
 
         if upstream_metadata is not None:
             response = {**upstream_metadata, "resource": resource_url}
             return response
 
-        # Upstream responded but with non-200 or non-dict payload. For
-        # pass-through servers the gateway is NOT the authorization server,
-        # so we must not fall through to the default gateway metadata —
-        # that would point clients at the wrong IdP.
-        verbose_logger.warning(
-            f"Upstream oauth-protected-resource metadata unavailable for pass-through MCP server {mcp_server.name!r}"
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=(f"Upstream oauth-protected-resource metadata unavailable for MCP server {mcp_server.name!r}"),
-        )
+        if mcp_server.is_oauth_passthrough:
+            verbose_logger.warning(
+                "Upstream oauth-protected-resource metadata unavailable "
+                f"for pass-through MCP server {mcp_server.name!r}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Upstream oauth-protected-resource metadata unavailable "
+                    f"for MCP server {mcp_server.name!r}"
+                ),
+            )
+
+        if fetch_failed:
+            verbose_logger.info(
+                "delegate-auth MCP server %r: upstream resource metadata "
+                "unavailable, falling back to gateway-served AS metadata",
+                mcp_server.name,
+            )
+        return {
+            "authorization_servers": [
+                (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
+            ],
+            "resource": resource_url,
+            "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
+        }
 
     return {
         "authorization_servers": [
@@ -1149,8 +1179,32 @@ def _build_oauth_authorization_server_response(
     if mcp_server_name:
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name, client_ip=client_ip)
 
+    if mcp_server is not None and mcp_server.delegates_interactive_oauth_to_upstream:
+        if not mcp_server.authorization_url or not mcp_server.token_url:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"MCP server {mcp_server.name!r} has delegate_auth_to_upstream "
+                    "but missing authorization_url or token_url"
+                ),
+            )
+        registration_endpoint = mcp_server.registration_url or (
+            f"{request_base_url}/{mcp_server_name}/register" if mcp_server_name else f"{request_base_url}/register"
+        )
+        return {
+            "issuer": request_base_url,
+            "authorization_endpoint": mcp_server.authorization_url,
+            "token_endpoint": mcp_server.token_url,
+            "response_types_supported": ["code"],
+            "scopes_supported": (mcp_server.scopes if mcp_server.scopes else []),
+            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "code_challenge_methods_supported": ["S256"],
+            "token_endpoint_auth_methods_supported": ["none"],
+            "registration_endpoint": registration_endpoint,
+        }
+
     return {
-        "issuer": request_base_url,  # point to your proxy
+        "issuer": request_base_url,
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
@@ -1158,7 +1212,6 @@ def _build_oauth_authorization_server_response(
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
-        # Claude expects a registration endpoint, even if we just fake it
         "registration_endpoint": (
             f"{request_base_url}/{mcp_server_name}/register" if mcp_server_name else f"{request_base_url}/register"
         ),
@@ -1288,6 +1341,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         "client_secret": "dummy",
         "redirect_uris": [f"{request_base_url}/callback"],
     }
+    client_redirect_uris = data.get("redirect_uris")
     client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
         resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
@@ -1300,6 +1354,7 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
                 response_types=data.get("response_types", []),
                 token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
                 fallback_client_id=resolved.server_name or resolved.name,
+                client_redirect_uris=client_redirect_uris,
             )
         return dummy_return
 
@@ -1314,4 +1369,5 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         response_types=data.get("response_types", []),
         token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
         fallback_client_id=mcp_server_name,
+        client_redirect_uris=client_redirect_uris,
     )
