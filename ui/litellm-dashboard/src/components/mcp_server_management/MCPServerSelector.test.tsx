@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import MCPServerSelector from "./MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { ALL_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
   useMCPServers: vi.fn(),
@@ -96,5 +96,59 @@ describe("MCPServerSelector no-mcp-servers option", () => {
     );
     expect(optionByValue("srv-1")?.disabled).toBe(true);
     expect(optionByValue(NO_MCP_SERVERS_SENTINEL)?.disabled).toBe(false);
+  });
+});
+
+describe("MCPServerSelector all-mcp-servers option", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseMCPServers.mockReturnValue({
+      data: [{ server_id: "srv-1", server_name: "Server One" }],
+      isLoading: false,
+    } as any);
+    mockUseMCPAccessGroups.mockReturnValue({ data: [], isLoading: false } as any);
+    mockUseMCPToolsets.mockReturnValue({ data: [], isLoading: false } as any);
+  });
+
+  const optionByValue = (value: string) =>
+    Array.from(screen.getByTestId("mcp-select").querySelectorAll("option")).find(
+      (o) => (o as HTMLOptionElement).value === value,
+    ) as HTMLOptionElement | undefined;
+
+  it("hides the All MCP Servers option by default", () => {
+    renderWithProviders(
+      <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: [], accessGroups: [] }} />,
+    );
+    expect(optionByValue(ALL_MCP_SERVERS_SENTINEL)).toBeUndefined();
+  });
+
+  it("emits an exclusive sentinel when All MCP Servers is selected", async () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        allowAllMcpServers
+        onChange={onChange}
+        value={{ servers: ["srv-1"], accessGroups: [] }}
+      />,
+    );
+    expect(optionByValue(ALL_MCP_SERVERS_SENTINEL)).toBeDefined();
+
+    await userEvent.selectOptions(screen.getByTestId("mcp-select"), [ALL_MCP_SERVERS_SENTINEL]);
+
+    expect(onChange).toHaveBeenCalledWith({ servers: [ALL_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
+  });
+
+  it("disables real server options while all-mcp-servers is selected", () => {
+    renderWithProviders(
+      <MCPServerSelector
+        accessToken="tok"
+        allowAllMcpServers
+        onChange={vi.fn()}
+        value={{ servers: [ALL_MCP_SERVERS_SENTINEL], accessGroups: [] }}
+      />,
+    );
+    expect(optionByValue("srv-1")?.disabled).toBe(true);
+    expect(optionByValue(ALL_MCP_SERVERS_SENTINEL)?.disabled).toBe(false);
   });
 });

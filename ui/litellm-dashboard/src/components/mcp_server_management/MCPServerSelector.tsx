@@ -3,7 +3,7 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { Select } from "antd";
 import React from "react";
-import { NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
+import { ALL_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 
 interface MCPServerSelectorProps {
   onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
@@ -18,6 +18,7 @@ interface MCPServerSelectorProps {
   disabled?: boolean;
   teamId?: string | null;
   allowNoMcpServers?: boolean;
+  allowAllMcpServers?: boolean;
 }
 
 const TOOLSET_PREFIX = "toolset:";
@@ -31,6 +32,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   disabled = false,
   teamId,
   allowNoMcpServers = false,
+  allowAllMcpServers = false,
 }) => {
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
@@ -81,10 +83,15 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   ];
 
   const hasNoMcpServersSelected = allowNoMcpServers && selectedValues.includes(NO_MCP_SERVERS_SENTINEL);
+  const hasAllMcpServersSelected = allowAllMcpServers && selectedValues.includes(ALL_MCP_SERVERS_SENTINEL);
+  const hasSentinelSelected = hasNoMcpServersSelected || hasAllMcpServersSelected;
 
   // Handle selection
   const handleChange = (selected: string[]) => {
-    // "No MCP Servers" is exclusive: picking it clears everything else.
+    if (allowAllMcpServers && selected.includes(ALL_MCP_SERVERS_SENTINEL)) {
+      onChange({ servers: [ALL_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
+      return;
+    }
     if (allowNoMcpServers && selected.includes(NO_MCP_SERVERS_SENTINEL)) {
       onChange({ servers: [NO_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
       return;
@@ -112,13 +119,31 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         style={{ width: "100%" }}
         disabled={disabled}
         filterOption={(input, option) => {
-          if (option?.value === NO_MCP_SERVERS_SENTINEL) return true;
+          if (option?.value === NO_MCP_SERVERS_SENTINEL || option?.value === ALL_MCP_SERVERS_SENTINEL) return true;
           const searchText = options.find((opt) => opt.value === option?.value)?.searchText || "";
           return searchText.toLowerCase().includes(input.toLowerCase());
         }}
       >
+        {allowAllMcpServers && (
+          <Select.Option
+            key={ALL_MCP_SERVERS_SENTINEL}
+            value={ALL_MCP_SERVERS_SENTINEL}
+            label="All MCP Servers"
+            disabled={hasNoMcpServersSelected}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ flex: 1 }}>All MCP Servers</span>
+              <span style={{ color: "#52c41a", fontSize: "12px", fontWeight: 500, opacity: 0.8 }}>Grant all</span>
+            </div>
+          </Select.Option>
+        )}
         {allowNoMcpServers && (
-          <Select.Option key={NO_MCP_SERVERS_SENTINEL} value={NO_MCP_SERVERS_SENTINEL} label="No MCP Servers">
+          <Select.Option
+            key={NO_MCP_SERVERS_SENTINEL}
+            value={NO_MCP_SERVERS_SENTINEL}
+            label="No MCP Servers"
+            disabled={hasAllMcpServersSelected}
+          >
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span style={{ flex: 1 }}>No MCP Servers</span>
               <span style={{ color: "#8c8c8c", fontSize: "12px", fontWeight: 500, opacity: 0.8 }}>Block all</span>
@@ -126,7 +151,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
           </Select.Option>
         )}
         {options.map((opt) => (
-          <Select.Option key={opt.value} value={opt.value} label={opt.label} disabled={hasNoMcpServersSelected}>
+          <Select.Option key={opt.value} value={opt.value} label={opt.label} disabled={hasSentinelSelected}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span
                 style={{

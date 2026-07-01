@@ -315,6 +315,68 @@ class TestMCPRequestHandler:
 
         assert result == [SpecialMCPServerNames.no_mcp_servers.value]
 
+    @pytest.mark.parametrize(
+        "team_servers,key_servers,expected_servers,scenario",
+        [
+            # Team has all-mcp-servers, key has no permissions -> inherit all
+            (
+                ["server1", "server2", "server3"],
+                [],
+                ["server1", "server2", "server3"],
+                "team_all_key_empty",
+            ),
+            # Team has all-mcp-servers, key has specific servers -> key's servers
+            # (intersection of all and key = key)
+            (
+                ["server1", "server2", "server3"],
+                ["server1"],
+                ["server1"],
+                "team_all_key_subset",
+            ),
+            # Both have full sets -> all servers
+            (
+                ["server1", "server2", "server3"],
+                ["server1", "server2", "server3"],
+                ["server1", "server2", "server3"],
+                "both_all",
+            ),
+        ],
+    )
+    async def test_all_mcp_servers_sentinel_on_team(
+        self, team_servers, key_servers, expected_servers, scenario
+    ):
+        """When _get_allowed_mcp_servers_for_team returns all IDs (because the
+        team has all-mcp-servers), the key/team intersection works correctly"""
+        auth = UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="test-team"
+        )
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_key",
+                new_callable=AsyncMock,
+                return_value=key_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=team_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_key_access_group_mcp_server_extras",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "litellm.proxy.proxy_server.general_settings",
+                {},
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert sorted(result) == sorted(expected_servers)
+
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""
 

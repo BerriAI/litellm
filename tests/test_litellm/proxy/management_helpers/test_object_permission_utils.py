@@ -13,6 +13,7 @@ from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_ObjectPer
 from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
+    _has_all_mcp_servers_sentinel,
     _resolve_team_allowed_mcp_servers,
     _rewrite_object_permission_mcp_servers,
     _set_object_permission,
@@ -150,10 +151,21 @@ def test_extract_requested_mcp_server_ids_excludes_no_mcp_servers_sentinel():
     assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1"}
 
 
+def test_extract_requested_mcp_server_ids_excludes_all_mcp_servers_sentinel():
+    obj_perm = {"mcp_servers": ["all-mcp-servers", "server-1"]}
+    assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1"}
+
+
 def test_rewrite_object_permission_mcp_servers_preserves_sentinel():
     obj_perm = {"mcp_servers": ["no-mcp-servers", "alias-1"]}
     _rewrite_object_permission_mcp_servers(obj_perm, {"alias-1": {"server-1"}})
     assert obj_perm["mcp_servers"] == ["no-mcp-servers", "server-1"]
+
+
+def test_rewrite_object_permission_mcp_servers_preserves_all_sentinel():
+    obj_perm = {"mcp_servers": ["all-mcp-servers", "alias-1"]}
+    _rewrite_object_permission_mcp_servers(obj_perm, {"alias-1": {"server-1"}})
+    assert obj_perm["mcp_servers"] == ["all-mcp-servers", "server-1"]
 
 
 @pytest.mark.asyncio
@@ -236,6 +248,7 @@ def _make_mock_mcp_manager(*existing_ids: str, servers=None):
         server_objs.setdefault(server_id, _make_mock_mcp_server(server_id))
     mock_mgr.get_registry.return_value = server_objs
     mock_mgr.get_mcp_server_by_id.side_effect = lambda sid: server_objs.get(sid)
+    mock_mgr.get_all_mcp_server_ids.return_value = set(server_objs.keys())
     return mock_mgr
 
 
@@ -518,6 +531,63 @@ async def test_validate_team_no_mcp_config_blocks_all(
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("server-1", "server-2", "server-3"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_key_against_team_with_all_mcp_servers_sentinel(
+    mock_access_groups, mock_allow_all
+):
+    """When a team has the all-mcp-servers sentinel, any key server should
+    pass validation because the team grants access to everything"""
+    team_obj = _make_team_obj(mcp_servers=["all-mcp-servers"])
+    obj_perm = {"mcp_servers": ["server-1", "server-2"]}
+    result = await validate_key_mcp_servers_against_team(
+        object_permission=obj_perm,
+        team_obj=team_obj,
+    )
+    assert result is not None
+    assert "server-1" in result["mcp_servers"]
+    assert "server-2" in result["mcp_servers"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_allowed_mcp_servers_with_all_sentinel(
+    mock_access_groups, mock_allow_all, mock_mgr
+):
+    """_resolve_team_allowed_mcp_servers returns all registry IDs when the
+    team has the all-mcp-servers sentinel"""
+    mock_mgr.get_all_mcp_server_ids.return_value = {"s1", "s2", "s3"}
+    team_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    team_perm.mcp_servers = ["all-mcp-servers"]
+    team_perm.mcp_access_groups = []
+    team_perm.mcp_tool_permissions = {}
+    result = await _resolve_team_allowed_mcp_servers(team_perm)
+    assert result == {"s1", "s2", "s3"}
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
     new=_make_mock_mcp_manager("server-outside"),
 )
 @patch(
@@ -629,6 +699,99 @@ async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
         team_obj=team_obj,
     )
     assert object_permission["mcp_servers"] == []
+
+
+# ---- Tests for all-mcp-servers sentinel validation in validate_key_mcp_servers_against_team ----
+
+
+def test_has_all_mcp_servers_sentinel_true():
+    assert _has_all_mcp_servers_sentinel({"mcp_servers": ["all-mcp-servers"]}) is True
+
+
+def test_has_all_mcp_servers_sentinel_false():
+    assert _has_all_mcp_servers_sentinel({"mcp_servers": ["server-1"]}) is False
+    assert _has_all_mcp_servers_sentinel(None) is False
+    assert _has_all_mcp_servers_sentinel({}) is False
+
+
+@pytest.mark.asyncio
+async def test_validate_all_sentinel_teamless_non_admin_raises():
+    """Non-admin, teamless key with all-mcp-servers sentinel must be rejected"""
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["all-mcp-servers"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc_info.value.status_code == 403
+    assert "all-mcp-servers" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("s1", "s2"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_all_sentinel_teamless_admin_passes(
+    mock_access_groups, mock_allow_all
+):
+    """Proxy admin assigning all-mcp-servers to a teamless key should pass"""
+    result = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["all-mcp-servers"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+    assert result is not None
+    assert "all-mcp-servers" in result["mcp_servers"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("s1", "s2"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_all_sentinel_key_in_team_with_sentinel_passes(
+    mock_access_groups, mock_allow_all
+):
+    """Key with all-mcp-servers in a team that also has the sentinel should pass"""
+    team_obj = _make_team_obj(mcp_servers=["all-mcp-servers"])
+    result = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["all-mcp-servers"]},
+        team_obj=team_obj,
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_validate_all_sentinel_key_in_team_without_sentinel_raises():
+    """Key with all-mcp-servers in a team that does NOT have the sentinel must be rejected"""
+    team_obj = _make_team_obj(mcp_servers=["server-1", "server-2"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["all-mcp-servers"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "all-mcp-servers" in str(exc_info.value.detail)
+    assert "team-1" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
