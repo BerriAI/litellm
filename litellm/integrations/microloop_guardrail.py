@@ -178,7 +178,7 @@ class MicroloopGuardrail(CustomGuardrail):
         history_window: int | None = None,
         volatile_fields: list[str] | None = None,
         auto_infer_volatile: bool = True,
-        **kwargs: object,  # noqa: ANN003
+        **kwargs,  # noqa: ANN003
     ) -> None:
         """
         Args:
