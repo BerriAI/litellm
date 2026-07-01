@@ -5,7 +5,7 @@ GDC Gemini chat completion transformation
 import json
 import os
 import threading
-from typing import Any
+from typing import Any, Final
 from urllib.parse import urlsplit
 
 import litellm
@@ -14,6 +14,7 @@ from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 
 class GDCGeminiConfig(OpenAILikeChatConfig):
     supports_vertex_params: bool = True  # Tell LiteLLM utilities not to strip vertex_ params
+    _GDCH_CREDENTIAL_TYPE: Final[str] = "gdch_service_account"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -147,6 +148,12 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             json_obj = json.loads(api_key)
         except json.JSONDecodeError:
             return None, False
+        if not isinstance(json_obj, dict) or json_obj.get("type") != self._GDCH_CREDENTIAL_TYPE:
+            raise ValueError(
+                "GDC only accepts a GDCH service account credential as a JSON api_key "
+                '(expected "type": "gdch_service_account"). Other Google credential types are '
+                "rejected so their token or external-account endpoints cannot drive server-side requests."
+            )
         creds, _ = google.auth.load_credentials_from_dict(json_obj)
         return creds, True
 

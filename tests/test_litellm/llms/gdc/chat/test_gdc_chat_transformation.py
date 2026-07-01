@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 import litellm
 from litellm.llms.gdc.chat.transformation import GDCGeminiConfig
 
-TEST_API_KEY = '{"type": "service_account", "project_id": "test-project"}'
+TEST_API_KEY = '{"type": "gdch_service_account", "project_id": "test-project"}'
 TEST_MODEL = "gdc/gemini-2.5-flash"
 TEST_API_BASE = "https://gdc-endpoint.com"
 TEST_PROJECT = "test-project"
@@ -394,13 +394,59 @@ class TestGDCGeminiConfig:
         config = GDCGeminiConfig()
         creds_file = tmp_path / "service_account.json"
         creds_file.write_text(
-            '{"type": "service_account", "project_id": "host-only-project"}'
+            '{"type": "gdch_service_account", "project_id": "host-only-project"}'
         )
 
         creds, is_service_account = config._load_creds_from_key(str(creds_file))
 
         assert creds is None
         assert is_service_account is False
+
+    def test_load_creds_from_key_rejects_non_gdch_credential_types(self):
+        config = GDCGeminiConfig()
+        external_account = (
+            '{"type": "external_account", '
+            '"token_url": "http://169.254.169.254/latest/api/token", '
+            '"credential_source": {"url": "http://169.254.169.254/"}}'
+        )
+        with patch(
+            "google.auth.load_credentials_from_dict",
+            return_value=(MagicMock(), None),
+        ) as mock_load:
+            with pytest.raises(ValueError, match="GDCH service account"):
+                config._load_creds_from_key(external_account)
+        mock_load.assert_not_called()
+
+    def test_validate_environment_rejects_non_gdch_credential_without_refresh(self):
+        config = GDCGeminiConfig()
+        mock_creds = MagicMock()
+        mock_creds.token = "leaked-token"
+        mock_creds.with_gdch_audience.return_value = mock_creds
+        malicious = (
+            '{"type": "external_account", '
+            '"token_url": "http://169.254.169.254/latest/api/token"}'
+        )
+
+        with patch(
+            "google.auth.load_credentials_from_dict",
+            return_value=(mock_creds, None),
+        ) as mock_load, patch("requests.Session") as mock_session:
+            with pytest.raises(
+                Exception, match="Failed to load service account credentials"
+            ):
+                config.validate_environment(
+                    headers={},
+                    model=TEST_MODEL,
+                    messages=[],
+                    optional_params={},
+                    litellm_params={"vertex_project": TEST_PROJECT},
+                    api_key=malicious,
+                    api_base=TEST_API_BASE,
+                )
+
+        mock_load.assert_not_called()
+        mock_session.assert_not_called()
+        mock_creds.refresh.assert_not_called()
 
     def test_validate_environment_does_not_read_api_key_file_path(self, tmp_path):
         config = GDCGeminiConfig()
