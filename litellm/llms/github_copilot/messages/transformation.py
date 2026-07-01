@@ -25,6 +25,14 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    def handles_web_search_natively(self) -> bool:
+        """
+        Copilot's /v1/messages endpoint does not execute ``web_search`` tools, so
+        the interception handler must short-circuit web-search-only requests
+        instead of routing them here.
+        """
+        return False
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -43,8 +51,10 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         leak the Copilot bearer token to a caller-controlled URL.
         """
         # Always use the Copilot endpoint resolved from the authenticated
-        # session, never the caller-supplied api_base.
-        dynamic_api_base = self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
+        # session, never the caller-supplied api_base. rstrip so a
+        # tenant-specific base with a trailing slash does not yield a
+        # double-slash URL once "/v1/messages" is appended downstream.
+        dynamic_api_base = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
         try:
             dynamic_api_key = self.authenticator.get_api_key()
         except GetAPIKeyError as e:
@@ -85,10 +95,14 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         """
         Return the complete URL for GitHub Copilot /v1/messages endpoint.
 
-        The caller-supplied ``api_base`` is intentionally ignored to avoid
-        leaking the Copilot bearer token to a caller-controlled URL.
+        ``api_base`` here is the value already resolved by
+        ``validate_anthropic_messages_environment`` (the authenticated Copilot
+        host), not the raw caller-supplied base — that one is discarded there to
+        avoid leaking the Copilot bearer token to a caller-controlled URL. We
+        reuse it to avoid a second authenticator read, falling back to a fresh
+        resolution only if it was not provided.
         """
-        resolved = self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE
+        resolved = (api_base or self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
         if not resolved.endswith("/v1/messages"):
             resolved = f"{resolved}/v1/messages"
         return resolved

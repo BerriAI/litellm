@@ -21,12 +21,17 @@ def test_github_copilot_anthropic_messages_config_init():
 
 
 def test_github_copilot_anthropic_messages_get_complete_url():
-    """URL is always resolved from the authenticator, never the caller."""
+    """get_complete_url builds the /v1/messages URL from the base it is handed.
+
+    In the request flow that ``api_base`` is the value already resolved by
+    validate_anthropic_messages_environment (the authenticated Copilot host); the
+    caller-supplied base is discarded there, not here (see the validate tests).
+    """
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_base.return_value = None
 
-    # No api_base supplied -> default Copilot endpoint
+    # No api_base supplied and no authenticator base -> default Copilot endpoint.
     url = config.get_complete_url(
         api_base=None,
         api_key=None,
@@ -35,10 +40,34 @@ def test_github_copilot_anthropic_messages_get_complete_url():
         litellm_params={},
     )
     assert url == "https://api.githubcopilot.com/v1/messages"
+    # Falls back to a single authenticator read, not a hard-coded second one.
+    config.authenticator.get_api_base.assert_called()
 
-    # Caller-supplied api_base must be ignored (token-exfiltration guard).
+    # The resolved (validated) base passed in is reused verbatim; no extra read.
+    config.authenticator.get_api_base.reset_mock()
     url = config.get_complete_url(
-        api_base="https://attacker.example.com",
+        api_base="https://api.business.githubcopilot.com",
+        api_key=None,
+        model="github_copilot/claude-haiku-4.5",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == "https://api.business.githubcopilot.com/v1/messages"
+    config.authenticator.get_api_base.assert_not_called()
+
+    # A trailing slash on the base must not produce a double-slash URL.
+    url = config.get_complete_url(
+        api_base="https://api.business.githubcopilot.com/",
+        api_key=None,
+        model="github_copilot/claude-haiku-4.5",
+        optional_params={},
+        litellm_params={},
+    )
+    assert url == "https://api.business.githubcopilot.com/v1/messages"
+
+    # An already-complete /v1/messages base is left untouched.
+    url = config.get_complete_url(
+        api_base="https://api.githubcopilot.com/v1/messages",
         api_key=None,
         model="github_copilot/claude-haiku-4.5",
         optional_params={},
@@ -46,12 +75,18 @@ def test_github_copilot_anthropic_messages_get_complete_url():
     )
     assert url == "https://api.githubcopilot.com/v1/messages"
 
-    # Authenticator-provided base is honored (e.g. business/enterprise tenants).
+
+def test_github_copilot_anthropic_messages_get_complete_url_normalizes_authenticator_trailing_slash():
+    """A tenant base with a trailing slash from the authenticator fallback must
+    not yield a double-slash URL."""
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
     config.authenticator.get_api_base.return_value = (
-        "https://api.business.githubcopilot.com"
+        "https://api.business.githubcopilot.com/"
     )
+
     url = config.get_complete_url(
-        api_base="https://attacker.example.com",
+        api_base=None,
         api_key=None,
         model="github_copilot/claude-haiku-4.5",
         optional_params={},
@@ -227,3 +262,40 @@ def test_provider_config_manager_skips_non_claude_copilot_models():
     )
 
     assert config is None
+
+
+def test_github_copilot_anthropic_messages_validate_environment_normalizes_trailing_slash():
+    """A tenant base with a trailing slash from the authenticator must be
+    normalized so the URL built downstream has no double slash."""
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key"
+    config.authenticator.get_api_base.return_value = (
+        "https://api.business.githubcopilot.com/"
+    )
+
+    _, api_base = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base="https://attacker.example.com",
+    )
+
+    assert api_base == "https://api.business.githubcopilot.com"
+
+
+def test_github_copilot_config_does_not_handle_web_search_natively():
+    """Copilot's /v1/messages does not run web_search, so its config must report
+    handles_web_search_natively() == False. This is what keeps the web-search
+    interception handler short-circuiting Copilot instead of routing to it, even
+    though Copilot now has a BaseAnthropicMessagesConfig. The base Anthropic
+    config (bedrock/vertex/anthropic path) must report True."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    assert GithubCopilotAnthropicMessagesConfig().handles_web_search_natively() is False
+    assert AnthropicMessagesConfig().handles_web_search_natively() is True
