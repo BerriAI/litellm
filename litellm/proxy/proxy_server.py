@@ -5282,9 +5282,8 @@ class ProxyConfig:
         4. Update router settings
         """
         if llm_router is not None and prisma_client is not None:
-            db_router_settings = await ConfigRepository(prisma_client).table.find_first(
-                where={"param_name": "router_settings"}
-            )
+            db_router_param = await ConfigRepository(prisma_client).get_param("router_settings")
+            db_param_value = db_router_param.param_value if db_router_param is not None else None
 
             config_router_settings = config_data.get("router_settings", {})
 
@@ -5292,16 +5291,15 @@ class ProxyConfig:
             if (
                 config_router_settings is not None
                 and isinstance(config_router_settings, dict)
-                and db_router_settings is not None
-                and isinstance(db_router_settings.param_value, dict)
+                and isinstance(db_param_value, dict)
             ):
                 from litellm.utils import _update_dictionary
 
-                combined_router_settings = _update_dictionary(config_router_settings, db_router_settings.param_value)
+                combined_router_settings = _update_dictionary(config_router_settings, db_param_value)
             elif config_router_settings is not None and isinstance(config_router_settings, dict):
                 combined_router_settings = config_router_settings
-            elif db_router_settings is not None and isinstance(db_router_settings.param_value, dict):
-                combined_router_settings = db_router_settings.param_value
+            elif isinstance(db_param_value, dict):
+                combined_router_settings = db_param_value
 
             if combined_router_settings:
                 llm_router.update_settings(**combined_router_settings)

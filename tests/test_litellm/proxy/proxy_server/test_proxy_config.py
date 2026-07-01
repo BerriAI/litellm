@@ -1368,7 +1368,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_router = MagicMock()
     fake_router.update_settings = MagicMock()
     fake_prisma = MagicMock()
-    fake_prisma.db.litellm_config.find_first = AsyncMock(
+    fake_prisma.db.litellm_config.find_unique = AsyncMock(
         return_value=SimpleNamespace(
             param_value={"timeout": 30, "retries": 2, "fallbacks": []}
         )
@@ -1390,6 +1390,34 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
         "called": True,
         "call_count": 1,
         "kwargs_keys": ["fallbacks", "retries", "timeout"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__add_router_settings_from_db_config_handles_json_string():
+    """Regression for #31836: param_value stored as a JSON string must be
+    deserialized before being applied to the router."""
+    import json
+
+    pc = ProxyConfig()
+    fake_router = MagicMock()
+    fake_router.update_settings = MagicMock()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_config.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            param_value=json.dumps(
+                {"model_group_alias": {"codex/gpt-5.5:auto": "codex/gpt-5.5"}}
+            )
+        )
+    )
+    await pc._add_router_settings_from_db_config(
+        config_data={},
+        llm_router=fake_router,
+        prisma_client=fake_prisma,
+    )
+    assert fake_router.update_settings.called
+    assert fake_router.update_settings.call_args.kwargs == {
+        "model_group_alias": {"codex/gpt-5.5:auto": "codex/gpt-5.5"},
     }
 
 
