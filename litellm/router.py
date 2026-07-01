@@ -2714,7 +2714,7 @@ class Router:
             await self._ageneric_api_call_with_fallbacks(
                 original_function=original_function, model=silent_model, **silent_kwargs
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {str(e)}")
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: List[Any], **kwargs):
