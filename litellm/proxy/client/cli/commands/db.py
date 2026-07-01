@@ -19,6 +19,8 @@ from litellm.proxy.db.prisma_client import PrismaManager
 try:
     from litellm_proxy_extras.utils import (
         _get_prisma_command as _imported_prisma_command,
+    )
+    from litellm_proxy_extras.utils import (
         _get_prisma_env as _imported_prisma_env,
     )
 
