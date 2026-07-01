@@ -290,7 +290,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         max_blocks = MAX_CACHE_CONTROL_BLOCKS - reserved_blocks
 
         used_blocks = AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system)
-        used_blocks += sum(AnthropicCacheControlHook._count_cache_control_blocks(msg) for msg in processed_messages)
+        used_blocks += sum(
+            AnthropicCacheControlHook._count_cache_control_blocks(cast(AllMessageValues, msg))
+            for msg in processed_messages
+        )
 
         for point in system_points:
             if used_blocks >= max_blocks:
@@ -304,9 +307,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             used_blocks += 1
 
         system_blocks_after = AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system)
+
+        for i, msg in enumerate(processed_messages):
+            content = msg.get("content")
+            if isinstance(content, str):
+                processed_messages[i] = {**msg, "content": [{"type": "text", "text": content}]}
+
         processed_messages = AnthropicCacheControlHook._apply_message_injections(
             points=message_points,
-            messages=processed_messages,
+            messages=cast(List[AllMessageValues], processed_messages),
             max_blocks=max_blocks - system_blocks_after,
         )
 
