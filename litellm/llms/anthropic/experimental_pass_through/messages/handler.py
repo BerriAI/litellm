@@ -540,6 +540,29 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
         )
     )
+
+    should_drop_params = (
+        litellm.drop_params is True
+        or getattr(litellm_params, "drop_params", None) is True
+        or kwargs.get("drop_params") is True
+    )
+
+    if should_drop_params:
+        from litellm.utils import _should_drop_param
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        additional_drop_params = kwargs.get("additional_drop_params") or []
+        for k in list(anthropic_messages_optional_request_params.keys()):
+            if _should_drop_param(k, additional_drop_params):
+                anthropic_messages_optional_request_params.pop(k, None)
+
+        if not AnthropicConfig._model_supports_effort_param(model):
+            anthropic_messages_optional_request_params.pop("output_config", None)
+        if not AnthropicConfig._supports_model_capability(model, "supports_reasoning"):
+            anthropic_messages_optional_request_params.pop("thinking", None)
+        if "context_management" in anthropic_messages_optional_request_params:
+            if custom_llm_provider in ["vertex_ai", "bedrock"] and "haiku" in model.lower():
+                anthropic_messages_optional_request_params.pop("context_management", None)
     if is_reasoning_auto_summary_enabled():
         thinking_param = anthropic_messages_optional_request_params.get("thinking")
         if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":

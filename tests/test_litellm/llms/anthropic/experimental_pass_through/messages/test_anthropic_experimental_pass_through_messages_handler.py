@@ -220,21 +220,15 @@ async def test_bedrock_converse_budget_tokens_preserved():
         mock_acompletion.assert_called_once()
 
         call_kwargs = mock_acompletion.call_args.kwargs
-        print(
-            "acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str)
-        )
+        print("acompletion call kwargs: ", json.dumps(call_kwargs, indent=4, default=str))
 
         # Verify thinking parameter is passed through with budget_tokens preserved
         thinking_param = call_kwargs.get("thinking")
-        assert (
-            thinking_param is not None
-        ), "thinking parameter should be passed to acompletion"
-        assert (
-            thinking_param.get("type") == "enabled"
-        ), "thinking.type should be 'enabled'"
-        assert (
-            thinking_param.get("budget_tokens") == 1024
-        ), f"thinking.budget_tokens should be 1024, but got {thinking_param.get('budget_tokens')}"
+        assert thinking_param is not None, "thinking parameter should be passed to acompletion"
+        assert thinking_param.get("type") == "enabled", "thinking.type should be 'enabled'"
+        assert thinking_param.get("budget_tokens") == 1024, (
+            f"thinking.budget_tokens should be 1024, but got {thinking_param.get('budget_tokens')}"
+        )
 
 
 def test_openai_model_with_thinking_converts_to_reasoning():
@@ -266,23 +260,18 @@ def test_openai_model_with_thinking_converts_to_reasoning():
         call_kwargs = mock_responses.call_args.kwargs
 
         # Verify reasoning is set (converted from thinking)
-        assert (
-            "reasoning" in call_kwargs
-        ), "reasoning should be passed to litellm.responses"
+        assert "reasoning" in call_kwargs, "reasoning should be passed to litellm.responses"
 
         # budget_tokens=1024 -> effort="low" (at the LOW budget threshold)
         # reasoning_auto_summary is False by default, so no summary key
         expected_reasoning = {"effort": "low"}
         assert call_kwargs["reasoning"] == expected_reasoning, (
-            f"reasoning should be {expected_reasoning} for budget_tokens=1024, "
-            f"got {call_kwargs.get('reasoning')}"
+            f"reasoning should be {expected_reasoning} for budget_tokens=1024, got {call_kwargs.get('reasoning')}"
         )
         assert "summary" not in call_kwargs["reasoning"]
 
         # Verify thinking is NOT passed directly to the Responses API
-        assert (
-            "thinking" not in call_kwargs
-        ), "thinking should NOT be passed directly to litellm.responses"
+        assert "thinking" not in call_kwargs, "thinking should NOT be passed directly to litellm.responses"
 
 
 class TestThinkingParameterTransformation:
@@ -335,9 +324,7 @@ class TestThinkingParameterTransformation:
                 thinking=thinking,
                 model="openai/gpt-5.2",
             )
-            assert result == {
-                "reasoning_effort": {"effort": "high", "summary": "detailed"}
-            }
+            assert result == {"reasoning_effort": {"effort": "high", "summary": "detailed"}}
         finally:
             litellm.reasoning_auto_summary = original
 
@@ -535,9 +522,9 @@ class TestThinkingSummaryPreservation:
             mock_responses.assert_called_once()
             call_kwargs = mock_responses.call_args.kwargs
             reasoning = call_kwargs["reasoning"]
-            assert (
-                reasoning["summary"] == "concise"
-            ), f"Expected summary='concise', got summary='{reasoning.get('summary')}'"
+            assert reasoning["summary"] == "concise", (
+                f"Expected summary='concise', got summary='{reasoning.get('summary')}'"
+            )
 
     def test_responses_adapter_preserves_summary(self):
         """translate_thinking_to_reasoning should include summary when user provides it."""
@@ -546,9 +533,7 @@ class TestThinkingSummaryPreservation:
         )
 
         thinking = {"type": "enabled", "budget_tokens": 5000, "summary": "concise"}
-        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
-            thinking
-        )
+        result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
         assert result == {"effort": "high", "summary": "concise"}
 
     def test_responses_adapter_no_summary_by_default(self):
@@ -562,11 +547,7 @@ class TestThinkingSummaryPreservation:
         try:
             litellm.reasoning_auto_summary = False
             thinking = {"type": "enabled", "budget_tokens": 5000}
-            result = (
-                LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(
-                    thinking
-                )
-            )
+            result = LiteLLMAnthropicToResponsesAPIAdapter.translate_thinking_to_reasoning(thinking)
             assert result == {"effort": "high"}
             assert result is not None and "summary" not in result
         finally:
@@ -583,9 +564,7 @@ class TestThinkingSummaryPreservation:
             thinking=thinking,
             model="openai/gpt-5.2",
         )
-        assert result == {
-            "reasoning_effort": {"effort": "high", "summary": "concise"}
-        }
+        assert result == {"reasoning_effort": {"effort": "high", "summary": "concise"}}
 
 
 # ---------------------------------------------------------------------------
@@ -656,9 +635,7 @@ def test_presanitized_flag_not_leaked_to_provider_params():
 
     def fake_base_handler(*args, **kwargs):
         captured.update(kwargs)
-        captured["optional"] = kwargs.get(
-            "anthropic_messages_optional_request_params", {}
-        )
+        captured["optional"] = kwargs.get("anthropic_messages_optional_request_params", {})
         return "stub"
 
     with patch.object(
@@ -821,3 +798,30 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+@pytest.mark.asyncio
+async def test_anthropic_pass_through_drop_params(monkeypatch):
+    from unittest.mock import AsyncMock
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    mock_handler = AsyncMock()
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", mock_handler)
+
+    # Test automatic dropping of context_management for haiku on vertex_ai
+    await anthropic_messages_handler(
+        model="vertex_ai/claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=64,
+        drop_params=True,
+        context_management={"edits": []},
+        custom_llm_provider="vertex_ai",
+        is_async=True,
+    )
+    called_kwargs = mock_handler.call_args.kwargs
+    optional_params = called_kwargs.get("anthropic_messages_optional_request_params", {})
+    assert "context_management" not in optional_params
