@@ -422,12 +422,12 @@ def _extract_requested_mcp_server_ids(
 def _has_all_mcp_servers_sentinel(
     object_permission: Optional[ObjectPermissionDict],
 ) -> bool:
-    if not object_permission or not isinstance(object_permission, dict):
+    if not object_permission:
         return False
     mcp_servers = object_permission.get("mcp_servers")
-    if isinstance(mcp_servers, list):
-        return SpecialMCPServerNames.all_mcp_servers.value in mcp_servers
-    return False
+    if not mcp_servers:
+        return False
+    return SpecialMCPServerNames.all_mcp_servers.value in mcp_servers
 
 
 def _extract_requested_mcp_access_groups(
