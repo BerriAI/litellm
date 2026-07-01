@@ -18,7 +18,7 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 from ..base_aws_llm import BaseAWSLLM, Credentials
-from ..common_utils import BedrockError, _get_all_bedrock_regions
+from ..common_utils import BedrockError, extract_bedrock_region_and_model_id
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
@@ -265,23 +265,11 @@ class BedrockConverseLLM(BaseAWSLLM):
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
         else:
-            # Strip nova spec prefixes before encoding model ID for API URL
-            _model_for_id = model
-            _stripped = _model_for_id
-            for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
-                if _stripped.startswith(rp):
-                    _stripped = _stripped[len(rp) :]
-                    break
-            # Strip embedded region prefix (e.g. "bedrock/us-east-1/model" -> "model")
-            # and capture it so it can be used as aws_region_name below.
-            _region_from_model: Optional[str] = None
-            _potential_region = _stripped.split("/", 1)[0]
-            if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
-                _region_from_model = _potential_region
-                _stripped = _stripped.split("/", 1)[1]
-                _model_for_id = _stripped
+            _region_from_model, _model_for_id = extract_bedrock_region_and_model_id(
+                model
+            )
             for _nova_prefix in ["nova-2/", "nova/"]:
-                if _stripped.startswith(_nova_prefix):
+                if _model_for_id.startswith(_nova_prefix):
                     _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
                     break
             modelId = self.encode_model_id(model_id=_model_for_id)

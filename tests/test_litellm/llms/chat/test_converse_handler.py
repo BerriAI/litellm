@@ -6,6 +6,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.chat import BedrockConverseLLM
+from litellm.llms.bedrock.common_utils import extract_bedrock_region_and_model_id
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -14,21 +15,43 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
+INFERENCE_PROFILE_ARN = (
+    "arn:aws:bedrock:us-east-1:12345678910:application-inference-profile/ujdtmcirjhevpi"
+)
+
 
 def test_encode_model_id_with_inference_profile():
     """
     Test instance profile is properly encoded when used as a model
     """
-    test_model = "arn:aws:bedrock:us-east-1:12345678910:application-inference-profile/ujdtmcirjhevpi"
+    test_model = INFERENCE_PROFILE_ARN
     expected_model = "arn%3Aaws%3Abedrock%3Aus-east-1%3A12345678910%3Aapplication-inference-profile%2Fujdtmcirjhevpi"
     bedrock_converse_llm = BedrockConverseLLM()
     returned_model = bedrock_converse_llm.encode_model_id(test_model)
     assert expected_model == returned_model
 
 
+def _extract_converse_model_id_and_region(model: str, optional_params: dict | None = None):
+    """Simulate converse_handler modelId + region extraction."""
+    bedrock_converse_llm = BedrockConverseLLM()
+    optional_params = optional_params if optional_params is not None else {}
+
+    _region_from_model, _model_for_id = extract_bedrock_region_and_model_id(model)
+    for _nova_prefix in ["nova-2/", "nova/"]:
+        if _model_for_id.startswith(_nova_prefix):
+            _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
+            break
+
+    model_id = bedrock_converse_llm.encode_model_id(model_id=_model_for_id)
+    if _region_from_model is not None and "aws_region_name" not in optional_params:
+        optional_params["aws_region_name"] = _region_from_model
+
+    return model_id, optional_params
+
+
 class TestBedrockRegionInModelPath:
     """
-    Tests for region extraction from bedrock/{region}/{model} path format.
+    Tests for region extraction from bedrock/{region}/{model} path format and ARNs.
 
     When a user passes model="bedrock/ap-northeast-1/moonshotai.kimi-k2.5",
     get_llm_provider strips "bedrock/" and passes "ap-northeast-1/moonshotai.kimi-k2.5"
@@ -68,6 +91,27 @@ class TestBedrockRegionInModelPath:
                 "us.anthropic.claude-haiku-4-5-20251001-v1%3A0",
                 None,
             ),
+            # Inference profile ARN — region from ARN colon structure
+            (
+                INFERENCE_PROFILE_ARN,
+                "arn%3Aaws%3Abedrock%3Aus-east-1%3A12345678910%3Aapplication-inference-profile%2Fujdtmcirjhevpi",
+                "us-east-1",
+            ),
+            (
+                f"bedrock/converse/{INFERENCE_PROFILE_ARN}",
+                "arn%3Aaws%3Abedrock%3Aus-east-1%3A12345678910%3Aapplication-inference-profile%2Fujdtmcirjhevpi",
+                "us-east-1",
+            ),
+            (
+                f"converse/{INFERENCE_PROFILE_ARN}",
+                "arn%3Aaws%3Abedrock%3Aus-east-1%3A12345678910%3Aapplication-inference-profile%2Fujdtmcirjhevpi",
+                "us-east-1",
+            ),
+            (
+                "bedrock/converse/us-east-1/moonshotai.kimi-k2.5",
+                "moonshotai.kimi-k2.5",
+                "us-east-1",
+            ),
         ],
     )
     def test_region_and_model_id_extraction(
@@ -75,34 +119,9 @@ class TestBedrockRegionInModelPath:
     ):
         """
         Verify that completion() correctly extracts both modelId and aws_region_name
-        from the bedrock/{region}/{model} path format.
+        from the bedrock/{region}/{model} path format and inference profile ARNs.
         """
-        bedrock_converse_llm = BedrockConverseLLM()
-        optional_params: dict = {}
-
-        # Simulate the modelId + region extraction logic from completion()
-        _model_for_id = model
-        _stripped = _model_for_id
-        for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
-            if _stripped.startswith(rp):
-                _stripped = _stripped[len(rp) :]
-                break
-
-        _region_from_model = None
-        _potential_region = _stripped.split("/", 1)[0]
-        if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
-            _region_from_model = _potential_region
-            _stripped = _stripped.split("/", 1)[1]
-            _model_for_id = _stripped
-
-        for _nova_prefix in ["nova-2/", "nova/"]:
-            if _stripped.startswith(_nova_prefix):
-                _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
-                break
-
-        model_id = bedrock_converse_llm.encode_model_id(model_id=_model_for_id)
-        if _region_from_model is not None and "aws_region_name" not in optional_params:
-            optional_params["aws_region_name"] = _region_from_model
+        model_id, optional_params = _extract_converse_model_id_and_region(model)
 
         assert (
             model_id == expected_model_id
@@ -116,22 +135,12 @@ class TestBedrockRegionInModelPath:
         If aws_region_name is already set in optional_params, the region in the
         model path must NOT override it.
         """
-        bedrock_converse_llm = BedrockConverseLLM()
         optional_params = {"aws_region_name": "eu-west-1"}
         model = "ap-northeast-1/moonshotai.kimi-k2.5"
 
-        _model_for_id = model
-        _stripped = model
-        _region_from_model = None
-        _potential_region = _stripped.split("/", 1)[0]
-        if _potential_region in _get_all_bedrock_regions() and "/" in _stripped:
-            _region_from_model = _potential_region
-            _stripped = _stripped.split("/", 1)[1]
-            _model_for_id = _stripped
-
-        model_id = bedrock_converse_llm.encode_model_id(model_id=_model_for_id)
-        if _region_from_model is not None and "aws_region_name" not in optional_params:
-            optional_params["aws_region_name"] = _region_from_model
+        model_id, optional_params = _extract_converse_model_id_and_region(
+            model, optional_params
+        )
 
         # modelId is still correctly stripped
         assert model_id == "moonshotai.kimi-k2.5"
