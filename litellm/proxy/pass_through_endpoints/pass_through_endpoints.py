@@ -868,6 +868,14 @@ async def pass_through_request(
             logging_obj=logging_obj,
         )
 
+        _additional_drop_params: List[str] = getattr(litellm, "additional_drop_params", None) or []
+        if _additional_drop_params and isinstance(_parsed_body, dict):
+            from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
+
+            for path in _additional_drop_params:
+                _parsed_body = delete_nested_value(_parsed_body, path)
+            passthrough_logging_payload["request_body"] = _parsed_body
+
         # Store custom_llm_provider in kwargs and logging object if provided
         if custom_llm_provider:
             logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
