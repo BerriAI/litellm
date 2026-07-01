@@ -92,6 +92,18 @@ else:
     LoggingClass = Any
 
 
+_OUTPUT_FORMAT_UNSUPPORTED_FIELDS = {
+    "maxItems",
+    "minItems",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "minLength",
+    "maxLength",
+}
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -248,17 +260,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return params
 
-    _OUTPUT_FORMAT_UNSUPPORTED_FIELDS = {
-        "maxItems",
-        "minItems",
-        "minimum",
-        "maximum",
-        "exclusiveMinimum",
-        "exclusiveMaximum",
-        "minLength",
-        "maxLength",
-    }
-
     @staticmethod
     def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -289,7 +290,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return schema
 
         # All numeric/string/array constraints not supported by Anthropic
-        unsupported_fields = AnthropicConfig._OUTPUT_FORMAT_UNSUPPORTED_FIELDS
+        unsupported_fields = _OUTPUT_FORMAT_UNSUPPORTED_FIELDS
 
         # Build description additions from removed constraints
         constraint_descriptions: list = []
@@ -371,7 +372,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if not isinstance(schema, (dict, list)):
             return False
 
-        unsupported_fields = AnthropicConfig._OUTPUT_FORMAT_UNSUPPORTED_FIELDS
+        unsupported_fields = _OUTPUT_FORMAT_UNSUPPORTED_FIELDS
 
         if isinstance(schema, dict):
             if any(field in schema for field in unsupported_fields):
