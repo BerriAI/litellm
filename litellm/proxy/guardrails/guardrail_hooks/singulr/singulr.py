@@ -1,11 +1,8 @@
 """
 Singulr guardrail integration for LiteLLM.
-
 Calls the Singulr Guard API to scan messages.
-
 """
 
-import json
 import os
 from typing import Any, Literal, Optional, cast
 from urllib.parse import urlparse
@@ -29,10 +26,14 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
+    SingulrGuardrailPayload,
+    SingulrGuardrailRequest,
+)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
-_DEFAULT_API_BASE = "https://localhost:8000"
-_GUARD_ENDPOINT = "/api/v1/ai-platform/controller/singulr-guardrails-litellm"
+_DEFAULT_API_BASE = "http://localhost:8003"
+_GUARD_ENDPOINT = "/api/v1/ai-gateway/litellm"
 
 
 class SingulrGuardrail(CustomGuardrail):
@@ -47,7 +48,9 @@ class SingulrGuardrail(CustomGuardrail):
     ) -> None:
         self.api_key = api_key or os.environ.get("SINGULR_API_KEY")
 
-        self.api_base = (api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
+        self.api_base = (
+            api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE
+        ).rstrip("/")
 
         parsed = urlparse(self.api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
@@ -61,7 +64,9 @@ class SingulrGuardrail(CustomGuardrail):
                 self.api_base,
             )
 
-        self.enforcement_entity_id = enforcement_entity_id or os.environ.get("SINGULR_ENFORCEMENT_ENTITY_ID")
+        self.enforcement_entity_id = enforcement_entity_id or os.environ.get(
+            "SINGULR_ENFORCEMENT_ENTITY_ID"
+        )
         self.guardrail_id = guardrail_id or os.environ.get("SINGULR_GUARDRAIL_ID")
 
         if block_on_error is None:
@@ -92,59 +97,22 @@ class SingulrGuardrail(CustomGuardrail):
 
     def _build_payload(
         self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, Any],
         input_type: Literal["request", "response"],
-    ) -> dict[str, str]:
-        if input_type == "request":
-            from litellm.proxy.guardrails._content_utils import (
-                build_inspection_messages,
-            )
+    ) -> dict[str, Any]:
+        request = SingulrGuardrailRequest.model_validate(request_data)
+        if not request.model_dump(exclude_none=True):
+            return {}
 
-            messages = build_inspection_messages(cast(dict[str, Any], request_data))
-            last_assistant_idx = next(
-                (
-                    i
-                    for i in reversed(range(len(messages)))
-                    if str(messages[i].get("role") or "").lower() in ("assistant", "tool")
-                ),
-                -1,
-            )
-            direct_texts = [
-                m["content"]
-                for m in messages[last_assistant_idx + 1 :]
-                if str(m.get("role") or "").lower() == "user" and m.get("content")
-            ]
-            indirect_texts = [
-                m["content"]
-                for m in messages
-                if str(m.get("role") or "").lower() in ("system", "tool") and m.get("content")
-            ] + [json.dumps(request_data[k]) for k in ("tools", "functions", "response_format") if request_data.get(k)]
-
-            if direct_texts or indirect_texts:
-                return {
-                    k: v
-                    for k, v in {
-                        "prompt": "\n".join(direct_texts),
-                        "indirect_prompt": "\n".join(indirect_texts),
-                    }.items()
-                    if v
-                }
-
-            texts = inputs.get("texts", [])
-            prompt = "\n".join(texts) if texts else ""
-            return {"prompt": prompt} if prompt else {}
-
-        texts = inputs.get("texts", [])
-        prompt = "\n".join(texts) if texts else ""
-        return {"prompt": prompt} if prompt else {}
+        payload = SingulrGuardrailPayload(request=request, input_type=input_type)
+        return payload.model_dump(exclude_none=True)
 
     def _build_headers(self) -> dict[str, str]:
         return dict(
             (header, value)
             for header, value in (
                 ("Content-Type", "application/json"),
-                ("Authorization", f"Bearer {self.api_key}" if self.api_key else ""),
+                ("X-Singulr-Gateway-Token", self.api_key),
                 (
                     "X-Singulr-Enforcement-Entity-Id",
                     self.enforcement_entity_id or "",
@@ -154,7 +122,7 @@ class SingulrGuardrail(CustomGuardrail):
             if value
         )
 
-    async def _call_api(self, payload: dict[str, str]) -> Optional[dict[str, Any]]:
+    async def _call_api(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
         endpoint = f"{self.api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 
@@ -179,7 +147,9 @@ class SingulrGuardrail(CustomGuardrail):
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=(f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"),
+                    message=(
+                        f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"
+                    ),
                 ) from exc
             return None
 
@@ -193,7 +163,9 @@ class SingulrGuardrail(CustomGuardrail):
             return None
 
         except ValueError as exc:
-            verbose_proxy_logger.error("Singulr API returned non-JSON response: %s", str(exc))
+            verbose_proxy_logger.error(
+                "Singulr API returned non-JSON response: %s", str(exc)
+            )
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
@@ -209,7 +181,7 @@ class SingulrGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-        payload = self._build_payload(inputs, request_data, input_type)
+        payload = self._build_payload(cast(dict[str, Any], request_data), input_type)
         verbose_proxy_logger.debug("Singulr: payload=%s", payload)
         if not payload:
             return inputs
