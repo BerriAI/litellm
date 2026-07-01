@@ -1103,6 +1103,38 @@ async def test_token_endpoint_respects_x_forwarded_host():
             None,
             "https://external.com",
         ),
+        # Case 15: X-Forwarded-Port 443 with HTTPS must NOT appear in the URL
+        (
+            "http://localhost:4000/",
+            "https",
+            "proxy.example.com",
+            "443",
+            "https://proxy.example.com",
+        ),
+        # Case 16: X-Forwarded-Port 80 with HTTP must NOT appear in the URL
+        (
+            "http://localhost:4000/",
+            "http",
+            "proxy.example.com",
+            "80",
+            "http://proxy.example.com",
+        ),
+        # Case 17: X-Forwarded-Port 443 without X-Forwarded-Host (portless base)
+        (
+            "http://internal.local/",
+            "https",
+            None,
+            "443",
+            "https://internal.local",
+        ),
+        # Case 18: Non-default port is preserved
+        (
+            "http://localhost:4000/",
+            "https",
+            "proxy.example.com",
+            "8443",
+            "https://proxy.example.com:8443",
+        ),
     ],
 )
 def test_get_request_base_url_comprehensive(
