@@ -3821,6 +3821,44 @@ async def test_add_router_settings_from_db_config_merge_logic():
 
 
 @pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_accepts_legacy_json_string():
+    """
+    Regression: older /config/update stored router_settings.param_value as a
+    JSON string inside the Json column. Reload must coerce that legacy row back
+    to a dict so model_group_alias reaches the live Router.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = json.dumps(
+        {
+            "model_group_alias": {"alias-model:auto": "target-model"}
+        }
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_config
+    )
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data={},
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    mock_router.update_settings.assert_called_once_with(
+        model_group_alias={"alias-model:auto": "target-model"}
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_router_settings_from_db_config_edge_cases():
     """
     Test edge cases for _add_router_settings_from_db_config method.
@@ -7621,8 +7659,7 @@ class _FakeLitellmConfig:
 
     async def _upsert(self, where=None, data=None):
         name = where["param_name"]
-        raw = data["update"]["param_value"]
-        value = json.loads(raw) if isinstance(raw, str) else raw
+        value = data["update"]["param_value"]
         self.rows[name] = value
         self.upsert_calls.append((name, value))
 
@@ -7821,6 +7858,28 @@ def test_update_config_litellm_settings_request_wins_for_non_callback_keys(
         stored = prisma.db.litellm_config.rows["litellm_settings"]
         assert stored["drop_params"] is False
         assert stored["set_verbose"] is True
+    finally:
+        restore()
+
+
+def test_update_config_router_settings_stores_json_object(_update_config_setup):
+    """router_settings is stored in a Json column, so /config/update must persist
+    an object rather than a JSON string. Otherwise DB reload skips settings like
+    model_group_alias that require dict values."""
+    client, prisma, restore = _update_config_setup()
+    try:
+        resp = client.post(
+            "/config/update",
+            json={
+                "router_settings": {
+                    "model_group_alias": {"alias-model:auto": "target-model"}
+                }
+            },
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["router_settings"]
+        assert isinstance(stored, dict)
+        assert stored["model_group_alias"] == {"alias-model:auto": "target-model"}
     finally:
         restore()
 

@@ -2937,7 +2937,10 @@ async def test_update_config_success_callback_normalization():
         return None
 
     async def fake_upsert(where=None, data=None):
-        upserted[where["param_name"]] = json.loads(data["update"]["param_value"])
+        value = data["update"]["param_value"]
+        upserted[where["param_name"]] = (
+            json.loads(value) if isinstance(value, str) else value
+        )
 
     class MockPrisma:
         def __init__(self):
@@ -2973,6 +2976,110 @@ async def test_update_config_success_callback_normalization():
     assert "sQs" not in callbacks
     # Existing callback should still be present
     assert "langfuse" in callbacks
+
+
+def test_normalize_config_param_value_preserves_non_object_values():
+    """Only legacy JSON object strings should be coerced back to dicts."""
+    from litellm.proxy.proxy_server import _normalize_config_param_value
+
+    assert _normalize_config_param_value({"setting": "value"}) == {"setting": "value"}
+    assert _normalize_config_param_value('{"setting": "value"}') == {
+        "setting": "value"
+    }
+    assert _normalize_config_param_value('["not", "an", "object"]') == (
+        '["not", "an", "object"]'
+    )
+    assert _normalize_config_param_value("not-json") == "not-json"
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_normalizes_legacy_json_string():
+    """DB-backed router_settings may exist as a legacy JSON string."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    proxy_config = proxy_server.ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = json.dumps(
+        {"model_group_alias": {"alias-model:auto": "target-model"}}
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_config
+    )
+
+    await proxy_config._add_router_settings_from_db_config(
+        config_data={"router_settings": {"timeout": 30}},
+        llm_router=mock_router,
+        prisma_client=mock_prisma_client,
+    )
+
+    mock_router.update_settings.assert_called_once_with(
+        timeout=30, model_group_alias={"alias-model:auto": "target-model"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_config_router_settings_merges_legacy_json_string(monkeypatch):
+    """A legacy JSON-string row should be read as a dict and written as an object."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+
+    class FakeRow:
+        def __init__(self, name, value):
+            self.param_name = name
+            self.param_value = value
+
+    upserted = {}
+
+    async def fake_find_first(where=None):
+        if where and where.get("param_name") == "router_settings":
+            return FakeRow(
+                "router_settings",
+                json.dumps({"timeout": 10}),
+            )
+        return None
+
+    async def fake_upsert(where=None, data=None):
+        upserted[where["param_name"]] = data["update"]["param_value"]
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_config = MagicMock()
+            self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
+            self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
+
+    class MockProxyConfig:
+        async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
+            return None
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MockPrisma())
+    monkeypatch.setattr(proxy_server, "proxy_config", MockProxyConfig())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(
+        proxy_server, "invalidate_config_param", AsyncMock(return_value=None)
+    )
+
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
+    await proxy_server.update_config(
+        ConfigYAML(
+            router_settings={
+                "model_group_alias": {"alias-model:auto": "target-model"},
+            }
+        ),
+        user_api_key_dict=admin_user,
+    )
+
+    assert upserted["router_settings"] == {
+        "timeout": 10.0,
+        "model_group_alias": {"alias-model:auto": "target-model"},
+    }
 
 
 @pytest.mark.parametrize(
