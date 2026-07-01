@@ -13972,8 +13972,10 @@ async def update_config(
                         existing["alerting"].append("slack")
                 existing[k] = v
             await _upsert_section("general_settings", existing)
-            await create_config_audit_log(
-                "general_settings", "updated", before_general_settings, existing, user_api_key_dict
+            asyncio.create_task(
+                create_config_audit_log(
+                    "general_settings", "updated", before_general_settings, existing, user_api_key_dict
+                )
             )
 
         # environment_variables: idempotently encrypt the request values
@@ -13988,8 +13990,10 @@ async def update_config(
                 proxy_config._encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
             )
             await _upsert_section("environment_variables", existing)
-            await create_config_audit_log(
-                "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
+            asyncio.create_task(
+                create_config_audit_log(
+                    "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
+                )
             )
 
         # litellm_settings: merge existing + request, request wins (matching
@@ -14024,8 +14028,10 @@ async def update_config(
                     merged["success_callback"] = list(set(incoming_cb))
 
             await _upsert_section("litellm_settings", merged)
-            await create_config_audit_log(
-                "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
+            asyncio.create_task(
+                create_config_audit_log(
+                    "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
+                )
             )
 
         # router_settings: merge existing + request, request wins.
@@ -14035,8 +14041,10 @@ async def update_config(
             updates = config_info.router_settings.dict(exclude_none=True)
             new_router_settings = {**existing, **updates}
             await _upsert_section("router_settings", new_router_settings)
-            await create_config_audit_log(
-                "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
+            asyncio.create_task(
+                create_config_audit_log(
+                    "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
+                )
             )
 
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
@@ -14190,8 +14198,10 @@ async def update_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
-    await create_config_audit_log(
-        "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
+    asyncio.create_task(
+        create_config_audit_log(
+            "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
+        )
     )
 
     if data.field_name == "plugins":
@@ -14594,8 +14604,10 @@ async def delete_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
-    await create_config_audit_log(
-        "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
+    asyncio.create_task(
+        create_config_audit_log(
+            "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
+        )
     )
 
     return response
@@ -14663,12 +14675,14 @@ async def delete_callback(
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
 
-        await create_config_audit_log(
-            "litellm_settings",
-            "deleted",
-            {"success_callback": before_success_callbacks},
-            {"success_callback": success_callbacks},
-            user_api_key_dict,
+        asyncio.create_task(
+            create_config_audit_log(
+                "litellm_settings",
+                "deleted",
+                {"success_callback": before_success_callbacks},
+                {"success_callback": success_callbacks},
+                user_api_key_dict,
+            )
         )
 
         # Restart the proxy to apply changes

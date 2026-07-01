@@ -366,12 +366,14 @@ async def add_allowed_ip(
 
     await proxy_config.save_config(new_config=config)
 
-    await create_config_audit_log(
-        param_name="general_settings",
-        action="updated",
-        before_value={"allowed_ips": before_allowed_ips},
-        after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
-        user_api_key_dict=user_api_key_dict,
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name="general_settings",
+            action="updated",
+            before_value={"allowed_ips": before_allowed_ips},
+            after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
+            user_api_key_dict=user_api_key_dict,
+        )
     )
 
     return {
@@ -417,12 +419,14 @@ async def delete_allowed_ip(
 
     await proxy_config.save_config(new_config=config)
 
-    await create_config_audit_log(
-        param_name="general_settings",
-        action="deleted",
-        before_value={"allowed_ips": before_allowed_ips},
-        after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
-        user_api_key_dict=user_api_key_dict,
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name="general_settings",
+            action="deleted",
+            before_value={"allowed_ips": before_allowed_ips},
+            after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
+            user_api_key_dict=user_api_key_dict,
+        )
     )
 
     return {"message": f"IP {ip_address.ip} deleted successfully", "status": "success"}
@@ -898,13 +902,15 @@ async def update_sso_settings(
         },
     )
 
-    await create_config_audit_log(
-        param_name="sso_config",
-        action="updated",
-        before_value=before_sso_data,
-        after_value=sso_data,
-        user_api_key_dict=user_api_key_dict,
-        table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name="sso_config",
+            action="updated",
+            before_value=before_sso_data,
+            after_value=sso_data,
+            user_api_key_dict=user_api_key_dict,
+            table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
+        )
     )
 
     # Remove SSO-related env vars from config.environment_variables
@@ -1094,12 +1100,14 @@ async def update_ui_theme_settings(
     # Save the updated config
     await proxy_config.save_config(new_config=stored_config)
 
-    await create_config_audit_log(
-        param_name="ui_theme_config",
-        action="updated",
-        before_value=before_theme,
-        after_value=theme_data,
-        user_api_key_dict=user_api_key_dict,
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name="ui_theme_config",
+            action="updated",
+            before_value=before_theme,
+            after_value=theme_data,
+            user_api_key_dict=user_api_key_dict,
+        )
     )
 
     return {
@@ -1360,13 +1368,15 @@ async def update_ui_settings(
     sanitized = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
 
-    await create_config_audit_log(
-        param_name="ui_settings",
-        action="updated",
-        before_value=existing,
-        after_value=ui_settings,
-        user_api_key_dict=user_api_key_dict,
-        table_name=LitellmTableNames.UI_SETTINGS_TABLE_NAME,
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name="ui_settings",
+            action="updated",
+            before_value=existing,
+            after_value=ui_settings,
+            user_api_key_dict=user_api_key_dict,
+            table_name=LitellmTableNames.UI_SETTINGS_TABLE_NAME,
+        )
     )
 
     return {

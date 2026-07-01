@@ -8790,6 +8790,8 @@ async def test_update_config_general_settings_emits_audit_log(monkeypatch):
         ),
         user_api_key_dict=admin,
     )
+    # Audit is scheduled via asyncio.create_task; yield so it runs.
+    await asyncio.sleep(0)
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
@@ -8830,6 +8832,8 @@ async def test_delete_config_general_settings_emits_deleted_audit_log(monkeypatc
         ),
         user_api_key_dict=admin,
     )
+    # Audit is scheduled via asyncio.create_task; yield so it runs.
+    await asyncio.sleep(0)
 
     fake.db.litellm_auditlog.create.assert_awaited_once()
     written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
