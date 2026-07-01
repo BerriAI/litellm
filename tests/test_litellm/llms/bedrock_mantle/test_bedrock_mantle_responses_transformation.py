@@ -452,6 +452,16 @@ class TestBedrockMantleResponsesRegistry:
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
         assert cfg.use_openai_path is True
 
+    def test_registry_returns_native_config_for_xai_grok(self, local_cost_map):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="xai.grok-4.3",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is False
+
     def test_unmapped_frontier_model_falls_through_to_none(self, restore_model_cost):
         # The gate is data-driven, not name-based: an unseen model not yet in the
         # price map (e.g. a future gpt-6) has no capability signal, so it falls
