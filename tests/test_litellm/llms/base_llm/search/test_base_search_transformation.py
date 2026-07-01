@@ -86,7 +86,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
         {"GOOGLE_PSE_ENGINE_ID": "engine"},
     ),
     (ParallelAISearchConfig, {"PARALLEL_API_KEY": "srv"}, "caller-key", {}),
-    (YouComSearchConfig, {"YOUCOM_API_KEY": "srv"}, "caller-key", {}),
+    (YouComSearchConfig, {"YDC_API_KEY": "srv"}, "caller-key", {}),
     (SearXNGSearchConfig, {"SEARXNG_API_KEY": "srv"}, "caller-key", {}),
     (
         DataForSEOSearchConfig,

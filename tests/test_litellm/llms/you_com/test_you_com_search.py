@@ -20,10 +20,10 @@ class TestYouComSearch:
     @pytest.fixture(autouse=True)
     def _set_api_key(self, monkeypatch):
         """
-        Default fixture: YOUCOM_API_KEY is set, scoped to this test.
+        Default fixture: YDC_API_KEY is set, scoped to this test.
         Tests that need the key absent should call `monkeypatch.delenv` themselves.
         """
-        monkeypatch.setenv("YOUCOM_API_KEY", "test-api-key")
+        monkeypatch.setenv("YDC_API_KEY", "test-api-key")
 
     @pytest.mark.asyncio
     async def test_you_com_search_request_payload(self):
@@ -250,10 +250,10 @@ class TestYouComSearch:
     @pytest.mark.asyncio
     async def test_you_com_search_keyless_free_tier(self, monkeypatch):
         """
-        Without YOUCOM_API_KEY, the adapter targets the keyless free-tier
+        Without YDC_API_KEY, the adapter targets the keyless free-tier
         endpoint and sends no X-API-Key header.
         """
-        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+        monkeypatch.delenv("YDC_API_KEY", raising=False)
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -298,11 +298,11 @@ class TestYouComSearch:
         self, monkeypatch
     ):
         """
-        When the key is passed programmatically (no YOUCOM_API_KEY in the env),
+        When the key is passed programmatically (no YDC_API_KEY in the env),
         the keyed endpoint must be selected and the X-API-Key header sent, instead
         of silently falling back to the keyless free tier.
         """
-        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+        monkeypatch.delenv("YDC_API_KEY", raising=False)
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -331,9 +331,9 @@ class TestYouComSearch:
     def test_you_com_search_complete_url_uses_programmatic_api_key(self, monkeypatch):
         """
         get_complete_url selects the keyed endpoint from a forwarded api_key even
-        when YOUCOM_API_KEY is absent from the environment.
+        when YDC_API_KEY is absent from the environment.
         """
-        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+        monkeypatch.delenv("YDC_API_KEY", raising=False)
 
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
@@ -354,7 +354,7 @@ class TestYouComSearch:
         validate_environment must NOT raise when no key is configured —
         the keyless free tier is the default behavior.
         """
-        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+        monkeypatch.delenv("YDC_API_KEY", raising=False)
 
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
@@ -369,7 +369,7 @@ class TestYouComSearch:
         endpoint advertising gzip content-encoding while returning bytes httpx
         can't decode. Without this, every keyless request raises DecodingError.
         """
-        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+        monkeypatch.delenv("YDC_API_KEY", raising=False)
 
         from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
