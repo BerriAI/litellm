@@ -6314,6 +6314,10 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(str(e))
             )
 
+    async def init_mcp_servers_from_db(self) -> None:
+        if self._should_load_db_object(object_type="mcp"):
+            await self._init_mcp_servers_in_db()
+
     async def _init_agents_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.agent_endpoints.agent_registry import (
             global_agent_registry as AGENT_REGISTRY,
@@ -7560,6 +7564,9 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+
+        if store_model_in_db is not True:
+            await proxy_config.init_mcp_servers_from_db()
 
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
