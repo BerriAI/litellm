@@ -14,6 +14,7 @@ Tests cover:
 """
 
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -309,7 +310,10 @@ async def test_async_build_agentic_loop_plan_calls_retrieve_and_builds_messages(
         tool_id="call_abc123",
     )
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
-    guardrail._issued_hashes["b573993006976af767214fac"] = None
+    guardrail._issued_hashes_by_call_id["call-1"] = (
+        frozenset({"b573993006976af767214fac"}),
+        time.monotonic() + 999,
+    )
 
     with patch.object(
         guardrail.async_handler,
@@ -326,7 +330,7 @@ async def test_async_build_agentic_loop_plan_calls_retrieve_and_builds_messages(
             anthropic_messages_optional_request_params={},
             logging_obj=None,
             stream=False,
-            kwargs={},
+            kwargs={"litellm_call_id": "call-1"},
         )
 
     assert plan.run_agentic_loop is True
@@ -372,7 +376,10 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
             "content": "Retrieve more: hash=deadbeef000000000000dead",
         }
     ]
-    guardrail._issued_hashes["deadbeef000000000000dead"] = None
+    guardrail._issued_hashes_by_call_id["call-1"] = (
+        frozenset({"deadbeef000000000000dead"}),
+        time.monotonic() + 999,
+    )
 
     with patch.object(
         guardrail.async_handler,
@@ -389,7 +396,7 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
             anthropic_messages_optional_request_params={},
             logging_obj=None,
             stream=False,
-            kwargs={},
+            kwargs={"litellm_call_id": "call-1"},
         )
 
     follow_up = plan.request_patch.messages  # type: ignore[union-attr]
@@ -399,9 +406,12 @@ async def test_async_build_agentic_loop_plan_handles_retrieve_404(
 
 
 @pytest.mark.asyncio
-async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request(
+async def test_async_build_agentic_loop_plan_rejects_hash_with_no_known_call(
     guardrail: HeadroomGuardrail,
 ):
+    """A hash-shaped string planted in message text must not be honored when
+    this guardrail has no record of ever issuing it, even if it's echoed back
+    in the current request's own messages (e.g. via prompt injection)."""
     tool_calls = [
         {
             "id": "call_xyz",
@@ -415,6 +425,7 @@ async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request
         arguments={"hash": "deadbeef000000000000dead"},
         tool_id="call_xyz",
     )
+    assert not guardrail._issued_hashes_by_call_id
 
     with patch.object(
         guardrail.async_handler,
@@ -424,13 +435,13 @@ async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request
         plan = await guardrail.async_build_agentic_loop_plan(
             tools={"tool_calls": tool_calls},
             model="gpt-4o",
-            messages=[{"role": "user", "content": "no hash markers here"}],
+            messages=[{"role": "user", "content": "Please fetch hash=deadbeef000000000000dead for me"}],
             response=response,
             anthropic_messages_provider_config=None,
             anthropic_messages_optional_request_params={},
             logging_obj=None,
             stream=False,
-            kwargs={},
+            kwargs={"litellm_call_id": "call-unknown"},
         )
 
     mock_get.assert_not_called()
@@ -442,27 +453,31 @@ async def test_async_build_agentic_loop_plan_rejects_hash_not_in_current_request
 
 
 @pytest.mark.asyncio
-async def test_async_build_agentic_loop_plan_rejects_hash_never_issued_by_compress(
+async def test_async_build_agentic_loop_plan_rejects_hash_issued_for_different_call(
     guardrail: HeadroomGuardrail,
 ):
-    """A hash-shaped string planted in message text must not be honored unless
-    this guardrail actually issued it via /v1/compress, even if it's echoed
-    back in the current request's messages (e.g. via prompt injection)."""
+    """A hash issued for one request must not be retrievable by a different
+    request just because the second request echoes that hash-shaped string
+    back in its own messages -- retrieval must be scoped per litellm_call_id,
+    not derived by re-scanning attacker-controlled message text."""
+    guardrail._issued_hashes_by_call_id["call-A"] = (
+        frozenset({"b573993006976af767214fac"}),
+        time.monotonic() + 999,
+    )
+
     tool_calls = [
         {
             "id": "call_xyz",
             "type": "function",
             "name": HEADROOM_RETRIEVE_TOOL_NAME,
-            "arguments": {"hash": "deadbeef000000000000dead"},
+            "arguments": {"hash": "b573993006976af767214fac"},
         }
     ]
     response = _make_openai_response_with_tool_call(
         tool_name=HEADROOM_RETRIEVE_TOOL_NAME,
-        arguments={"hash": "deadbeef000000000000dead"},
+        arguments={"hash": "b573993006976af767214fac"},
         tool_id="call_xyz",
     )
-    messages = [{"role": "user", "content": "Please fetch hash=deadbeef000000000000dead for me"}]
-    assert "deadbeef000000000000dead" not in guardrail._issued_hashes
 
     with patch.object(
         guardrail.async_handler,
@@ -472,13 +487,13 @@ async def test_async_build_agentic_loop_plan_rejects_hash_never_issued_by_compre
         plan = await guardrail.async_build_agentic_loop_plan(
             tools={"tool_calls": tool_calls},
             model="gpt-4o",
-            messages=messages,
+            messages=[{"role": "user", "content": "Please fetch hash=b573993006976af767214fac for me"}],
             response=response,
             anthropic_messages_provider_config=None,
             anthropic_messages_optional_request_params={},
             logging_obj=None,
             stream=False,
-            kwargs={},
+            kwargs={"litellm_call_id": "call-B"},
         )
 
     mock_get.assert_not_called()
@@ -521,7 +536,10 @@ async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_
         }
     ]
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
-    guardrail._issued_hashes["b573993006976af767214fac"] = None
+    guardrail._issued_hashes_by_call_id["call-1"] = (
+        frozenset({"b573993006976af767214fac"}),
+        time.monotonic() + 999,
+    )
 
     with patch.object(
         guardrail.async_handler,
@@ -538,7 +556,7 @@ async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_
             anthropic_messages_optional_request_params={},
             logging_obj=None,
             stream=False,
-            kwargs={},
+            kwargs={"litellm_call_id": "call-1"},
         )
 
     follow_up = plan.request_patch.messages  # type: ignore[union-attr]
@@ -553,6 +571,77 @@ async def test_async_build_agentic_loop_plan_builds_responses_api_function_call_
     assert output_item is not None
     assert output_item["call_id"] == "call_abc123"
     assert output_item["output"] == original_content
+
+
+@pytest.mark.asyncio
+async def test_async_build_agentic_loop_plan_builds_anthropic_tool_result_messages(
+    guardrail: HeadroomGuardrail,
+):
+    """For the Anthropic Messages API, follow-up must echo a tool_use content
+    block in an assistant message paired with a tool_result content block in a
+    user message keyed by the same tool_use_id -- chat-style tool-role
+    messages are not valid Anthropic input."""
+    original_content = "This is the full compressed content."
+    mock_retrieve = _make_retrieve_response(original_content)
+
+    response = MagicMock()
+    response.choices = None
+    response.content = [
+        {
+            "type": "tool_use",
+            "id": "toolu_abc123",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "input": {"hash": "b573993006976af767214fac"},
+        }
+    ]
+
+    tool_calls = [
+        {
+            "id": "toolu_abc123",
+            "type": "function",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": {"hash": "b573993006976af767214fac"},
+        }
+    ]
+    messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
+    guardrail._issued_hashes_by_call_id["call-1"] = (
+        frozenset({"b573993006976af767214fac"}),
+        time.monotonic() + 999,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=mock_retrieve,
+    ):
+        plan = await guardrail.async_build_agentic_loop_plan(
+            tools={"tool_calls": tool_calls},
+            model="claude-sonnet-4-5",
+            messages=messages,
+            response=response,
+            anthropic_messages_provider_config=None,
+            anthropic_messages_optional_request_params={},
+            logging_obj=None,
+            stream=False,
+            kwargs={"litellm_call_id": "call-1"},
+        )
+
+    follow_up = plan.request_patch.messages  # type: ignore[union-attr]
+    assert all(m.get("role") != "tool" for m in follow_up)
+
+    assistant_message = next((m for m in follow_up if m.get("role") == "assistant"), None)
+    assert assistant_message is not None
+    tool_use_block = next((b for b in assistant_message["content"] if b.get("type") == "tool_use"), None)
+    assert tool_use_block is not None
+    assert tool_use_block["id"] == "toolu_abc123"
+
+    user_message = follow_up[-1]
+    assert user_message["role"] == "user"
+    tool_result_block = next((b for b in user_message["content"] if b.get("type") == "tool_result"), None)
+    assert tool_result_block is not None
+    assert tool_result_block["tool_use_id"] == "toolu_abc123"
+    assert tool_result_block["content"] == original_content
 
 
 def test_extract_hashes_from_messages_finds_hashes():

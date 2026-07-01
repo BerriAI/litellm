@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections import OrderedDict
+import time
+import uuid
 from typing import TYPE_CHECKING, Any, Literal, Optional, Tuple
 
 import httpx
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
 BYPASS_HEADER = "x-headroom-bypass"
 HEADROOM_RETRIEVE_TOOL_NAME = "headroom_retrieve"
 _HASH_PATTERN = re.compile(r"hash=([a-f0-9]{24})")
-_MAX_ISSUED_HASHES = 5000
+_HASH_CACHE_TTL_SECONDS = 15 * 60
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -84,18 +85,15 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
     }
 
 
-def _remember_issued_hashes(cache: OrderedDict[str, None], hashes: list[str]) -> None:
-    """Record hashes actually returned by Headroom's /v1/compress.
-
-    The CCR retrieval loop validates tool-call hashes against this cache so an
-    attacker can't make the model retrieve content via a hash-shaped string
-    planted in message text that Headroom never issued.
-    """
-    for hash_value in hashes:
-        cache[hash_value] = None
-        cache.move_to_end(hash_value)
-    while len(cache) > _MAX_ISSUED_HASHES:
-        cache.popitem(last=False)
+def _resolve_call_id(logging_obj: object, request_state: dict[str, object]) -> Optional[str]:
+    """Resolve the litellm_call_id shared by a request's pre-call hook and its
+    agentic-loop hooks, so CCR hash validation can be scoped per call instead
+    of trusting any hash-shaped string that shows up in message text."""
+    logging_call_id = getattr(logging_obj, "litellm_call_id", None)
+    if isinstance(logging_call_id, str) and logging_call_id:
+        return logging_call_id
+    kwargs_call_id = request_state.get("litellm_call_id")
+    return kwargs_call_id if isinstance(kwargs_call_id, str) else None
 
 
 def has_headroom_retrieve_tool(tools: object) -> bool:
@@ -230,6 +228,41 @@ def _is_responses_api_response(response: object) -> bool:
     return isinstance(getattr(response, "output", None), list)
 
 
+def _is_anthropic_messages_response(response: object) -> bool:
+    return isinstance(getattr(response, "content", None), list)
+
+
+def _build_anthropic_followup_messages(
+    retrieved: list[tuple[dict[str, object], str]],
+) -> list[dict[str, object]]:
+    """Build Anthropic Messages API follow-up messages for a tool round-trip.
+
+    Anthropic requires the tool_use block to be echoed back in an assistant
+    message, paired with a tool_result block in a user message keyed by the
+    same tool_use_id -- it does not accept chat-style tool-role messages.
+    """
+    assistant_message: dict[str, object] = {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": tool_call.get("id"),
+                "name": tool_call.get("name"),
+                "input": tool_call.get("arguments", {}),
+            }
+            for tool_call, _ in retrieved
+        ],
+    }
+    user_message: dict[str, object] = {
+        "role": "user",
+        "content": [
+            {"type": "tool_result", "tool_use_id": tool_call.get("id"), "content": content}
+            for tool_call, content in retrieved
+        ],
+    }
+    return [assistant_message, user_message]
+
+
 def _build_responses_followup_items(
     retrieved: list[tuple[dict[str, object], str]],
 ) -> list[dict[str, object]]:
@@ -275,7 +308,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
-        self._issued_hashes: OrderedDict[str, None] = OrderedDict()
+        self._issued_hashes_by_call_id: dict[str, tuple[frozenset[str], float]] = {}
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             guardrail_name=guardrail_name,
             event_hook=event_hook,
@@ -297,6 +330,14 @@ class HeadroomGuardrail(CustomGuardrail):
         if self.headroom_api_key:
             headers["Authorization"] = f"Bearer {self.headroom_api_key}"
         return headers
+
+    def _prune_expired_hashes(self) -> None:
+        now = time.monotonic()
+        self._issued_hashes_by_call_id = {
+            call_id: (hashes, expiry)
+            for call_id, (hashes, expiry) in self._issued_hashes_by_call_id.items()
+            if expiry > now
+        }
 
     async def _call_compress(
         self,
@@ -456,7 +497,12 @@ class HeadroomGuardrail(CustomGuardrail):
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
-        _remember_issued_hashes(self._issued_hashes, hashes)
+        self._prune_expired_hashes()
+        call_id = _resolve_call_id(logging_obj, request_data)
+        if not call_id:
+            call_id = str(uuid.uuid4())
+            request_data["litellm_call_id"] = call_id
+        self._issued_hashes_by_call_id[call_id] = (frozenset(hashes), time.monotonic() + _HASH_CACHE_TTL_SECONDS)
 
         existing_tools = inputs.get("tools")
         retrieve_tool = _build_headroom_retrieve_tool()
@@ -502,19 +548,21 @@ class HeadroomGuardrail(CustomGuardrail):
     ) -> AgenticLoopPlan:
         tool_calls: list[dict[str, object]] = tools.get("tool_calls", [])  # type: ignore[assignment]
 
-        message_hashes = frozenset(extract_hashes_from_messages(messages))
+        self._prune_expired_hashes()
+        call_id = _resolve_call_id(logging_obj, kwargs)
+        valid_hashes = self._issued_hashes_by_call_id.get(call_id, (frozenset(), 0.0))[0] if call_id else frozenset()
 
         retrieved: list[tuple[dict[str, object], str]] = []
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
             hash_value = arguments.get("hash", "") if isinstance(arguments, dict) else ""
             query = arguments.get("query") if isinstance(arguments, dict) else None
-            # A hash is only honored if it was actually issued by a Headroom
-            # /v1/compress call (self._issued_hashes) AND appears in this
-            # request's own message history. Either check alone is forgeable:
-            # message text is attacker-controlled, and the issued-hash cache is
-            # shared across concurrent requests on this guardrail instance.
-            if str(hash_value) not in message_hashes or str(hash_value) not in self._issued_hashes:
+            # A hash is only honored if it was issued by *this request's own*
+            # Headroom /v1/compress call, scoped by litellm_call_id. Scoping by
+            # message text alone is forgeable -- an attacker can plant a
+            # hash-shaped string in their own prompt, and a hash issued for one
+            # request would validate for any other request that echoes it back.
+            if str(hash_value) not in valid_hashes:
                 verbose_proxy_logger.warning(
                     "Headroom CCR: rejecting hash=%s not produced by current request compression",
                     hash_value,
@@ -530,6 +578,8 @@ class HeadroomGuardrail(CustomGuardrail):
 
         if _is_responses_api_response(response):
             follow_up_messages = list(messages) + _build_responses_followup_items(retrieved)
+        elif _is_anthropic_messages_response(response):
+            follow_up_messages = list(messages) + _build_anthropic_followup_messages(retrieved)
         else:
             assistant_message = _build_assistant_message_from_response(response)
             tool_results = [
