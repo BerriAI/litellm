@@ -316,6 +316,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       // Transform access groups into objects with name property
       const accessGroups = restValues.mcp_access_groups;
 
+      const isInteractiveOAuth = restValues.auth_type === AUTH_TYPE.OAUTH2 && values.oauth_flow_type !== OAUTH_FLOW.M2M;
+
       const staticHeaders = reduceStaticHeaders(staticHeadersList);
       const envVars = normalizeEnvVars(envVarsList);
 
@@ -415,7 +417,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         tool_name_to_description: toolNameToDescription,
         allow_all_keys: Boolean(allowAllKeysRaw),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
-        delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
+        // delegate_auth_to_upstream (PKCE passthrough) is only honored for the
+        // Interactive OAuth flow; force false otherwise so a stale toggle value
+        // can't persist against M2M or non-oauth2 auth.
+        delegate_auth_to_upstream: isInteractiveOAuth && Boolean(delegateAuthToUpstreamRaw),
         oauth_passthrough: Boolean(oauthPassthroughRaw),
         static_headers: staticHeaders,
         env_vars: envVars,
@@ -444,7 +449,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           const oauthMode = getMcpOAuthMode({
             auth_type: restValues.auth_type,
             oauth2_flow: values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : null,
-            delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
+            delegate_auth_to_upstream: isInteractiveOAuth && Boolean(delegateAuthToUpstreamRaw),
           });
           if (oauthMode === "obo") {
             const scope = oauthTokenResponse.scope;
@@ -507,7 +512,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setTransportType(value);
     // Clear fields that are not relevant for the selected transport
     if (value === "stdio") {
-      form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
+      form.setFieldsValue({
+        url: undefined,
+        spec_path: undefined,
+        auth_type: undefined,
+        credentials: undefined,
+        delegate_auth_to_upstream: false,
+      });
     } else if (value === TRANSPORT.OPENAPI) {
       form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined });
     } else {
