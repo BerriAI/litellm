@@ -4,7 +4,7 @@ Calls the Singulr Guard API to scan messages.
 """
 
 import os
-from typing import Any, Literal, Optional, cast
+from typing import Any, Optional, cast
 from urllib.parse import urlparse
 
 import httpx
