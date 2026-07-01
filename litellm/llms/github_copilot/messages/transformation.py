@@ -33,6 +33,16 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         """
         return False
 
+    def should_filter_anthropic_beta_headers(self) -> bool:
+        """
+        Copilot's /v1/messages is a native Anthropic Messages passthrough, so
+        ``anthropic-beta`` values injected by ``_update_headers_with_anthropic_beta``
+        (context_management, structured outputs, ...) must reach the upstream
+        verbatim. The default provider-scoped filter would drop them because
+        github_copilot has no entry in ``anthropic_beta_headers_config.json``.
+        """
+        return False
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,

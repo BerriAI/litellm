@@ -287,6 +287,43 @@ def test_github_copilot_anthropic_messages_validate_environment_normalizes_trail
     assert api_base == "https://api.business.githubcopilot.com"
 
 
+def test_github_copilot_config_disables_anthropic_beta_filtering():
+    """Copilot's /v1/messages is a native Anthropic passthrough, so injected
+    anthropic-beta values (context_management, structured outputs, ...) must be
+    forwarded verbatim. The default provider-scoped filter would drop them
+    because github_copilot has no entry in the beta headers config; a regression
+    here would silently disable header-gated Anthropic features for Copilot."""
+    from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    config = GithubCopilotAnthropicMessagesConfig()
+    assert config.should_filter_anthropic_beta_headers() is False
+    assert AnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
+
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key"
+    config.authenticator.get_api_base.return_value = None
+
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}
+        },
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert "context-management-2025-06-27" in headers["anthropic-beta"]
+    if config.should_filter_anthropic_beta_headers():
+        headers = update_headers_with_filtered_beta(headers=dict(headers), provider="github_copilot")
+    assert "context-management-2025-06-27" in headers.get("anthropic-beta", "")
+
+
 def test_github_copilot_config_does_not_handle_web_search_natively():
     """Copilot's /v1/messages does not run web_search, so its config must report
     handles_web_search_natively() == False. This is what keeps the web-search
