@@ -1402,6 +1402,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           teamId={selectedCreateKeyTeam?.team_id ?? null}
                           placeholder="Select MCP servers or access groups (optional)"
                           allowNoMcpServers
+                          allowAllMcpServers
                         />
                       </Form.Item>
 

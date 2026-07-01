@@ -510,6 +510,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
               value={form.getFieldValue("allowed_mcp_servers_and_groups")}
               accessToken={accessToken || ""}
               placeholder="Select MCP servers and access groups (optional)"
+              allowAllMcpServers
             />
           </Form.Item>
 

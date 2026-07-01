@@ -434,6 +434,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                         value={form.getFieldValue("mcp_servers_and_groups")}
                         accessToken={accessToken || ""}
                         placeholder="Select MCP servers and access groups"
+                        allowAllMcpServers
                       />
                     </Form.Item>
 

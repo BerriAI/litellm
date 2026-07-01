@@ -628,6 +628,7 @@ export function KeyEditView({
           accessToken={accessToken || ""}
           placeholder="Select MCP servers or access groups (optional)"
           allowNoMcpServers
+          allowAllMcpServers
         />
       </Form.Item>
 
