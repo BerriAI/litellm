@@ -628,6 +628,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
     oauth_server = MagicMock()
     oauth_server.auth_type = MCPAuth.oauth2
     oauth_server.needs_user_oauth_token = True
+    oauth_server.delegate_auth_to_upstream = False
 
     with (
         patch(
@@ -648,10 +649,10 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
-            return_value=None,
-        ) as mock_get_stored_token,
+            return_value=False,
+        ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
@@ -666,11 +667,115 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             await handle_streamable_http_mcp(scope, receive, send)
 
     # Verify a 401 was raised
-    assert mock_get_stored_token.await_count == 1
+    assert mock_has_token.await_count == 1
     assert mock_handle_request.await_count == 0
     assert exc_info.value.status_code == 401
     assert "www-authenticate" in exc_info.value.headers
     assert "Bearer authorization_uri=" in exc_info.value.headers["www-authenticate"]
+
+
+@pytest.mark.asyncio
+async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_challenge():
+    """
+    OAuth2 server with ``delegate_auth_to_upstream=True`` where the client
+    already presents a bearer token the upstream rejects: the request bypasses
+    the preemptive challenge (a token is present) and reaches the session
+    manager, whose upstream ``MCPUpstreamAuthError`` is surfaced verbatim so the
+    client sees the upstream's RFC 9728 challenge rather than the gateway's.
+    """
+    from fastapi import HTTPException
+
+    try:
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/delegated_oauth_server",
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("litellm.example.com", 443),
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"host", b"litellm.example.com"),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+    user_auth = MagicMock()
+    user_auth.user_id = None
+    delegated_server = MagicMock()
+    delegated_server.auth_type = MCPAuth.oauth2
+    delegated_server.delegate_auth_to_upstream = True
+    delegated_server.needs_user_oauth_token = True
+    delegated_server.server_id = "delegated-oauth-server"
+
+    upstream_challenge = 'Bearer resource_metadata="https://upstream.example.com/.well-known/oauth-protected-resource"'
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(
+                user_auth,
+                None,
+                ["delegated_oauth_server"],
+                None,
+                {"Authorization": "Bearer upstream-token-the-upstream-rejects"},
+                None,
+            ),
+        ),
+        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=delegated_server,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            new_callable=AsyncMock,
+            side_effect=MCPUpstreamAuthError(
+                status_code=401,
+                www_authenticate=upstream_challenge,
+                server_name="delegated_oauth_server",
+            ),
+        ) as mock_handle_request,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_streamable_http_mcp(scope, receive, send)
+
+    assert mock_handle_request.await_count == 1
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.headers == {"www-authenticate": upstream_challenge}
 
 
 @pytest.mark.asyncio
@@ -713,6 +818,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
     oauth_server = MagicMock()
     oauth_server.auth_type = MCPAuth.oauth2
     oauth_server.needs_user_oauth_token = True
+    oauth_server.delegate_auth_to_upstream = False
 
     with (
         patch(
@@ -733,10 +839,10 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
-            return_value={"Authorization": "Bearer cached-token"},
-        ) as mock_get_stored_token,
+            return_value=True,
+        ) as mock_has_token,
         patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
@@ -754,24 +860,29 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert mock_get_stored_token.await_count == 1
+    assert mock_has_token.await_count == 1
     assert mock_handle_request.await_count == 1
 
 
 @pytest.mark.asyncio
-async def test_handle_streamable_http_mcp_emits_401_for_delegated_server_without_token():
+async def test_handle_streamable_http_mcp_delegated_server_without_token_returns_preemptive_resource_metadata_401():
     """
-    OAuth2 server with ``delegate_auth_to_upstream=True`` and no Authorization
-    header must still emit a pre-emptive 401 with WWW-Authenticate so the
-    client kicks off PKCE. The 401 points at LiteLLM's discovery shim, which
-    in turn delegates to the upstream OAuth issuer.
+    OAuth2 server with ``delegate_auth_to_upstream=True`` and no stored token
+    must fail fast with a 401 carrying a ``resource_metadata=`` challenge that
+    points at the gateway's proxied oauth-protected-resource well-known, so the
+    MCP client starts PKCE against the upstream IdP. On ``initialize`` the
+    gateway answers locally and never probes upstream, so this preemptive
+    challenge is the only thing that can drive the client into the OAuth flow;
+    falling through to the session manager (or emitting the gateway
+    ``authorization_uri=`` challenge) leaves the client with no tools and no
+    sign-in prompt.
     """
     from fastapi import HTTPException
 
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager,
+            session_manager_stateful,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -779,13 +890,24 @@ async def test_handle_streamable_http_mcp_emits_401_for_delegated_server_without
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/mcp",
+        "path": "/mcp/delegated_oauth_server",
+        "_original_path": "/delegated_oauth_server/mcp",
+        "scheme": "https",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("litellm.example.com", 443),
         "headers": [
             (b"content-type", b"application/json"),
             (b"host", b"litellm.example.com"),
         ],
     }
-    receive = AsyncMock()
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}',
+            "more_body": False,
+        }
+    )
     send = AsyncMock()
     user_auth = MagicMock()
     user_auth.user_id = None
@@ -793,6 +915,7 @@ async def test_handle_streamable_http_mcp_emits_401_for_delegated_server_without
     delegated_server.auth_type = MCPAuth.oauth2
     delegated_server.delegate_auth_to_upstream = True
     delegated_server.needs_user_oauth_token = True
+    delegated_server.server_id = "delegated-oauth-server"
 
     with (
         patch(
@@ -820,11 +943,15 @@ async def test_handle_streamable_http_mcp_emits_401_for_delegated_server_without
             return_value=False,
         ),
         patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            new_callable=AsyncMock,
+        ) as mock_has_token,
+        patch(
             "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=delegated_server,
         ),
         patch.object(
-            session_manager,
+            session_manager_stateful,
             "handle_request",
             new_callable=AsyncMock,
         ) as mock_handle_request,
@@ -832,6 +959,14 @@ async def test_handle_streamable_http_mcp_emits_401_for_delegated_server_without
         with pytest.raises(HTTPException) as exc_info:
             await handle_streamable_http_mcp(scope, receive, send)
 
-    assert exc_info.value.status_code == 401
-    assert "www-authenticate" in exc_info.value.headers
+    # Delegate-auth servers raise the resource_metadata challenge before any
+    # per-user existence check, so the v2 token store is never consulted.
+    assert mock_has_token.await_count == 0
     assert mock_handle_request.await_count == 0
+    assert exc_info.value.status_code == 401
+    challenge = exc_info.value.headers["www-authenticate"]
+    assert "resource_metadata=" in challenge
+    assert "authorization_uri=" not in challenge
+    assert (
+        "/.well-known/oauth-protected-resource/delegated_oauth_server/mcp" in challenge
+    )

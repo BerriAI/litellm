@@ -88,9 +88,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except BedrockError as e:
-            verbose_logger.warning(
-                f"Bedrock CountTokens API error: status={e.status_code}, message={e.message}"
-            )
+            verbose_logger.warning(f"Bedrock CountTokens API error: status={e.status_code}, message={e.message}")
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,

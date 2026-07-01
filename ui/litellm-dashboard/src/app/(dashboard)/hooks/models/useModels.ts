@@ -1,4 +1,4 @@
-import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
+import { useQuery, useInfiniteQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { modelInfoCall, modelHubCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
@@ -27,6 +27,7 @@ const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 const infiniteModelKeys = createQueryKeys("infiniteModels");
+const userModelsKeys = createQueryKeys("userModels");
 
 export const useModelsInfo = (
   page: number = 1,
@@ -72,6 +73,18 @@ export const useAllProxyModels = () => {
   return useQuery<AllProxyModelsResponse>({
     queryKey: allProxyModelsKeys.list({}),
     queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true, null, true, false, "expand"),
+    enabled: Boolean(accessToken && userId && userRole),
+  });
+};
+
+export const useUserModels = (): UseQueryResult<string[]> => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  return useQuery<string[]>({
+    queryKey: userModelsKeys.list({}),
+    queryFn: async () => {
+      const response = await modelAvailableCall(accessToken!, userId!, userRole!);
+      return response["data"].map((model: { id: string }) => model.id);
+    },
     enabled: Boolean(accessToken && userId && userRole),
   });
 };

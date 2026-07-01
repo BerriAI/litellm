@@ -131,9 +131,7 @@ class VertexImageGeneration(VertexLLM):
             should_use_v1beta1_features=False,
             mode="image_generation",
         )
-        optional_params = optional_params or {
-            "sampleCount": 1
-        }  # default optional params
+        optional_params = optional_params or {"sampleCount": 1}  # default optional params
 
         # Transform optional params to camelCase format
         optional_params = self.transform_optional_params(optional_params)
@@ -165,9 +163,7 @@ class VertexImageGeneration(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         json_response = response.json()
-        return self.process_image_generation_response(
-            json_response, model_response, model
-        )
+        return self.process_image_generation_response(json_response, model_response, model)
 
     async def aimage_generation(
         self,
@@ -271,9 +267,7 @@ class VertexImageGeneration(VertexLLM):
             raise Exception(f"Error: {response.status_code} {response.text}")
 
         json_response = response.json()
-        return self.process_image_generation_response(
-            json_response, model_response, model
-        )
+        return self.process_image_generation_response(json_response, model_response, model)
 
     def is_image_generation_response(self, json_response: Dict[str, Any]) -> bool:
         if "predictions" in json_response:

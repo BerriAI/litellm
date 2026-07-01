@@ -18,17 +18,6 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
   }
 };
 
-export const getInProductNudgesCall = async (accessToken: string) => {
-  /**
-   * Get in-product nudges configuration.
-   */
-  try {
-    return await apiClient.get(`/in_product_nudges`, { accessToken });
-  } catch (error) {
-    console.error("Failed to get in-product nudges:", error);
-    throw error;
-  }
-};
 /**
  * Helper file for calls being made to proxy
  */
@@ -38,11 +27,15 @@ import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } fro
 import { Team } from "./key_team_helpers/key_list";
 import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
+import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
+
+export { serverRootPath };
 
 export { deriveErrorMessage };
 export { ApiError } from "@/lib/http/client";
@@ -57,8 +50,6 @@ const resolveDefaultBase = (fallback: string | null): string | null =>
       ? "http://localhost:4000"
       : fallback;
 const defaultProxyBaseUrl = resolveDefaultBase(null);
-const defaultServerRootPath = "/";
-export let serverRootPath = defaultServerRootPath;
 const WORKER_URL_KEY = "litellm_worker_url";
 // If a worker URL is in localStorage, use it as the initial proxyBaseUrl.
 // This survives page navigation and the sessionStorage.clear() in user_dashboard.
@@ -103,7 +94,7 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
 };
 
 const updateServerRootPath = (receivedServerRootPath: string) => {
-  serverRootPath = receivedServerRootPath;
+  setServerRootPath(receivedServerRootPath);
 };
 
 export const getProxyBaseUrl = (): string => {
@@ -285,6 +276,7 @@ export interface LiteLLMWellKnownUiConfig {
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
 }
@@ -404,6 +396,7 @@ export const getUiConfig = async () => {
    * Update the proxy base url and server root path
    */
   console.log("jsonData in getUiConfig:", jsonData);
+  updateServerRootPath(jsonData.server_root_path);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
   return jsonData;
 };
@@ -2451,6 +2444,9 @@ export const keyListCall = async (
         return_full_object: "true",
         include_team_keys: "true",
         include_created_by_keys: "true",
+        // /key/list is exact by default; opt in so the key-list search box keeps
+        // matching partial user_id/key_alias.
+        substring_matching: "true",
       },
     });
   } catch (error) {
@@ -2822,6 +2818,7 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  budget_duration?: string | null;
   allowed_models?: string[] | null;
 }
 
@@ -2949,18 +2946,21 @@ export const teamMemberUpdateCall = async (
       user_id: formValues.user_id,
     };
 
-    // Add optional budget and rate limit fields
+    const orNull = (value: unknown) => (value === undefined || value === null || value === "" ? null : value);
     if (formValues.user_email !== undefined) {
       requestBody.user_email = formValues.user_email;
     }
-    if (formValues.max_budget_in_team !== undefined && formValues.max_budget_in_team !== null) {
-      requestBody.max_budget_in_team = formValues.max_budget_in_team;
+    if ("max_budget_in_team" in formValues) {
+      requestBody.max_budget_in_team = orNull(formValues.max_budget_in_team);
     }
-    if (formValues.tpm_limit !== undefined && formValues.tpm_limit !== null) {
-      requestBody.tpm_limit = formValues.tpm_limit;
+    if ("tpm_limit" in formValues) {
+      requestBody.tpm_limit = orNull(formValues.tpm_limit);
     }
-    if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
-      requestBody.rpm_limit = formValues.rpm_limit;
+    if ("rpm_limit" in formValues) {
+      requestBody.rpm_limit = orNull(formValues.rpm_limit);
+    }
+    if ("budget_duration" in formValues) {
+      requestBody.budget_duration = orNull(formValues.budget_duration);
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
@@ -5225,11 +5225,16 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string, customHeaders?: Record<string, string>) => {
-  // Construct base URL
-  let url = proxyBaseUrl
-    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-    : `/mcp-rest/tools/list?server_id=${serverId}`;
+export const listMCPTools = async (
+  accessToken: string,
+  serverId: string,
+  customHeaders?: Record<string, string>,
+  includeDisabledTools?: boolean,
+) => {
+  // Construct base URL. include_disabled_tools returns the full server catalog
+  // (admin-only, backend-enforced) so the settings UI can configure the allowlist.
+  const query = `server_id=${serverId}${includeDisabledTools ? "&include_disabled_tools=true" : ""}`;
+  let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/list?${query}` : `/mcp-rest/tools/list?${query}`;
 
   console.log("Fetching MCP tools from:", url);
 
@@ -5606,13 +5611,27 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
 };
 
 /**
- * Get all spend logs for a particular session
+ * Get a page of spend logs for a particular session.
+ *
+ * The backend paginates this endpoint (page / page_size, returning
+ * { data, total, page, page_size, total_pages }). Callers that need the whole
+ * session should page through total_pages and accumulate the results.
  */
-export const sessionSpendLogsCall = async (accessToken: string, session_id: string) => {
+export const sessionSpendLogsCall = async (
+  accessToken: string,
+  session_id: string,
+  page: number = 1,
+  page_size: number = 100,
+) => {
   try {
+    const params = new URLSearchParams({
+      session_id,
+      page: String(page),
+      page_size: String(page_size),
+    });
     let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`
-      : `/spend/logs/session/ui?session_id=${encodeURIComponent(session_id)}`;
+      ? `${proxyBaseUrl}/spend/logs/session/ui?${params.toString()}`
+      : `/spend/logs/session/ui?${params.toString()}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -7384,19 +7403,7 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */
-export const registerClaudeCodePlugin = async (
-  accessToken: string,
-  pluginData: {
-    name: string;
-    source: { source: string; repo?: string; url?: string };
-    version?: string;
-    description?: string;
-    author?: { name: string; email?: string };
-    homepage?: string;
-    keywords?: string[];
-    category?: string;
-  },
-) => {
+export const registerClaudeCodePlugin = async (accessToken: string, pluginData: SkillRegisterRequest) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/plugins` : `/claude-code/plugins`;
@@ -7411,8 +7418,13 @@ export const registerClaudeCodePlugin = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      const errorBody = await response.text();
+      let errorMessage: string;
+      try {
+        errorMessage = deriveErrorMessage(JSON.parse(errorBody));
+      } catch {
+        errorMessage = errorBody || `Request failed with status ${response.status}`;
+      }
       handleError(errorMessage);
       throw new Error(errorMessage);
     }

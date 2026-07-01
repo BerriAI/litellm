@@ -55,7 +55,8 @@ if [ $? -eq 0 ]; then
     # Specify the destination directory
     destination_dir="../../litellm/proxy/_experimental/out"
 
-    # Remove existing files in the destination directory
+    # Ensure the destination directory exists, then clear it
+    mkdir -p "$destination_dir"
     rm -rf "$destination_dir"/*
 
     # Copy the contents of the output directory to the specified destination

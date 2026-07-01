@@ -22,7 +22,7 @@ no ``llm_provider`` / ``model`` attribute. Downstream:
   category routing missed these entirely.
 
 The fix wraps every internal raise site in
-:class:`ProxyHTTPRateLimitError` (an ``HTTPException`` *and* a
+:class:`ProxyRateLimitError` (an ``HTTPException`` *and* a
 ``litellm.RateLimitError``), and resolves ``model`` / ``llm_provider`` from
 ``data["model"]`` via :func:`get_llm_provider`. When the model is missing or
 unparseable we fall back to ``llm_provider="litellm_proxy"`` so we never break
@@ -61,9 +61,9 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
     PROXY_LLM_PROVIDER_FALLBACK,
-    ProxyHTTPRateLimitError,
     resolve_llm_provider_for_rate_limit,
 )
 from litellm.proxy.utils import InternalUsageCache
@@ -75,12 +75,11 @@ from litellm.types.agents import AgentResponse
 # ---------------------------------------------------------------------------
 
 
-class TestProxyHTTPRateLimitErrorClass:
+class TestProxyRateLimitErrorClass:
     """Pin the dual ``HTTPException`` + ``RateLimitError`` shape."""
 
     def test_is_both_http_exception_and_rate_limit_error(self):
-        e = ProxyHTTPRateLimitError(
-            status_code=429,
+        e = ProxyRateLimitError(
             detail="boom",
             model="gpt-4o-mini",
             llm_provider="openai",
@@ -92,15 +91,15 @@ class TestProxyHTTPRateLimitErrorClass:
         assert e.status_code == 429
         assert e.model == "gpt-4o-mini"
         assert e.llm_provider == "openai"
-        assert e.message == "boom"
+        # ProxyRateLimitError prefixes message via RateLimitError.__init__.
+        assert "boom" in e.message
         assert e.detail == "boom"
 
     def test_dict_detail_is_stringified_for_message(self):
         # Some hooks pass a dict detail (e.g. dynamic_rate_limiter v1) — the
         # `message` attr (read by RateLimitError.__str__ and observability
         # callbacks) must still be a string.
-        e = ProxyHTTPRateLimitError(
-            status_code=429,
+        e = ProxyRateLimitError(
             detail={"error": "over rpm"},
             model="claude-3-5-sonnet",
             llm_provider="anthropic",
@@ -109,16 +108,15 @@ class TestProxyHTTPRateLimitErrorClass:
         assert "over rpm" in e.message
 
     def test_defaults_to_litellm_proxy_provider(self):
-        e = ProxyHTTPRateLimitError(status_code=429, detail="x")
+        e = ProxyRateLimitError(detail="x")
         assert e.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
         assert e.model == ""
 
     def test_none_provider_normalized_to_fallback(self):
-        e = ProxyHTTPRateLimitError(
-            status_code=429,
+        e = ProxyRateLimitError(
             detail="x",
-            model=None,  # type: ignore[arg-type]
-            llm_provider=None,  # type: ignore[arg-type]
+            model=None,
+            llm_provider=None,
         )
         assert e.llm_provider == PROXY_LLM_PROVIDER_FALLBACK
         assert e.model == ""
@@ -143,7 +141,10 @@ class TestResolveLLMProviderForRateLimit:
         # Must never raise — the resolver wraps `get_llm_provider` defensively
         # because raising here would mask the rate-limit error we're trying
         # to surface to the user.
-        resolved_model, provider = resolve_llm_provider_for_rate_limit(model)
+        # Pin llm_router to None so the alias-fallback path doesn't pick up
+        # a router left behind by another test in the session.
+        with patch("litellm.proxy.proxy_server.llm_router", None):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit(model)
         assert provider == PROXY_LLM_PROVIDER_FALLBACK
         # Resolver returns the input model verbatim on the unknown branch so
         # the `.model` attribute is never silently swapped to a different one.
@@ -155,14 +156,147 @@ class TestResolveLLMProviderForRateLimit:
     def test_get_llm_provider_raising_is_swallowed(self):
         # If get_llm_provider itself blows up (unexpected error), we still
         # fall back rather than letting the secondary exception escape.
+        # No router is registered in this test, so the alias-fallback path
+        # also yields None and we land at PROXY_LLM_PROVIDER_FALLBACK.
         with patch.object(
             litellm,
             "get_llm_provider",
             side_effect=RuntimeError("boom"),
         ):
-            resolved_model, provider = resolve_llm_provider_for_rate_limit("anything")
+            with patch(
+                "litellm.proxy.proxy_server.llm_router",
+                None,
+            ):
+                resolved_model, provider = resolve_llm_provider_for_rate_limit(
+                    "anything"
+                )
         assert provider == PROXY_LLM_PROVIDER_FALLBACK
         assert resolved_model == "anything"
+
+    def test_router_alias_resolves_to_underlying_provider(self):
+        """
+        Nearly every real LiteLLM proxy deployment uses router aliases:
+
+            model_list:
+              - model_name: tpm-locked
+                litellm_params:
+                  model: openai/gpt-4o-mini
+                  ...
+
+        ``litellm.get_llm_provider("tpm-locked")`` doesn't know about
+        router aliases and raises. Before this fix the resolver fell
+        through to ``"litellm_proxy"``, defeating the whole point of the
+        ``llm_provider`` field on the rate-limit error. The alias path
+        must look the deployment up in the router's ``model_list`` and
+        resolve from its ``litellm_params.model``.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {
+                    "model_name": "tpm-locked",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "fake",
+                    },
+                }
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit("tpm-locked")
+        assert provider == "openai", (
+            f"Router-alias path must resolve through litellm_params.model, "
+            f"not fall through to {PROXY_LLM_PROVIDER_FALLBACK!r}. Got "
+            f"provider={provider!r}, model={resolved_model!r}."
+        )
+        # The resolved model should point at the underlying deployment so
+        # downstream Prometheus labels / failure callbacks attribute the
+        # 429 to the real upstream, not the alias.
+        assert resolved_model == "gpt-4o-mini"
+
+    def test_router_alias_with_multiple_deployments_uses_first(self):
+        """
+        When an alias maps to multiple deployments (the load-balancing
+        case), the rate-limit error fired at the *alias* level is
+        deployment-agnostic — we have no way of knowing which one would
+        have been picked. Use the first deployment's underlying provider:
+        every deployment under one alias should agree on provider in any
+        sensible config, and 'first' is deterministic so the Prometheus
+        label is stable.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {
+                    "model_name": "claude-pool",
+                    "litellm_params": {"model": "anthropic/claude-3-5-sonnet"},
+                },
+                {
+                    "model_name": "claude-pool",
+                    "litellm_params": {"model": "anthropic/claude-3-5-haiku"},
+                },
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            _, provider = resolve_llm_provider_for_rate_limit("claude-pool")
+        assert provider == "anthropic"
+
+    def test_router_alias_unknown_falls_back(self):
+        """
+        Alias not in the router model_list — both lookups fail, so we
+        land at the defensive ``litellm_proxy`` fallback rather than
+        raising.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {
+                    "model_name": "tpm-locked",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                }
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit(
+                "not-an-alias"
+            )
+        assert provider == PROXY_LLM_PROVIDER_FALLBACK
+        assert resolved_model == "not-an-alias"
+
+    def test_router_alias_with_malformed_deployment_falls_back(self):
+        """
+        A deployment in the router model_list with no usable
+        ``litellm_params.model`` (or where ``get_llm_provider`` on the
+        underlying string also raises) must not crash the resolver —
+        fall through to the defensive fallback.
+        """
+
+        class _FakeRouter:
+            model_list = [
+                {"model_name": "broken", "litellm_params": {}},
+                {"model_name": "broken", "litellm_params": {"model": ""}},
+                {
+                    "model_name": "broken",
+                    "litellm_params": {"model": "nonsense-no-provider"},
+                },
+            ]
+
+        with patch(
+            "litellm.proxy.proxy_server.llm_router",
+            _FakeRouter(),
+        ):
+            resolved_model, provider = resolve_llm_provider_for_rate_limit("broken")
+        assert provider == PROXY_LLM_PROVIDER_FALLBACK
+        assert resolved_model == "broken"
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +486,7 @@ async def test_parallel_request_limiter_v1_missing_model_falls_back():
 # ---------------------------------------------------------------------------
 
 
-def _v3_over_limit_response(rate_limit_type: str = "rpm") -> dict:
+def _v3_over_limit_response(rate_limit_type: str = "requests") -> dict:
     return {
         "overall_code": "OVER_LIMIT",
         "statuses": [
@@ -532,7 +666,7 @@ async def test_dynamic_rate_limiter_v3_model_capacity_path_populates_provider():
                     "descriptor_key": "model_saturation_check",
                     "current_limit": 100,
                     "limit_remaining": 0,
-                    "rate_limit_type": "rpm",
+                    "rate_limit_type": "requests",
                 }
             ],
         }
@@ -582,7 +716,7 @@ async def test_dynamic_rate_limiter_v3_unknown_descriptor_path_populates_provide
                     "descriptor_key": "something_we_dont_handle",
                     "current_limit": 1,
                     "limit_remaining": 0,
-                    "rate_limit_type": "rpm",
+                    "rate_limit_type": "requests",
                 }
             ],
         }
@@ -937,31 +1071,56 @@ async def test_max_budget_per_session_limiter_unknown_model_falls_back():
 # ---------------------------------------------------------------------------
 
 
-def test_prometheus_exception_class_name_includes_provider():
+def test_prometheus_exception_class_name_back_compat_for_proxy_rate_limit_error():
+    """
+    `_get_exception_class_name` deliberately returns the literal string
+    ``"HTTPException"`` for every ``ProxyRateLimitError`` instance so that
+    pre-existing dashboards / alerts (which key off the historical value)
+    keep working after the unified rate-limit error class landed in #27687.
+
+    Provider attribution is now surfaced separately via the
+    ``rate_limit_category`` / ``rate_limit_type`` labels — this test pins
+    the back-compat shim itself.
+    """
     from litellm.integrations.prometheus import PrometheusLogger
 
-    exc = ProxyHTTPRateLimitError(
-        status_code=429,
+    exc = ProxyRateLimitError(
         detail="over limit",
         model="gpt-4o-mini",
         llm_provider="openai",
     )
+    assert PrometheusLogger._get_exception_class_name(exc) == "HTTPException"
 
-    name = PrometheusLogger._get_exception_class_name(exc)
-    # Format is "{Provider.}{ClassName}" per `_get_exception_class_name`.
-    assert name.startswith("Openai.")
-    # And specifically: it ends in our exception class. (We don't pin the
-    # full string to avoid coupling the test to PR #27687's parallel rename.)
-    assert name.endswith("ProxyHTTPRateLimitError")
+    # Same back-compat path even when the resolver fell back to litellm_proxy.
+    exc_no_model = ProxyRateLimitError(detail="over limit")
+    assert PrometheusLogger._get_exception_class_name(exc_no_model) == "HTTPException"
 
 
-def test_prometheus_exception_class_name_falls_back_when_no_model():
+def test_prometheus_exception_class_name_back_compat_for_budget_exceeded_error():
+    """
+    The unified rate-limit work also attached ``.llm_provider`` to
+    ``BudgetExceededError`` so callbacks get provider attribution from
+    ``StandardLoggingPayload``. Without a back-compat short-circuit the
+    provider-prefix step in ``_get_exception_class_name`` would silently
+    flip the label from ``"BudgetExceededError"`` to e.g.
+    ``"Openai.BudgetExceededError"`` and break dashboards keyed on the
+    historical value. Pin the literal label here.
+    """
     from litellm.integrations.prometheus import PrometheusLogger
 
-    exc = ProxyHTTPRateLimitError(status_code=429, detail="over limit")
-    name = PrometheusLogger._get_exception_class_name(exc)
-    # `litellm_proxy` -> `Litellm_proxy.` (capitalize first char only).
-    assert name.startswith("Litellm_proxy.")
+    err = litellm.BudgetExceededError(
+        current_cost=1.0,
+        max_budget=0.5,
+        llm_provider="openai",
+    )
+    assert PrometheusLogger._get_exception_class_name(err) == "BudgetExceededError"
+
+    # Default (empty llm_provider) path — same literal label.
+    err_no_provider = litellm.BudgetExceededError(current_cost=1.0, max_budget=0.5)
+    assert (
+        PrometheusLogger._get_exception_class_name(err_no_provider)
+        == "BudgetExceededError"
+    )
 
 
 if __name__ == "__main__":

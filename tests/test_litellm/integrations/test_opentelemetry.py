@@ -19,9 +19,11 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import litellm
 from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
+    OTELMetricAttributeFilter,
     OTELSemconvCategory,
     _normalize_team_metadata_keys,
 )
@@ -4688,6 +4690,109 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         self.assertTrue(otel._emit_once(kwargs, "success"))
         self.assertFalse(otel._emit_once(kwargs, "success"))
 
+    def test_emit_once_accepts_list_valued_scope_part(self):
+        """Regression for LIT-3428 / LIT-3764: a list-valued ``guardrail_mode``
+        (the shape Presidio expands to with ``output_parse_pii: true``) must
+        not raise ``TypeError: unhashable type: 'list'`` when building the
+        dedupe key. Pre-fix, this call crashed inside ``dict.get``."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]),
+            "Same list scope must dedupe to False on the second call",
+        )
+
+    def test_emit_once_distinct_list_scopes_dont_collide(self):
+        """Two different list-valued scopes on the same handler/kwargs must
+        each emit exactly once. Catches a regression where every list collapses
+        to the same key (e.g. ``str(list)`` collisions on near-identical input)."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call"]))
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]),
+            "Distinct list scopes must produce distinct dedupe keys",
+        )
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call"]))
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
+        )
+
+    def test_emit_once_accepts_dict_and_set_scope_parts(self):
+        """``guardrail_mode`` can also arrive as a ``GuardrailMode`` TypedDict
+        (i.e. a plain dict at runtime). Sets are not produced today but flow
+        through the same normalization. Both must hash without raising."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
+        )
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"a", "b"}))
+
+    def test_emit_once_handles_self_referential_scope_without_recursion_error(self):
+        """``_freeze_for_dedupe`` caps recursion at ``_FREEZE_MAX_DEPTH`` and
+        falls back to ``repr`` past the cap, so a self-referential container
+        in scope must not crash ``_emit_once``. ``guardrail_mode`` cannot
+        construct such input today, but the cap is the bound that justifies
+        recursion on the logging hot path."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        cyclic: list = []
+        cyclic.append(cyclic)
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+
+    def test_create_guardrail_span_does_not_raise_on_list_mode(self):
+        """End-to-end regression for LIT-3428: ``_create_guardrail_span``
+        must produce exactly one span (not raise ``TypeError``) when the
+        guardrail entry's ``guardrail_mode`` is a list."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "hidden_params": {},
+                "guardrail_information": [
+                    {
+                        "guardrail_name": "presidio-pii",
+                        "guardrail_mode": ["pre_call", "post_call"],
+                        "guardrail_response": "ok",
+                        "start_time": 1.0,
+                        "end_time": 2.0,
+                    }
+                ],
+            },
+        }
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        guardrail_spans = [
+            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            1,
+            "List-valued guardrail_mode must emit exactly one guardrail span "
+            "across repeated lifecycle entrypoints",
+        )
+
     def test_handle_success_emits_single_litellm_request_span_on_double_call(self):
         """Sync + async callback paths firing for the same kwargs must
         result in exactly one litellm_request span."""
@@ -5301,6 +5406,8 @@ class TestEndProxySpanLitellmMetadataFallback(unittest.TestCase):
 
         otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.now())
         mock_span.end.assert_called_once()
+
+
 class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
     """team_metadata, http.route, and both model names (the user-facing
     model_group alias and the dispatched provider model) must land on the
@@ -5467,3 +5574,281 @@ class TestOpenTelemetryTeamMetadataKeysConfig(unittest.TestCase):
         ):
             cfg = OpenTelemetryConfig(baggage_team_metadata_keys=["from_arg"])
             assert cfg.baggage_team_metadata_keys == ["from_arg"]
+
+
+class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
+    """LIT-3600: include/exclude control over which attributes are stamped on
+    emitted metrics, to cap metric cardinality. These drive the real
+    _handle_success -> _record_metrics path through an in-memory reader and
+    read attributes straight off the recorded data points, so they fail if the
+    filtering feature is reverted and pass only when it works end to end."""
+
+    HERE = os.path.dirname(__file__)
+    POLL_INTERVAL = 0.05
+    POLL_TIMEOUT = 2.0
+    DURATION_METRIC = "gen_ai.client.operation.duration"
+    TOKEN_METRIC = "gen_ai.client.token.usage"
+
+    # High-cardinality attributes the captured fixture emits by default. Each is
+    # a member of VALID_METRIC_ATTRIBUTE_NAMES and is present on the recorded
+    # metric when no filter is configured (verified by the backward-compat test).
+    HIGH_CARDINALITY_KEYS = (
+        "hidden_params",
+        "metadata.user_api_key_hash",
+        "metadata.requester_ip_address",
+        "metadata.requester_metadata",
+        "metadata.applied_guardrails",
+    )
+    RETAINED_LOW_CARDINALITY_KEY = "gen_ai.request.model"
+
+    def _load_fixtures(self):
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
+            kwargs = json.load(f)
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
+            response_obj = json.load(f)
+        return kwargs, response_obj
+
+    def _record(self, attributes):
+        """Run a real success hook with metrics enabled and return the reader."""
+        metric_reader = InMemoryMetricReader()
+        meter_provider = MeterProvider(metric_readers=[metric_reader])
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(
+                exporter="console", enable_metrics=True, attributes=attributes
+            ),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+        )
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs, response_obj = self._load_fixtures()
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_success(kwargs, response_obj, start, end)
+        return metric_reader
+
+    def _keysets(self, reader, metric_name):
+        """Attribute-key sets, one per recorded data point of `metric_name`."""
+        deadline = time.time() + self.POLL_TIMEOUT
+        while time.time() < deadline:
+            data = reader.get_metrics_data()
+            if data and hasattr(data, "resource_metrics"):
+                for rm in data.resource_metrics:
+                    for sm in rm.scope_metrics:
+                        for m in sm.metrics:
+                            if m.name == metric_name:
+                                return [
+                                    set(dp.attributes.keys())
+                                    for dp in m.data.data_points
+                                ]
+            time.sleep(self.POLL_INTERVAL)
+        return None
+
+    def test_exclude_list_strips_high_cardinality_keys_across_metrics(self):
+        """The bug: high-cardinality metadata/hidden_params explode metric
+        cardinality. With exclude_list set, none of them reach any data point,
+        while the retained low-cardinality model attribute survives. Asserted
+        on both the duration and token-usage histograms."""
+        reader = self._record(
+            OTELMetricAttributeFilter(exclude_list=list(self.HIGH_CARDINALITY_KEYS))
+        )
+        excluded = set(self.HIGH_CARDINALITY_KEYS)
+
+        for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
+            keysets = self._keysets(reader, metric_name)
+            self.assertTrue(keysets, f"{metric_name} was not recorded")
+            for keys in keysets:
+                self.assertTrue(
+                    excluded.isdisjoint(keys),
+                    f"{metric_name} leaked excluded keys: {excluded & keys}",
+                )
+                self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def test_include_list_allows_only_listed_attributes(self):
+        """An allowlist caps emitted attributes to exactly the listed set.
+        gen_ai.token.type is a structural discriminator added to the token
+        histogram after filtering, so it is the only key permitted beyond the
+        allowlist, and only on that metric."""
+        include = ["gen_ai.request.model", "gen_ai.system"]
+        reader = self._record(OTELMetricAttributeFilter(include_list=include))
+        allowed = set(include)
+
+        duration_keysets = self._keysets(reader, self.DURATION_METRIC)
+        self.assertTrue(duration_keysets, "duration metric was not recorded")
+        for keys in duration_keysets:
+            self.assertEqual(keys, allowed)
+
+        token_keysets = self._keysets(reader, self.TOKEN_METRIC)
+        self.assertTrue(token_keysets, "token-usage metric was not recorded")
+        for keys in token_keysets:
+            self.assertEqual(keys - {"gen_ai.token.type"}, allowed)
+
+    def test_no_filter_preserves_high_cardinality_keys(self):
+        """Backward compatibility: with no attributes config, every
+        high-cardinality key the fixture carries is still stamped on the
+        metric, so existing customers who rely on them are unaffected."""
+        reader = self._record(None)
+        expected = set(self.HIGH_CARDINALITY_KEYS)
+
+        for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
+            keysets = self._keysets(reader, metric_name)
+            self.assertTrue(keysets, f"{metric_name} was not recorded")
+            for keys in keysets:
+                self.assertTrue(
+                    expected.issubset(keys),
+                    f"{metric_name} dropped {expected - keys} by default",
+                )
+                self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def test_proxy_callback_settings_attributes_applied_without_kwarg(self):
+        """Regression for the proxy path: the OpenTelemetry logger is constructed
+        before the proxy populates litellm.callback_settings['otel']['attributes'],
+        and without the attributes kwarg, so the filter must be resolved at record
+        time rather than at __init__. Otherwise metrics ship at full cardinality
+        (the bug the live proxy surfaced; constructing with the kwarg, or with
+        callback_settings already set, hid it)."""
+        previous = litellm.callback_settings
+        litellm.callback_settings = {}  # not yet populated when the logger is built
+        try:
+            metric_reader = InMemoryMetricReader()
+            meter_provider = MeterProvider(metric_readers=[metric_reader])
+            tracer_provider = TracerProvider()
+            tracer_provider.add_span_processor(
+                SimpleSpanProcessor(InMemorySpanExporter())
+            )
+            otel = OpenTelemetry(
+                config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
+                tracer_provider=tracer_provider,
+                meter_provider=meter_provider,
+            )
+            otel.tracer = tracer_provider.get_tracer(__name__)
+            # The proxy sets this only after the logger already exists.
+            litellm.callback_settings = {
+                "otel": {
+                    "attributes": {"exclude_list": list(self.HIGH_CARDINALITY_KEYS)}
+                }
+            }
+            kwargs, response_obj = self._load_fixtures()
+            start = datetime.utcnow()
+            otel._handle_success(
+                kwargs, response_obj, start, start + timedelta(seconds=1)
+            )
+        finally:
+            litellm.callback_settings = previous
+
+        excluded = set(self.HIGH_CARDINALITY_KEYS)
+        for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
+            keysets = self._keysets(metric_reader, metric_name)
+            self.assertTrue(keysets, f"{metric_name} was not recorded")
+            for keys in keysets:
+                self.assertTrue(
+                    excluded.isdisjoint(keys),
+                    f"{metric_name} leaked {excluded & keys} via callback_settings",
+                )
+                self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def test_callback_settings_validation_failure_is_not_sticky(self):
+        """On the lazy callback_settings path a validation failure must not cache
+        the bad config. Once the operator corrects
+        callback_settings['otel']['attributes'], the next record resolves the
+        fixed filter instead of re-raising the stale error until a restart."""
+        previous = litellm.callback_settings
+        litellm.callback_settings = {
+            "otel": {
+                "attributes": {
+                    "include_list": ["gen_ai.system"],
+                    "exclude_list": ["hidden_params"],
+                }
+            }
+        }
+        try:
+            otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+            attrs = {"gen_ai.system": "openai", "hidden_params": "{}"}
+
+            with self.assertRaises(ValueError):
+                otel._filter_metric_attributes(attrs)
+
+            litellm.callback_settings = {
+                "otel": {"attributes": {"exclude_list": ["hidden_params"]}}
+            }
+            filtered = otel._filter_metric_attributes(attrs)
+        finally:
+            litellm.callback_settings = previous
+
+        self.assertEqual(filtered, {"gen_ai.system": "openai"})
+
+    def test_include_and_exclude_together_raise_value_error(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        include_list=["gen_ai.system"],
+                        exclude_list=["hidden_params"],
+                    ),
+                )
+            )
+
+    def test_unknown_include_name_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        include_list=["not.a.real.attribute"]
+                    ),
+                )
+            )
+
+    def test_unknown_exclude_name_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        exclude_list=["metadata.does_not_exist"]
+                    ),
+                )
+            )
+
+    def test_dict_attributes_kwarg_path_validates(self):
+        """The YAML/kwargs entry point (a plain dict) flows through
+        _build_metric_attribute_filter and hits the same validation."""
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                attributes={
+                    "include_list": ["gen_ai.system"],
+                    "exclude_list": ["hidden_params"],
+                }
+            )
+
+    def test_no_filter_returns_attrs_object_unchanged(self):
+        """The no-config path is a hot-path no-op: it returns the same dict
+        object, so default emission pays zero copy cost. Locking identity makes
+        a future refactor that always copies/filters trip here."""
+        otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+        attrs = {"gen_ai.request.model": "m", "hidden_params": "{}"}
+        self.assertIs(otel._filter_metric_attributes(attrs), attrs)
+
+    def test_token_type_discriminator_rejected_from_either_list(self):
+        """gen_ai.token.type is a structural discriminator stamped onto the
+        input/output token series after filtering; it cannot be filtered without
+        collapsing the two series into one. Listing it in include_list or
+        exclude_list is rejected loudly at startup rather than silently ignored,
+        so an operator gets an error instead of a no-op."""
+        for attributes in (
+            OTELMetricAttributeFilter(exclude_list=["gen_ai.token.type"]),
+            OTELMetricAttributeFilter(include_list=["gen_ai.token.type"]),
+        ):
+            with self.assertRaises(ValueError):
+                OpenTelemetry(
+                    config=OpenTelemetryConfig(
+                        exporter="console", attributes=attributes
+                    )
+                )

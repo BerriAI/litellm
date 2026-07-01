@@ -28,6 +28,18 @@ export interface CredentialValues {
   value: string;
 }
 
+const getApiVersionFromApiBase = (apiBase: string): string | null => {
+  const queryStartIndex = apiBase.indexOf("?");
+  if (queryStartIndex === -1) {
+    return null;
+  }
+
+  const queryString = apiBase.slice(queryStartIndex + 1).split("#")[0];
+  const searchParams = new URLSearchParams(queryString);
+
+  return searchParams.get("api_version") || searchParams.get("api-version");
+};
+
 const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): ProviderCredentialField => {
   const type: ProviderCredentialField["type"] =
     field.field_type === "password"
@@ -167,6 +179,30 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
+  const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
+  const lastInferredApiVersionRef = React.useRef<string | null>(null);
+
+  const handleApiBaseChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      if (!hasApiVersionField) {
+        return;
+      }
+
+      const apiVersion = getApiVersionFromApiBase(event.target.value);
+      if (apiVersion) {
+        lastInferredApiVersionRef.current = apiVersion;
+        form.setFieldsValue({ api_version: apiVersion });
+        return;
+      }
+
+      if (form.getFieldValue("api_version") === lastInferredApiVersionRef.current) {
+        form.setFieldsValue({ api_version: "" });
+      }
+      lastInferredApiVersionRef.current = null;
+    },
+    [form, hasApiVersionField],
+  );
+
   const handleUpload = {
     name: "file",
     accept: ".json",
@@ -261,6 +297,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
                 placeholder={field.placeholder}
                 type={field.type === "password" ? "password" : "text"}
                 defaultValue={field.defaultValue}
+                onChange={field.key === "api_base" ? handleApiBaseChange : undefined}
               />
             )}
           </Form.Item>

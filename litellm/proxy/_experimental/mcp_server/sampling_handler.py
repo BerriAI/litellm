@@ -97,25 +97,19 @@ def _resolve_model_from_preferences(
             for model_name in available_model_names:
                 if hint_name.lower() in model_name.lower():
                     verbose_logger.debug(
-                        "MCP sampling model resolution: substring hint match "
-                        "'%s' -> '%s'",
+                        "MCP sampling model resolution: substring hint match '%s' -> '%s'",
                         hint_name,
                         model_name,
                     )
                     return model_name
         verbose_logger.debug(
-            "MCP sampling model resolution: no hint matched from %s "
-            "against %d available models",
+            "MCP sampling model resolution: no hint matched from %s against %d available models",
             [getattr(h, "name", None) for h in model_preferences.hints],
             len(available_model_names),
         )
 
     # 2. Priority-based selection (cost/speed/intelligence)
-    if (
-        model_preferences
-        and available_model_names
-        and _has_priorities(model_preferences)
-    ):
+    if model_preferences and available_model_names and _has_priorities(model_preferences):
         best = _select_model_by_priority(available_model_names, model_preferences)
         if best is not None:
             verbose_logger.debug(
@@ -134,8 +128,7 @@ def _resolve_model_from_preferences(
     # Fall back to first available model
     if available_model_names:
         verbose_logger.debug(
-            "MCP sampling model resolution: no default configured, "
-            "falling back to first available model '%s'",
+            "MCP sampling model resolution: no default configured, falling back to first available model '%s'",
             available_model_names[0],
         )
         return available_model_names[0]
@@ -247,14 +240,9 @@ def _select_model_by_priority(
     best_name = None
     best_score = -1.0
     for i, entry in enumerate(scored):
-        score = (
-            cost_weight * cost_scores[i]
-            + speed_weight * speed_scores[i]
-            + intel_weight * intel_scores[i]
-        )
+        score = cost_weight * cost_scores[i] + speed_weight * speed_scores[i] + intel_weight * intel_scores[i]
         verbose_logger.debug(
-            "MCP priority scoring: model=%s cost_score=%.3f speed_score=%.3f "
-            "intel_score=%.3f → weighted=%.3f",
+            "MCP priority scoring: model=%s cost_score=%.3f speed_score=%.3f intel_score=%.3f → weighted=%.3f",
             entry["name"],
             cost_scores[i],
             speed_scores[i],
@@ -353,11 +341,7 @@ def _convert_single_content(
         tool_use_id = getattr(content, "toolUseId", "")
         nested_content = getattr(content, "content", [])
         if isinstance(nested_content, list):
-            text_parts = [
-                getattr(c, "text", str(c))
-                for c in nested_content
-                if getattr(c, "type", None) == "text"
-            ]
+            text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
             result_text = "\n".join(text_parts) if text_parts else ""
         else:
             result_text = str(nested_content)
@@ -417,9 +401,7 @@ def _convert_mcp_messages_to_openai(
         # above (e.g. unexpected role, single non-list content).
         converted = _convert_mcp_content_to_openai(content)
         converted_parts = (
-            converted
-            if isinstance(converted, list)
-            else ([converted] if isinstance(converted, dict) else [])
+            converted if isinstance(converted, list) else ([converted] if isinstance(converted, dict) else [])
         )
 
         # Separate marker items from regular content parts
@@ -488,9 +470,7 @@ def _extract_tool_calls(content: Any) -> List[Dict[str, Any]]:
                     "type": "function",
                     "function": {
                         "name": getattr(item, "name", ""),
-                        "arguments": json.dumps(
-                            getattr(item, "input", {}), default=str
-                        ),
+                        "arguments": json.dumps(getattr(item, "input", {}), default=str),
                     },
                 }
             )
@@ -517,11 +497,7 @@ def _extract_tool_results(content: Any) -> List[Dict[str, Any]]:
             # Extract text from nested content
             nested_content = getattr(item, "content", [])
             if isinstance(nested_content, list):
-                text_parts = [
-                    getattr(c, "text", str(c))
-                    for c in nested_content
-                    if getattr(c, "type", None) == "text"
-                ]
+                text_parts = [getattr(c, "text", str(c)) for c in nested_content if getattr(c, "type", None) == "text"]
                 result_text = "\n".join(text_parts) if text_parts else ""
             else:
                 result_text = str(nested_content)
@@ -597,8 +573,7 @@ def _convert_openai_response_to_mcp_result(
     """
     if not response.choices:
         verbose_logger.warning(
-            "MCP sampling: LLM returned empty choices list for model=%s "
-            "(possible content filter or provider error)",
+            "MCP sampling: LLM returned empty choices list for model=%s (possible content filter or provider error)",
             model_name,
         )
         return ErrorData(
@@ -661,9 +636,7 @@ def _convert_openai_response_to_mcp_result(
     )
 
 
-async def _check_model_access(  # noqa: PLR0915
-    model: str, user_api_key_auth: Any
-) -> Optional["ErrorData"]:
+async def _check_model_access(model: str, user_api_key_auth: Any) -> Optional["ErrorData"]:
     """Enforce model-permission checks for MCP sampling requests.
 
     Runs the same authorization checks as ``/chat/completions``:
@@ -681,9 +654,7 @@ async def _check_model_access(  # noqa: PLR0915
     _user_role = getattr(user_api_key_auth, "user_role", None)
 
     _has_real_credential = bool(_api_key) or bool(_token)
-    _is_admin = (
-        _user_role in ("proxy_admin", "proxy_admin_viewer") if _user_role else False
-    )
+    _is_admin = _user_role in ("proxy_admin", "proxy_admin_viewer") if _user_role else False
 
     if not _has_real_credential and not _is_admin:
         verbose_logger.warning(
@@ -760,9 +731,7 @@ async def _check_model_access(  # noqa: PLR0915
                     model=model,
                     team_object=team_obj,
                     llm_router=_llm_router,
-                    team_model_aliases=getattr(
-                        user_api_key_auth, "team_model_aliases", None
-                    ),
+                    team_model_aliases=getattr(user_api_key_auth, "team_model_aliases", None),
                 )
                 if _user_id and _proxy_logging_obj:
                     await _check_team_member_model_access(
@@ -824,10 +793,7 @@ async def _check_model_access(  # noqa: PLR0915
         )
         return ErrorData(
             code=-1,
-            message=(
-                f"Model access denied: the API key is not authorized "
-                f"to use model '{model}'. {access_err}"
-            ),
+            message=(f"Model access denied: the API key is not authorized to use model '{model}'. {access_err}"),
         )
 
 
@@ -859,9 +825,7 @@ async def _run_budget_checks(
         )
         import litellm
     except ImportError as import_err:
-        verbose_logger.warning(
-            "MCP sampling: budget check imports unavailable: %s", import_err
-        )
+        verbose_logger.warning("MCP sampling: budget check imports unavailable: %s", import_err)
         return None  # Can't enforce budgets without the modules
 
     _team_id = getattr(user_api_key_auth, "team_id", None)
@@ -1102,9 +1066,7 @@ async def _build_completion_kwargs(
     from litellm.proxy.proxy_server import proxy_config
 
     completion_kwargs["user"] = getattr(user_api_key_auth, "user_id", None)
-    _dummy_request = _build_sampling_request(
-        raw_headers=raw_headers, client_ip=client_ip
-    )
+    _dummy_request = _build_sampling_request(raw_headers=raw_headers, client_ip=client_ip)
     completion_kwargs = await add_litellm_data_to_request(
         data=completion_kwargs,
         request=_dummy_request,
@@ -1236,9 +1198,7 @@ async def handle_sampling_create_message(
             user_api_key_auth=user_api_key_auth,
         )
 
-        result = _convert_openai_response_to_mcp_result(
-            response=response, model_name=model
-        )
+        result = _convert_openai_response_to_mcp_result(response=response, model_name=model)
         verbose_logger.info(
             "MCP sampling: completed successfully, model=%s, stopReason=%s",
             getattr(result, "model", "unknown"),

@@ -6,11 +6,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroExportRequest,
     CloudZeroExportResponse,
@@ -53,7 +54,7 @@ async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: st
         "timezone": timezone,
     }
 
-    await prisma_client.db.litellm_config.upsert(
+    await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "cloudzero_settings"},
         data={
             "create": {
@@ -80,7 +81,7 @@ async def _get_cloudzero_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    cloudzero_config = await prisma_client.db.litellm_config.find_first(
+    cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "cloudzero_settings"}
     )
     if cloudzero_config is None or cloudzero_config.param_value is None:
@@ -97,15 +98,11 @@ async def _get_cloudzero_settings():
     # Decrypt the API key
     encrypted_api_key = settings.get("api_key")
     if encrypted_api_key:
-        decrypted_api_key = decrypt_value_helper(
-            encrypted_api_key, key="cloudzero_api_key", exception_type="error"
-        )
+        decrypted_api_key = decrypt_value_helper(encrypted_api_key, key="cloudzero_api_key", exception_type="error")
         if decrypted_api_key is None:
             raise HTTPException(
                 status_code=500,
-                detail={
-                    "error": "Failed to decrypt CloudZero API key. Check your salt key configuration."
-                },
+                detail={"error": "Failed to decrypt CloudZero API key. Check your salt key configuration."},
             )
         settings["api_key"] = decrypted_api_key
 
@@ -213,21 +210,11 @@ async def update_cloudzero_settings(
         current_settings = await _get_cloudzero_settings()
 
         # Update only provided fields
-        updated_api_key = (
-            request.api_key
-            if request.api_key is not None
-            else current_settings["api_key"]
-        )
+        updated_api_key = request.api_key if request.api_key is not None else current_settings["api_key"]
         updated_connection_id = (
-            request.connection_id
-            if request.connection_id is not None
-            else current_settings["connection_id"]
+            request.connection_id if request.connection_id is not None else current_settings["connection_id"]
         )
-        updated_timezone = (
-            request.timezone
-            if request.timezone is not None
-            else current_settings["timezone"]
-        )
+        updated_timezone = request.timezone if request.timezone is not None else current_settings["timezone"]
 
         # Store updated settings using the setter method with encryption
         await _set_cloudzero_settings(
@@ -238,9 +225,7 @@ async def update_cloudzero_settings(
 
         verbose_proxy_logger.info("CloudZero settings updated successfully")
 
-        return CloudZeroInitResponse(
-            message="CloudZero settings updated successfully", status="success"
-        )
+        return CloudZeroInitResponse(message="CloudZero settings updated successfully", status="success")
 
     except HTTPException as e:
         if e.status_code == 400:
@@ -282,7 +267,7 @@ async def is_cloudzero_setup_in_db() -> bool:
             return False
 
         # Check for CloudZero settings in database
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -376,9 +361,7 @@ async def init_cloudzero_settings(
 
         verbose_proxy_logger.info("CloudZero settings initialized successfully")
 
-        return CloudZeroInitResponse(
-            message="CloudZero settings initialized successfully", status="success"
-        )
+        return CloudZeroInitResponse(message="CloudZero settings initialized successfully", status="success")
 
     except Exception as e:
         verbose_proxy_logger.error(f"Error initializing CloudZero settings: {str(e)}")
@@ -439,9 +422,7 @@ async def cloudzero_dry_run_export(
         )
 
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error performing CloudZero dry run export: {str(e)}"
-        )
+        verbose_proxy_logger.error(f"Error performing CloudZero dry run export: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to perform CloudZero dry run export: {str(e)}"},
@@ -548,7 +529,7 @@ async def delete_cloudzero_settings(
             )
 
         # Check if CloudZero settings exist
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -560,15 +541,11 @@ async def delete_cloudzero_settings(
 
         # Delete only the CloudZero settings entry
         # This uses a specific where clause to target only the cloudzero_settings row
-        await prisma_client.db.litellm_config.delete(
-            where={"param_name": "cloudzero_settings"}
-        )
+        await ConfigRepository(prisma_client).table.delete(where={"param_name": "cloudzero_settings"})
 
         verbose_proxy_logger.info("CloudZero settings deleted successfully")
 
-        return CloudZeroInitResponse(
-            message="CloudZero settings deleted successfully", status="success"
-        )
+        return CloudZeroInitResponse(message="CloudZero settings deleted successfully", status="success")
 
     except HTTPException as e:
         raise e

@@ -20,6 +20,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -54,6 +55,8 @@ def _make_spend_counter_cache(
             side_effect=redis_increment_side_effect,
         )
         cache.redis_cache.async_delete_cache = AsyncMock()
+        cache.redis_cache.async_set_cache = AsyncMock()
+        cache.redis_cache.async_set_max = AsyncMock()
     else:
         cache.redis_cache = None
     cache.async_increment_cache = AsyncMock(return_value=redis_increment_value)
@@ -111,6 +114,272 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory(monkeypatch
     assert result == 17.0
 
 
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_stale_low_counter_against_db(monkeypatch):
+    """A Redis counter left stale-low by a Redis restart must not admit a key
+    whose authoritative DB spend is already over budget. With max_budget set,
+    get_current_spend re-checks the DB and returns the higher recorded spend."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=12.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc",
+        fallback_spend=12.0,
+        max_budget=10.0,
+    )
+
+    assert result == 12.0
+    assert from_db.await_count == 1
+    # the stale counter is repaired up to the authoritative DB value via a
+    # monotonic set-max so other workers read the corrected total, and a
+    # concurrent increment cannot be clobbered
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key="spend:key:abc", value=12.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_no_db_recheck_when_counter_healthy(monkeypatch):
+    """A healthy counter (at or above the caller's recorded spend) is trusted
+    without a DB read, so under-budget traffic stays off the DB path."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=5.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=99.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc",
+        fallback_spend=3.0,
+        max_budget=10.0,
+    )
+
+    assert result == 5.0
+    assert from_db.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_no_floor_without_max_budget(monkeypatch):
+    """Without max_budget the read-time DB floor is skipped: callers that only
+    read spend (alerts, soft budgets) keep the cheap counter-only behavior."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=12.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=12.0
+    )
+
+    assert result == 2.0
+    assert from_db.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floor_admits_after_reset(monkeypatch):
+    """Right after a weekly reset the counter is 0 while the per-worker cached
+    spend can still be last week's value. The DB floor reads the reset spend (0)
+    and admits, so reset keys are not over-blocked."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=0.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    from_db = AsyncMock(return_value=0.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc",
+        fallback_spend=12.0,
+        max_budget=10.0,
+    )
+
+    assert result == 0.0
+    assert from_db.await_count == 1
+    # counter already matches the DB (reset to 0); nothing to repair, so no write
+    fake_cache.redis_cache.async_set_max.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floor_caches_db_read(monkeypatch):
+    """A persistently stale-low counter must not drive a DB read per request:
+    the authoritative spend is cached in-process and reused within the window."""
+    cache = ps.DualCache()
+    cache.redis_cache = MagicMock()
+    cache.redis_cache.async_get_cache = AsyncMock(return_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", cache)
+    from_db = AsyncMock(return_value=12.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    first = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0
+    )
+    second = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=12.0, max_budget=10.0
+    )
+
+    assert first == 12.0
+    assert second == 12.0
+    assert from_db.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_end_user_tag_against_fallback(monkeypatch):
+    """End-user and tag counters have no DB row (from_db returns None). When the
+    counter is stale-low, enforcement falls back to the caller's recorded spend
+    (loaded fresh in auth) instead of trusting the stale counter."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=None))
+
+    result = await ps.get_current_spend(
+        counter_key="spend:end_user:e1",
+        fallback_spend=20.0,
+        max_budget=10.0,
+    )
+
+    assert result == 20.0
+    # no DB row to repair against, so the shared counter is left untouched
+    fake_cache.redis_cache.async_set_max.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
+    """Per-window counters have no DB row but aggregate from spend logs. A
+    stale-low window counter is floored to (and repaired up to) the logged
+    window spend, even though the caller's fallback is 0."""
+    from datetime import datetime, timezone
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=2.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", AsyncMock(return_value=None))
+    wfsl = AsyncMock(return_value=15.0)
+    monkeypatch.setattr(ps.SpendCounterReseed, "window_from_spend_logs", wfsl)
+
+    counter_key = "spend:key:tok:window:7d"
+    result = await ps.get_current_spend(
+        counter_key=counter_key,
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Key",
+        window_entity_id="tok",
+        window_start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert result == 15.0
+    assert wfsl.await_count == 1
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key=counter_key, value=15.0
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_rejects_when_unverifiable(monkeypatch):
+    """With fail_closed_budget_enforcement on, an admit decision backed only by a
+    per-pod fallback (Redis unreachable and DB unreadable) is rejected with 503
+    rather than admitted on an unverifiable budget."""
+    from fastapi import HTTPException
+
+    fake_cache = _make_spend_counter_cache(
+        redis_get_side_effect=RuntimeError("redis down")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await ps.get_current_spend(
+            counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
+        )
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_off_admits_when_unverifiable(monkeypatch):
+    """Default (flag off): an unverifiable read keeps the existing behavior and
+    admits using the cached fallback — no new rejection."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_side_effect=RuntimeError("redis down")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
+    )
+    assert result == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_admits_when_redis_verified(monkeypatch):
+    """Fail-closed only rejects unverifiable reads: a value served by Redis is
+    authoritative, so an under-budget request is admitted normally."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=1.0)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+
+    result = await ps.get_current_spend(
+        counter_key="spend:key:abc", fallback_spend=1.0, max_budget=10.0
+    )
+    assert result == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_fail_closed_allows_authoritative_fallback(monkeypatch):
+    """End-user/tag callers pass fallback_authoritative=True (their spend is
+    loaded fresh from the DB in auth), so fail-closed does not reject them even
+    when the counter path is unreadable."""
+    fake_cache = _make_spend_counter_cache(
+        redis_get_side_effect=RuntimeError("redis down")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    result = await ps.get_current_spend(
+        counter_key="spend:end_user:e1",
+        fallback_spend=1.0,
+        max_budget=10.0,
+        fallback_authoritative=True,
+    )
+    assert result == 1.0
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_strict_floors_when_fallback_also_stale(monkeypatch):
+    """Strict mode closes the both-stale gap: when the counter AND the caller's
+    cached spend are both stale-low (cheap guard would skip), strict mode still
+    re-checks the authoritative DB and enforces against it."""
+    fake_cache = _make_spend_counter_cache(redis_get_value=0.00001)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(
+        ps, "general_settings", {"fail_closed_budget_enforcement": True}
+    )
+    from_db = AsyncMock(return_value=0.5)
+    monkeypatch.setattr(ps.SpendCounterReseed, "from_db", from_db)
+
+    # fallback == current, so the default cheap guard would NOT re-check
+    result = await ps.get_current_spend(
+        counter_key="spend:team:t1",
+        fallback_spend=0.00001,
+        max_budget=0.0002,
+    )
+
+    assert result == 0.5
+    assert from_db.await_count == 1
+
+
 # ---------------------------------------------------------------------------
 # increment_spend_counters
 # ---------------------------------------------------------------------------
@@ -149,6 +418,191 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch):
         "redis_increment_called": True,
         "increment_calls": 4,
         "user_cache_used": True,
+    }
+
+
+class _ConcurrencyProbe:
+    """Stand-in for redis_cache.async_increment that pins concurrency.
+
+    Each call registers itself as in-flight and blocks on ``release`` until the
+    test lets it proceed. ``all_arrived`` fires once ``expected`` distinct scope
+    increments are simultaneously suspended here, which can only happen if the
+    per-scope increments are gathered rather than awaited one after another.
+    """
+
+    def __init__(self, expected_concurrency: int):
+        self.expected = expected_concurrency
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.all_arrived = asyncio.Event()
+        self.release = asyncio.Event()
+        self.values: dict[str, float] = {}
+
+    async def async_increment(self, *, key, value, refresh_ttl=True):
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if self.in_flight >= self.expected:
+            self.all_arrived.set()
+        if not self.release.is_set():
+            await self.release.wait()
+        self.in_flight -= 1
+        self.values[key] = self.values.get(key, 0.0) + value
+        return self.values[key]
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_runs_scopes_concurrently(monkeypatch):
+    """The six independent scopes (key, team, team_member, user, end_user+tags,
+    org) must be incremented concurrently. The probe only fires once all six are
+    suspended in async_increment at the same time, which is impossible if the
+    awaits are chained sequentially."""
+    probe = _ConcurrencyProbe(expected_concurrency=6)
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = probe.async_increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    task = asyncio.create_task(
+        ps.increment_spend_counters(
+            token="hashed-tok",
+            team_id="t1",
+            user_id="u1",
+            org_id="org1",
+            end_user_id="eu1",
+            tags=["a", "b"],
+            response_cost=5.0,
+        )
+    )
+
+    try:
+        await asyncio.wait_for(probe.all_arrived.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        probe.release.set()
+        await task
+        pytest.fail(
+            "scope increments did not run concurrently; sequential awaits "
+            f"detected (peak in-flight was {probe.max_in_flight}, expected 6)"
+        )
+
+    assert probe.in_flight == 6
+    assert probe.max_in_flight == 6
+    probe.release.set()
+    await task
+
+    assert probe.values == {
+        "spend:key:hashed-tok": 5.0,
+        "spend:team:t1": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+        "spend:tag:b": 5.0,
+        "spend:org:org1": 5.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_skips_reserved_counter_keys(monkeypatch):
+    """Counters already reserved by a budget reservation are skipped, every
+    other scope is still incremented exactly once, and the reservation is
+    finalized after the gathered work completes."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    reserved = {"spend:key:hashed-tok", "spend:org:org1"}
+    monkeypatch.setattr(
+        br, "get_reserved_counter_keys", MagicMock(return_value=set(reserved))
+    )
+    monkeypatch.setattr(br, "reconcile_budget_reservation", AsyncMock())
+
+    recorded: dict[str, float] = {}
+
+    async def _record_increment(*, key, value, refresh_ttl=True):
+        recorded[key] = recorded.get(key, 0.0) + value
+        return recorded[key]
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = _record_increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    reservation = {"finalized": False}
+    await ps.increment_spend_counters(
+        token="hashed-tok",
+        team_id="t1",
+        user_id="u1",
+        org_id="org1",
+        end_user_id="eu1",
+        tags=["a"],
+        response_cost=5.0,
+        budget_reservation=reservation,
+    )
+
+    assert reservation["finalized"] is True
+    assert recorded == {
+        "spend:team:t1": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_failing_scope_propagates_after_siblings_settle(
+    monkeypatch,
+):
+    """A failure in one scope must propagate to the caller (so it can invalidate
+    reserved counters) while every other scope still settles rather than being
+    left as an orphaned background task, and the reservation is not finalized."""
+    recorded: dict[str, float] = {}
+
+    async def _increment(*, key, value, refresh_ttl=True):
+        if key == "spend:team:t1":
+            raise RuntimeError("redis increment failed")
+        recorded[key] = recorded.get(key, 0.0) + value
+        return recorded[key]
+
+    fake_cache = _make_spend_counter_cache(redis_get_value=None)
+    fake_cache.redis_cache.async_increment = _increment
+    fake_user_cache = _make_user_api_key_cache(get_value=None)
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(
+        ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None)
+    )
+
+    reservation = {"finalized": False}
+    with pytest.raises(RuntimeError, match="redis increment failed"):
+        await ps.increment_spend_counters(
+            token="hashed-tok",
+            team_id="t1",
+            user_id="u1",
+            org_id="org1",
+            end_user_id="eu1",
+            tags=["a"],
+            response_cost=5.0,
+            budget_reservation=reservation,
+        )
+
+    assert reservation["finalized"] is False
+    assert recorded == {
+        "spend:key:hashed-tok": 5.0,
+        "spend:team_member:u1:t1": 5.0,
+        "spend:user:u1": 5.0,
+        "spend:end_user:eu1": 5.0,
+        "spend:tag:a": 5.0,
+        "spend:org:org1": 5.0,
     }
 
 
@@ -192,8 +646,9 @@ async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set
 async def test_reconcile_budget_reservation_for_counter_update_failure_invalidates(
     monkeypatch,
 ):
-    """Reservation reconcile raising must invalidate reserved counters but
-    not propagate the exception."""
+    """Reservation reconcile raising must invalidate reserved counters, swallow
+    the exception, and return an empty set so the caller falls back to the
+    direct spend-counter increment instead of skipping it."""
     import litellm.proxy.spend_tracking.budget_reservation as br
 
     monkeypatch.setattr(
@@ -213,7 +668,7 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
         budget_reservation={"foo": "bar"}, response_cost=1.0
     )
 
-    assert result == {"spend:key:abc"}
+    assert result == set()
     assert fake_invalidate.called is True
 
 

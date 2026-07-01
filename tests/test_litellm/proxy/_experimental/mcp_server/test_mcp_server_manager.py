@@ -30,6 +30,9 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
     _deserialize_json_list,
+    _normalize_mcp_server_cost_info,
+    _should_strip_caller_authorization,
+    _without_authorization,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -135,6 +138,43 @@ class TestMCPServerManager:
 
         assert client.stdio_config["env"]["NODE_ENV"] == "test"
         assert client.stdio_config["env"]["NPM_CONFIG_CACHE"] == MCP_NPM_CACHE_DIR
+
+    @pytest.mark.asyncio
+    async def test_caller_auth_header_cannot_bypass_v2_for_authorization_code(self):
+        """A caller-supplied per-request override must not substitute the stored authorization_code
+        token: _create_mcp_client keeps the v2 spec and resolves through the injected provider
+        rather than deferring to the v1 caller-override path."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
+            Ok,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        calls = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                calls.append((subject.subject_id, server.server_id))
+                return Ok(StaticHeaderAuth("stored-token"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = MCPServer(
+            server_id="authz-srv",
+            name="authz",
+            url="https://upstream.example/mcp",
+            transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2,  # oauth2 + no client creds + not delegate -> authorization_code
+        )
+
+        client = await manager._create_mcp_client(
+            server, mcp_auth_header="Bearer caller-supplied-token"
+        )
+
+        # the v2 resolver ran (the caller override did NOT defer to v1); the stored token wins
+        assert calls == [("", "authz-srv")]
+        assert client is not None
 
     async def test_create_mcp_client_stdio_injects_npm_config_cache(self):
         """Test that _create_mcp_client injects NPM_CONFIG_CACHE when not already set,
@@ -256,6 +296,91 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.alias == "friendly_alias"
         assert server.server_name == "validserver"
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_coerces_cost_string_to_float(self):
+        """YAML 1.1 parses `7e-05` as a string; ingest must coerce it to float."""
+        manager = MCPServerManager()
+        config = {
+            "google_maps": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "mcp_info": {
+                    "mcp_server_cost_info": {
+                        "default_cost_per_query": "7e-05",
+                        "tool_name_to_cost_per_query": {"geocode": "1e-3"},
+                    }
+                },
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        cost_info = server.mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 7e-05
+        assert isinstance(cost_info["default_cost_per_query"], float)
+        assert cost_info["tool_name_to_cost_per_query"]["geocode"] == 1e-3
+        assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method from config is carried onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+        config = {
+            "basic_provider": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "token_endpoint_auth_method": "client_secret_basic",
+            },
+            "default_provider": {
+                "url": "https://example.com/mcp2",
+                "transport": MCPTransport.http,
+            },
+        }
+
+        await manager.load_servers_from_config(config)
+
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+        assert by_name["basic_provider"].token_endpoint_auth_method == "client_secret_basic"
+        assert by_name["default_provider"].token_endpoint_auth_method is None
+
+    def test_normalize_mcp_server_cost_info_preserves_float_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": 0.01,
+                "tool_name_to_cost_per_query": {"search": 0.05},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert cost_info["default_cost_per_query"] == 0.01
+        assert cost_info["tool_name_to_cost_per_query"] == {"search": 0.05}
+
+    def test_normalize_mcp_server_cost_info_drops_non_numeric_values(self):
+        mcp_info = {
+            "server_name": "maps",
+            "mcp_server_cost_info": {
+                "default_cost_per_query": "not-a-number",
+                "tool_name_to_cost_per_query": {"search": "free", "geocode": "2e-4"},
+            },
+        }
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        assert "default_cost_per_query" not in cost_info
+        assert cost_info["tool_name_to_cost_per_query"] == {"geocode": 2e-4}
+
+    def test_normalize_mcp_server_cost_info_leaves_missing_cost_info_alone(self):
+        mcp_info = {"server_name": "maps"}
+
+        _normalize_mcp_server_cost_info(mcp_info)
+
+        assert "mcp_server_cost_info" not in mcp_info
 
     def test_warns_when_custom_separator_invalid(self, monkeypatch, caplog):
         """Invalid MCP_TOOL_PREFIX_SEPARATOR values should log a warning."""
@@ -535,6 +660,84 @@ class TestMCPServerManager:
         )
 
         assert captured_extra_headers == {"x-request-id": "req-123"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_v2_authz_code_drops_caller_authorization(
+        self,
+    ):
+        """A v2-migrated per-user OAuth (authorization_code) server must NOT seed a
+        caller-forwarded Authorization into extra_headers — the resolver injects the
+        stored per-user token, and apply-if-absent would otherwise let the caller's
+        header override another user's stored credential (matches v1's overwrite)."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        # oauth2, not M2M, not delegate => to_server_spec maps it to AuthorizationCodeConfig
+        server = MCPServer(
+            server_id="server-authz-code-call",
+            name="authz-code-server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        # Migrated authorization_code => the centralized strip decision says drop the
+        # caller's Authorization (the v2 resolver injects the stored token).
+        assert (
+            _should_strip_caller_authorization(
+                mcp_server=server, raw_headers=None, user_api_key_auth=None
+            )
+            is True
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = "unset"
+
+        async def capture_create_mcp_client(
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers={"Authorization": "Bearer caller-supplied-token"},
+            raw_headers={"authorization": "Bearer caller-supplied-token"},
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        # The caller's Authorization must not reach extra_headers; the v2 resolver is
+        # the sole Authorization source for this server.
+        assert captured_extra_headers != "unset"
+        if captured_extra_headers:
+            assert "authorization" not in {k.lower() for k in captured_extra_headers}
+
+    def test_without_authorization_drops_only_the_credential(self):
+        # None / empty -> None
+        assert _without_authorization(None) is None
+        assert _without_authorization({}) is None
+        # Only Authorization present -> nothing left -> None (case-insensitive)
+        assert _without_authorization({"authorization": "Bearer x"}) is None
+        # Authorization dropped, other headers kept
+        assert _without_authorization(
+            {"Authorization": "Bearer x", "X-Trace-Id": "t"}
+        ) == {"X-Trace-Id": "t"}
 
     @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(
@@ -2157,7 +2360,7 @@ class TestMCPServerManager:
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_looks_up_stored_token(self):
-        """Falls back to stored per-user OAuth headers when no token is supplied."""
+        """Falls back to stored per-user OAuth headers for a non-migrated (delegate) oauth2 server."""
         from litellm.proxy._types import UserAPIKeyAuth
 
         manager = MCPServerManager()
@@ -2166,6 +2369,7 @@ class TestMCPServerManager:
             name="oauth-srv",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,  # stays on v1, so v1 still builds the header
         )
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
         stored = {"Authorization": "Bearer stored-user-token"}
@@ -2182,8 +2386,35 @@ class TestMCPServerManager:
         mock_lookup.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_steps_aside_for_migrated_server(self):
+        """A migrated authorization_code server is owned by the v2 resolver, so v1 must not also
+        build the token into extra_headers (which the v2 graft would defer to and shadow).
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,  # per-user, not delegate -> migrated to v2
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer should-not-be-used"}),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+
+        assert result is None  # stepped aside; the v2 resolver handles the token
+        mock_lookup.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_swallows_lookup_exception(self):
-        """Returns supplied headers (None) when the stored-token lookup raises."""
+        """Returns supplied headers (None) when the v1 stored-token lookup raises (delegate path)."""
         from litellm.proxy._types import UserAPIKeyAuth
 
         manager = MCPServerManager()
@@ -2192,6 +2423,7 @@ class TestMCPServerManager:
             name="oauth-srv",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,  # non-migrated, so it reaches the v1 lookup
         )
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
@@ -2203,6 +2435,51 @@ class TestMCPServerManager:
                 server, oauth2_headers=None, user_api_key_auth=user_auth
             )
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_has_user_oauth_token_delegates_to_provider(self):
+        """has_user_oauth_token maps the server and delegates the verdict to the v2 resolver."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        for verdict in (True, False):
+
+            class _Provider:
+                async def has_user_token(self, subject, spec):
+                    return verdict
+
+            manager = MCPServerManager(cred_provider=_Provider())
+            server = MCPServer(
+                server_id="s",
+                name="n",
+                transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2,
+            )
+            user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+            assert await manager.has_user_oauth_token(server, user_auth) is verdict
+
+    @pytest.mark.asyncio
+    async def test_has_user_oauth_token_short_circuits_for_unmigrated_server(self):
+        """A server the resolver does not own (None spec, e.g. delegate) is False without a call."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        calls: list = []
+
+        class _Provider:
+            async def has_user_token(self, subject, spec):
+                calls.append(spec)
+                return True
+
+        manager = MCPServerManager(cred_provider=_Provider())
+        server = MCPServer(
+            server_id="s",
+            name="n",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            delegate_auth_to_upstream=True,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk", user_id="alice")
+        assert await manager.has_user_oauth_token(server, user_auth) is False
+        assert calls == []  # short-circuited on the None spec, never hit the resolver
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_no_user_id(self):
@@ -2292,7 +2569,6 @@ class TestMCPServerManager:
 
         # Unprefixed resolution
         resolved_server_unpref = manager._get_mcp_server_from_tool_name("create_zap")
-        print(resolved_server_unpref)
         assert resolved_server_unpref is not None
         assert resolved_server_unpref.server_id == server.server_id
 
@@ -2885,6 +3161,44 @@ class TestMCPServerManager:
             assert "test_server_2" in result
 
     @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_blocks_allow_all_keys(self):
+        """A key scoped to no-mcp-servers gets zero servers even when allow_all_keys
+        servers exist, and the inner resolver is never consulted."""
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with (
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+        mock_inner.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
         """Anonymous delegated auth listing should only include oauth2 servers."""
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -2999,6 +3313,31 @@ class TestMCPServerTimestamps:
 
         assert mcp_server.created_at == created
         assert mcp_server.updated_at == updated
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method stored in the credentials JSON is loaded onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+
+        basic_record = LiteLLM_MCPServerTable(
+            server_id="basic-db-1",
+            server_name="basic_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={"token_endpoint_auth_method": "client_secret_basic"},
+        )
+        basic_server = await manager.build_mcp_server_from_table(basic_record, credentials_are_encrypted=False)
+        assert basic_server.token_endpoint_auth_method == "client_secret_basic"
+
+        default_record = LiteLLM_MCPServerTable(
+            server_id="default-db-1",
+            server_name="default_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={},
+        )
+        default_server = await manager.build_mcp_server_from_table(default_record, credentials_are_encrypted=False)
+        assert default_server.token_endpoint_auth_method is None
 
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
@@ -4467,6 +4806,182 @@ class TestGetPublicMCPServersLegacyMode:
         )
         result = manager.get_public_mcp_servers()
         assert sorted(s.server_id for s in result) == ["a", "b"]
+
+
+class TestCreateMcpClientV2Graft:
+    """The PR4 v2-resolver graft in ``_create_mcp_client``.
+
+    Migrated HTTP/SSE modes (``none`` plus the static ``api_key`` family) resolve through the
+    injected ``UpstreamCredentialProvider`` into the ``resolved_auth`` slot; every other mode,
+    and every stdio server, defers to v1's ``auth_value`` path unchanged.
+    """
+
+    def _http_server(self, **overrides: Any) -> MCPServer:
+        base: Dict[str, Any] = dict(
+            server_id="http-graft",
+            name="graft_server",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        base.update(overrides)
+        return MCPServer(**base)
+
+    async def test_none_mode_resolves_to_noop_auth(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            NoOpAuth,
+        )
+
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(auth_type=None)
+        )
+
+        assert isinstance(client._resolved_auth, NoOpAuth)
+        assert client._mcp_auth_value is None
+
+    @pytest.mark.parametrize(
+        "auth_type, token, expected_name, expected_value",
+        [
+            (MCPAuth.api_key, "k-123", "X-API-Key", "k-123"),
+            (MCPAuth.bearer_token, "b-123", "Authorization", "Bearer b-123"),
+            (MCPAuth.token, "t-123", "Authorization", "token t-123"),
+            (MCPAuth.authorization, "raw-123", "Authorization", "raw-123"),
+        ],
+    )
+    async def test_static_family_emits_expected_header(
+        self, auth_type, token, expected_name, expected_value
+    ):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(auth_type=auth_type, authentication_token=token)
+        )
+
+        assert isinstance(client._resolved_auth, StaticHeaderAuth)
+        assert client._resolved_auth.header_name == expected_name
+        assert client._resolved_auth._header_value.get_secret_value() == expected_value
+        assert client._mcp_auth_value is None
+
+    async def test_basic_mode_base64_encodes(self):
+        import base64
+
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(auth_type=MCPAuth.basic, authentication_token="user:pass")
+        )
+
+        encoded = base64.b64encode(b"user:pass").decode()
+        assert isinstance(client._resolved_auth, StaticHeaderAuth)
+        assert client._resolved_auth.header_name == "Authorization"
+        assert (
+            client._resolved_auth._header_value.get_secret_value() == f"Basic {encoded}"
+        )
+
+    async def test_m2m_client_credentials_defers_to_v1(self):
+        # M2M (oauth2 client_credentials) is not migrated: to_server_spec returns
+        # None, so the graft sets no resolved auth and leaves v1 in charge (v1
+        # performs the client_credentials grant itself - the static
+        # authentication_token is never consumed for oauth2, so it does not flow
+        # to _mcp_auth_value). Per-user oauth2 (authorization_code) is migrated to
+        # v2 and is exercised separately.
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(
+                auth_type=MCPAuth.oauth2,
+                oauth2_flow="client_credentials",
+                authentication_token="legacy-token",
+            )
+        )
+
+        assert client._resolved_auth is None
+        assert client._mcp_auth_value is None
+
+    async def test_static_token_missing_defers_to_v1(self):
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(auth_type=MCPAuth.api_key, authentication_token=None)
+        )
+
+        assert client._resolved_auth is None
+
+    async def test_stdio_migrated_auth_type_still_defers_to_v1(self):
+        client = await MCPServerManager()._create_mcp_client(
+            MCPServer(
+                server_id="stdio-graft",
+                name="stdio_graft",
+                transport=MCPTransport.stdio,
+                command="node",
+                args=["server.js"],
+                auth_type=MCPAuth.api_key,
+                authentication_token="k-stdio",
+            )
+        )
+
+        assert client.transport_type == MCPTransport.stdio
+        assert client._resolved_auth is None
+        assert client._mcp_auth_value == "k-stdio"
+
+    async def test_resolver_error_maps_to_http_exception(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+            CredError,
+        )
+
+        class _UnauthorizedProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_unauthorized("denied"))
+
+        manager = MCPServerManager(cred_provider=_UnauthorizedProvider())
+
+        with pytest.raises(HTTPException) as exc:
+            await manager._create_mcp_client(self._http_server(auth_type=None))
+
+        assert exc.value.status_code == 401
+
+    async def test_per_request_override_defers_to_v1(self):
+        # A per-request override (mcp_auth_header) must win over the shared static token,
+        # exactly as v1 did, so a migrated static server defers to v1 when one is present.
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(
+                auth_type=MCPAuth.bearer_token, authentication_token="shared-tok"
+            ),
+            mcp_auth_header="caller-override",
+        )
+
+        assert client._resolved_auth is None
+        assert client._mcp_auth_value == "caller-override"
+
+    async def test_conflicting_extra_header_skips_resolved_auth_on_v2(self):
+        # An Authorization already supplied via extra_headers (guardrail hook like the JWT
+        # signer, static_headers, or a forwarded caller header) must win. The server stays on
+        # the v2 path but skips resolved_auth, so nothing overwrites the inbound header.
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(
+                auth_type=MCPAuth.bearer_token, authentication_token="shared-tok"
+            ),
+            extra_headers={"Authorization": "Bearer hook-jwt"},
+        )
+
+        assert client._resolved_auth is None
+        assert client._mcp_auth_value is None
+        assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
+
+    async def test_none_with_extra_header_stays_v2_without_clobbering(self):
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            NoOpAuth,
+        )
+
+        # none resolves to NoOpAuth, which writes no header, so it cannot clobber an inbound
+        # Authorization; it stays on the v2 path and the inbound header is preserved verbatim.
+        client = await MCPServerManager()._create_mcp_client(
+            self._http_server(auth_type=None),
+            extra_headers={"Authorization": "Bearer hook-jwt"},
+        )
+
+        assert isinstance(client._resolved_auth, NoOpAuth)
+        assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
 
 
 if __name__ == "__main__":

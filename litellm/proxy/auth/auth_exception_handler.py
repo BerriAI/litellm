@@ -107,16 +107,10 @@ class UserAPIKeyAuthExceptionHandler:
             # is labeled — a fresh UserAPIKeyAuth here would drop everything auth had
             # already looked up (e.g. an expired key whose team/user is known). Copy
             # so the handler is side-effect-free for the caller's identity object.
-            user_api_key_dict = (
-                resolved_identity.model_copy()
-                if resolved_identity is not None
-                else UserAPIKeyAuth()
-            )
+            user_api_key_dict = resolved_identity.model_copy() if resolved_identity is not None else UserAPIKeyAuth()
             user_api_key_dict.parent_otel_span = parent_otel_span
             user_api_key_dict.request_route = route
-            user_api_key_dict.api_key = (
-                user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
-            )
+            user_api_key_dict.api_key = user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
 
             # Stamp identity onto the request's server span now, before the request
             # is rejected; the OTEL failure hooks don't touch the server span, so
@@ -125,6 +119,18 @@ class UserAPIKeyAuthExceptionHandler:
                 user_api_key_dict,
                 model=request_data.get("model"),
             )
+
+            # Budget checks live in tenant-scoped helpers (key / team / org / tag)
+            # that don't see the request model, so the BudgetExceededError they
+            # raise carries `llm_provider=""`. Resolve it here off `request_data`
+            # so custom-callback consumers reading StandardLoggingPayload get
+            # the same `llm_provider` attribution as for RPM/TPM 429s.
+            if isinstance(e, litellm.BudgetExceededError) and not e.llm_provider:
+                from litellm.proxy.hooks.rate_limiter_utils import (
+                    resolve_llm_provider_for_rate_limit,
+                )
+
+                _, e.llm_provider = resolve_llm_provider_for_rate_limit(request_data.get("model"))
 
             # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
@@ -154,6 +160,16 @@ class UserAPIKeyAuthExceptionHandler:
                 )
             elif isinstance(e, ProxyException):
                 raise e
+            if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+                raise ProxyException(
+                    message=(
+                        "Service Unavailable, the authentication database is "
+                        "temporarily unreachable. Please retry shortly."
+                    ),
+                    type=ProxyErrorTypes.no_db_connection,
+                    param="None",
+                    code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
             raise ProxyException(
                 message="Authentication Error, " + str(e),
                 type=ProxyErrorTypes.auth_error,

@@ -42,11 +42,7 @@ class PolyfillResult:
         visible: List[AppliedEdit] = []
         for edit in self.applied_edits:
             if edit.get("type") == COMPACT_EDIT_TYPE:
-                if (
-                    self.compaction_block is not None
-                    or edit.get("error")
-                    or edit.get("warnings")
-                ):
+                if self.compaction_block is not None or edit.get("error") or edit.get("warnings"):
                     visible.append(edit)
             else:
                 visible.append(edit)

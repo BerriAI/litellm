@@ -29,6 +29,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import MemoryRepository
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.memory_management import (
     LiteLLM_MemoryRow,
     MemoryCreateRequest,
@@ -96,15 +98,11 @@ def _require_prisma():
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
-        raise HTTPException(
-            status_code=500, detail=CommonProxyErrors.db_not_connected_error.value
-        )
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     return prisma_client
 
 
-def _internal_error(
-    log_message: str, exc: Exception, default_detail: str
-) -> HTTPException:
+def _internal_error(log_message: str, exc: Exception, default_detail: str) -> HTTPException:
     """
     Build a 500 HTTPException with a generic, caller-safe `detail` while
     logging the actual exception server-side. Avoids leaking internal Prisma /
@@ -114,9 +112,7 @@ def _internal_error(
     return HTTPException(status_code=500, detail=default_detail)
 
 
-async def _assert_write_access(
-    prisma_client: Any, row: Any, user_api_key_dict: UserAPIKeyAuth
-) -> None:
+async def _assert_write_access(prisma_client: Any, row: Any, user_api_key_dict: UserAPIKeyAuth) -> None:
     """
     Enforce ownership for mutations (PUT/DELETE).
 
@@ -156,9 +152,7 @@ async def _assert_write_access(
     )
 
 
-async def _is_team_admin_for(
-    prisma_client: Any, user_api_key_dict: UserAPIKeyAuth, team_id: str
-) -> bool:
+async def _is_team_admin_for(prisma_client: Any, user_api_key_dict: UserAPIKeyAuth, team_id: str) -> bool:
     """
     True if the caller is a team admin of `team_id`, or an org admin for the
     team's organization. Mirrors the auth pattern used by team-management
@@ -173,13 +167,9 @@ async def _is_team_admin_for(
     )
 
     try:
-        team_obj = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": team_id}
-        )
+        team_obj = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "Error loading team for write-auth check (team_id=%s): %s", team_id, e
-        )
+        verbose_proxy_logger.exception("Error loading team for write-auth check (team_id=%s): %s", team_id, e)
         return False
     if team_obj is None:
         return False
@@ -192,14 +182,10 @@ async def _is_team_admin_for(
     # initialized. In tests / non-proxy contexts that import path may fail —
     # treat any error as "not an org admin" rather than crashing the request.
     try:
-        if await _is_user_org_admin_for_team(
-            user_api_key_dict=user_api_key_dict, team_obj=team_obj
-        ):
+        if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             return True
     except Exception as e:
-        verbose_proxy_logger.debug(
-            "Org-admin check skipped during write-auth (team_id=%s): %s", team_id, e
-        )
+        verbose_proxy_logger.debug("Org-admin check skipped during write-auth (team_id=%s): %s", team_id, e)
     return False
 
 
@@ -215,9 +201,7 @@ def _is_unique_violation(exc: Exception) -> bool:
     if code == "P2002":
         return True
     msg = str(exc)
-    return (
-        "P2002" in msg or "Unique" in msg or "unique" in msg or "UniqueViolation" in msg
-    )
+    return "P2002" in msg or "Unique" in msg or "unique" in msg or "UniqueViolation" in msg
 
 
 def _resolve_scope(
@@ -237,16 +221,8 @@ def _resolve_scope(
     a PROXY_ADMIN who is explicitly stamping a global/shared row.
     """
     if _is_admin(user_api_key_dict):
-        user_id = (
-            requested_user_id
-            if requested_user_id is not None
-            else user_api_key_dict.user_id
-        )
-        team_id = (
-            requested_team_id
-            if requested_team_id is not None
-            else user_api_key_dict.team_id
-        )
+        user_id = requested_user_id if requested_user_id is not None else user_api_key_dict.user_id
+        team_id = requested_team_id if requested_team_id is not None else user_api_key_dict.team_id
         return user_id, team_id
 
     if requested_user_id is not None and requested_user_id != user_api_key_dict.user_id:
@@ -304,7 +280,7 @@ async def create_memory(
         create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
 
     try:
-        row = await prisma_client.db.litellm_memorytable.create(data=create_data)
+        row = await MemoryRepository(prisma_client).table.create(data=create_data)
     except Exception as e:
         # Key is globally unique. Any duplicate → 409.
         if _is_unique_violation(e):
@@ -364,35 +340,27 @@ async def list_memory(
         where = {"AND": [key_filter, vis]}
 
     try:
-        total = await prisma_client.db.litellm_memorytable.count(where=where)
-        rows = await prisma_client.db.litellm_memorytable.find_many(
+        total = await MemoryRepository(prisma_client).table.count(where=where)
+        rows = await MemoryRepository(prisma_client).table.find_many(
             where=where,
             order={"updated_at": "desc"},
             skip=(page - 1) * page_size,
             take=page_size,
         )
     except Exception as e:
-        raise _internal_error(
-            "Error listing memory: %s", e, "Internal error listing memory entries."
-        )
+        raise _internal_error("Error listing memory: %s", e, "Internal error listing memory entries.")
 
     return MemoryListResponse(memories=[_row_to_model(r) for r in rows], total=total)
 
 
-async def _find_memory_for_caller(
-    prisma_client: Any, key: str, user_api_key_dict: UserAPIKeyAuth
-) -> Any:
+async def _find_memory_for_caller(prisma_client: Any, key: str, user_api_key_dict: UserAPIKeyAuth) -> Any:
     """Look up a memory row by key, scoped to the caller's visibility."""
     key_filter: dict = {"key": key}
     vis = _visibility_filter(user_api_key_dict)
     where: dict = key_filter if vis is None else {"AND": [key_filter, vis]}
-    rows = await prisma_client.db.litellm_memorytable.find_many(
-        where=where, take=1, order={"updated_at": "desc"}
-    )
+    rows = await MemoryRepository(prisma_client).table.find_many(where=where, take=1, order={"updated_at": "desc"})
     if not rows:
-        raise HTTPException(
-            status_code=404, detail=f"Memory with key '{key}' not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Memory with key '{key}' not found")
     return rows[0]
 
 
@@ -475,7 +443,7 @@ async def upsert_memory(
             # their team) — otherwise a teammate could overwrite a personal
             # entry through the OR-based visibility filter.
             await _assert_write_access(prisma_client, existing, user_api_key_dict)
-            row = await prisma_client.db.litellm_memorytable.update(
+            row = await MemoryRepository(prisma_client).table.update(
                 where={"memory_id": existing.memory_id},
                 data=data,
             )
@@ -486,9 +454,7 @@ async def upsert_memory(
                     detail="Cannot create a new memory via PUT without a 'value'.",
                 )
             # PUT-create must honor admin scope override, matching POST semantics.
-            user_id, team_id = _resolve_scope(
-                user_api_key_dict, body.user_id, body.team_id
-            )
+            user_id, team_id = _resolve_scope(user_api_key_dict, body.user_id, body.team_id)
             # Omit `metadata` when None so the column defaults to SQL NULL;
             # otherwise JSON-encode for Prisma — same pattern as
             # `create_memory` above.
@@ -503,9 +469,7 @@ async def upsert_memory(
             if body.metadata is not None:
                 create_data["metadata"] = _serialize_metadata_for_prisma(body.metadata)
             try:
-                row = await prisma_client.db.litellm_memorytable.create(
-                    data=create_data
-                )
+                row = await MemoryRepository(prisma_client).table.create(data=create_data)
             except Exception as e:
                 # Race: a concurrent PUT/POST created the row after our check.
                 # Re-read and fall back to an update so the PUT stays idempotent
@@ -521,19 +485,15 @@ async def upsert_memory(
                         detail=f"Memory with key '{key}' already exists.",
                     )
                 # Same write-authorization check as the non-race path.
-                await _assert_write_access(
-                    prisma_client, existing_after_race, user_api_key_dict
-                )
-                row = await prisma_client.db.litellm_memorytable.update(
+                await _assert_write_access(prisma_client, existing_after_race, user_api_key_dict)
+                row = await MemoryRepository(prisma_client).table.update(
                     where={"memory_id": existing_after_race.memory_id},
                     data=data,
                 )
     except HTTPException:
         raise
     except Exception as e:
-        raise _internal_error(
-            "Error upserting memory: %s", e, "Internal error updating memory entry."
-        )
+        raise _internal_error("Error upserting memory: %s", e, "Internal error updating memory entry.")
 
     return _row_to_model(row)
 
@@ -554,12 +514,8 @@ async def delete_memory(
     # Visibility != write authority — see the upsert handler for the rationale.
     await _assert_write_access(prisma_client, row, user_api_key_dict)
     try:
-        await prisma_client.db.litellm_memorytable.delete(
-            where={"memory_id": row.memory_id}
-        )
+        await MemoryRepository(prisma_client).table.delete(where={"memory_id": row.memory_id})
     except Exception as e:
-        raise _internal_error(
-            "Error deleting memory: %s", e, "Internal error deleting memory entry."
-        )
+        raise _internal_error("Error deleting memory: %s", e, "Internal error deleting memory entry.")
 
     return MemoryDeleteResponse(key=key, deleted=True)

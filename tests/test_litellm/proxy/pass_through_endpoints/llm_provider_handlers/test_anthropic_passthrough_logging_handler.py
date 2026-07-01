@@ -321,6 +321,307 @@ class TestAzureAnthropicCostCalculation:
         assert call_kwargs["model"] == "azure_ai/claude-sonnet-4-5_gb_20250929"
         assert call_kwargs["custom_llm_provider"] == "azure_ai"
 
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_resolves_unknown_model_from_litellm_params(
+        self, mock_completion_cost
+    ):
+        """When the body model is the "unknown" sentinel, the deployment model
+        from litellm_params must be used for costing, not "unknown" (which makes
+        completion_cost raise and the cost silently fall back to $0)."""
+        from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(model="unknown")
+        logging_obj.model_call_details["litellm_params"] = {
+            "model": "anthropic/claude-3-5-haiku-20241022",
+            "metadata": {
+                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
+            },
+        }
+        logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "unknown"
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="unknown",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        assert (
+            mock_completion_cost.call_args[1]["model"]
+            == "anthropic/claude-3-5-haiku-20241022"
+        )
+        assert kwargs["response_cost"] == 0.001
+        assert kwargs["model"] == "anthropic/claude-3-5-haiku-20241022"
+
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_resolves_unknown_model_from_model_group(
+        self, mock_completion_cost
+    ):
+        """With only model_group available (no deployment litellm_params.model),
+        the leading passthrough/ prefix must be stripped so the cost map can
+        resolve the model."""
+        from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.002
+
+        logging_obj = self._create_mock_logging_obj(model="unknown")
+        logging_obj.model_call_details["litellm_params"] = {
+            "metadata": {
+                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
+            }
+        }
+        logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "unknown"
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="unknown",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        assert (
+            mock_completion_cost.call_args[1]["model"]
+            == "anthropic/claude-3-5-haiku-20241022"
+        )
+        assert kwargs["response_cost"] == 0.002
+
+    @patch("litellm.completion_cost")
+    def test_cost_calculation_skips_unknown_litellm_params_model_for_model_group(
+        self, mock_completion_cost
+    ):
+        """When litellm_params.model is itself the "unknown" sentinel, the
+        deployment-model branch must not short-circuit; resolution falls through
+        to model_group so costing still prices the real model instead of "unknown"."""
+        from datetime import datetime
+
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.003
+
+        logging_obj = self._create_mock_logging_obj(model="unknown")
+        logging_obj.model_call_details["litellm_params"] = {
+            "model": "unknown",
+            "metadata": {
+                "model_group": "passthrough/anthropic/claude-3-5-haiku-20241022"
+            },
+        }
+        logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "unknown"
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="unknown",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        assert (
+            mock_completion_cost.call_args[1]["model"]
+            == "anthropic/claude-3-5-haiku-20241022"
+        )
+        assert kwargs["response_cost"] == 0.003
+        assert kwargs["model"] == "anthropic/claude-3-5-haiku-20241022"
+
+    @patch("litellm.completion_cost")
+    def test_streaming_cost_calculation_resolves_model_from_message_start_chunk(
+        self, mock_completion_cost
+    ):
+        """On the bare /anthropic passthrough path litellm_params carries no model
+        or model_group and the body model is the "unknown" sentinel; the model
+        must be recovered from the message_start SSE event so completion_cost
+        prices the real model instead of failing on "unknown" and logging $0."""
+        from datetime import datetime
+
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as RealLoggingObj,
+        )
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        mock_completion_cost.return_value = 0.001
+
+        def _sse(event, data):
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+        frames = [
+            _sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_1",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": "claude-3-5-haiku-20241022",
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 0},
+                    },
+                },
+            ),
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            _sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "hi"},
+                },
+            ),
+            _sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            _sse(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 1},
+                },
+            ),
+            _sse("message_stop", {"type": "message_stop"}),
+        ]
+        all_chunks = list(
+            PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames)
+        )
+
+        logging_obj = RealLoggingObj(
+            model="unknown",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="1",
+        )
+        logging_obj.model_call_details["model"] = "unknown"
+        logging_obj.model_call_details["stream"] = True
+        logging_obj.model_call_details["litellm_params"] = {}
+        logging_obj.litellm_params = {}
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=all_chunks,
+            end_time=datetime.now(),
+        )
+
+        assert result["result"] is not None
+        mock_completion_cost.assert_called_once()
+        assert mock_completion_cost.call_args[1]["model"] == "claude-3-5-haiku-20241022"
+        assert result["kwargs"]["response_cost"] == 0.001
+        assert result["kwargs"]["model"] == "claude-3-5-haiku-20241022"
+
+    def test_extract_model_skips_non_dict_data_payload(self):
+        """A scalar data: payload (e.g. `data: null`) must be skipped, not crash
+        the streaming log handler with AttributeError, which would propagate out
+        and break spend logging for the whole request."""
+        chunks = [
+            "event: ping\ndata: null\n\n",
+            'event: message_start\ndata: {"type": "message_start", "message": '
+            '{"model": "claude-3-5-haiku-20241022"}}\n\n',
+        ]
+
+        assert (
+            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
+                chunks
+            )
+            == "claude-3-5-haiku-20241022"
+        )
+
+    def test_extract_model_parses_per_line_not_first_data_substring(self):
+        """A raw multi-line SSE event whose non-data line contains the substring
+        "data:" must not derail parsing: matching only lines that start with
+        "data:" recovers the message_start model, whereas a first-substring slice
+        would consume the wrong offset, fail to parse JSON, and return None."""
+        raw_event = (
+            "event: ping data: not-json\n"
+            'data: {"type": "message_start", "message": '
+            '{"model": "claude-3-5-haiku-20241022"}}\n\n'
+        )
+
+        assert (
+            AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks(
+                [raw_event]
+            )
+            == "claude-3-5-haiku-20241022"
+        )
+
+    def test_passthrough_logging_sets_response_cost_with_server_tool_use_dict(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = self._create_mock_logging_obj(model="claude-3-7-sonnet-20250219")
+        logging_obj.get_router_model_id.return_value = None
+        logging_obj.litellm_params = {}
+
+        response = ModelResponse(
+            id="test-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="test", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="claude-3-7-sonnet-20250219",
+            usage={
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "server_tool_use": {"web_search_requests": 1},
+            },
+        )
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-7-sonnet-20250219",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert "response_cost" in kwargs
+        assert kwargs["response_cost"] > 0
+
 
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""
@@ -686,6 +987,74 @@ class TestAnthropicBatchPassthroughCostTracking:
             )
 
 
+class TestBuildCompleteStreamingResponseRobustness:
+    """_build_complete_streaming_response must tolerate non-standard SSE frames."""
+
+    def _build(self, chunks: List[str]):
+        return AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=chunks,
+            litellm_logging_obj=MagicMock(),
+            model="claude-3-sonnet-20240229",
+        )
+
+    def test_done_frame_is_skipped(self):
+        """A bare 'data: [DONE]' control frame must not break reconstruction."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+            "data: [DONE]",
+        ]
+        result = self._build(chunks)
+        assert result is not None
+        assert result.choices[0].message.content == "Hi"
+
+    def test_non_json_sse_line_is_skipped(self):
+        """Non-JSON SSE lines (comments, keep-alive pings) must be skipped."""
+        chunks = [
+            ": ping",
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            "this is not json at all",
+        ]
+        # Must not raise; a malformed stream simply yields no usable response.
+        result = self._build(chunks)
+        assert result is None or hasattr(result, "choices")
+
+    def test_mixed_valid_and_invalid_frames(self):
+        """Valid events are still collected when interleaved with invalid ones."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            "data: [DONE]",
+            ": keep-alive",
+            "not-json",
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        result = self._build(chunks)
+        assert result is not None
+        assert result.choices[0].message.content == "Hello"
+
+    def test_done_in_text_payload_is_not_dropped(self):
+        """A valid event whose text content contains '[DONE]' must NOT be skipped."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The stream ends with [DONE]"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":8}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        result = self._build(chunks)
+        assert result is not None
+        assert result.choices[0].message.content == "The stream ends with [DONE]"
+
+
 class TestPureTextFastPathParity:
     """
     The pure-text fast path in _build_complete_streaming_response must produce
@@ -1045,6 +1414,147 @@ class TestPureTextFastPathParity:
         )
 
 
+class TestInterruptedStreamOutputTokenRecovery:
+    """
+    When an Anthropic pass-through stream is interrupted (client disconnect)
+    before the terminal ``message_delta``, the only usage signal is the
+    ``message_start`` ``output_tokens`` placeholder (typically 1-3), so
+    completion tokens and spend are undercounted ~20x. The handler must
+    re-tokenize the buffered ``content_block_delta`` text to recover a
+    realistic ``output_tokens``; completed streams must stay untouched.
+    """
+
+    @staticmethod
+    def _sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    _MODEL = "claude-3-5-haiku-20241022"
+    _OUTPUT_TEXT = (
+        "The history of computing spans centuries, beginning with mechanical "
+        "calculators and the abacus, advancing through Charles Babbage's "
+        "analytical engine, Ada Lovelace's first algorithm, Alan Turing's "
+        "theoretical machine, and the electronic computers of the twentieth "
+        "century that gave rise to the modern information age."
+    )
+
+    def _interrupted_chunks(self, *, placeholder_output_tokens: int = 2):
+        from litellm.proxy.pass_through_endpoints.streaming_handler import (
+            PassThroughStreamingHandler,
+        )
+
+        words = self._OUTPUT_TEXT.split(" ")
+        frames = [
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_interrupted",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": self._MODEL,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {
+                            "input_tokens": 29,
+                            "output_tokens": placeholder_output_tokens,
+                        },
+                    },
+                },
+            ),
+            self._sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+        ]
+        for i, word in enumerate(words):
+            text = word if i == 0 else " " + word
+            frames.append(
+                self._sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {"type": "text_delta", "text": text},
+                    },
+                )
+            )
+        # Client disconnects here: no content_block_stop / message_delta /
+        # message_stop are ever received.
+        return list(PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(frames))
+
+    def _completed_chunks(self, *, final_output_tokens: int = 80):
+        chunks = self._interrupted_chunks()
+        chunks.append(
+            "data: "
+            + json.dumps(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": final_output_tokens},
+                }
+            )
+        )
+        chunks.append('data: {"type": "message_stop"}')
+        return chunks
+
+    def _run(self, all_chunks):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"model": self._MODEL, "stream": True}
+        logging_obj.litellm_call_id = "test-call-id"
+        logging_obj.litellm_params = {}
+        logging_obj.get_router_model_id.return_value = None
+
+        return AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": self._MODEL, "stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=all_chunks,
+            end_time=datetime.now(),
+        )
+
+    def test_interrupted_stream_retokenizes_buffered_output(self):
+        import litellm
+
+        placeholder = 2
+        result = self._run(
+            self._interrupted_chunks(placeholder_output_tokens=placeholder)
+        )
+        usage = result["result"].usage
+
+        expected = litellm.token_counter(
+            model=self._MODEL,
+            text=self._OUTPUT_TEXT,
+            count_response_tokens=True,
+        )
+
+        assert expected > placeholder * 5
+        assert usage.completion_tokens == expected
+        assert usage.completion_tokens > placeholder
+        assert usage.total_tokens == usage.prompt_tokens + expected
+        # Anthropic spend is priced off completion_tokens_details.text_tokens; if the
+        # placeholder leaks through here, cost stays undercounted even though
+        # completion_tokens looks right.
+        assert usage.completion_tokens_details.text_tokens == expected
+
+    def test_completed_stream_keeps_message_delta_tokens(self):
+        final = 80
+        result = self._run(self._completed_chunks(final_output_tokens=final))
+        usage = result["result"].usage
+
+        # Terminal message_delta present: recovery must not fire; the authoritative
+        # provider count is preserved verbatim.
+        assert usage.completion_tokens == final
+
+
 class TestStreamFalseDeduplication:
     """
     Regression tests for the duplicate-callback bug where a streaming pass-through
@@ -1375,3 +1885,310 @@ class TestNonStreamingResponseRedaction:
         leaked = logging_obj.model_call_details.get("complete_streaming_response")
         assert leaked is None
         assert redacted.choices[0].message.content == "redacted-by-litellm"
+
+
+def _sse_bytes(data: dict) -> bytes:
+    return f"event: {data['type']}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+class TestAnthropicUsageOnlyFallback:
+    """When stream_chunk_builder cannot reassemble a large/agentic stream (returns
+    None or raises), Anthropic still emits token usage in the message_start /
+    message_delta SSE events. The handler must recover usage-only so the request is
+    priced instead of being dropped from SpendLogs while Anthropic billed the tokens."""
+
+    _CHUNKS = [
+        _sse_bytes(
+            {
+                "type": "message_start",
+                "message": {
+                    "model": "claude-3-5-haiku-20241022",
+                    "usage": {
+                        "input_tokens": 100,
+                        "cache_read_input_tokens": 40,
+                        "cache_creation_input_tokens": 20,
+                        "output_tokens": 1,
+                    },
+                },
+            }
+        ),
+        _sse_bytes(
+            {
+                "type": "message_delta",
+                "usage": {
+                    "output_tokens": 55,
+                    "server_tool_use": {"web_search_requests": 2},
+                },
+            }
+        ),
+    ]
+
+    def test_build_usage_only_recovers_cache_inclusive_usage(self):
+        response = (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=self._CHUNKS, model="claude-3-5-haiku-20241022"
+            )
+        )
+        assert response is not None
+        usage = response.usage
+        # prompt_tokens must be cache-inclusive (input + cache_read + cache_creation)
+        assert usage.prompt_tokens == 160
+        assert usage.completion_tokens == 55
+        assert usage._cache_read_input_tokens == 40
+        assert usage._cache_creation_input_tokens == 20
+        assert usage.prompt_tokens_details.cached_tokens == 40
+        assert usage.server_tool_use.web_search_requests == 2
+
+    def test_build_usage_only_returns_none_without_usage_events(self):
+        chunks = [_sse_bytes({"type": "content_block_delta", "delta": {"text": "hi"}})]
+        assert (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=chunks, model="claude-3-5-haiku-20241022"
+            )
+            is None
+        )
+
+    def test_build_usage_only_recovers_cache_split_server_tools_and_model(self):
+        # the model is "unknown" up-front and only the 5m/1h cache split is sent
+        # (no flat cache_creation_input_tokens); web/tool-search and geo arrive in
+        # message_delta. All must be recovered and priced, not left at $0.
+        chunks = [
+            "event: ping\ndata: [DONE]\n\n",  # ignored sentinel between real events
+            _sse_bytes(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-opus-4-6",
+                        "usage": {
+                            "input_tokens": 80,
+                            "output_tokens": 1,
+                            "cache_creation": {
+                                "ephemeral_5m_input_tokens": 12,
+                                "ephemeral_1h_input_tokens": 8,
+                            },
+                            "inference_geo": "us",
+                        },
+                    },
+                }
+            ),
+            _sse_bytes(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "tool_use"},
+                    "usage": {
+                        "output_tokens": 40,
+                        "cache_read_input_tokens": 5,
+                        "inference_geo": "us",
+                        "server_tool_use": {
+                            "web_search_requests": 1,
+                            "tool_search_requests": 3,
+                        },
+                    },
+                }
+            ),
+        ]
+        response = (
+            AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=chunks, model="unknown"
+            )
+        )
+        assert response is not None
+        assert response.model == "claude-opus-4-6"
+        # the real stop_reason is surfaced, not a hardcoded "stop"
+        assert response.choices[0].finish_reason == "tool_calls"
+        usage = response.usage
+        # 80 input + 20 cache_creation (derived from 12+8) + 5 cache_read
+        assert usage.prompt_tokens == 105
+        assert usage.completion_tokens == 40
+        assert usage._cache_creation_input_tokens == 20
+        assert usage._cache_read_input_tokens == 5
+        assert usage.server_tool_use.web_search_requests == 1
+        assert usage.server_tool_use.tool_search_requests == 3
+
+    @pytest.mark.parametrize(
+        "event_str,expected",
+        [
+            ("data: [DONE]", None),
+            ("data: ", None),
+            ("data: {not-json", None),
+            ("event: ping", None),
+            ('data: {"a": 1}', {"a": 1}),
+        ],
+    )
+    def test_extract_sse_data_handles_malformed_and_sentinel_lines(
+        self, event_str, expected
+    ):
+        assert (
+            AnthropicPassthroughLoggingHandler._extract_sse_data(event_str) == expected
+        )
+
+    def _real_logging_obj(self):
+        from litellm.litellm_core_utils.litellm_logging import Logging as RealLoggingObj
+
+        logging_obj = RealLoggingObj(
+            model="claude-3-5-haiku-20241022",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="1",
+        )
+        logging_obj.model_call_details["litellm_params"] = {}
+        logging_obj.litellm_params = {}
+        return logging_obj
+
+    @patch("litellm.completion_cost")
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+    )
+    def test_handler_falls_back_when_assembly_returns_none(
+        self, mock_assemble, mock_cost
+    ):
+        mock_assemble.return_value = None
+        mock_cost.return_value = 0.0021
+        logging_obj = self._real_logging_obj()
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-5-haiku-20241022", "stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=list(self._CHUNKS),
+            end_time=datetime.now(),
+        )
+
+        assert result["result"] is not None
+        assert result["result"].usage.completion_tokens == 55
+        assert result["kwargs"]["response_cost"] == 0.0021
+
+    @patch("litellm.completion_cost")
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+    )
+    def test_handler_falls_back_when_assembly_raises(self, mock_assemble, mock_cost):
+        import litellm
+
+        mock_assemble.side_effect = litellm.APIError(
+            status_code=500,
+            message="boom",
+            llm_provider="anthropic",
+            model="claude-3-5-haiku-20241022",
+        )
+        mock_cost.return_value = 0.0021
+        logging_obj = self._real_logging_obj()
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-5-haiku-20241022", "stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=list(self._CHUNKS),
+            end_time=datetime.now(),
+        )
+
+        # a raise from stream_chunk_builder must be treated like a None result,
+        # not propagate out and drop the request from SpendLogs
+        assert result["result"] is not None
+        assert result["result"].usage.completion_tokens == 55
+        assert result["kwargs"]["response_cost"] == 0.0021
+
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+    )
+    def test_handler_returns_none_when_no_usage_recoverable(self, mock_assemble):
+        # assembly fails AND the chunks carry no usage event, so there is nothing
+        # to price; the handler must return None rather than fabricate a response
+        mock_assemble.return_value = None
+        logging_obj = self._real_logging_obj()
+        chunks = [_sse_bytes({"type": "content_block_delta", "delta": {"text": "hi"}})]
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-5-haiku-20241022", "stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=chunks,
+            end_time=datetime.now(),
+        )
+
+        assert result["result"] is None
+        assert result["kwargs"] == {}
+
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_usage_only_response_from_chunks"
+    )
+    @patch.object(
+        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+    )
+    def test_handler_does_not_crash_when_usage_only_fallback_raises(
+        self, mock_assemble, mock_fallback
+    ):
+        # if the usage-only fallback itself raises, it must be treated as None and
+        # drop gracefully, not propagate out and crash the success handler
+        mock_assemble.return_value = None
+        mock_fallback.side_effect = Exception("fallback boom")
+        logging_obj = self._real_logging_obj()
+
+        result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/anthropic/v1/messages",
+            request_body={"model": "claude-3-5-haiku-20241022", "stream": True},
+            endpoint_type="messages",
+            start_time=datetime.now(),
+            all_chunks=list(self._CHUNKS),
+            end_time=datetime.now(),
+        )
+
+        assert result["result"] is None
+        assert result["kwargs"] == {}
+
+
+class TestAnthropicResponseCostRecordedOnModelCallDetails:
+    """The pass-through success path reads spend from
+    model_call_details["response_cost"], not from kwargs, so the streaming payload
+    builder must record it there or streaming pass-through logs $0."""
+
+    def test_create_payload_records_response_cost_on_model_call_details(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        logging_obj.get_router_model_id.return_value = None
+        logging_obj.litellm_params = {}
+        logging_obj.litellm_call_id = "test-call-id"
+
+        response = ModelResponse(
+            id="test-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="hello", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="claude-3-7-sonnet-20250219",
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-7-sonnet-20250219",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            logging_obj.model_call_details["response_cost"] == kwargs["response_cost"]
+        )
+        assert logging_obj.model_call_details["response_cost"] > 0
