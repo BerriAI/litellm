@@ -2692,6 +2692,32 @@ class TestGetBedrockModelIdArnHandling:
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
+        def test_arn_url_matches_expected(self):
+        """Full URL built from messages config must match expected encoded form."""
+        import urllib.parse
+        from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeMessagesConfig,
+        )
+
+        config = AmazonAnthropicClaudeMessagesConfig()
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=f"bedrock/{self.ARN}",
+            optional_params={"aws_region_name": "us-east-1"},
+            litellm_params={},
+            stream=True,
+        )
+        encoded_arn = urllib.parse.quote(self.ARN, safe="")
+        expected = (
+            f"https://bedrock-runtime.us-east-1.amazonaws.com"
+            f"/model/{encoded_arn}/invoke-with-response-stream"
+        )
+        assert (
+            url == expected
+        ), f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
+
+
     def test_regular_model_id_unaffected(self):
         """Non-ARN model IDs must continue to work as before."""
         model_id = self._call("anthropic.claude-3-sonnet-20240229-v1:0")
