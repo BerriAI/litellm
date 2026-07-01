@@ -1,9 +1,19 @@
 """Tests for MicroloopGuardrail — deterministic loop detection for LiteLLM."""
+
+import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("microloop")
+# ── Mock the Rust engine for CI coverage ──────────────────────────────────────
+# The CI environment does not have the `microloop` Rust binary installed.
+# We mock it here so the guardrail code executes and Codecov registers coverage.
+_mock_engine = MagicMock()
+_mock_engine.verify.return_value = 0  # Default to "Allow"
+_mock_microloop_module = MagicMock()
+_mock_microloop_module.Microloop.return_value = _mock_engine
+sys.modules["microloop"] = _mock_microloop_module
+# ──────────────────────────────────────────────────────────────────────────────
 
 from litellm.integrations.microloop_guardrail import MicroloopGuardrail
 from litellm.exceptions import GuardrailRaisedException
