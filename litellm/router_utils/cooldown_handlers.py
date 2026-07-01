@@ -37,6 +37,79 @@ else:
     Span = Any
 
 
+_EXCEPTION_POLICY_FIELDS: tuple[tuple[type, str], ...] = (
+    (litellm.BadRequestError, "BadRequestErrorAllowedFails"),
+    (litellm.AuthenticationError, "AuthenticationErrorAllowedFails"),
+    (litellm.Timeout, "TimeoutErrorAllowedFails"),
+    (litellm.RateLimitError, "RateLimitErrorAllowedFails"),
+    (litellm.ContentPolicyViolationError, "ContentPolicyViolationErrorAllowedFails"),
+    (litellm.InternalServerError, "InternalServerErrorAllowedFails"),
+    (litellm.ServiceUnavailableError, "ServiceUnavailableErrorAllowedFails"),
+    (litellm.BadGatewayError, "BadGatewayErrorAllowedFails"),
+    (litellm.NotFoundError, "NotFoundErrorAllowedFails"),
+)
+
+
+def _get_deployment_cooldown_policy(
+    litellm_router_instance: LitellmRouter,
+    deployment: str,
+) -> tuple[Optional[dict[str, int]], Optional[int]]:
+    """Return (allowed_fails_policy, allowed_fails) from deployment model_info, or (None, None)."""
+    dep = litellm_router_instance.get_model_info(id=deployment)
+    if dep is None:
+        return None, None
+    mi: dict[str, Any] = dep.get("model_info") or {}
+    raw = mi.get("allowed_fails_policy")
+    policy: Optional[dict[str, int]] = raw if isinstance(raw, dict) else None
+    allowed: Optional[int] = mi.get("allowed_fails")
+    return policy, allowed
+
+
+def _resolve_allowed_fails_from_policy(
+    policy: Optional[dict[str, int]],
+    exception: Any,
+) -> Optional[int]:
+    """Match *exception* against *policy* and return the configured allowed-fail count, or None."""
+    if policy is None:
+        return None
+    for exc_type, field in _EXCEPTION_POLICY_FIELDS:
+        if isinstance(exception, exc_type):
+            return policy.get(field)
+    return None
+
+
+def _should_cooldown_based_on_deployment_policy(
+    litellm_router_instance: LitellmRouter,
+    deployment: str,
+    original_exception: Any,
+    dep_policy: Optional[dict[str, int]],
+    dep_allowed_fails: Optional[int],
+) -> bool:
+    """Resolve deployment-level allowed-fails and delegate to the shared counting logic."""
+    allowed_fails_from_policy = _resolve_allowed_fails_from_policy(dep_policy, original_exception)
+    if allowed_fails_from_policy is not None:
+        allowed_fails_override: int = allowed_fails_from_policy
+        cache_key_suffix: str = type(original_exception).__name__
+    else:
+        allowed_fails_override = dep_allowed_fails if dep_allowed_fails is not None else 0
+        cache_key_suffix = "generic"
+
+    model_info = litellm_router_instance.get_model_info(id=deployment)
+    cooldown_time_override: Optional[float] = None
+    if model_info is not None:
+        litellm_params = model_info.get("litellm_params") or {}
+        cooldown_time_override = litellm_params.get("cooldown_time")
+
+    return should_cooldown_based_on_allowed_fails_policy(
+        litellm_router_instance=litellm_router_instance,
+        deployment=deployment,
+        original_exception=original_exception,
+        allowed_fails_override=allowed_fails_override,
+        cooldown_time_override=cooldown_time_override,
+        cache_key_suffix=cache_key_suffix,
+    )
+
+
 def _is_cooldown_required(
     litellm_router_instance: LitellmRouter,
     model_id: str,
@@ -172,6 +245,17 @@ def _should_cooldown_deployment(
 
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
+    ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
+    dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
+    if dep_policy is not None or dep_allowed_fails is not None:
+        return _should_cooldown_based_on_deployment_policy(
+            litellm_router_instance,
+            deployment,
+            original_exception,
+            dep_policy,
+            dep_allowed_fails,
+        )
+
     ## BASE CASE - single deployment
     model_group = litellm_router_instance.get_model_group(id=deployment)
     is_single_deployment_model_group = False
@@ -364,29 +448,43 @@ def should_cooldown_based_on_allowed_fails_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
     original_exception: Any,
+    allowed_fails_override: Optional[int] = None,
+    cooldown_time_override: Optional[float] = None,
+    cache_key_suffix: Optional[str] = None,
 ) -> bool:
     """
     Check if fails are within the allowed limit and update the number of fails.
+
+    When *allowed_fails_override* / *cooldown_time_override* are supplied they
+    take precedence over the router-level values (used by deployment-level overrides).
+
+    When *cache_key_suffix* is supplied the fail counter is keyed as
+    ``{deployment}:{cache_key_suffix}`` so that different exception types are
+    tracked independently per deployment.
 
     Returns:
     - True if fails exceed the allowed limit (should cooldown)
     - False if fails are within the allowed limit (should not cooldown)
     """
-    allowed_fails = (
-        litellm_router_instance.get_allowed_fails_from_policy(
-            exception=original_exception,
+    if allowed_fails_override is not None:
+        allowed_fails = allowed_fails_override
+    else:
+        allowed_fails = (
+            litellm_router_instance.get_allowed_fails_from_policy(
+                exception=original_exception,
+            )
+            or litellm_router_instance.allowed_fails
         )
-        or litellm_router_instance.allowed_fails
-    )
-    cooldown_time = litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
+    cooldown_time = cooldown_time_override or litellm_router_instance.cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
 
-    current_fails = litellm_router_instance.failed_calls.get_cache(key=deployment) or 0
+    cache_key = f"{deployment}:{cache_key_suffix}" if cache_key_suffix else deployment
+    current_fails = litellm_router_instance.failed_calls.get_cache(key=cache_key) or 0
     updated_fails = current_fails + 1
 
     if updated_fails > allowed_fails:
         return True
     else:
-        litellm_router_instance.failed_calls.set_cache(key=deployment, value=updated_fails, ttl=cooldown_time)
+        litellm_router_instance.failed_calls.set_cache(key=cache_key, value=updated_fails, ttl=cooldown_time)
 
     return False
 

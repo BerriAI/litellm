@@ -8,6 +8,7 @@ from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     get_fallback_error_info,
 )
+from litellm.router_utils.cooldown_handlers import _set_cooldown_deployments
 from litellm.types.router import LiteLLMParamsTypedDict
 
 if TYPE_CHECKING:
@@ -16,6 +17,50 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+
+def _trigger_cooldown_for_failed_deployment(
+    litellm_router: LitellmRouter,
+    kwargs: dict,
+    exception: Exception,
+) -> None:
+    """
+    Trigger cooldown for a failed fallback deployment.
+
+    In the fallback path the normal failure-callback cooldown is skipped because the
+    Logging object sets has_logged_async_failure=True after the first failure and
+    blocks all subsequent failure callbacks. This helper ensures every failed
+    fallback deployment is evaluated for cooldown regardless.
+    """
+    try:
+        metadata = kwargs.get("litellm_metadata") or kwargs.get("metadata") or {}
+        model_info = metadata.get("model_info") or {}
+        deployment_id: Optional[str] = model_info.get("id") if isinstance(model_info, dict) else None
+
+        if deployment_id is None:
+            verbose_router_logger.debug("Cannot trigger cooldown for fallback: no deployment_id in metadata")
+            return
+
+        exception_status: Union[str, int] = getattr(exception, "status_code", "")
+
+        time_to_cooldown = litellm_router.cooldown_time
+        deployment_dict = litellm_router.get_model_info(id=deployment_id)
+        if deployment_dict is not None:
+            deployment_cooldown = (deployment_dict.get("litellm_params") or {}).get("cooldown_time")
+            if deployment_cooldown is not None and deployment_cooldown >= 0:
+                time_to_cooldown = deployment_cooldown
+
+        _set_cooldown_deployments(
+            litellm_router_instance=litellm_router,
+            exception_status=exception_status,
+            original_exception=exception,
+            deployment=deployment_id,
+            time_to_cooldown=time_to_cooldown,
+        )
+
+        verbose_router_logger.debug(f"Triggered cooldown for fallback deployment {deployment_id}")
+    except Exception as e:  # noqa: BLE001
+        verbose_router_logger.debug(f"Error triggering cooldown for fallback deployment: {e}")
 
 
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
@@ -160,6 +205,11 @@ async def run_async_fallback(
                 original_model_group=original_model_group,
                 kwargs=kwargs,
                 original_exception=original_exception,
+            )
+            _trigger_cooldown_for_failed_deployment(
+                litellm_router=litellm_router,
+                kwargs=kwargs,
+                exception=e,
             )
     raise error_from_fallbacks
 
