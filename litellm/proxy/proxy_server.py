@@ -425,7 +425,10 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.management_helpers.audit_logs import (
+    create_audit_log_for_update,
+    create_object_audit_log,
+)
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
@@ -14226,6 +14229,47 @@ def _redact_general_setting_value(field_name: str, value: JsonValue, is_full_adm
     if isinstance(value, (dict, list)):
         return _redact_secret_values_in_obj(value)
     return value
+
+
+def _dump_redacted_config(value: Optional[JsonValue], *, redact_all_values: bool = False) -> Optional[str]:
+    # `default=str` matches the sibling audit-log serializers in
+    # team_endpoints.py and the LiteLLM_AuditLogs validator, so a YAML-loaded
+    # value with a non-JSON-native leaf (datetime, custom object) cannot turn
+    # an audit write into a 500.
+    if value is None:
+        return None
+    if redact_all_values and isinstance(value, dict):
+        return json.dumps({key: "REDACTED" for key in value}, default=str)
+    return json.dumps(_redact_secret_values_in_obj(value), default=str)
+
+
+async def create_config_audit_log(
+    param_name: str,
+    action: AUDIT_ACTIONS,
+    before_value: Optional[JsonValue],
+    after_value: Optional[JsonValue],
+    user_api_key_dict: UserAPIKeyAuth,
+    table_name: LitellmTableNames = LitellmTableNames.CONFIG_TABLE_NAME,
+) -> None:
+    """Record a system-wide settings change in LiteLLM_AuditLog.
+
+    Secret leaves are redacted before the row is written. environment_variables
+    hold arbitrary credentials under non-secret-looking uppercase keys (e.g.
+    DATABASE_URL), so every value in that section is redacted rather than
+    relying on key-name matching; other sections reuse the same matcher
+    /config/field/info applies for non-admins.
+    """
+    redact_all_values = param_name == "environment_variables"
+    await create_object_audit_log(
+        object_id=param_name,
+        action=action,
+        table_name=table_name,
+        before_value=_dump_redacted_config(before_value, redact_all_values=redact_all_values),
+        after_value=_dump_redacted_config(after_value, redact_all_values=redact_all_values),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=None,
+        litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+    )
 
 
 @router.get(
