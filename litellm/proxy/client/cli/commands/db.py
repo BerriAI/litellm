@@ -92,8 +92,7 @@ def db_generate() -> None:
     """
     if not _PROXY_EXTRAS_AVAILABLE:
         click.echo(
-            "Error: litellm-proxy-extras is not installed. "
-            "Run: pip install 'litellm[proxy]'",
+            "Error: litellm-proxy-extras is not installed. Run: pip install 'litellm[proxy]'",
             err=True,
         )
         raise SystemExit(1)
@@ -111,8 +110,7 @@ def db_generate() -> None:
 
     if _get_prisma_command is None:
         click.echo(
-            "Error: litellm-proxy-extras is not installed. "
-            "Run: pip install 'litellm[proxy]'",
+            "Error: litellm-proxy-extras is not installed. Run: pip install 'litellm[proxy]'",
             err=True,
         )
         raise SystemExit(1)
