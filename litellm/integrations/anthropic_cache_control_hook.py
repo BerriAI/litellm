@@ -55,7 +55,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         Returns:
         - model: str - the model to use
-        - messages: List[AllMessageValues] - messages with applied cache controls
+        - messages: list[AllMessageValues] - messages with applied cache controls
         - non_default_params: dict - params with any global cache controls
         """
         # Extract cache control injection points
@@ -230,10 +230,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def apply_to_anthropic_messages_request(
-        messages: List[Dict],
+        messages: list[dict],
         system: str | list | None,
-        injection_points: List[CacheControlInjectionPoint],
-    ) -> Tuple[List[Dict], str | list | None, List[CacheControlInjectionPoint]]:
+        injection_points: list[CacheControlInjectionPoint],
+    ) -> tuple[list[dict], str | list | None, list[CacheControlInjectionPoint]]:
         """Apply cache control injection for the Anthropic-native v1/messages endpoint.
 
         Returns (messages, system, remaining_non_message_points).
@@ -241,12 +241,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return messages, system, []
 
-        processed_messages: List[Dict] = copy.deepcopy(messages)
+        processed_messages: list[dict] = copy.deepcopy(messages)
         processed_system = copy.deepcopy(system) if system is not None else None
 
-        message_points: List[CacheControlMessageInjectionPoint] = []
-        system_points: List[CacheControlMessageInjectionPoint] = []
-        remaining_points: List[CacheControlInjectionPoint] = []
+        message_points: list[CacheControlMessageInjectionPoint] = []
+        system_points: list[CacheControlMessageInjectionPoint] = []
+        remaining_points: list[CacheControlInjectionPoint] = []
 
         for point in injection_points:
             if point.get("location") == "message":
@@ -290,7 +290,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         processed_messages = AnthropicCacheControlHook._apply_message_injections(
             points=message_points,
-            messages=cast(List[AllMessageValues], processed_messages),
+            messages=cast(list[AllMessageValues], processed_messages),
             max_blocks=max_blocks - used_blocks,
         )
 
@@ -298,10 +298,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def maybe_inject_cache_control(
-        messages: List[Dict],
+        messages: list[dict],
         system: str | list | None,
-        kwargs: Dict[str, Any],
-    ) -> Tuple[List[Dict], str | list | None]:
+        kwargs: dict[str, Any],
+    ) -> tuple[list[dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
         Pops the key from kwargs; if remaining (non-message) points exist they
