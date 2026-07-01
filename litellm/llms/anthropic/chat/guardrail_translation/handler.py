@@ -48,7 +48,10 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.custom_guardrail import (
+        CustomGuardrail,
+        ModifyResponseException,
+    )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
@@ -69,6 +72,146 @@ class AnthropicMessagesHandler(BaseTranslation):
     def __init__(self):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Optional[list[Any]] = None,
+    ) -> list[bytes]:
+        """
+        Build an Anthropic SSE sequence delivering the guardrail block message
+        and terminating the stream cleanly.
+
+        - ``stream_started`` False (buffered / pre-stream): nothing has been
+          sent, so emit a complete standalone message (message_start ->
+          content_block_* -> message_delta -> message_stop) via
+          FakeAnthropicMessagesStreamIterator, the same converter the
+          /v1/messages pre-stream block handler uses.
+        - ``stream_started`` True (sampling / detect-only end-of-stream): real
+          chunks were already sent, so *continue* the in-progress message --
+          close the open content block, append the block message as a new text
+          block, then end the message. Emitting a second ``message_start`` here
+          would make Anthropic clients reject the stream.
+        """
+        if stream_started:
+            return self._block_continuation_chunks(exc, responses_so_far or [])
+        return self._standalone_block_chunks(exc)
+
+    def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
+        import uuid
+
+        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            FakeAnthropicMessagesStreamIterator,
+        )
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        block_response = AnthropicMessagesResponse(
+            id=f"msg_{uuid.uuid4()}",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": exc.message}],
+            model=exc.model,
+            stop_reason="end_turn",
+            usage={"input_tokens": 0, "output_tokens": 0},
+        )
+        return list(FakeAnthropicMessagesStreamIterator(response=block_response))
+
+    def _block_continuation_chunks(self, exc: "ModifyResponseException", responses_so_far: list[Any]) -> list[bytes]:
+        """Continue an already-started message: close the open content block,
+        append the block message as a new text block, then end the message --
+        without a second message_start."""
+
+        def _sse(event_type: str, payload: dict) -> bytes:
+            return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
+
+        open_index, max_index = self._content_block_state(responses_so_far)
+        new_index = (max_index + 1) if max_index is not None else 0
+        chunks: list[bytes] = []
+        if open_index is not None:
+            chunks.append(_sse("content_block_stop", {"type": "content_block_stop", "index": open_index}))
+        chunks += [
+            _sse(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": new_index,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            ),
+            _sse(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": new_index,
+                    "delta": {"type": "text_delta", "text": exc.message},
+                },
+            ),
+            _sse("content_block_stop", {"type": "content_block_stop", "index": new_index}),
+            _sse(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 0},
+                },
+            ),
+            _sse("message_stop", {"type": "message_stop"}),
+        ]
+        return chunks
+
+    @staticmethod
+    def _content_block_state(
+        responses_so_far: list[Any],
+    ) -> tuple[Optional[int], Optional[int]]:
+        """From the SSE chunks already sent to the client, return (open
+        content-block index or None, highest content-block index seen or None).
+
+        A single streamed item may bundle multiple SSE events (raw bytes) or be
+        an already-parsed event dict, so every event across every item is
+        considered -- matching how ``get_streaming_string_so_far`` reads the
+        same stream."""
+        open_indices: set[int] = set()
+        max_index: Optional[int] = None
+        for item in responses_so_far:
+            for data in AnthropicMessagesHandler._iter_sse_events(item):
+                event_type = data.get("type")
+                index = data.get("index")
+                if not isinstance(index, int):
+                    continue
+                if event_type == "content_block_start":
+                    open_indices.add(index)
+                    max_index = index if max_index is None else max(max_index, index)
+                elif event_type == "content_block_stop":
+                    open_indices.discard(index)
+        open_index = max(open_indices) if open_indices else None
+        return open_index, max_index
+
+    @staticmethod
+    def _iter_sse_events(item: Any) -> list[dict]:
+        """Yield the event-data dicts in one stream chunk.
+
+        Handles both formats this stream can carry (see
+        ``get_streaming_string_so_far``): raw SSE ``bytes`` -- which may bundle
+        several events separated by a blank line -- and an already-parsed event
+        ``dict``."""
+        if isinstance(item, dict):
+            return [item]
+        if not isinstance(item, (bytes, bytearray)):
+            return []
+        events: list[dict] = []
+        for block in item.decode("utf-8", errors="replace").split("\n\n"):
+            for line in block.split("\n"):
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    parsed = json.loads(line[len("data:") :].strip())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    events.append(parsed)
+        return events
 
     def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format."""
