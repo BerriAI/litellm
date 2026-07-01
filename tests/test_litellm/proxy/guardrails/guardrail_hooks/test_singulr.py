@@ -11,6 +11,7 @@ import pytest
 
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.guardrails.guardrail_hooks.singulr.singulr import SingulrGuardrail
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     SingulrGuardrailConfigModel,
 )
@@ -103,6 +104,13 @@ class TestSingulrConfiguration:
         ) as mock_logger:
             SingulrGuardrail(api_key="test_key", api_base="https://remote.singulr.ai")
             mock_logger.warning.assert_not_called()
+
+    def test_only_supports_pre_call_hook(self):
+        """Singulr only forwards the original request; there is no response
+        text available to scan on the post_call path, so post_call must not
+        be registered as a supported event hook."""
+        guardrail = SingulrGuardrail(api_key="test_key")
+        assert guardrail.supported_event_hooks == [GuardrailEventHooks.pre_call]
 
 
 # ---------------------------------------------------------------------------
@@ -313,18 +321,6 @@ class TestSingulrBuildPayload:
 
     def test_empty_request_returns_empty_payload(self, singulr_guardrail):
         assert singulr_guardrail._build_payload({}, "request") == {}
-
-    def test_response_input_type_forwards_request_messages(self, singulr_guardrail):
-        """input_type="response" currently forwards the same request payload
-        shape as input_type="request" -- no separate response body is sent."""
-        request_data = {"messages": [{"role": "user", "content": "hi"}]}
-        payload = singulr_guardrail._build_payload(request_data, "response")
-        assert payload["input_type"] == "response"
-        assert payload["request"]["messages"] == [{"role": "user", "content": "hi"}]
-        assert "response" not in payload
-
-    def test_response_returns_empty_payload_when_no_messages(self, singulr_guardrail):
-        assert singulr_guardrail._build_payload({}, "response") == {}
 
 
 # ---------------------------------------------------------------------------

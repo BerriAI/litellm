@@ -39,7 +39,7 @@ class SingulrGuardrailPayload(BaseModel):
     """Payload sent to the Singulr guardrail API."""
 
     request: SingulrGuardrailRequest
-    input_type: Literal["request", "response"]
+    input_type: str
 
 
 class SingulrGuardrailConfigModel(GuardrailConfigModel):

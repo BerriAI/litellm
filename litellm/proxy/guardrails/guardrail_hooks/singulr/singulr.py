@@ -82,7 +82,6 @@ class SingulrGuardrail(CustomGuardrail):
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
-                GuardrailEventHooks.post_call,
             ]
 
         super().__init__(**kwargs)
@@ -98,7 +97,7 @@ class SingulrGuardrail(CustomGuardrail):
     def _build_payload(
         self,
         request_data: dict[str, Any],
-        input_type: Literal["request", "response"],
+        input_type: str,
     ) -> dict[str, Any]:
         request = SingulrGuardrailRequest.model_validate(request_data)
         if not request.model_dump(exclude_none=True):
@@ -178,7 +177,7 @@ class SingulrGuardrail(CustomGuardrail):
         self,
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
-        input_type: Literal["request", "response"],
+        input_type: str,
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         payload = self._build_payload(cast(dict[str, Any], request_data), input_type)
