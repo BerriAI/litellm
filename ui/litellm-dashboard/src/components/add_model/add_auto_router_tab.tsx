@@ -436,11 +436,19 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
         ]}
         width={700}
       >
-        {/* Only render the ConnectionErrorDisplay when modal is visible and we have a test ID */}
         {isResultModalVisible && (
           <ConnectionErrorDisplay
             key={connectionTestId}
-            formValues={form.getFieldsValue()}
+            formValues={{
+              ...form.getFieldsValue(),
+              custom_llm_provider: "auto_router",
+              model_mappings: [{
+                public_name: form.getFieldValue("auto_router_name") || "auto_router",
+                litellm_model: routerType === "complexity"
+                  ? "auto_router/complexity_router"
+                  : `auto_router/${form.getFieldValue("auto_router_name") || "auto_router"}`,
+              }],
+            }}
             accessToken={accessToken}
             testMode="chat"
             modelName={form.getFieldValue("auto_router_name")}
