@@ -31,6 +31,7 @@ class KeyGenerateBody(BaseModel):
     team_id: str | None = None
     budget_id: str | None = None
     model_max_budget: dict[str, ModelBudgetEntry] | None = None
+    budget_fallbacks: dict[str, list[str]] | None = None
     budget_limits: list[BudgetWindow] | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
@@ -93,6 +94,12 @@ class ChatBody(BaseModel):
     max_tokens: int | None = None
     user: str | None = None
     metadata: ChatMetadata | None = None
+
+
+class AnthropicMessagesBody(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    max_tokens: int
 
 
 class OutMessage(BaseModel):

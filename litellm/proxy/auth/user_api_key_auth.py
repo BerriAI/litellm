@@ -12,7 +12,7 @@ import fnmatch
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, NamedTuple, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterator, NamedTuple, List, Optional, Protocol, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -73,6 +73,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
     _safe_get_request_query_params,
+    _safe_set_request_parsed_body,
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
@@ -169,6 +170,47 @@ def _get_model_names_for_budget_checks(
     if isinstance(model, str):
         return [model]
     return model
+
+
+class _KeyModelBudgetLimiter(Protocol):
+    async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool: ...
+
+    async def get_fallback_model_within_budget(
+        self, user_api_key_dict: UserAPIKeyAuth, model: str
+    ) -> Optional[str]: ...
+
+
+async def _check_key_model_budget_with_fallback(
+    valid_token: UserAPIKeyAuth,
+    model_max_budget_limiter: _KeyModelBudgetLimiter,
+    model_name: str,
+    request_data: dict,
+    request: Request,
+) -> None:
+    """
+    Enforce the key's per-model budget for `model_name`. If exceeded and the
+    key has a `budget_fallbacks` chain configured for `model_name`, reroute
+    the request to the first fallback model still within its own budget
+    instead of rejecting the request.
+
+    Raises:
+        BudgetExceededError: if `model_name` is over budget and no configured
+            fallback is within budget either.
+    """
+    try:
+        await model_max_budget_limiter.is_key_within_model_budget(
+            user_api_key_dict=valid_token,
+            model=model_name,
+        )
+    except litellm.BudgetExceededError as e:
+        fallback_model = await model_max_budget_limiter.get_fallback_model_within_budget(
+            user_api_key_dict=valid_token,
+            model=model_name,
+        )
+        if fallback_model is None:
+            raise e
+        request_data["model"] = fallback_model
+        _safe_set_request_parsed_body(request=request, parsed_body=request_data)
 
 
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
@@ -1779,9 +1821,12 @@ async def _user_api_key_auth_builder(
                     ):
                         ## GET THE SPEND FOR THIS MODEL
                         for model_name in current_models:
-                            await model_max_budget_limiter.is_key_within_model_budget(
-                                user_api_key_dict=valid_token,
-                                model=model_name,
+                            await _check_key_model_budget_with_fallback(
+                                valid_token=valid_token,
+                                model_max_budget_limiter=model_max_budget_limiter,
+                                model_name=model_name,
+                                request_data=request_data,
+                                request=request,
                             )
 
                     # Check 5b. End-user model max budget
@@ -2834,9 +2879,12 @@ async def _run_post_custom_auth_checks(
         and valid_token.token is not None
     ):
         for model_name in current_models:
-            await model_max_budget_limiter.is_key_within_model_budget(
-                user_api_key_dict=valid_token,
-                model=model_name,
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=model_max_budget_limiter,
+                model_name=model_name,
+                request_data=request_data,
+                request=request,
             )
 
     # 4. Check end-user model_max_budget
