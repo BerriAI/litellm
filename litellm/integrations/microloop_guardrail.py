@@ -60,6 +60,18 @@ class _CallHistory:
 # ---------------------------------------------------------------------------
 
 
+def _parse_json_dict(raw: str) -> dict[str, object] | None:
+    """Parse a JSON string into a dict, returning None on failure."""
+    try:
+        result: object = json.loads(raw)  # pyright: ignore[reportAny]
+    except (json.JSONDecodeError, TypeError):
+        return None
+    else:
+        if isinstance(result, dict):
+            return dict(result)
+        return None
+
+
 def _strip_volatile_fields(args_json: str, volatile_fields: set[str]) -> str:
     """Remove known volatile fields from a JSON arguments string.
 
@@ -73,15 +85,12 @@ def _strip_volatile_fields(args_json: str, volatile_fields: set[str]) -> str:
     """
     if not volatile_fields:
         return args_json
-    try:
-        obj = json.loads(args_json)
-        if not isinstance(obj, dict):
-            return args_json
-        for field in volatile_fields:
-            obj.pop(field, None)
-        return json.dumps(obj, sort_keys=True, separators=(",", ":"))
-    except (json.JSONDecodeError, TypeError):
+    obj = _parse_json_dict(args_json)
+    if obj is None:
         return args_json
+    for field in volatile_fields:
+        obj.pop(field, None)
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
 def _auto_infer_volatile(
@@ -111,19 +120,13 @@ def _auto_infer_volatile(
     diff_counts: dict[str, int] = {}
     const_fields: set[str] = set()
 
-    try:
-        current = json.loads(current_args)
-        if not isinstance(current, dict):
-            return inferred
-    except (json.JSONDecodeError, TypeError):
+    current = _parse_json_dict(current_args)
+    if current is None:
         return inferred
 
     for _past_tool, past_args_str in recent_calls:
-        try:
-            past = json.loads(past_args_str)
-            if not isinstance(past, dict):
-                continue
-        except (json.JSONDecodeError, TypeError):
+        past = _parse_json_dict(past_args_str)
+        if past is None:
             continue
 
         diffs: list[str] = []
@@ -175,7 +178,7 @@ class MicroloopGuardrail(CustomGuardrail):
         history_window: int | None = None,
         volatile_fields: list[str] | None = None,
         auto_infer_volatile: bool = True,
-        **kwargs,  # noqa: ANN003
+        **kwargs: object,  # noqa: ANN003
     ) -> None:
         """
         Args:
