@@ -1,9 +1,16 @@
+from unittest.mock import patch
+
 from litellm.llms.tencent.chat.transformation import TencentChatConfig
 
 
 def test_supported_openai_params_includes_thinking_and_reasoning_effort():
     config = TencentChatConfig()
-    params = config.get_supported_openai_params(model="tencent/deepseek-v4-pro")
+
+    with patch(
+        "litellm.llms.tencent.chat.transformation.supports_reasoning",
+        return_value=True,
+    ):
+        params = config.get_supported_openai_params(model="tencent/deepseek-v4-pro")
 
     assert "thinking" in params
     assert "reasoning_effort" in params
@@ -11,38 +18,64 @@ def test_supported_openai_params_includes_thinking_and_reasoning_effort():
     assert "temperature" in params
 
 
+def test_supported_openai_params_excludes_thinking_without_reasoning_support():
+    config = TencentChatConfig()
+
+    with patch(
+        "litellm.llms.tencent.chat.transformation.supports_reasoning",
+        return_value=False,
+    ):
+        params = config.get_supported_openai_params(model="tencent/non-reasoning-model")
+
+    assert "thinking" not in params
+    assert "reasoning_effort" not in params
+    assert "stream" in params
+
+
 def test_map_openai_params_passes_thinking_dict_through():
     config = TencentChatConfig()
-    result = config.map_openai_params(
-        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
-        optional_params={},
-        model="tencent/deepseek-v4-pro",
-        drop_params=False,
-    )
+    with patch(
+        "litellm.llms.tencent.chat.transformation.supports_reasoning",
+        return_value=True,
+    ):
+        result = config.map_openai_params(
+            non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+            optional_params={},
+            model="tencent/deepseek-v4-pro",
+            drop_params=False,
+        )
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
 def test_map_openai_params_converts_reasoning_effort_to_thinking():
     config = TencentChatConfig()
-    result = config.map_openai_params(
-        non_default_params={"reasoning_effort": "medium"},
-        optional_params={},
-        model="tencent/deepseek-v4-pro",
-        drop_params=False,
-    )
+    with patch(
+        "litellm.llms.tencent.chat.transformation.supports_reasoning",
+        return_value=True,
+    ):
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "medium"},
+            optional_params={},
+            model="tencent/deepseek-v4-pro",
+            drop_params=False,
+        )
 
     assert result["thinking"] == {"type": "enabled"}
 
 
 def test_map_openai_params_drops_none_reasoning_effort():
     config = TencentChatConfig()
-    result = config.map_openai_params(
-        non_default_params={"reasoning_effort": "none"},
-        optional_params={},
-        model="tencent/deepseek-v4-pro",
-        drop_params=False,
-    )
+    with patch(
+        "litellm.llms.tencent.chat.transformation.supports_reasoning",
+        return_value=True,
+    ):
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "none"},
+            optional_params={},
+            model="tencent/deepseek-v4-pro",
+            drop_params=False,
+        )
 
     assert "thinking" not in result
     assert "reasoning_effort" not in result
@@ -50,15 +83,19 @@ def test_map_openai_params_drops_none_reasoning_effort():
 
 def test_map_openai_params_thinking_priority_over_reasoning_effort():
     config = TencentChatConfig()
-    result = config.map_openai_params(
-        non_default_params={
-            "thinking": {"type": "enabled", "budget_tokens": 2048},
-            "reasoning_effort": "high",
-        },
-        optional_params={},
-        model="tencent/deepseek-v4-pro",
-        drop_params=False,
-    )
+    with patch(
+        "litellm.llms.tencent.chat.transformation.supports_reasoning",
+        return_value=True,
+    ):
+        result = config.map_openai_params(
+            non_default_params={
+                "thinking": {"type": "enabled", "budget_tokens": 2048},
+                "reasoning_effort": "high",
+            },
+            optional_params={},
+            model="tencent/deepseek-v4-pro",
+            drop_params=False,
+        )
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 2048}
 

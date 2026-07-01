@@ -37,18 +37,13 @@ def test_strips_billing_metadata():
 def test_get_api_base_default():
     config = TencentAnthropicMessagesConfig()
 
-    assert (
-        config.get_api_base() == "https://tokenhub-intl.tencentcloudmaas.com"
-    )
+    assert config.get_api_base() == "https://tokenhub-intl.tencentcloudmaas.com"
 
 
 def test_get_api_base_from_arg():
     config = TencentAnthropicMessagesConfig()
 
-    assert (
-        config.get_api_base(api_base="https://custom.example.com")
-        == "https://custom.example.com"
-    )
+    assert config.get_api_base(api_base="https://custom.example.com") == "https://custom.example.com"
 
 
 def test_messages_url_default():

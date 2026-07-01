@@ -3,9 +3,10 @@ Translates from OpenAI's `/v1/chat/completions` to Tencent TokenHub's
 OpenAI-compatible endpoint.
 """
 
-from typing import Any, List, Optional, Tuple
+from typing import Optional, Tuple
 
 from litellm.secret_managers.main import get_secret_str
+from litellm.utils import supports_reasoning
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -13,7 +14,8 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 class TencentChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         params = super().get_supported_openai_params(model)
-        params.extend(["thinking", "reasoning_effort"])
+        if supports_reasoning(model, custom_llm_provider="tencent"):
+            params.extend(["thinking", "reasoning_effort"])
         return params
 
     def map_openai_params(
@@ -57,12 +59,10 @@ class TencentChatConfig(OpenAIGPTConfig):
 
         api_base = api_base.rstrip("/")
 
-        if api_base.endswith("/v1"):
-            pass
-        elif not api_base.endswith("/v1/chat/completions"):
+        if api_base.endswith("/chat/completions"):
+            return api_base
+
+        if not api_base.endswith("/v1"):
             api_base = f"{api_base}/v1"
 
-        if not api_base.endswith("/chat/completions"):
-            api_base = f"{api_base}/chat/completions"
-
-        return api_base
+        return f"{api_base}/chat/completions"
