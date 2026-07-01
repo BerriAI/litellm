@@ -619,12 +619,17 @@ class Cache:
             else:
                 cache_key = self.get_cache_key(**kwargs)
             if cache_key is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
+                cache_control_args: DynamicCacheControl = kwargs.get("cache", {})
+                max_age = cache_control_args.get("s-maxage") or cache_control_args.get("s-max-age") or float("inf")
+                cache_lookup_kwargs = self._get_safe_cache_lookup_kwargs(kwargs)
                 if dynamic_cache_object is not None:
-                    cached_result = await dynamic_cache_object.async_get_cache(cache_key, **kwargs)
+                    cached_result = await dynamic_cache_object.async_get_cache(cache_key, **cache_lookup_kwargs)
                 else:
-                    cached_result = await self.cache.async_get_cache(cache_key, **kwargs)
+                    cached_result = await self.cache.async_get_cache(cache_key, **cache_lookup_kwargs)
+                self._update_metadata_from_cache_lookup_kwargs(
+                    original_kwargs=kwargs,
+                    cache_lookup_kwargs=cache_lookup_kwargs,
+                )
                 return self._get_cache_logic(cached_result=cached_result, max_age=max_age)
         except Exception:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
