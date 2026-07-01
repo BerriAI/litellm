@@ -1390,3 +1390,28 @@ async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
         )
 
     assert "Traceback" not in str(excinfo.value)
+@pytest.mark.asyncio
+async def test_anthropic_pass_through_drop_params(monkeypatch):
+    from unittest.mock import AsyncMock
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+
+    mock_handler = AsyncMock()
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", mock_handler)
+
+    # Test automatic dropping of context_management for haiku on vertex_ai
+    await anthropic_messages_handler(
+        model="vertex_ai/claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "hello"}],
+        max_tokens=64,
+        drop_params=True,
+        context_management={"edits": []},
+        custom_llm_provider="vertex_ai",
+        is_async=True,
+    )
+    called_kwargs = mock_handler.call_args.kwargs
+    optional_params = called_kwargs.get("anthropic_messages_optional_request_params", {})
+    assert "context_management" not in optional_params
