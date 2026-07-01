@@ -2681,3 +2681,95 @@ async def test_deferred_setup_clear_drops_appends_when_buffered():
     streaming._buffer_pending_message_until_setup(new_audio)
 
     assert streaming._pending_messages_until_setup == [new_audio]
+
+
+def _transcription_guardrail():
+    """A minimal real CustomGuardrail registered for the realtime transcript hook."""
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    class _TranscriptionGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self, inputs, request_data, input_type, logging_obj=None
+        ):
+            return inputs
+
+    return _TranscriptionGuardrail(
+        guardrail_name="test_transcription_guard",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+
+
+def test_setup_folds_in_auto_response_disable_when_transcription_guardrail_active():
+    """Gemini rejects a second setup, so a transcription guardrail's auto-response
+    disable must be folded into the one-and-only setup; otherwise the model
+    auto-responds and the guardrail is bypassed."""
+    import litellm
+
+    litellm.callbacks = [_transcription_guardrail()]
+    try:
+        streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+        setup = json.dumps(
+            {
+                "setup": {
+                    "model": "models/gemini-3.1-flash-live-preview",
+                    "generationConfig": {"responseModalities": ["AUDIO"]},
+                    "inputAudioTranscription": {},
+                }
+            }
+        )
+        out = json.loads(streaming._maybe_inject_guardrail_auto_response_disable(setup))
+        aad = out["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
+        assert aad["disabled"] is True
+    finally:
+        litellm.callbacks = []
+
+
+def test_setup_unchanged_without_transcription_guardrail():
+    import litellm
+
+    litellm.callbacks = []
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    setup = json.dumps(
+        {"setup": {"model": "x", "generationConfig": {"responseModalities": ["AUDIO"]}}}
+    )
+    out = streaming._maybe_inject_guardrail_auto_response_disable(setup)
+    assert json.loads(out) == json.loads(setup)
+
+
+def test_non_bidi_setup_left_untouched_for_followup_capable_providers():
+    """OpenAI realtime accepts a follow-up session.update, so a non-bidi message
+    (no top-level 'setup' key) must be left untouched even with a guardrail on."""
+    import litellm
+
+    litellm.callbacks = [_transcription_guardrail()]
+    try:
+        streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+        msg = json.dumps({"type": "session.update", "session": {"instructions": "hi"}})
+        assert streaming._maybe_inject_guardrail_auto_response_disable(msg) == msg
+    finally:
+        litellm.callbacks = []
+
+
+@pytest.mark.asyncio
+async def test_log_messages_routes_async_logging_through_bounded_worker():
+    """Realtime success logging must go through GLOBAL_LOGGING_WORKER (bounded
+    queue + per-coroutine timeout), not a bare asyncio.create_task. A bare task
+    has no timeout/concurrency cap, so when a logging callback is slow every
+    realtime turn leaves a suspended task pinning its response in memory -> an
+    unbounded leak. Regression for that fix."""
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj)
+    streaming.messages = [{"type": "session.created"}]
+
+    with (
+        patch("litellm.litellm_core_utils.realtime_streaming.GLOBAL_LOGGING_WORKER") as mock_worker,
+        patch("litellm.litellm_core_utils.realtime_streaming.asyncio.create_task") as mock_create_task,
+        patch("litellm.litellm_core_utils.realtime_streaming.executor.submit"),
+    ):
+        await streaming.log_messages()
+
+        mock_worker.ensure_initialized_and_enqueue.assert_called_once()
+        # the bare create_task path must no longer be used for success logging
+        mock_create_task.assert_not_called()
