@@ -610,7 +610,7 @@ def _get_region_from_bedrock_arn(model: str) -> Optional[str]:
     return region
 
 
-def extract_bedrock_region_and_model_id(model: str) -> Tuple[Optional[str], str]:
+def extract_bedrock_region_and_model_id(model: str) -> tuple[Optional[str], str]:
     """
     Strip LiteLLM routing prefixes, then extract region + cleaned model ID.
 
