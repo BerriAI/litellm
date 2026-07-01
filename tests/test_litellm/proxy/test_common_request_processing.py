@@ -4355,17 +4355,9 @@ class TestResponseCostHeaderForTypedDictResponses:
 
 
 class TestPreCallWithFallbacksOnLocalRateLimit:
-    """
-    Regression tests for LIT-3890: proxy fallbacks must trigger when local rate
-    limits (key-level TPM/RPM or dynamic_rate_limiter_v3) reject a request.
-    """
 
     @pytest.mark.asyncio
     async def test_fallback_triggered_on_local_rate_limit(self):
-        """
-        When the primary model is locally rate-limited, the request should
-        proceed with a configured fallback model.
-        """
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -4418,10 +4410,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_raises_when_no_fallbacks_configured(self):
-        """
-        When no fallbacks are configured, the original rate limit error
-        should propagate unchanged.
-        """
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -4461,10 +4449,6 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
 
     @pytest.mark.asyncio
     async def test_raises_when_all_fallbacks_also_rate_limited(self):
-        """
-        When all fallback models are also locally rate-limited, the original
-        error for the primary model should be re-raised.
-        """
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -4502,15 +4486,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     llm_router=mock_router,
                 )
 
-        # Model should be restored to original
         assert processor.data["model"] == "gpt-4"
 
     @pytest.mark.asyncio
     async def test_fallback_uses_key_level_router_settings(self):
-        """
-        Key-level router_settings fallbacks should take precedence over
-        router-level fallbacks.
-        """
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
@@ -4554,15 +4533,10 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                 llm_router=mock_router,
             )
 
-        # Should use key-level fallback, not router-level
         assert processor.data["model"] == "claude-3-haiku"
 
     @pytest.mark.asyncio
     async def test_disable_fallbacks_flag_respected(self):
-        """
-        When disable_fallbacks is set in request data, local rate limit
-        errors should not trigger fallback logic.
-        """
         from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
