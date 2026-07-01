@@ -1,4 +1,4 @@
-from litellm.cost_calculator import generic_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
 
 
