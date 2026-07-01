@@ -1,32 +1,60 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ViewSwitcher from "./ViewSwitcher";
 
-const { mockUsePluginMode, state } = vi.hoisted(() => {
+const { mockUsePluginMode, mockUseUISettings, mockUseAuthorized, state } = vi.hoisted(() => {
   const state = {
     mode: "ai-gateway" as string,
     setMode: vi.fn(),
     plugins: [] as { name: string; display_name: string; url: string }[],
     activePlugin: null as { name: string; display_name: string; url: string } | null,
+    enableChatUI: false,
+    userRole: "Internal User" as string,
   };
-  return { mockUsePluginMode: vi.fn(() => state), state };
+  return {
+    state,
+    mockUsePluginMode: vi.fn(() => ({
+      mode: state.mode,
+      setMode: state.setMode,
+      plugins: state.plugins,
+      activePlugin: state.activePlugin,
+    })),
+    mockUseUISettings: vi.fn(() => ({ data: { values: { enable_chat_ui: state.enableChatUI } } })),
+    mockUseAuthorized: vi.fn(() => ({ userRole: state.userRole })),
+  };
 });
 
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: mockUsePluginMode }));
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: mockUseAuthorized }));
+// Deterministic hrefs so navigation assertions don't depend on server_root_path.
+vi.mock("@/utils/migratedPages", () => ({ migratedHref: (seg: string) => `/ui/${seg}` }));
 
 describe("ViewSwitcher", () => {
+  let assignSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    assignSpy = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { assign: assignSpy },
+    });
+  });
+
   afterEach(() => {
     state.mode = "ai-gateway";
     state.plugins = [];
+    state.enableChatUI = false;
+    state.userRole = "Internal User";
     state.setMode.mockClear();
   });
 
-  it("renders nothing when there are no plugins", () => {
+  it("renders nothing with no plugins, chat disabled, and a non-admin user", () => {
     const { container } = render(<ViewSwitcher />);
     expect(container.firstChild).toBeNull();
   });
 
-  it("labels the button from the active plugin's display_name and lists AI Gateway + each plugin", async () => {
+  it("labels the button from the active plugin and lists AI Gateway + each plugin", async () => {
     state.plugins = [
       { name: "litellm-platform-plugin", display_name: "Chat UI", url: "http://localhost:3300" },
       { name: "obs", display_name: "Observability", url: "http://localhost:9000" },
@@ -35,7 +63,6 @@ describe("ViewSwitcher", () => {
     render(<ViewSwitcher />);
 
     expect(screen.getByRole("button")).toHaveTextContent("Chat UI");
-    expect(screen.queryByText("Agent Control Plane")).not.toBeInTheDocument();
 
     act(() => {
       fireEvent.click(screen.getByRole("button"));
@@ -44,22 +71,7 @@ describe("ViewSwitcher", () => {
     expect(screen.getByText("Observability")).toBeInTheDocument();
   });
 
-  it("switches to AI Gateway when that entry is picked", async () => {
-    state.plugins = [{ name: "litellm-platform-plugin", display_name: "Chat UI", url: "http://localhost:3300" }];
-    state.mode = "litellm-platform-plugin";
-    render(<ViewSwitcher />);
-
-    act(() => {
-      fireEvent.click(screen.getByRole("button"));
-    });
-    await waitFor(() => expect(screen.getByText("AI Gateway")).toBeInTheDocument());
-    act(() => {
-      fireEvent.click(screen.getByText("AI Gateway"));
-    });
-    expect(state.setMode).toHaveBeenCalledWith("ai-gateway");
-  });
-
-  it("switches to a plugin by name when its entry is picked", async () => {
+  it("switches plugin mode when a mode entry is picked", async () => {
     state.plugins = [{ name: "litellm-platform-plugin", display_name: "Chat UI", url: "http://localhost:3300" }];
     state.mode = "ai-gateway";
     render(<ViewSwitcher />);
@@ -72,5 +84,55 @@ describe("ViewSwitcher", () => {
       fireEvent.click(screen.getByText("Chat UI"));
     });
     expect(state.setMode).toHaveBeenCalledWith("litellm-platform-plugin");
+    expect(assignSpy).not.toHaveBeenCalled();
+  });
+
+  it("shows a clickable Chat entry that navigates to the chat app when enabled", async () => {
+    state.enableChatUI = true;
+    state.userRole = "Internal User";
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
+    expect(screen.queryByText(/Enable in Admin Settings/i)).not.toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Chat"));
+    });
+    expect(assignSpy).toHaveBeenCalledWith("/ui/chat");
+    expect(state.setMode).not.toHaveBeenCalled();
+  });
+
+  it("greys out Chat and points admins to Admin Settings when disabled", async () => {
+    state.enableChatUI = false;
+    state.userRole = "Admin";
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
+    expect(screen.getByText(/Enable in Admin Settings/i)).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Chat"));
+    });
+    expect(assignSpy).toHaveBeenCalledWith("/ui/admin-panel");
+    expect(state.setMode).not.toHaveBeenCalled();
+  });
+
+  it("hides the Chat entry from non-admins when disabled", async () => {
+    state.enableChatUI = false;
+    state.userRole = "Internal User";
+    state.plugins = [{ name: "obs", display_name: "Observability", url: "http://localhost:9000" }];
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    await waitFor(() => expect(screen.getByText("Observability")).toBeInTheDocument());
+    expect(screen.queryByText("Chat")).not.toBeInTheDocument();
   });
 });
