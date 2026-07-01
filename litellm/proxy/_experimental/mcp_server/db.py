@@ -1231,7 +1231,7 @@ def _remaining_token_seconds(expires_at: str | None) -> int | None:
 async def get_active_submitted_mcp_server_ids_for_user(
     prisma_client: PrismaClient,
     user_id: str,
-) -> List[str]:
+) -> list[str]:
     """Return active BYOM servers submitted by this user (creator visibility)."""
     if not user_id:
         return []
