@@ -1,16 +1,10 @@
 region = "eu-central-1"
 azs    = ["eu-central-1a", "eu-central-1b"]
 
-# Resource naming: every AWS resource the stack creates is named
-# `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
-# tenant="acme" + env="stage" → ALB `acme-litellm-stage`, ECS service
-# `acme-litellm-stage-gateway`, etc.
 tenant = "data-reply"
 env    = "prod"
 
-# TLS: provide an ACM cert for production. Without one, plan fails unless
-# allow_plaintext_alb = true is set explicitly (trial/dev only).
-# TODO: acm_certificate_domain_name = "litellm.datareply.de"
+acm_certificate_domain_name = "litellm.datareply.de"
 
 s3_force_destroy    = false
 skip_final_snapshot = false
@@ -20,9 +14,37 @@ skip_final_snapshot = false
 proxy_config = {
   model_list = [
     {
-      model_name = "gpt-5.4"
+      model_name = "GPT-5.5"
+      litellm_params = {
+        model   = "openai/gpt-5.5"
+        api_key = "os.environ/OPENAI_API_KEY"
+      }
+    },
+    {
+      model_name = "GPT-5.4"
       litellm_params = {
         model   = "openai/gpt-5.4"
+        api_key = "os.environ/OPENAI_API_KEY"
+      }
+    },
+    {
+      model_name = "GPT-5.4-Mini"
+      litellm_params = {
+        model   = "openai/gpt-5.4-mini"
+        api_key = "os.environ/OPENAI_API_KEY"
+      }
+    },
+    {
+      model_name = "GPT-5.3-Codex"
+      litellm_params = {
+        model   = "openai/gpt-5.3-codex"
+        api_key = "os.environ/OPENAI_API_KEY"
+      }
+    },
+    {
+      model_name = "GPT-5.2"
+      litellm_params = {
+        model   = "openai/gpt-5.2"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },
