@@ -60,6 +60,13 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
     """
     try:
         return generic_cost_per_token(model=model, usage=usage, custom_llm_provider="fireworks_ai")
-    except Exception:
+    except Exception as e:
+        from litellm._logging import verbose_logger
+
+        verbose_logger.debug(
+            "fireworks_ai cost_per_token: model=%s not found, falling back to param-size pricing. Error: %s",
+            model,
+            str(e),
+        )
         base_model = get_base_model_for_pricing(model_name=model)
         return generic_cost_per_token(model=base_model, usage=usage, custom_llm_provider="fireworks_ai")
