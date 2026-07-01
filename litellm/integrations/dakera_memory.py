@@ -100,10 +100,14 @@ class DakeraMemoryLogger(CustomLogger):
             if sid:
                 return str(sid)
         # Fall back to a stable per-API-key namespace to prevent cross-tenant leakage.
-        # This isolates memories per litellm API key when no explicit session is supplied.
+        # Handles both UserAPIKeyAuth objects (has .api_key attribute) and serialized
+        # dicts (kwargs["user_api_key_dict"] in async_log_success_event).
         caller_key: str = ""
         if user_api_key_dict is not None:
-            caller_key = getattr(user_api_key_dict, "api_key", "") or ""
+            caller_key = getattr(user_api_key_dict, "api_key", None)
+            if caller_key is None and isinstance(user_api_key_dict, dict):
+                caller_key = user_api_key_dict.get("api_key", "")
+            caller_key = caller_key or ""
         if caller_key:
             return "key:" + hashlib.sha256(caller_key.encode()).hexdigest()[:16]
         return "default"
@@ -192,7 +196,7 @@ class DakeraMemoryLogger(CustomLogger):
         """Store the completed LLM exchange in Dakera."""
         try:
             messages: List[Dict] = kwargs.get("messages", [])
-            session_id = self._session_id(kwargs.get("metadata"))
+            session_id = self._session_id(kwargs.get("metadata"), kwargs.get("user_api_key_dict"))
 
             raw_content = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
