@@ -6,7 +6,7 @@ Hooks into litellm's pre/post call lifecycle:
 - async_log_success_event: persists the completed exchange to Dakera after success
 
 Self-host Dakera:
-    docker run -p 3000:3000 -e DAKERA_API_KEY=demo dakera/dakera:latest
+    docker run -p 3300:3300 -e DAKERA_API_KEY=demo ghcr.io/dakera-ai/dakera:latest
 
 Usage:
     import litellm
@@ -14,7 +14,7 @@ Usage:
 
     litellm.callbacks = [
         DakeraMemoryLogger(
-            base_url="http://localhost:3000",
+            base_url="http://localhost:3300",
             api_key="dk_your_key",
             top_k=5,
         )
@@ -78,7 +78,7 @@ class DakeraMemoryLogger(CustomLogger):
         session_id_key: str = "session_id",
     ) -> None:
         super().__init__()
-        self.base_url = (base_url or os.getenv("DAKERA_API_URL", "http://localhost:3000")).rstrip("/")
+        self.base_url = (base_url or os.getenv("DAKERA_API_URL", "http://localhost:3300")).rstrip("/")
         self.api_key = api_key or os.getenv("DAKERA_API_KEY", "")
         self.top_k = top_k
         self.session_id_key = session_id_key
