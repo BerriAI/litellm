@@ -45,12 +45,12 @@ class SingulrGuardrailPayload(BaseModel):
 class SingulrGuardrailConfigModel(GuardrailConfigModel):
     singulr_api_key: Optional[str] = Field(
         default=None,
-        description="The Singulr API key. Generate this key from Singulr Platform.",
+        description="The Singulr API key. Generate API key from Singulr Platform.",
     )
 
     singulr_api_base: Optional[str] = Field(
         default=None,
-        description="The Singulr API base URL. Generate base URL from Singulr Platform.",
+        description="The Singulr API base URL. Get base URL from Singulr Platform.",
     )
 
     singulr_application_id: Optional[str] = Field(
