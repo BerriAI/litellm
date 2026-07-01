@@ -23579,6 +23579,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -23719,6 +23723,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -24702,6 +24710,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -26083,6 +26098,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -27891,6 +27913,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -28025,6 +28051,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -29643,6 +29673,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -31602,6 +31636,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
@@ -32065,6 +32103,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -32163,6 +32205,10 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Fallbacks */
+            budget_fallbacks?: {
+                [key: string]: string[];
+            } | null;
             /** Budget Limits */
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /**
@@ -32390,6 +32436,13 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /**
+             * Budget Fallbacks
+             * @default {}
+             */
+            budget_fallbacks: {
+                [key: string]: string[];
+            };
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
