@@ -266,3 +266,34 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
         )
     assert out is wrapped
     mock_wrap.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aresponses_fallback_on_in_stream_error_event():
+    """APIError raised by _maybe_raise_for_error_event propagates through the wrapper."""
+    import litellm
+
+    router = _make_router()
+
+    class _ErrorOnFirstChunkSource:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise litellm.APIError(
+                status_code=429,
+                message="rate limited",
+                llm_provider="openai",
+                model="gpt-5",
+            )
+
+    source = _ErrorOnFirstChunkSource()
+    wrapped = await router._aresponses_streaming_iterator(
+        response=source,
+        initial_kwargs={"model": "primary"},
+    )
+
+    with pytest.raises(litellm.APIError) as exc_info:
+        async for _ in wrapped:
+            pass
+    assert exc_info.value.status_code == 429

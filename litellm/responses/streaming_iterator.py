@@ -47,6 +47,17 @@ def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -
         verbose_logger.error("%s failed: %s", task_name, exception)
 
 
+_CLIENT_ERROR_CODES: frozenset[str] = frozenset(
+    (
+        "invalid_request_error",
+        "context_length_exceeded",
+        "insufficient_quota",
+        "content_policy_violation",
+        "model_not_found",
+    )
+)
+
+
 class BaseResponsesAPIStreamingIterator:
     """
     Base class for streaming iterators that process responses from the Responses API.
@@ -338,6 +349,47 @@ class BaseResponsesAPIStreamingIterator:
         )
         self._handle_failure(exception)
 
+    def _maybe_raise_for_error_event(self, result: object) -> None:
+        chunk_type = getattr(result, "type", None)
+        if chunk_type not in ("error", "response.failed"):
+            return
+
+        error_obj: object = (
+            getattr(getattr(result, "response", None), "error", None)
+            if chunk_type == "response.failed"
+            else getattr(result, "error", None)
+        )
+
+        if error_obj is not None and hasattr(error_obj, "message"):
+            error_message = str(getattr(error_obj, "message", "Response API in-stream error"))
+        elif error_obj is not None and isinstance(error_obj, dict):
+            error_message = str(error_obj.get("message", "Response API in-stream error"))
+        else:
+            error_message = "Response API in-stream error"
+
+        if isinstance(error_obj, dict):
+            raw = error_obj.get("code")
+            error_code: Optional[str] = raw if isinstance(raw, str) else None
+        elif error_obj is not None:
+            raw_attr = getattr(error_obj, "code", None)
+            error_code = raw_attr if isinstance(raw_attr, str) else None
+        else:
+            error_code = None
+
+        if error_code is not None and error_code.startswith("rate_limit"):
+            status_code = 429
+        elif error_code in _CLIENT_ERROR_CODES:
+            status_code = 400
+        else:
+            status_code = 500
+
+        raise litellm.APIError(
+            status_code=status_code,
+            message=error_message,
+            llm_provider=self.custom_llm_provider or "",
+            model=self.model or "",
+        )
+
     def _get_completed_response_object(self) -> Optional[Any]:
         openai_types = _get_openai_response_types()
         completed_response = self.completed_response
@@ -611,6 +663,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopAsyncIteration
                 elif result is not None:
+                    self._maybe_raise_for_error_event(result)
                     # Await hook directly instead of run_async_function
                     # (which spawns a thread + event loop per call)
                     result = await self._call_post_streaming_deployment_hook(
@@ -685,6 +738,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                 if self.finished:
                     raise StopIteration
                 elif result is not None:
+                    self._maybe_raise_for_error_event(result)
                     # Sync path: use run_async_function for the hook
                     result = run_async_function(
                         async_function=self._call_post_streaming_deployment_hook,

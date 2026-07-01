@@ -17,18 +17,21 @@ import os
 import sys
 from datetime import datetime
 from typing import Any, Dict, Optional
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import litellm
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
+    ErrorEvent,
+    ErrorEventError,
     ResponseCompletedEvent,
     ResponseFailedEvent,
     ResponseIncompleteEvent,
@@ -655,3 +658,118 @@ class TestBaseResponsesAPIStreamingIterator:
             # Failure handlers should NOT have been called
             mock_logging_obj.async_failure_handler.assert_not_called()
             mock_logging_obj.failure_handler.assert_not_called()
+
+
+class TestMaybeRaiseForErrorEvent:
+    """Regression tests for _maybe_raise_for_error_event."""
+
+    def _make_iterator(self) -> BaseResponsesAPIStreamingIterator:
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+        mock_response = Mock()
+        mock_response.headers = {}
+        return BaseResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="openai",
+        )
+
+    def _make_error_chunk(self, code: str, message: str = "err") -> ErrorEvent:
+        error_obj = ErrorEventError(
+            type="rate_limit_error" if code.startswith("rate_limit") else "invalid_request_error",
+            code=code,
+            message=message,
+        )
+        return ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR, sequence_number=0, error=error_obj
+        )
+
+    def test_raises_api_error_on_error_type(self):
+        iterator = self._make_iterator()
+        chunk = self._make_error_chunk("internal_error", "something went wrong")
+        with pytest.raises(litellm.APIError) as exc_info:
+            iterator._maybe_raise_for_error_event(chunk)
+        assert exc_info.value.status_code == 500
+
+    def test_maps_rate_limit_to_429(self):
+        iterator = self._make_iterator()
+        chunk = self._make_error_chunk("rate_limit_exceeded", "Too many requests")
+        with pytest.raises(litellm.APIError) as exc_info:
+            iterator._maybe_raise_for_error_event(chunk)
+        assert exc_info.value.status_code == 429
+
+    def test_maps_invalid_request_to_400(self):
+        iterator = self._make_iterator()
+        chunk = self._make_error_chunk("invalid_request_error", "bad request")
+        with pytest.raises(litellm.APIError) as exc_info:
+            iterator._maybe_raise_for_error_event(chunk)
+        assert exc_info.value.status_code == 400
+
+    def test_maps_context_length_exceeded_to_400(self):
+        iterator = self._make_iterator()
+        chunk = self._make_error_chunk("context_length_exceeded", "max tokens exceeded")
+        with pytest.raises(litellm.APIError) as exc_info:
+            iterator._maybe_raise_for_error_event(chunk)
+        assert exc_info.value.status_code == 400
+
+    def test_passes_through_normal_chunk(self):
+        iterator = self._make_iterator()
+        chunk = Mock()
+        chunk.type = ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        iterator._maybe_raise_for_error_event(chunk)  # must not raise
+
+    def test_error_event_error_param_accepts_dict(self):
+        error_obj = ErrorEventError(
+            type="invalid_request_error",
+            code="context_length_exceeded",
+            message="too long",
+            param={"field": "messages", "index": 0},
+        )
+        assert isinstance(error_obj.param, dict)
+
+    @pytest.mark.asyncio
+    async def test_async_iterator_raises_api_error_on_error_event(self):
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        error_payload = {
+            "type": "error",
+            "error": {
+                "type": "rate_limit_error",
+                "code": "rate_limit_exceeded",
+                "message": "rate limited",
+            },
+        }
+        sse_bytes = f"data: {json.dumps(error_payload)}\n\n".encode()
+
+        async def mock_aiter_bytes():
+            yield sse_bytes
+
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        error_obj = ErrorEventError(
+            type="rate_limit_error", code="rate_limit_exceeded", message="rate limited"
+        )
+        mock_config.transform_streaming_response.return_value = ErrorEvent(
+            type=ResponsesAPIStreamEvents.ERROR, sequence_number=0, error=error_obj
+        )
+
+        iterator = ResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-5",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="openai",
+        )
+
+        with pytest.raises(litellm.APIError) as exc_info:
+            async for _ in iterator:
+                pass
+        assert exc_info.value.status_code == 429
