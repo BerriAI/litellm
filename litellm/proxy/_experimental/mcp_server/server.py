@@ -735,6 +735,44 @@ if MCP_AVAILABLE:
         verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
         return forward_progress
 
+    async def _build_virtual_call_logging_obj(
+        name: str,
+        arguments: dict[str, Any],
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> Optional[LiteLLMLoggingObj]:
+        """Run the pre-call pipeline (guardrails + logging setup) for a virtual
+        mcp_tool_call so the SSE path spend-logs like the REST path."""
+        from fastapi import Request
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            proxy_config,
+            proxy_logging_obj,
+        )
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/mcp/tools/call",
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        _, virtual_logging_obj = await ProxyBaseLLMRequestProcessing(
+            data={"name": name, "arguments": arguments}
+        ).common_processing_pre_call_logic(
+            request=request,
+            user_api_key_dict=user_api_key_auth,
+            proxy_config=proxy_config,
+            route_type=CallTypes.call_mcp_tool.value,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+        )
+        return virtual_logging_obj
+
     async def _dispatch_virtual_mcp_tool(
         name: str,
         arguments: Optional[dict[str, Any]],
@@ -754,6 +792,7 @@ if MCP_AVAILABLE:
         from litellm.proxy._experimental.mcp_server.tool_search import (
             MCP_TOOL_CALL_TOOL_NAME,
             MCP_TOOL_SEARCH_TOOL_NAME,
+            coerce_top_k,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
         )
@@ -780,7 +819,7 @@ if MCP_AVAILABLE:
         if name == MCP_TOOL_SEARCH_TOOL_NAME:
             return await handle_mcp_tool_search(
                 query=args.get("query", ""),
-                top_k=int(args.get("top_k", 5)),
+                top_k=coerce_top_k(args.get("top_k", 5)),
                 user_api_key_dict=user_api_key_auth,
                 client_ip=client_ip,
                 mcp_servers=mcp_servers,
@@ -789,6 +828,11 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
             )
+
+        assert user_api_key_auth is not None  # guaranteed by the flag check above
+        virtual_logging_obj = await _build_virtual_call_logging_obj(
+            name=name, arguments=args, user_api_key_auth=user_api_key_auth
+        )
         return await handle_mcp_tool_call(
             tool_name=args.get("tool_name", ""),
             arguments=args.get("arguments") or {},
@@ -799,6 +843,7 @@ if MCP_AVAILABLE:
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
+            litellm_logging_obj=virtual_logging_obj,
         )
 
     @server.call_tool()

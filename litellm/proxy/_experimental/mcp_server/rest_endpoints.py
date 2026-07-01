@@ -569,7 +569,7 @@ if MCP_AVAILABLE:
                 include_disabled_tools and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             )
 
-            if getattr(
+            if apply_tool_filters and getattr(
                 getattr(user_api_key_dict, "object_permission", None),
                 "mcp_tool_search_enabled",
                 False,
@@ -748,6 +748,7 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.tool_search import (
                 MCP_TOOL_CALL_TOOL_NAME,
                 MCP_TOOL_SEARCH_TOOL_NAME,
+                coerce_top_k,
                 handle_mcp_tool_call,
                 handle_mcp_tool_search,
             )
@@ -775,7 +776,7 @@ if MCP_AVAILABLE:
                 if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
                     return await handle_mcp_tool_search(
                         query=tool_arguments.get("query", ""),
-                        top_k=int(tool_arguments.get("top_k", 5)),
+                        top_k=coerce_top_k(tool_arguments.get("top_k", 5)),
                         user_api_key_dict=user_api_key_dict,
                         client_ip=rest_client_ip,
                         mcp_auth_header=virtual_mcp_auth_header,

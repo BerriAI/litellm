@@ -19,10 +19,11 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._experimental.mcp_server.tool_search import (
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
+    coerce_top_k,
     get_virtual_tool_definitions,
     search_tools,
 )
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
 def _make_tools(specs: list[tuple[str, str]]) -> list[dict[str, Any]]:
@@ -49,6 +50,26 @@ SAMPLE_TOOLS = _make_tools(
         ("notion-create_page", "Create a new page in Notion"),
     ]
 )
+
+
+class TestCoerceTopK:
+    def test_int_passthrough(self) -> None:
+        assert coerce_top_k(3) == 3
+
+    def test_numeric_string_coerced(self) -> None:
+        assert coerce_top_k("7") == 7
+
+    def test_float_truncated(self) -> None:
+        assert coerce_top_k(3.9) == 3
+
+    def test_non_numeric_string_returns_default(self) -> None:
+        assert coerce_top_k("abc") == 5
+
+    def test_none_returns_default(self) -> None:
+        assert coerce_top_k(None) == 5
+
+    def test_custom_default(self) -> None:
+        assert coerce_top_k("nope", default=10) == 10
 
 
 class TestSearchTools:
@@ -153,10 +174,7 @@ class TestListToolRestApiWithToolSearch:
         list_fn = next(
             r.endpoint
             for r in router.routes
-            if hasattr(r, "path")
-            and r.path.endswith("/tools/list")
-            and hasattr(r, "methods")
-            and "GET" in r.methods
+            if hasattr(r, "path") and r.path.endswith("/tools/list") and hasattr(r, "methods") and "GET" in r.methods
         )
 
         result = await list_fn(
@@ -196,10 +214,7 @@ class TestListToolRestApiWithToolSearch:
         list_fn = next(
             r.endpoint
             for r in router.routes
-            if hasattr(r, "path")
-            and r.path.endswith("/tools/list")
-            and hasattr(r, "methods")
-            and "GET" in r.methods
+            if hasattr(r, "path") and r.path.endswith("/tools/list") and hasattr(r, "methods") and "GET" in r.methods
         )
 
         with (
@@ -208,17 +223,13 @@ class TestListToolRestApiWithToolSearch:
                 new_callable=AsyncMock,
                 return_value=[user_api_key_dict],
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
-            ) as mock_manager,
+            patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager") as mock_manager,
             patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints._get_tools_for_single_server",
                 new_callable=AsyncMock,
                 return_value=fake_tools,
             ),
-            patch(
-                "litellm.proxy._experimental.mcp_server.rest_endpoints.IPAddressUtils"
-            ),
+            patch("litellm.proxy._experimental.mcp_server.rest_endpoints.IPAddressUtils"),
             patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints._prefetch_user_oauth_creds",
                 new_callable=AsyncMock,
@@ -239,16 +250,91 @@ class TestListToolRestApiWithToolSearch:
             ),
         ):
             mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
-            mock_manager.filter_server_ids_by_ip_with_info = MagicMock(
-                return_value=(["github"], 0)
-            )
-            mock_manager.get_mcp_server_by_id = MagicMock(
-                return_value=MagicMock(name="github", server_id="github")
-            )
+            mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["github"], 0))
+            mock_manager.get_mcp_server_by_id = MagicMock(return_value=MagicMock(name="github", server_id="github"))
             result = await list_fn(
                 request=mock_request,
                 server_id=None,
                 include_disabled_tools=False,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        tool_names = [t["name"] for t in result["tools"]]
+        assert MCP_TOOL_SEARCH_TOOL_NAME not in tool_names
+        assert "github-create_issue" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_admin_include_disabled_tools_bypasses_virtual_catalog(self) -> None:
+        """Regression: an admin listing with include_disabled_tools must see the
+        real catalog (to configure allowlists) even when mcp_tool_search_enabled is
+        set, instead of the two virtual tools."""
+        from litellm.proxy._experimental.mcp_server.rest_endpoints import router
+
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="admin_key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            object_permission=_make_perm(
+                mcp_tool_search_enabled=True,
+                mcp_servers=["github"],
+            ),
+        )
+
+        mock_request = MagicMock()
+        mock_request.headers = {}
+
+        fake_tools = [
+            {
+                "name": "github-create_issue",
+                "description": "Create issue",
+                "inputSchema": {"type": "object"},
+            }
+        ]
+
+        list_fn = next(
+            r.endpoint
+            for r in router.routes
+            if hasattr(r, "path") and r.path.endswith("/tools/list") and hasattr(r, "methods") and "GET" in r.methods
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints.build_effective_auth_contexts",
+                new_callable=AsyncMock,
+                return_value=[user_api_key_dict],
+            ),
+            patch("litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager") as mock_manager,
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_tools_for_single_server",
+                new_callable=AsyncMock,
+                return_value=fake_tools,
+            ),
+            patch("litellm.proxy._experimental.mcp_server.rest_endpoints.IPAddressUtils"),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._prefetch_user_oauth_creds",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_oauth2_server_ids",
+                return_value=[],
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_server_auth_header",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._get_user_oauth_extra_headers",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            mock_manager.get_allowed_mcp_servers = AsyncMock(return_value=["github"])
+            mock_manager.filter_server_ids_by_ip_with_info = MagicMock(return_value=(["github"], 0))
+            mock_manager.get_mcp_server_by_id = MagicMock(return_value=MagicMock(name="github", server_id="github"))
+            result = await list_fn(
+                request=mock_request,
+                server_id=None,
+                include_disabled_tools=True,
                 user_api_key_dict=user_api_key_dict,
             )
 
@@ -272,10 +358,7 @@ class TestCallToolRestApiVirtualTools:
         return next(
             r.endpoint
             for r in router.routes
-            if hasattr(r, "path")
-            and r.path.endswith("/tools/call")
-            and hasattr(r, "methods")
-            and "POST" in r.methods
+            if hasattr(r, "path") and r.path.endswith("/tools/call") and hasattr(r, "methods") and "POST" in r.methods
         )
 
     @pytest.mark.asyncio
@@ -288,9 +371,7 @@ class TestCallToolRestApiVirtualTools:
             ),
         )
 
-        request = self._make_request(
-            {"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "create issue"}}
-        )
+        request = self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "create issue"}})
 
         mock_tool = MagicMock()
         mock_tool.name = "github-create_issue"
@@ -372,9 +453,7 @@ class TestCallToolRestApiVirtualTools:
 
         user_api_key_dict = UserAPIKeyAuth(
             api_key="test_key",
-            object_permission=_make_perm(
-                mcp_tool_search_enabled=True, mcp_servers=["github"]
-            ),
+            object_permission=_make_perm(mcp_tool_search_enabled=True, mcp_servers=["github"]),
         )
         request = self._make_request(
             {
@@ -383,9 +462,7 @@ class TestCallToolRestApiVirtualTools:
             }
         )
 
-        fake_result = CallToolResult(
-            content=[TextContent(type="text", text="ok")], isError=False
-        )
+        fake_result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
 
         with (
             patch(
@@ -403,9 +480,7 @@ class TestCallToolRestApiVirtualTools:
                 return_value=fake_result,
             ),
         ):
-            await self._get_call_fn()(
-                request=request, user_api_key_dict=user_api_key_dict
-            )
+            await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
 
         mock_allowed.assert_awaited_once()
         assert mock_allowed.await_args.kwargs["client_ip"] == "203.0.113.7"
@@ -415,13 +490,9 @@ class TestCallToolRestApiVirtualTools:
         """Search must list tools through the IP-filtered catalog, not the raw one."""
         user_api_key_dict = UserAPIKeyAuth(
             api_key="test_key",
-            object_permission=_make_perm(
-                mcp_tool_search_enabled=True, mcp_servers=["github"]
-            ),
+            object_permission=_make_perm(mcp_tool_search_enabled=True, mcp_servers=["github"]),
         )
-        request = self._make_request(
-            {"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "issue"}}
-        )
+        request = self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "issue"}})
 
         with (
             patch(
@@ -434,9 +505,7 @@ class TestCallToolRestApiVirtualTools:
                 return_value=[],
             ) as mock_list,
         ):
-            await self._get_call_fn()(
-                request=request, user_api_key_dict=user_api_key_dict
-            )
+            await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
 
         mock_list.assert_awaited_once()
         assert mock_list.await_args.kwargs["client_ip"] == "203.0.113.7"
@@ -450,9 +519,7 @@ class TestCallToolRestApiVirtualTools:
             object_permission=_make_perm(mcp_tool_search_enabled=False),
         )
 
-        request = self._make_request(
-            {"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "create issue"}}
-        )
+        request = self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": "create issue"}})
 
         with pytest.raises(HTTPException) as exc_info:
             await self._get_call_fn()(
@@ -486,9 +553,7 @@ class TestDispatchVirtualMcpTool:
             _dispatch_virtual_mcp_tool,
         )
 
-        uak = UserAPIKeyAuth(
-            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=False)
-        )
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=False))
         result = await _dispatch_virtual_mcp_tool(
             name=MCP_TOOL_SEARCH_TOOL_NAME,
             arguments={"query": "x"},
@@ -502,9 +567,7 @@ class TestDispatchVirtualMcpTool:
     async def test_routes_search_with_client_ip(self) -> None:
         from litellm.proxy._experimental.mcp_server import server as srv
 
-        uak = UserAPIKeyAuth(
-            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
-        )
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
             "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
             new_callable=AsyncMock,
@@ -526,9 +589,7 @@ class TestDispatchVirtualMcpTool:
     async def test_routes_call_with_client_ip(self) -> None:
         from litellm.proxy._experimental.mcp_server import server as srv
 
-        uak = UserAPIKeyAuth(
-            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
-        )
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
             "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call",
             new_callable=AsyncMock,
@@ -550,11 +611,62 @@ class TestDispatchVirtualMcpTool:
         assert kw["tool_name"] == "math-add"
         assert kw["client_ip"] == "203.0.113.9"
         assert kw["mcp_auth_header"] == "bearer-xyz"
-        assert kw["mcp_server_auth_headers"] == {
-            "github": {"Authorization": "Bearer gh"}
-        }
+        assert kw["mcp_server_auth_headers"] == {"github": {"Authorization": "Bearer gh"}}
         assert kw["oauth2_headers"] == {"Authorization": "Bearer oauth"}
         assert kw["raw_headers"] == {"x-mcp-auth": "tok"}
+
+    @pytest.mark.asyncio
+    async def test_call_builds_and_forwards_logging_obj(self) -> None:
+        """Regression: the SSE dispatch must run the pre-call pipeline and forward
+        the resulting logging object to handle_mcp_tool_call, otherwise mcp_tool_call
+        over /mcp/ skips spend logging and guardrails (unlike the REST path)."""
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        sentinel_logging_obj = object()
+        with (
+            patch.object(
+                srv,
+                "_build_virtual_call_logging_obj",
+                new_callable=AsyncMock,
+                return_value=sentinel_logging_obj,
+            ) as mock_build,
+            patch(
+                "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_call",
+                new_callable=AsyncMock,
+                return_value="CALL_RESULT",
+            ) as mock_call,
+        ):
+            await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_CALL_TOOL_NAME,
+                arguments={"tool_name": "math-add", "arguments": {"a": 1}},
+                user_api_key_auth=uak,
+                client_ip=None,
+            )
+
+        assert mock_build.await_count == 1
+        assert mock_call.await_args.kwargs["litellm_logging_obj"] is sentinel_logging_obj
+
+    @pytest.mark.asyncio
+    async def test_search_coerces_non_int_top_k(self) -> None:
+        """Regression: a non-integer top_k from an MCP client must not raise; it
+        falls back to the default instead of ValueError propagating out."""
+        from litellm.proxy._experimental.mcp_server import server as srv
+
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        with patch(
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_mcp_tool_search",
+            new_callable=AsyncMock,
+            return_value="SEARCH_RESULT",
+        ) as mock_search:
+            await srv._dispatch_virtual_mcp_tool(
+                name=MCP_TOOL_SEARCH_TOOL_NAME,
+                arguments={"query": "issue", "top_k": "not-a-number"},
+                user_api_key_auth=uak,
+                client_ip=None,
+            )
+
+        assert mock_search.await_args.kwargs["top_k"] == 5
 
     @pytest.mark.asyncio
     async def test_call_handler_forwards_auth_headers_to_execute(self) -> None:
@@ -566,12 +678,8 @@ class TestDispatchVirtualMcpTool:
             handle_mcp_tool_call,
         )
 
-        uak = UserAPIKeyAuth(
-            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
-        )
-        fake = CallToolResult(
-            content=[TextContent(type="text", text="ok")], isError=False
-        )
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        fake = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
@@ -599,9 +707,7 @@ class TestDispatchVirtualMcpTool:
 
         kw = mock_exec.await_args.kwargs
         assert kw["mcp_auth_header"] == "bearer-xyz"
-        assert kw["mcp_server_auth_headers"] == {
-            "github": {"Authorization": "Bearer gh"}
-        }
+        assert kw["mcp_server_auth_headers"] == {"github": {"Authorization": "Bearer gh"}}
         assert kw["oauth2_headers"] == {"Authorization": "Bearer oauth"}
         assert kw["raw_headers"] == {"x-mcp-auth": "tok"}
         # Spend logging: the logging object must reach execute_mcp_tool
@@ -620,9 +726,7 @@ class TestDispatchVirtualMcpTool:
             handle_mcp_tool_call,
         )
 
-        uak = UserAPIKeyAuth(
-            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
-        )
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
@@ -687,9 +791,7 @@ class TestHandleListToolsVirtual:
     async def test_returns_virtual_tools_when_flag_enabled(self) -> None:
         from litellm.proxy._experimental.mcp_server import server as srv
 
-        uak = UserAPIKeyAuth(
-            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
-        )
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with patch(
             "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
             new_callable=AsyncMock,
@@ -713,9 +815,7 @@ class TestMcpServerToolCallErrorHandling:
 
         from litellm.proxy._experimental.mcp_server import server as srv
 
-        uak = UserAPIKeyAuth(
-            api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True)
-        )
+        uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with (
             patch(
                 "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
@@ -725,9 +825,7 @@ class TestMcpServerToolCallErrorHandling:
             patch(
                 "litellm.proxy._experimental.mcp_server.server._dispatch_virtual_mcp_tool",
                 new_callable=AsyncMock,
-                side_effect=HTTPException(
-                    status_code=403, detail="User not allowed to call this tool"
-                ),
+                side_effect=HTTPException(status_code=403, detail="User not allowed to call this tool"),
             ),
         ):
             result = await srv.mcp_server_tool_call(

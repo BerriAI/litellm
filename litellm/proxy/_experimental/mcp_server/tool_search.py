@@ -4,14 +4,21 @@ import json
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
-from mcp.types import CallToolResult, TextContent
-
 if TYPE_CHECKING:
+    from mcp.types import CallToolResult
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
 
 MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
+
+
+def coerce_top_k(value: Any, default: int = 5) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
@@ -80,6 +87,8 @@ async def handle_mcp_tool_search(
     oauth2_headers: Optional[dict[str, str]] = None,
     raw_headers: Optional[dict[str, str]] = None,
 ) -> CallToolResult:
+    from mcp.types import CallToolResult, TextContent
+
     from litellm.proxy._experimental.mcp_server.server import _list_mcp_tools
 
     mcp_tools = await _list_mcp_tools(
