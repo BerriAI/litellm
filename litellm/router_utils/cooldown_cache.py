@@ -100,6 +100,30 @@ class CooldownCache:
     def get_cooldown_cache_key(model_id: str) -> str:
         return "deployment:" + model_id + ":cooldown"
 
+    def _corrected_active_cooldown(
+        self,
+        key: str,
+        result: dict,
+        current_time: float,
+    ) -> Optional[CooldownCacheValue]:
+        """
+        Return a CooldownCacheValue if the cooldown is still active, or None if it has expired.
+
+        Also corrects the in-memory TTL when DualCache promotes a Redis entry using the
+        default 600s TTL instead of the true remaining cooldown time.
+        """
+        cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
+        remaining = (cooldown_cache_value["timestamp"] + cooldown_cache_value["cooldown_time"]) - current_time
+        if remaining <= 0:
+            self.cache.in_memory_cache.delete_cache(key)
+            return None
+        current_expiry = self.cache.in_memory_cache.ttl_dict.get(key)
+        if current_expiry is not None and current_expiry > current_time + remaining + 5:
+            corrected_ttl = min(remaining, 60.0)
+            self.cache.in_memory_cache.delete_cache(key)
+            self.cache.in_memory_cache.set_cache(key, result, ttl=corrected_ttl)
+        return cooldown_cache_value
+
     async def async_get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
@@ -117,11 +141,13 @@ class CooldownCache:
         if results is None or all(v is None for v in results):
             return active_cooldowns
 
-        # Process the results
+        current_time = time.time()
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                active_cooldowns.append((model_id, cooldown_cache_value))
+                key = CooldownCache.get_cooldown_cache_key(model_id)
+                cooldown_cache_value = self._corrected_active_cooldown(key, result, current_time)
+                if cooldown_cache_value is not None:
+                    active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
 
@@ -134,11 +160,13 @@ class CooldownCache:
         results = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
         active_cooldowns = []
-        # Process the results
+        current_time = time.time()
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                active_cooldowns.append((model_id, cooldown_cache_value))
+                key = CooldownCache.get_cooldown_cache_key(model_id)
+                cooldown_cache_value = self._corrected_active_cooldown(key, result, current_time)
+                if cooldown_cache_value is not None:
+                    active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
 
