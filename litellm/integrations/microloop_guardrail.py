@@ -178,7 +178,8 @@ class MicroloopGuardrail(CustomGuardrail):
         history_window: int | None = None,
         volatile_fields: list[str] | None = None,
         auto_infer_volatile: bool = True,
-        **kwargs,  # noqa: ANN003
+        guardrail_name: str = "microloop",
+        default_on: bool = True,
     ) -> None:
         """
         Args:
@@ -189,19 +190,12 @@ class MicroloopGuardrail(CustomGuardrail):
                 (e.g. request IDs, timestamps).
             auto_infer_volatile: When True, automatically detect volatile
                 fields from call history.
-            **kwargs: Forwarded to :class:`litellm.integrations.custom_guardrail.CustomGuardrail`.
+            guardrail_name: Name passed to parent guardrail.
+            default_on: Whether the guardrail is active by default.
         """
-        guardrail_name = kwargs.pop("guardrail_name", "microloop")
-        supported_event_hooks = kwargs.pop(
-            "supported_event_hooks",
-            None,  # will register for pre_call by default
-        )
-        default_on = kwargs.pop("default_on", True)
         super().__init__(
             guardrail_name=guardrail_name,
-            supported_event_hooks=supported_event_hooks,
             default_on=default_on,
-            **kwargs,
         )
         self._max_repeats = max_repeats
         self._history_window = history_window or (max_repeats * 2)
