@@ -31,6 +31,7 @@ import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
@@ -6782,17 +6783,25 @@ export const testMCPToolsListRequest = async (
     const data = await response.json();
 
     if (!response.ok || data.error) {
+      if (response.status === 403) {
+        return {
+          tools: [],
+          error: true,
+          status: 403,
+          message: MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE,
+        };
+      }
       // Return the error response instead of throwing an error
       // This allows the caller to handle the error format properly
       if (data.error) {
-        return data; // Return the full error response
-      } else {
-        return {
-          tools: [],
-          error: "request_failed",
-          message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
-        };
+        return { ...data, status: response.status };
       }
+      return {
+        tools: [],
+        error: "request_failed",
+        status: response.status,
+        message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
+      };
     }
 
     return data;

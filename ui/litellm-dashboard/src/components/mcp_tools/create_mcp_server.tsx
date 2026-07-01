@@ -91,7 +91,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
-  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } =
+  const { tools, isLoadingTools, toolsError, toolsErrorStatus, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } =
     useTestMCPConnection({
       accessToken,
       oauthAccessToken,
@@ -1088,6 +1088,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               tools={tools}
               isLoadingTools={isLoadingTools}
               toolsError={toolsError}
+              toolsErrorStatus={toolsErrorStatus}
               toolsErrorStackTrace={toolsErrorStackTrace}
               canFetchTools={canFetchTools}
               fetchTools={fetchTools}
@@ -1112,6 +1113,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               externalTools={tools}
               externalIsLoading={isLoadingTools}
               externalError={toolsError}
+              externalErrorStatus={toolsErrorStatus}
               externalCanFetch={canFetchTools}
             />
           </div>
