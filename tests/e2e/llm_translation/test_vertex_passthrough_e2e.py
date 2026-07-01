@@ -87,7 +87,9 @@ class _ModelDeleteBody(BaseModel):
     id: str
 
 
-def _add_vertex_passthrough_model(client: PassthroughClient, model_name: str, project: str, credentials: str) -> str:
+def _add_vertex_passthrough_model(
+    client: PassthroughClient, model_name: str, project: str, credentials: str
+) -> str:
     return unwrap(
         client.gateway.transport.post(
             "/model/new",
