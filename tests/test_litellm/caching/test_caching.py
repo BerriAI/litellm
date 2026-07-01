@@ -183,12 +183,17 @@ async def test_async_get_cache_filters_kwargs_like_sync():
 
 @pytest.mark.asyncio
 async def test_async_get_cache_propagates_semantic_similarity_metadata():
-    """async_get_cache must copy semantic-similarity from the backend's metadata
-    copy back into the caller's original metadata dict."""
+    """async_get_cache must receive a metadata COPY (not the original) and then
+    propagate semantic-similarity back via _update_metadata_from_cache_lookup_kwargs.
+    Without the fix, the backend receives the original dict directly and the
+    propagation step is skipped entirely."""
     cache = Cache(type=LiteLLMCacheType.LOCAL)
+    received_metadata_objects: list = []
 
     async def fake_get(key, **kwargs):
-        kwargs.get("metadata", {})["semantic-similarity"] = 0.95
+        md = kwargs.get("metadata", {})
+        received_metadata_objects.append(md)
+        md["semantic-similarity"] = 0.95
         return None
 
     backend = MagicMock()
@@ -203,4 +208,6 @@ async def test_async_get_cache_propagates_semantic_similarity_metadata():
         metadata=original_metadata,
     )
 
+    assert len(received_metadata_objects) == 1
+    assert received_metadata_objects[0] is not original_metadata
     assert original_metadata.get("semantic-similarity") == 0.95
