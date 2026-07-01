@@ -719,6 +719,104 @@ def test_get_config_callbacks_happy(client, auth_as, mock_prisma, monkeypatch):
     }
 
 
+def _config_with_callbacks():
+    return {
+        "litellm_settings": {
+            "success_callback": ["langfuse"],
+            "failure_callback": ["sentry"],
+        },
+        "general_settings": {"alerting": ["slack"]},
+        "environment_variables": {
+            "LANGFUSE_PUBLIC_KEY": "pk-lf-abc",
+            "LANGFUSE_SECRET_KEY": "sk-lf-secret123",
+            "LANGFUSE_HOST": "https://cloud.langfuse.com",
+            "SENTRY_DSN": "https://key@sentry.io/123",
+            "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T00/B00/xxx",
+        },
+    }
+
+
+def _setup_slack_alerting(monkeypatch):
+    from litellm.proxy import proxy_server as ps
+
+    slack_instance = MagicMock()
+    slack_instance.alert_types = ["llm_exceptions"]
+    slack_instance._all_possible_alert_types.return_value = ["llm_exceptions", "budget_alerts"]
+    slack_instance.alert_to_webhook_url = {
+        "llm_exceptions": "https://hooks.slack.com/services/T00/B00/secret",
+        "budget_alerts": "https://hooks.slack.com/services/T00/B00/secret2",
+    }
+    proxy_logging = MagicMock()
+    proxy_logging.slack_alerting_instance = slack_instance
+    monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging)
+
+
+def test_get_config_callbacks_admin_sees_plaintext(client, auth_as, mock_prisma, monkeypatch):
+    """PROXY_ADMIN sees raw credential values in callback variables and
+    alert_to_webhook_url -- no redaction."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(return_value=_config_with_callbacks())
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+    _setup_slack_alerting(monkeypatch)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    langfuse_cb = next(cb for cb in body["callbacks"] if cb["name"] == "langfuse")
+    assert langfuse_cb["variables"]["LANGFUSE_SECRET_KEY"] == "sk-lf-secret123"
+    assert langfuse_cb["variables"]["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
+
+    slack_alert = next(a for a in body["alerts"] if a["name"] == "slack")
+    for url in slack_alert["alerts_to_webhook"].values():
+        assert url.startswith("https://hooks.slack.com/")
+
+
+def test_get_config_callbacks_viewer_gets_redacted(client, auth_as, mock_prisma, monkeypatch):
+    """PROXY_ADMIN_VIEW_ONLY must NOT see plaintext credentials in callback
+    variables or alert_to_webhook_url values."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.setattr(ps, "llm_router", None)
+
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.get_config = AsyncMock(return_value=_config_with_callbacks())
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+    _setup_slack_alerting(monkeypatch)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+        response = client.get("/get/config/callbacks")
+    assert response.status_code == 200
+    body = response.json()
+
+    langfuse_cb = next(cb for cb in body["callbacks"] if cb["name"] == "langfuse")
+    assert langfuse_cb["variables"]["LANGFUSE_SECRET_KEY"] == "REDACTED"
+    assert langfuse_cb["variables"]["LANGFUSE_HOST"] == "REDACTED"
+    assert langfuse_cb["variables"]["LANGFUSE_PUBLIC_KEY"] == "REDACTED"
+
+    sentry_cb = next(cb for cb in body["callbacks"] if cb["name"] == "sentry")
+    for val in sentry_cb["variables"].values():
+        assert val is None or val == "REDACTED"
+
+    slack_alert = next(a for a in body["alerts"] if a["name"] == "slack")
+    for url in slack_alert["alerts_to_webhook"].values():
+        assert url == "REDACTED"
+
+    assert langfuse_cb["name"] == "langfuse"
+    assert langfuse_cb["type"] == "success"
+
+
 def test_get_config_callbacks_internal_error(client, auth_as, mock_prisma, monkeypatch):
     """If proxy_config.get_config() raises, the handler wraps the failure in
     a ProxyException → non-2xx response with an error body."""

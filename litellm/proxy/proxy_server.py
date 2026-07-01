@@ -425,10 +425,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
-from litellm.proxy.management_helpers.audit_logs import (
-    create_audit_log_for_update,
-    create_object_audit_log,
-)
+from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
@@ -473,7 +470,6 @@ from litellm.proxy.response_api_endpoints.endpoints import router as response_ro
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
-from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -1078,6 +1074,22 @@ _OPENAPI_HTTP_METHODS = {
 # `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
 # and cache endpoint files.
 _ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
+
+
+def _redact_callback_variables(
+    callback_data: dict[str, object], is_full_admin: bool
+) -> dict[str, object]:
+    if is_full_admin:
+        return callback_data
+    variables = callback_data.get("variables")
+    if not isinstance(variables, dict):
+        return callback_data
+    return {
+        **callback_data,
+        "variables": {k: ("REDACTED" if v is not None else None) for k, v in variables.items()},
+    }
+
+
 _DB_LITELLM_PARAM_ENV_REF_KEYS = frozenset(
     {
         "api_key",
@@ -2267,133 +2279,111 @@ async def increment_spend_counters(
             budget_reservation["finalized"] = True
         return
 
-    cost: float = response_cost
-
-    async def _key_scope(key_token: str) -> None:
-        # key_token arrives pre-hashed from metadata["user_api_key"] (auth flow
+    if token is not None:
+        # token arrives pre-hashed from metadata["user_api_key"] (auth flow
         # hashes raw "sk-..." keys before they reach the callback). The
         # startswith("sk-") check is a safety net matching update_cache —
         # if a raw key somehow arrives, hash it; otherwise use as-is to
         # avoid double-hashing (budget checks read valid_token.token which
         # is single-hashed).
-        hashed_token = (
-            hash_token(token=key_token) if isinstance(key_token, str) and key_token.startswith("sk-") else key_token
-        )
+        hashed_token = hash_token(token=token) if isinstance(token, str) and token.startswith("sk-") else token
         key_counter_key = f"spend:key:{hashed_token}"
         if key_counter_key not in reserved_counter_keys:
             await _init_and_increment_spend_counter(
                 counter_key=key_counter_key,
                 source_cache_key=hashed_token,
-                increment=cost,
+                increment=response_cost,
             )
 
+        # Increment per-window budget counters for multi-budget keys
         key_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
-        if key_obj is None:
-            return
-        key_budget_limits = getattr(key_obj, "budget_limits", None) or (
-            key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
-        )
-        if isinstance(key_budget_limits, str):
-            key_budget_limits = json.loads(key_budget_limits)
-        if not isinstance(key_budget_limits, list):
-            return
-        for window in key_budget_limits:
-            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
-            if key_window_counter not in reserved_counter_keys:
-                await _init_and_increment_window_spend_counter(
-                    counter_key=key_window_counter,
-                    entity_type="Key",
-                    entity_id=hashed_token,
-                    window_start=get_budget_window_start(window),
-                    increment=cost,
-                )
+        if key_obj is not None:
+            key_budget_limits = getattr(key_obj, "budget_limits", None) or (
+                key_obj.get("budget_limits") if isinstance(key_obj, dict) else None
+            )
+            if isinstance(key_budget_limits, str):
+                key_budget_limits = json.loads(key_budget_limits)
+            if isinstance(key_budget_limits, list):
+                for window in key_budget_limits:
+                    duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+                    key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
+                    if key_window_counter not in reserved_counter_keys:
+                        from litellm.proxy.spend_tracking.budget_reservation import (
+                            get_budget_window_start,
+                        )
 
-    async def _team_scope(scope_team_id: str) -> None:
-        team_counter_key = f"spend:team:{scope_team_id}"
+                        await _init_and_increment_window_spend_counter(
+                            counter_key=key_window_counter,
+                            entity_type="Key",
+                            entity_id=hashed_token,
+                            window_start=get_budget_window_start(window),
+                            increment=response_cost,
+                        )
+
+    if team_id is not None:
+        team_counter_key = f"spend:team:{team_id}"
         if team_counter_key not in reserved_counter_keys:
             await _init_and_increment_spend_counter(
                 counter_key=team_counter_key,
-                source_cache_key=f"team_id:{scope_team_id}",
-                increment=cost,
+                source_cache_key=f"team_id:{team_id}",
+                increment=response_cost,
             )
 
-        team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{scope_team_id}")
-        if team_obj is None:
-            return
-        team_budget_limits = getattr(team_obj, "budget_limits", None) or (
-            team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
-        )
-        if isinstance(team_budget_limits, str):
-            team_budget_limits = json.loads(team_budget_limits)
-        if not isinstance(team_budget_limits, list):
-            return
-        for window in team_budget_limits:
-            duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            team_window_counter = f"spend:team:{scope_team_id}:window:{duration}"
-            if team_window_counter not in reserved_counter_keys:
-                await _init_and_increment_window_spend_counter(
-                    counter_key=team_window_counter,
-                    entity_type="Team",
-                    entity_id=scope_team_id,
-                    window_start=get_budget_window_start(window),
-                    increment=cost,
-                )
-
-    async def _team_member_scope(scope_user_id: str, scope_team_id: str) -> None:
-        team_member_counter_key = f"spend:team_member:{scope_user_id}:{scope_team_id}"
-        if team_member_counter_key in reserved_counter_keys:
-            return
-        await _init_and_increment_spend_counter(
-            counter_key=team_member_counter_key,
-            source_cache_key=f"team_membership:{scope_user_id}:{scope_team_id}",
-            increment=cost,
-        )
-
-    async def _user_scope(scope_user_id: str) -> None:
-        user_counter_key = f"spend:user:{scope_user_id}"
-        if user_counter_key in reserved_counter_keys:
-            return
-        await _init_and_increment_spend_counter(
-            counter_key=user_counter_key,
-            source_cache_key=scope_user_id,
-            increment=cost,
-        )
-
-    scope_coros = tuple(
-        coro
-        for coro in (
-            _key_scope(token) if token is not None else None,
-            _team_scope(team_id) if team_id is not None else None,
-            _team_member_scope(user_id, team_id) if user_id is not None and team_id is not None else None,
-            _user_scope(user_id) if user_id is not None else None,
-            _increment_end_user_and_tag_spend_counters(
-                end_user_id=end_user_id,
-                tags=tags,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
+        # Increment per-window budget counters for multi-budget teams
+        team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{team_id}")
+        if team_obj is not None:
+            team_budget_limits = getattr(team_obj, "budget_limits", None) or (
+                team_obj.get("budget_limits") if isinstance(team_obj, dict) else None
             )
-            if end_user_id is not None or tags is not None
-            else None,
-            _increment_org_spend_counter(
-                org_id=org_id,
-                response_cost=cost,
-                reserved_counter_keys=reserved_counter_keys,
+            if isinstance(team_budget_limits, str):
+                team_budget_limits = json.loads(team_budget_limits)
+            if isinstance(team_budget_limits, list):
+                for window in team_budget_limits:
+                    duration = window["budget_duration"] if isinstance(window, dict) else window.budget_duration
+                    team_window_counter = f"spend:team:{team_id}:window:{duration}"
+                    if team_window_counter not in reserved_counter_keys:
+                        from litellm.proxy.spend_tracking.budget_reservation import (
+                            get_budget_window_start,
+                        )
+
+                        await _init_and_increment_window_spend_counter(
+                            counter_key=team_window_counter,
+                            entity_type="Team",
+                            entity_id=team_id,
+                            window_start=get_budget_window_start(window),
+                            increment=response_cost,
+                        )
+
+    if user_id is not None and team_id is not None:
+        team_member_counter_key = f"spend:team_member:{user_id}:{team_id}"
+        if team_member_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=team_member_counter_key,
+                source_cache_key=f"team_membership:{user_id}:{team_id}",
+                increment=response_cost,
             )
-            if org_id is not None
-            else None,
-        )
-        if coro is not None
+
+    if user_id is not None:
+        user_counter_key = f"spend:user:{user_id}"
+        if user_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=user_counter_key,
+                source_cache_key=user_id,
+                increment=response_cost,
+            )
+
+    await _increment_end_user_and_tag_spend_counters(
+        end_user_id=end_user_id,
+        tags=tags,
+        response_cost=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
     )
 
-    # return_exceptions so a failing scope does not leave its siblings running
-    # as orphaned tasks that race the caller's reservation-counter invalidation;
-    # all scopes settle, then the first error propagates as before.
-    scope_results = await asyncio.gather(*scope_coros, return_exceptions=True)
-    scope_errors = [r for r in scope_results if isinstance(r, BaseException)]
-    if scope_errors:
-        raise scope_errors[0]
-
+    await _increment_org_spend_counter(
+        org_id=org_id,
+        response_cost=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
     if budget_reservation is not None:
         budget_reservation["finalized"] = True
 
@@ -13962,7 +13952,6 @@ async def update_config(
         # effect of auto-enabling slack alerting.
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
-            before_general_settings = copy.deepcopy(existing)
             updates = config_info.general_settings.dict(exclude_none=True)
             for k, v in updates.items():
                 if k == "alert_to_webhook_url":
@@ -13972,11 +13961,6 @@ async def update_config(
                         existing["alerting"].append("slack")
                 existing[k] = v
             await _upsert_section("general_settings", existing)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "general_settings", "updated", before_general_settings, existing, user_api_key_dict
-                )
-            )
 
         # environment_variables: idempotently encrypt the request values
         # (plaintext on first write, OR ciphertext the UI read back via
@@ -13985,16 +13969,10 @@ async def update_config(
         # their stored ciphertext byte-for-byte.
         if config_info.environment_variables is not None:
             existing = await _read_section("environment_variables")
-            before_environment_variables = copy.deepcopy(existing)
             existing.update(
                 proxy_config._encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
             )
             await _upsert_section("environment_variables", existing)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
-                )
-            )
 
         # litellm_settings: merge existing + request, request wins (matching
         # router_settings semantics — the caller's value for any given key is
@@ -14006,7 +13984,6 @@ async def update_config(
         # entries that delete_callback (lowercase lookup) cannot find.
         if config_info.litellm_settings is not None:
             existing = await _read_section("litellm_settings")
-            before_litellm_settings = copy.deepcopy(existing)
             updated_litellm_settings = dict(config_info.litellm_settings)
 
             incoming_cb = updated_litellm_settings.get("success_callback")
@@ -14028,24 +14005,12 @@ async def update_config(
                     merged["success_callback"] = list(set(incoming_cb))
 
             await _upsert_section("litellm_settings", merged)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
-                )
-            )
 
         # router_settings: merge existing + request, request wins.
         if config_info.router_settings is not None:
             existing = await _read_section("router_settings")
-            before_router_settings = copy.deepcopy(existing)
             updates = config_info.router_settings.dict(exclude_none=True)
-            new_router_settings = {**existing, **updates}
-            await _upsert_section("router_settings", new_router_settings)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
-                )
-            )
+            await _upsert_section("router_settings", {**existing, **updates})
 
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
@@ -14177,8 +14142,6 @@ async def update_config_general_settings(
     else:
         general_settings = dict(db_general_settings.param_value)
 
-    before_general_settings = copy.deepcopy(general_settings)
-
     ## update db
 
     field_value = data.field_value
@@ -14198,11 +14161,6 @@ async def update_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
-    asyncio.create_task(
-        create_config_audit_log(
-            "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
-        )
-    )
 
     if data.field_name == "plugins":
         register_plugins_from_config(general_settings)
@@ -14261,47 +14219,6 @@ def _redact_general_setting_value(field_name: str, value: JsonValue, is_full_adm
     if isinstance(value, (dict, list)):
         return _redact_secret_values_in_obj(value)
     return value
-
-
-def _dump_redacted_config(value: Optional[JsonValue], *, redact_all_values: bool = False) -> Optional[str]:
-    # `default=str` matches the sibling audit-log serializers in
-    # team_endpoints.py and the LiteLLM_AuditLogs validator, so a YAML-loaded
-    # value with a non-JSON-native leaf (datetime, custom object) cannot turn
-    # an audit write into a 500.
-    if value is None:
-        return None
-    if redact_all_values and isinstance(value, dict):
-        return json.dumps({key: "REDACTED" for key in value}, default=str)
-    return json.dumps(_redact_secret_values_in_obj(value), default=str)
-
-
-async def create_config_audit_log(
-    param_name: str,
-    action: AUDIT_ACTIONS,
-    before_value: Optional[JsonValue],
-    after_value: Optional[JsonValue],
-    user_api_key_dict: UserAPIKeyAuth,
-    table_name: LitellmTableNames = LitellmTableNames.CONFIG_TABLE_NAME,
-) -> None:
-    """Record a system-wide settings change in LiteLLM_AuditLog.
-
-    Secret leaves are redacted before the row is written. environment_variables
-    hold arbitrary credentials under non-secret-looking uppercase keys (e.g.
-    DATABASE_URL), so every value in that section is redacted rather than
-    relying on key-name matching; other sections reuse the same matcher
-    /config/field/info applies for non-admins.
-    """
-    redact_all_values = param_name == "environment_variables"
-    await create_object_audit_log(
-        object_id=param_name,
-        action=action,
-        table_name=table_name,
-        before_value=_dump_redacted_config(before_value, redact_all_values=redact_all_values),
-        after_value=_dump_redacted_config(after_value, redact_all_values=redact_all_values),
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by=None,
-        litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
-    )
 
 
 @router.get(
@@ -14587,8 +14504,6 @@ async def delete_config_general_settings(
     else:
         general_settings = dict(db_general_settings.param_value)
 
-    before_general_settings = copy.deepcopy(general_settings)
-
     ## update db
 
     general_settings.pop(data.field_name, None)
@@ -14604,11 +14519,6 @@ async def delete_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
-    asyncio.create_task(
-        create_config_audit_log(
-            "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
-        )
-    )
 
     return response
 
@@ -14666,24 +14576,12 @@ async def delete_callback(
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
-        before_success_callbacks = list(success_callbacks)
-
         # Remove callback from success_callback list
         success_callbacks.remove(callback_name)
         config.setdefault("litellm_settings", {})["success_callback"] = success_callbacks
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
-
-        asyncio.create_task(
-            create_config_audit_log(
-                "litellm_settings",
-                "deleted",
-                {"success_callback": before_success_callbacks},
-                {"success_callback": success_callbacks},
-                user_api_key_dict,
-            )
-        )
 
         # Restart the proxy to apply changes
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
@@ -14714,7 +14612,9 @@ async def delete_callback(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_config():
+async def get_config(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     For Admin UI - allows admin to view config via UI
     # return the callbacks and the env variables for the callback
@@ -14745,30 +14645,20 @@ async def get_config():
         _failure_callbacks = normalize_callback(_failure_callbacks)
         _success_and_failure_callbacks = normalize_callback(_success_and_failure_callbacks)
 
-        _data_to_return = []
-        """
-        [
-            {
-                "name": "langfuse",
-                "variables": {
-                    "LANGFUSE_PUB_KEY": "value",
-                    "LANGFUSE_SECRET_KEY": "value",
-                    "LANGFUSE_HOST": "value"
-                },
-                "type": "success"
-            }
+        is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
+        _all_callbacks = [
+            *((cb, "success") for cb in _success_callbacks),
+            *((cb, "failure") for cb in _failure_callbacks),
+            *((cb, "success_and_failure") for cb in _success_and_failure_callbacks),
         ]
-
-        """
-
-        for _callback in _success_callbacks:
-            _data_to_return.append(process_callback(_callback, "success", environment_variables))
-
-        for _callback in _failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "failure", environment_variables))
-
-        for _callback in _success_and_failure_callbacks:
-            _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
+        _data_to_return = [
+            _redact_callback_variables(
+                process_callback(cb, cb_type, environment_variables),
+                is_full_admin,
+            )
+            for cb, cb_type in _all_callbacks
+        ]
 
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
@@ -14786,12 +14676,21 @@ async def get_config():
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
             _alerts_to_webhook = proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+            _safe_alerts_to_webhook = (
+                _alerts_to_webhook
+                if is_full_admin
+                else (
+                    {k: "REDACTED" for k in _alerts_to_webhook}
+                    if _alerts_to_webhook
+                    else _alerts_to_webhook
+                )
+            )
             alerting_data.append(
                 {
                     "name": "slack",
                     "variables": _slack_env_vars,
                     "active_alerts": _alerting_types,
-                    "alerts_to_webhook": _alerts_to_webhook,
+                    "alerts_to_webhook": _safe_alerts_to_webhook,
                 }
             )
         # pass email alerting vars
