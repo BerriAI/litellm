@@ -281,3 +281,61 @@ def test_router_silent_experiment_completion():
         assert silent_call[1]["model"] == "openai/gpt-4"
         # Verify model_group is set to the silent model name for correct metric attribution
         assert silent_call[1]["metadata"]["model_group"] == "silent-model"
+
+
+@pytest.mark.asyncio
+async def test_router_silent_experiment_aresponses():
+    """
+    Regression: silent_model in litellm_params must fire a background aresponses call
+    when the primary request goes through /v1/responses (issue #31888).
+    """
+    model_list = [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "fake-key",
+                "silent_model": "silent-model",
+            },
+        },
+        {
+            "model_name": "silent-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": "fake-key",
+            },
+        },
+    ]
+
+    mock_response = MagicMock()
+    mock_aresponses = AsyncMock(return_value=mock_response)
+
+    with patch.object(litellm, "aresponses", mock_aresponses):
+        router = Router(model_list=model_list)
+        await router.aresponses(
+            model="primary-model",
+            input=[{"role": "user", "content": "hi"}],
+        )
+
+        await asyncio.sleep(0.1)
+
+        assert mock_aresponses.call_count == 2
+
+        call_args_list = mock_aresponses.call_args_list
+        for call in call_args_list:
+            assert "silent_model" not in call.kwargs
+
+        silent_call = next(
+            (c for c in call_args_list if c.kwargs.get("metadata", {}).get("is_silent_experiment") is True),
+            None,
+        )
+        assert silent_call is not None
+        assert silent_call.kwargs["model"] == "openai/gpt-4o"
+        assert silent_call.kwargs["metadata"]["model_group"] == "silent-model"
+
+        primary_call = next(
+            (c for c in call_args_list if not c.kwargs.get("metadata", {}).get("is_silent_experiment")),
+            None,
+        )
+        assert primary_call is not None
+        assert primary_call.kwargs["model"] == "openai/gpt-4o-mini"

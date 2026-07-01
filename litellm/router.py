@@ -2704,6 +2704,19 @@ class Router:
 
         return SyncFallbackStreamWrapper(stream_with_fallbacks())
 
+    async def _silent_experiment_ageneric(self, silent_model: str, original_function: Callable, **kwargs: Any) -> None:
+        try:
+            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
+                return
+            verbose_router_logger.info(f"Starting silent experiment for model {silent_model}")
+            silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
+            silent_kwargs["metadata"]["model_group"] = silent_model
+            await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function, model=silent_model, **silent_kwargs
+            )
+        except Exception as e:
+            verbose_router_logger.error(f"Silent experiment failed for model {silent_model}: {str(e)}")
+
     async def _silent_experiment_acompletion(self, silent_model: str, messages: List[Any], **kwargs):
         """
         Run a silent experiment in the background.
@@ -4471,6 +4484,15 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data = deployment["litellm_params"].copy()
+            silent_model = data.pop("silent_model", None)
+            if silent_model is not None:
+                asyncio.create_task(
+                    self._silent_experiment_ageneric(
+                        silent_model=silent_model,
+                        original_function=original_generic_function,
+                        **kwargs,
+                    )
+                )
             model_name = data["model"]
             self.total_calls[model_name] += 1
 
@@ -4499,6 +4521,7 @@ class Router:
             if custom_llm_provider is not None:
                 response_kwargs["custom_llm_provider"] = custom_llm_provider
 
+            response_kwargs.pop("silent_model", None)
             response = original_generic_function(**response_kwargs)
 
             rpm_semaphore = self._get_client(
