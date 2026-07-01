@@ -1325,6 +1325,26 @@ class MCPServerManager:
                 ]
                 combined_servers.update(delegate_server_ids)
 
+            # BYOM: approved submissions stay visible to the submitter even when
+            # allow_all_keys=false and no access groups were configured at approval.
+            submitter_user_id = getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+            if submitter_user_id:
+                from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                    get_active_submitted_mcp_server_ids_for_user,
+                )
+                from litellm.proxy.proxy_server import prisma_client
+
+                if prisma_client is not None:
+                    submitted_server_ids = await get_active_submitted_mcp_server_ids_for_user(
+                        prisma_client,
+                        submitter_user_id,
+                    )
+                    combined_servers.update(
+                        server_id
+                        for server_id in submitted_server_ids
+                        if self.get_mcp_server_by_id(server_id) is not None
+                    )
+
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
             return list(combined_servers)
