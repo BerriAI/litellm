@@ -3027,8 +3027,8 @@ export interface paths {
         /**
          * Get Active Tasks Stats
          * @description Returns:
-         *       total_active_tasks: int
-         *       by_name: { coroutine_name: count }
+         *     total_active_tasks: int
+         *     by_name: { coroutine_name: count }
          */
         get: operations["get_active_tasks_stats_debug_asyncio_tasks_get"];
         put?: never;
@@ -21003,6 +21003,11 @@ export interface components {
             /** User Ids */
             user_ids: string[];
         };
+        /** BlockUsersResponse */
+        BlockUsersResponse: {
+            /** Blocked Users */
+            blocked_users: components["schemas"]["LiteLLM_EndUserTable"][];
+        };
         /**
          * BlockedWord
          * @description Represents a blocked word with its action and optional description
@@ -22651,10 +22656,10 @@ export interface components {
         /**
          * ContentFilterCategoryConfig
          * @description category: "harmful_self_harm"
-         *                   enabled: true
-         *                   action: "BLOCK"
-         *                   severity_threshold: "medium"
-         *                   category_file: "/path/to/custom_file.yaml"  # optional override
+         *     enabled: true
+         *     action: "BLOCK"
+         *     severity_threshold: "medium"
+         *     category_file: "/path/to/custom_file.yaml"  # optional override
          */
         ContentFilterCategoryConfig: {
             /**
@@ -22879,6 +22884,37 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * CustomerResponse
+         * @description Customer object returned by the /customer read+write endpoints.
+         *
+         *     Nests the full budget response model so server-managed budget fields
+         *     (budget_reset_at, created_at) survive response_model filtering, rather than
+         *     the narrow write-allowlist shape LiteLLM_EndUserTable carries for internal use.
+         */
+        CustomerResponse: {
+            /** Alias */
+            alias?: string | null;
+            /** Allowed Model Region */
+            allowed_model_region?: ("eu" | "us") | null;
+            /** Blocked */
+            blocked: boolean;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Default Model */
+            default_model?: string | null;
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** User Id */
+            user_id: string;
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -23042,6 +23078,13 @@ export interface components {
         DeleteCustomerRequest: {
             /** User Ids */
             user_ids: string[];
+        };
+        /** DeleteCustomersResponse */
+        DeleteCustomersResponse: {
+            /** Deleted Customers */
+            deleted_customers: number;
+            /** Message */
+            message: string;
         };
         /**
          * DeleteEvalResponse
@@ -24792,6 +24835,8 @@ export interface components {
             allowed_model_region?: ("eu" | "us") | null;
             /** Blocked */
             blocked: boolean;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
@@ -25062,6 +25107,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Tool Search Enabled */
+            mcp_tool_search_enabled?: boolean | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /** Models */
@@ -25105,6 +25152,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Tool Search Enabled */
+            mcp_tool_search_enabled?: boolean | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /**
@@ -31477,6 +31526,14 @@ export interface components {
              */
             workers: components["schemas"]["WorkerRegistryEntry"][];
         };
+        /** UnblockUsersResponse */
+        UnblockUsersResponse: {
+            /**
+             * Blocked Users
+             * @description User IDs that remain blocked after this unblock call
+             */
+            blocked_users: string[];
+        };
         /**
          * UpdateCustomerRequest
          * @description Update a Customer, use this to update customer budgets etc
@@ -37482,7 +37539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BlockUsersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37553,7 +37610,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteCustomersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37585,7 +37642,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_EndUserTable"];
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37614,7 +37671,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_EndUserTable"][];
+                    "application/json": components["schemas"]["CustomerResponse"][];
                 };
             };
         };
@@ -37638,7 +37695,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37671,7 +37728,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UnblockUsersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37704,7 +37761,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38130,7 +38187,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteCustomersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38162,7 +38219,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38191,7 +38248,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"][];
                 };
             };
         };
@@ -38215,7 +38272,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38281,7 +38338,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -43890,13 +43947,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *         Every rate-limit condition surfaced by litellm — whether it originated from
-             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *         max-iterations, etc.) — is raised as an instance of this class.
+             *     Every rate-limit condition surfaced by litellm — whether it originated from
+             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *     max-iterations, etc.) — is raised as an instance of this class.
              *
-             *         The :attr:`category` attribute lets callers distinguish the source. See
-             *         :class:`RateLimitErrorCategory` for the available values.
+             *     The :attr:`category` attribute lets callers distinguish the source. See
+             *     :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
