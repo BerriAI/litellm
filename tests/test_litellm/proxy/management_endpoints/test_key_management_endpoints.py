@@ -7781,6 +7781,198 @@ async def test_default_key_generate_params_duration(monkeypatch):
         litellm.default_key_generate_params = original_value
 
 
+async def test_default_key_generate_params_object_permission_applied_when_absent(
+    monkeypatch,
+):
+    """
+    default_key_generate_params.object_permission is applied to a key that
+    doesn't specify object_permission at all.
+    """
+    import litellm
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase
+
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm-1")
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    original_value = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {
+        "object_permission": {"vector_stores": ["default-vs"]}
+    }
+
+    try:
+        request = GenerateKeyRequest()  # No object_permission specified
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+        assert isinstance(request.object_permission, LiteLLM_ObjectPermissionBase)
+        assert request.object_permission.vector_stores == ["default-vs"]
+    finally:
+        litellm.default_key_generate_params = original_value
+
+
+async def test_default_key_generate_params_object_permission_merges_partial(
+    monkeypatch,
+):
+    """
+    default_key_generate_params.object_permission fills only the fields the
+    caller left unset - an explicitly supplied field (agents here) is
+    preserved alongside the defaulted field (vector_stores).
+    """
+    import litellm
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase
+
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm-2")
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    original_value = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {
+        "object_permission": {"vector_stores": ["default-vs"]}
+    }
+
+    try:
+        request = GenerateKeyRequest(
+            object_permission=LiteLLM_ObjectPermissionBase(agents=["agent-1"])
+        )
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+        assert request.object_permission.agents == ["agent-1"]
+        assert request.object_permission.vector_stores == ["default-vs"]
+    finally:
+        litellm.default_key_generate_params = original_value
+
+
+async def test_default_key_generate_params_object_permission_does_not_override_explicit(
+    monkeypatch,
+):
+    """
+    A field the caller explicitly set on object_permission must win over the
+    same field in default_key_generate_params.
+    """
+    import litellm
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase
+
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm-3")
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    original_value = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {
+        "object_permission": {"vector_stores": ["default-vs"]}
+    }
+
+    try:
+        request = GenerateKeyRequest(
+            object_permission=LiteLLM_ObjectPermissionBase(
+                vector_stores=["explicit-vs"]
+            )
+        )
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+                api_key="sk-1234",
+                user_id="1234",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+        assert request.object_permission.vector_stores == ["explicit-vs"]
+    finally:
+        litellm.default_key_generate_params = original_value
+
+
 @pytest.mark.asyncio
 async def test_build_key_filter_member_team_service_accounts():
     """

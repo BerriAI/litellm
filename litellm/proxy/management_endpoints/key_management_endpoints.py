@@ -783,6 +783,22 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+            elif key == "object_permission":
+                _default_object_permission = litellm.default_key_generate_params.get("object_permission")
+                if _default_object_permission is not None:
+                    if value is None:
+                        setattr(
+                            data,
+                            key,
+                            LiteLLM_ObjectPermissionBase(**_default_object_permission),
+                        )
+                    else:
+                        for (
+                            _op_field,
+                            _op_default_value,
+                        ) in _default_object_permission.items():
+                            if getattr(value, _op_field, None) is None:
+                                setattr(value, _op_field, _op_default_value)
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
