@@ -17,7 +17,7 @@ export const getFieldByName = (fields: any[], fieldName: string) => {
 
 export const groupFieldsByCategory = (fields: any[], redisType: string) => {
   // Basic fields that are always shown
-  const basicFieldNames = ["host", "port", "password", "username"];
+  const basicFieldNames = ["url", "host", "port", "db", "password", "username"];
   const basicFields = basicFieldNames.map((name) => getFieldByName(fields, name)).filter(Boolean);
 
   // Advanced field groups
