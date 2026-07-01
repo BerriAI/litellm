@@ -1237,7 +1237,7 @@ async def _check_team_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
@@ -1419,7 +1419,7 @@ async def _check_org_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
