@@ -251,8 +251,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         if "content-type" not in headers and "Content-Type" not in headers:
             headers["Content-Type"] = "application/json"
 
-        if "x-goog-user-project" not in headers and "X-Goog-User-Project" not in headers:
-            headers["x-goog-user-project"] = f"projects/{project}"
+        stale_quota_headers = tuple(h for h in headers if h.lower() == "x-goog-user-project")
+        for stale in stale_quota_headers:
+            headers.pop(stale, None)
+        headers["x-goog-user-project"] = f"projects/{project}"
 
         return headers
 

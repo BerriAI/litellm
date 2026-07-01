@@ -356,12 +356,12 @@ class TestGDCGeminiConfig:
         assert headers["Authorization"] == "Bearer cached-token"
         mock_creds.refresh.assert_not_called()
 
-    def test_validate_environment_preserves_existing_headers(self):
+    def test_validate_environment_preserves_content_type_but_rebinds_quota_project(self):
         config = GDCGeminiConfig()
         headers = config.validate_environment(
             headers={
                 "Content-Type": "text/plain",
-                "x-goog-user-project": "projects/other",
+                "x-goog-user-project": "projects/attacker",
             },
             model=TEST_MODEL,
             messages=[],
@@ -371,7 +371,31 @@ class TestGDCGeminiConfig:
             api_base=TEST_API_BASE,
         )
         assert headers["Content-Type"] == "text/plain"
-        assert headers["x-goog-user-project"] == "projects/other"
+        assert headers["x-goog-user-project"] == f"projects/{TEST_PROJECT}"
+
+    @pytest.mark.parametrize(
+        "header_name", ["x-goog-user-project", "X-Goog-User-Project", "X-GOOG-USER-PROJECT"]
+    )
+    def test_validate_environment_strips_caller_forwarded_quota_header(self, header_name):
+        config = GDCGeminiConfig()
+        mock_creds = MagicMock()
+        mock_creds.token = "tok"
+        mock_creds.with_gdch_audience.return_value = mock_creds
+        preformed = f"{TEST_API_BASE}/v1/projects/deployment-proj/locations/us-central1/chat/completions"
+        with patch(
+            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
+        ):
+            headers = config.validate_environment(
+                headers={header_name: "projects/attacker"},
+                model=TEST_MODEL,
+                messages=[],
+                optional_params={"vertex_project": "attacker-proj"},
+                litellm_params={},
+                api_key=TEST_API_KEY,
+                api_base=preformed,
+            )
+        quota_values = [v for k, v in headers.items() if k.lower() == "x-goog-user-project"]
+        assert quota_values == ["projects/deployment-proj"]
 
     @pytest.mark.parametrize(
         "bad", ["p/locations/l/chat/completions?", "a/b", "a?b", "a#b", "..", "a b", "a:b", "a%2Fb"]
