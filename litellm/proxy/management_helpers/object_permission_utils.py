@@ -419,6 +419,17 @@ def _extract_requested_mcp_server_ids(
     return server_ids
 
 
+def _has_all_mcp_servers_sentinel(
+    object_permission: Optional[ObjectPermissionDict],
+) -> bool:
+    if not object_permission or not isinstance(object_permission, dict):
+        return False
+    mcp_servers = object_permission.get("mcp_servers")
+    if isinstance(mcp_servers, list):
+        return SpecialMCPServerNames.all_mcp_servers.value in mcp_servers
+    return False
+
+
 def _extract_requested_mcp_access_groups(
     object_permission: Optional[ObjectPermissionDict],
 ) -> Set[str]:
@@ -468,13 +479,42 @@ async def validate_key_mcp_servers_against_team(
     Raises HTTPException(403) if validation fails.
     """
     teamless_admin_assignment = team_obj is None and is_proxy_admin
+    has_all_sentinel = _has_all_mcp_servers_sentinel(object_permission)
     requested_servers = _extract_requested_mcp_server_ids(object_permission)
     requested_access_groups = _extract_requested_mcp_access_groups(object_permission)
 
     requested_toolsets = _extract_requested_mcp_toolsets(object_permission)
 
+    if has_all_sentinel:
+        if teamless_admin_assignment:
+            pass
+        elif team_obj is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        "Key is not in a team. The 'all-mcp-servers' sentinel "
+                        "cannot be assigned to personal keys by non-admin callers."
+                    )
+                },
+            )
+        else:
+            team_op = team_obj.object_permission
+            team_mcp_servers = (team_op.mcp_servers or []) if team_op else []
+            if SpecialMCPServerNames.all_mcp_servers.value not in team_mcp_servers:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": (
+                            f"Key requests 'all-mcp-servers' but team '{team_obj.team_id}' "
+                            f"does not grant the all-mcp-servers sentinel. "
+                            f"Team allows: {sorted(team_mcp_servers)}."
+                        )
+                    },
+                )
+
     # Nothing to validate
-    if not requested_servers and not requested_access_groups and not requested_toolsets:
+    if not requested_servers and not requested_access_groups and not requested_toolsets and not has_all_sentinel:
         return object_permission
 
     allow_all_keys_servers = _get_allow_all_keys_server_ids()

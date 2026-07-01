@@ -13,6 +13,7 @@ from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_ObjectPer
 from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
+    _has_all_mcp_servers_sentinel,
     _resolve_team_allowed_mcp_servers,
     _rewrite_object_permission_mcp_servers,
     _set_object_permission,
@@ -666,6 +667,99 @@ async def test_validate_stale_mcp_server_ids_are_removed_from_object_permission(
         team_obj=team_obj,
     )
     assert object_permission["mcp_servers"] == []
+
+
+# ---- Tests for all-mcp-servers sentinel validation in validate_key_mcp_servers_against_team ----
+
+
+def test_has_all_mcp_servers_sentinel_true():
+    assert _has_all_mcp_servers_sentinel({"mcp_servers": ["all-mcp-servers"]}) is True
+
+
+def test_has_all_mcp_servers_sentinel_false():
+    assert _has_all_mcp_servers_sentinel({"mcp_servers": ["server-1"]}) is False
+    assert _has_all_mcp_servers_sentinel(None) is False
+    assert _has_all_mcp_servers_sentinel({}) is False
+
+
+@pytest.mark.asyncio
+async def test_validate_all_sentinel_teamless_non_admin_raises():
+    """Non-admin, teamless key with all-mcp-servers sentinel must be rejected"""
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["all-mcp-servers"]},
+            team_obj=None,
+            is_proxy_admin=False,
+        )
+    assert exc_info.value.status_code == 403
+    assert "all-mcp-servers" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("s1", "s2"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_all_sentinel_teamless_admin_passes(
+    mock_access_groups, mock_allow_all
+):
+    """Proxy admin assigning all-mcp-servers to a teamless key should pass"""
+    result = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["all-mcp-servers"]},
+        team_obj=None,
+        is_proxy_admin=True,
+    )
+    assert result is not None
+    assert "all-mcp-servers" in result["mcp_servers"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("s1", "s2"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_all_sentinel_key_in_team_with_sentinel_passes(
+    mock_access_groups, mock_allow_all
+):
+    """Key with all-mcp-servers in a team that also has the sentinel should pass"""
+    team_obj = _make_team_obj(mcp_servers=["all-mcp-servers"])
+    result = await validate_key_mcp_servers_against_team(
+        object_permission={"mcp_servers": ["all-mcp-servers"]},
+        team_obj=team_obj,
+    )
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_validate_all_sentinel_key_in_team_without_sentinel_raises():
+    """Key with all-mcp-servers in a team that does NOT have the sentinel must be rejected"""
+    team_obj = _make_team_obj(mcp_servers=["server-1", "server-2"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["all-mcp-servers"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "all-mcp-servers" in str(exc_info.value.detail)
+    assert "team-1" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
