@@ -189,6 +189,9 @@ class LitellmTableNames(str, enum.Enum):
     TOOL_TABLE_NAME = "LiteLLM_ToolTable"
     CACHE_CONFIG_TABLE_NAME = "LiteLLM_CacheConfig"
     CONFIG_OVERRIDES_TABLE_NAME = "LiteLLM_ConfigOverrides"
+    CONFIG_TABLE_NAME = "LiteLLM_Config"
+    SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
+    UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -1003,6 +1006,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
     search_tools: Optional[List[str]] = None
+    mcp_tool_search_enabled: Optional[bool] = None
 
 
 from litellm.types.object_permission import (  # noqa: E402

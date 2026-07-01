@@ -2112,7 +2112,7 @@ class BaseLLMHTTPHandler:
                 anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
-                kwargs=kwargs,
+                kwargs={**kwargs, "api_key": api_key} if api_key else kwargs,
             )
             return initial_response
         else:
@@ -2122,6 +2122,10 @@ class BaseLLMHTTPHandler:
                 logging_obj=logging_obj,
             )
 
+        # Inject api_key into kwargs so follow-up calls in agentic hooks can
+        # authenticate. api_key is a named param here (not in kwargs), so
+        # _prepare_followup_kwargs would miss it otherwise.
+        kwargs_for_agentic = {**kwargs, "api_key": api_key} if api_key else kwargs
         # Call agentic completion hooks (non-streaming path only)
         final_response = await self._call_agentic_completion_hooks(
             response=initial_response,
@@ -2132,7 +2136,7 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             stream=False,
             custom_llm_provider=custom_llm_provider,
-            kwargs=kwargs,
+            kwargs=kwargs_for_agentic,
         )
 
         return self._maybe_wrap_in_fake_stream(
