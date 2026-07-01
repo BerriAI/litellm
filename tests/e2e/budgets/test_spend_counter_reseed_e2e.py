@@ -20,18 +20,15 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
-from typing import TYPE_CHECKING
 
 import pytest
+import redis
+from redis.cluster import RedisCluster
 
 from budget_client import BudgetClient
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse
 from lifecycle import ResourceManager
-
-if TYPE_CHECKING:
-    import redis
-    from redis.cluster import RedisCluster
 
 pytestmark = pytest.mark.e2e
 
@@ -47,13 +44,11 @@ def _redis() -> "redis.Redis[str] | RedisCluster[str]":
     """The proxy's Redis. The deployed runner sets REDIS_HOST to the serverless
     ElastiCache, which is always TLS + cluster-mode; without it, fall back to a
     local standalone redis for docker-compose runs."""
-    import redis
-
     host = os.getenv("REDIS_HOST")
     if not host:
-        return redis.Redis(host="localhost", port=6380, decode_responses=True, socket_connect_timeout=2)
-
-    from redis.cluster import RedisCluster
+        return redis.Redis(
+            host="localhost", port=6380, decode_responses=True, socket_connect_timeout=2
+        )
 
     return RedisCluster(
         host=host,
@@ -64,14 +59,14 @@ def _redis() -> "redis.Redis[str] | RedisCluster[str]":
     )
 
 
-def _spend_counter(rds: "redis.Redis[str] | RedisCluster[str]", key: str) -> float | None:
+def _spend_counter(
+    rds: "redis.Redis[str] | RedisCluster[str]", key: str
+) -> float | None:
     """The shared spend counter for `key`, or None if it is cold. A cluster client
     can't run a keyspace SCAN that spans shards, so read the key directly - the stage
     gateway sets no cache namespace, so the key is the bare ``spend:key:{sha256(key)}``.
     A standalone client matches by suffix, so the local cache namespace (litellm.caching)
     need not be hard-coded here."""
-    from redis.cluster import RedisCluster
-
     digest = hashlib.sha256(key.encode()).hexdigest()
     suffix = f"spend:key:{digest}"
     if isinstance(rds, RedisCluster):
