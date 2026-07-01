@@ -10,9 +10,7 @@ if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(
-    litellm_params: "LitellmParams", guardrail: "Guardrail"
-) -> MCPJWTSigner:
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> MCPJWTSigner:
     import litellm
 
     guardrail_name = guardrail.get("guardrail_name")

@@ -122,9 +122,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
-        if isinstance(input, list) and (
-            isinstance(input[0], list) or isinstance(input[0], int)
-        ):
+        if isinstance(input, list) and (isinstance(input[0], list) or isinstance(input[0], int)):
             raise ValueError("Input must be a list of strings")
         return cast(
             dict,
@@ -197,9 +195,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         output_data = []
         for k, embedding_list in embeddings.items():
             for idx, embedding in enumerate(embedding_list):
-                output_data.append(
-                    {"object": "embedding", "index": idx, "embedding": embedding}
-                )
+                output_data.append({"object": "embedding", "index": idx, "embedding": embedding})
         model_response.object = "list"
         model_response.data = output_data
         model_response.model = model

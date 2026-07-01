@@ -85,7 +85,6 @@ const defaultProps = {
   setTeams: vi.fn(),
   setKeys: vi.fn(),
   premiumUser: false,
-  organizations: [] as any[],
   addKey: vi.fn(),
   createClicked: false,
 };

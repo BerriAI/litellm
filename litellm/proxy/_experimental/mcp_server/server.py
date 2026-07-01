@@ -232,6 +232,60 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     return False
 
 
+def _mcp_meta_trace_carrier(req_ctx: object) -> Optional[dict[str, str]]:
+    """The W3C trace context (``traceparent``/``tracestate``) the MCP client
+    propagated in the request's ``params._meta`` (SEP-414), or ``None``.
+
+    Per the OTel MCP semconv the MCP span parents to this propagated context rather
+    than to the HTTP/session transport (which is recorded as a link instead), so a
+    streamable-HTTP session that multiplexes many messages does not glue every
+    message under the session's first request. The client's W3C Baggage is
+    deliberately excluded: it is caller-controlled, and the otel baggage processor
+    stamps allowlisted baggage keys (``litellm.team.id``, ``litellm.metadata.*``,
+    ...) onto the span, so honoring remote baggage would let a client spoof a
+    span's identity attribution.
+    """
+    meta = getattr(req_ctx, "meta", None)
+    extra = getattr(meta, "model_extra", None)
+    if not isinstance(extra, dict):
+        return None
+    carrier = {
+        key: extra[key]
+        for key in ("traceparent", "tracestate")
+        if isinstance(extra.get(key), str)
+    }
+    return carrier or None
+
+
+def _otel_set_mcp_trace_carrier(carrier: Optional[dict[str, str]]) -> object:
+    """Stash ``carrier`` for the otel_v2 MCP span and return a reset token, or
+    ``None`` when otel_v2 is unavailable. Lazily imported so opentelemetry stays an
+    optional dependency."""
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            set_mcp_message_trace_carrier,
+        )
+
+        return set_mcp_message_trace_carrier(carrier)
+    except ImportError:
+        return None
+
+
+def _otel_reset_mcp_trace_carrier(token: object) -> None:
+    """Clear the per-message trace carrier so it never leaks to the next message on
+    the same session task. Paired with ``_otel_set_mcp_trace_carrier``."""
+    if token is None:
+        return
+    try:
+        from litellm.integrations.otel.plumbing.context import (
+            reset_mcp_message_trace_carrier,
+        )
+
+        reset_mcp_message_trace_carrier(token)
+    except ImportError:
+        return
+
+
 def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
     """Map a ``ProxyException`` to an ``HTTPException`` that preserves its real
     status code and headers.
@@ -284,6 +338,7 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         _should_strip_caller_authorization,
+        _without_authorization,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -606,8 +661,10 @@ if MCP_AVAILABLE:
         _session_reset_token = None
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _trace_token = None
 
         try:
+            _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
             # Get user authentication from context variable
             (
                 user_api_key_auth,
@@ -662,6 +719,7 @@ if MCP_AVAILABLE:
             # This prevents the HTTP stream from failing and allows the client to get a response
             return []
         finally:
+            _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
 
@@ -790,8 +848,10 @@ if MCP_AVAILABLE:
         _session_reset_token = None
         if req_ctx:
             _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _trace_token = None
 
         try:
+            _trace_token = _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(req_ctx))
             # Validate arguments
             (
                 user_api_key_auth,
@@ -914,6 +974,7 @@ if MCP_AVAILABLE:
 
             return response
         finally:
+            _otel_reset_mcp_trace_carrier(_trace_token)
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
 
@@ -1223,8 +1284,7 @@ if MCP_AVAILABLE:
             # closed so URL/header namespacing cannot silently fall back to
             # the caller's full allowed-server set.
             verbose_logger.debug(
-                "MCP scope filter resolved to no servers for requested names %s; "
-                "returning empty list (fail-closed).",
+                "MCP scope filter resolved to no servers for requested names %s; returning empty list (fail-closed).",
                 mcp_servers,
             )
             return []
@@ -1460,115 +1520,21 @@ if MCP_AVAILABLE:
         user_api_key_auth: Optional[UserAPIKeyAuth],
         prefetched_creds: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, str]]:
-        """Look up stored OAuth2 token for (user, server) and return as extra_headers dict.
+        """Stored OAuth2 token for (user, server) as an ``Authorization: Bearer`` header, or None.
 
-        Lookup order:
-        1. Redis cache (fast path, NaCl-decrypted) — skipped when prefetched_creds supplied
-        2. prefetched_creds dict (pre-fetched batch DB query) or fresh DB query
-        3. Auto-refresh when the stored token is expired and a refresh_token exists
-
-        Args:
-            prefetched_creds: Optional dict keyed by server_id with credential payloads.
-                              When provided, the Redis and individual DB lookups are
-                              skipped in favour of the pre-fetched batch result.
+        Thin wrapper over ``resolve_user_oauth_access_token`` (Redis cache, else DB + refresh);
+        ``prefetched_creds`` skips the per-server Redis/DB lookups for the batch path.
         """
-        if server.auth_type != MCPAuth.oauth2:
+        if server.auth_type != MCPAuth.oauth2 or user_api_key_auth is None:
             return None
-        if user_api_key_auth is None:
-            return None
-        user_id = getattr(user_api_key_auth, "user_id", None)
-        server_id = getattr(server, "server_id", None)
-        if not user_id or not server_id:
-            return None
-        try:
-            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
-                get_user_oauth_credential,
-                resolve_valid_user_oauth_token,
-            )
-            from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (  # noqa: PLC0415
-                _compute_per_user_token_ttl,
-                mcp_per_user_token_cache,
-            )
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            resolve_user_oauth_access_token,
+        )
 
-            # ── Fast path: Redis cache ────────────────────────────────────────
-            # Only used when prefetched_creds is not supplied (individual lookup).
-            if prefetched_creds is None:
-                cached_token = await mcp_per_user_token_cache.get(user_id, server_id)
-                if cached_token is not None:
-                    verbose_logger.debug(
-                        "_get_user_oauth_extra_headers_from_db: Redis hit for user=%s server=%s",
-                        user_id,
-                        server_id,
-                    )
-                    return {"Authorization": f"Bearer {cached_token}"}
-
-            # ── Slow path: DB lookup ──────────────────────────────────────────
-            prisma_client = None
-            if prefetched_creds is not None:
-                cred = prefetched_creds.get(server_id)
-            else:
-                from litellm.proxy.utils import (  # noqa: PLC0415
-                    get_prisma_client_or_throw,
-                )
-
-                prisma_client = get_prisma_client_or_throw(
-                    "Database not connected. Connect a database to use OAuth2 MCP tools."
-                )
-                cred = await get_user_oauth_credential(
-                    prisma_client, user_id, server_id
-                )
-
-            if not cred or not cred.get("access_token"):
-                return None
-
-            cred = await resolve_valid_user_oauth_token(
-                user_id=user_id,
-                server=server,
-                cred=cred,
-                prisma_client=prisma_client,
-            )
-            if cred is None:
-                # Refresh failed or token expired with no usable refresh_token —
-                # clear the stale Redis entry so the next request doesn't reuse it.
-                await mcp_per_user_token_cache.delete(user_id, server_id)
-                return None
-
-            access_token: str = cred["access_token"]
-
-            # Warm (or re-warm) the Redis cache from the DB result.
-            # Always write regardless of whether expires_at is present — tokens
-            # without an expiry are still valid and should be cached using the
-            # server/default TTL so subsequent requests are fast.
-            if prefetched_creds is None:
-                raw_expires = None
-                expires_at = cred.get("expires_at")
-                if expires_at:
-                    from datetime import datetime, timezone  # noqa: PLC0415
-
-                    try:
-                        exp_dt = datetime.fromisoformat(expires_at)
-                        if exp_dt.tzinfo is None:
-                            exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-                        remaining = int(
-                            (exp_dt - datetime.now(timezone.utc)).total_seconds()
-                        )
-                        raw_expires = max(remaining, 0) if remaining > 0 else None
-                    except (ValueError, TypeError):
-                        pass
-                ttl = _compute_per_user_token_ttl(server, raw_expires)
-                await mcp_per_user_token_cache.set(
-                    user_id, server_id, access_token, ttl
-                )
-
-            return {"Authorization": f"Bearer {access_token}"}
-        except Exception as e:
-            verbose_logger.warning(
-                "_get_user_oauth_extra_headers_from_db: failed to retrieve credential for user=%s server=%s: %s",
-                user_id,
-                server_id,
-                e,
-            )
-        return None
+        token = await resolve_user_oauth_access_token(
+            getattr(user_api_key_auth, "user_id", None), server, prefetched_creds
+        )
+        return {"Authorization": f"Bearer {token}"} if token else None
 
     async def _prefetch_oauth_creds_for_user(
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -1629,6 +1595,16 @@ if MCP_AVAILABLE:
             else:
                 # Copy to avoid mutating the original dict (important for parallel fetching)
                 extra_headers = oauth2_headers.copy() if oauth2_headers else None
+                # Migrated authorization_code: the v2 resolver injects the stored per-user
+                # token, so drop the caller-forwarded Authorization (apply-if-absent would
+                # otherwise let it shadow the resolved token). Delegate keeps it. Centralized
+                # via _should_strip_caller_authorization to match _call_regular_mcp_tool.
+                if extra_headers and _should_strip_caller_authorization(
+                    mcp_server=server,
+                    raw_headers=raw_headers,
+                    user_api_key_auth=user_api_key_auth,
+                ):
+                    extra_headers = _without_authorization(extra_headers)
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -1880,8 +1856,17 @@ if MCP_AVAILABLE:
                 # Prefer server-stored per-user OAuth when configured, so a stale
                 # Authorization header from the MCP client cannot override Redis/DB
                 # (same issue as call_tool in mcp_server_manager: VS Code caches tokens).
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                    to_server_spec,
+                )
+
+                # A server migrated to the v2 resolver gets its token from the resolver at connect
+                # time; building it here would double-resolve and be shadowed by the v2 graft. The
+                # preemptive 401 already challenged a missing token, so one exists for the connect.
+                migrated_to_v2 = to_server_spec(server) is not None
                 if (
-                    server.auth_type == MCPAuth.oauth2
+                    not migrated_to_v2
+                    and server.auth_type == MCPAuth.oauth2
                     and getattr(server, "needs_user_oauth_token", False)
                     and user_api_key_auth is not None
                 ):
@@ -1894,7 +1879,11 @@ if MCP_AVAILABLE:
                         extra_headers = db_headers
 
                 # If still no OAuth2 token, fall back to pre-fetched creds (non-stale-client path)
-                elif extra_headers is None and server.auth_type == MCPAuth.oauth2:
+                elif (
+                    not migrated_to_v2
+                    and extra_headers is None
+                    and server.auth_type == MCPAuth.oauth2
+                ):
                     extra_headers = await _get_user_oauth_extra_headers_from_db(
                         server,
                         user_api_key_auth,
@@ -1927,12 +1916,15 @@ if MCP_AVAILABLE:
                     )
                     return filtered_tools
                 except MCPUpstreamAuthError:
-                    # Surface upstream 401/403 to the outer handler so the
-                    # client receives a proper WWW-Authenticate challenge
-                    # instead of a silently empty tool list. Without this
-                    # re-raise the broad ``except Exception`` below would
-                    # swallow the auth error.
-                    raise
+                    # Absorb so one unauthenticated server does not empty every other server's
+                    # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
+                    # intentionally not done here: raising from this list handler cannot produce a
+                    # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
+                    # error), so that belongs in a request-scope preemptive check, tracked separately.
+                    verbose_logger.debug(
+                        f"MCP list_tools: omitting {server.name}; it needs upstream auth"
+                    )
+                    return []
                 except Exception as e:
                     verbose_logger.exception(
                         f"Error getting tools from server {server.name}: {str(e)}"
@@ -3606,12 +3598,6 @@ if MCP_AVAILABLE:
                 # If no stored token exists, fail fast with 401 so clients can
                 # kick off PKCE/interactive OAuth flow immediately.
                 if server.needs_user_oauth_token:
-                    stored_oauth_headers = await _get_user_oauth_extra_headers_from_db(
-                        server=server,
-                        user_api_key_auth=user_api_key_auth,
-                    )
-                    if stored_oauth_headers:
-                        continue
                     if getattr(server, "delegate_auth_to_upstream", False) is True:
                         # Delegate-auth servers run upstream PKCE: challenge with
                         # the proxied resource_metadata (RFC 9728), not the
@@ -3626,6 +3612,12 @@ if MCP_AVAILABLE:
                             detail="Unauthorized",
                             headers={"www-authenticate": www_authenticate},
                         )
+                    # The v2 resolver owns the existence check, so every authorization_code
+                    # resolution (egress and this discovery challenge) runs through it.
+                    if await global_mcp_server_manager.has_user_oauth_token(
+                        server, user_api_key_auth
+                    ):
+                        continue
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)
