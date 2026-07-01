@@ -424,14 +424,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": initial_block,
                         }
                     )
-                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                        response=first_chunk,
-                        current_content_block_index=self.current_content_block_index,
+                    processed_first = (
+                        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                            response=first_chunk,
+                            current_content_block_index=self.current_content_block_index,
+                        )
                     )
-                    if (
-                        isinstance(processed_first, dict)
-                        and processed_first.get("type") == "message_delta"
-                    ):
+                    if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -439,7 +438,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                    self.chunk_queue.append(processed_first)
+                        self.chunk_queue.append(processed_first)
+                    elif self._delta_has_content(processed_first):
+                        self.chunk_queue.append(processed_first)
                 else:
                     self.chunk_queue.append(
                         {
@@ -690,14 +691,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "content_block": initial_block,
                         }
                     )
-                    processed_first = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
-                        response=first_chunk,
-                        current_content_block_index=self.current_content_block_index,
+                    processed_first = (
+                        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_response_to_anthropic(
+                            response=first_chunk,
+                            current_content_block_index=self.current_content_block_index,
+                        )
                     )
-                    if (
-                        isinstance(processed_first, dict)
-                        and processed_first.get("type") == "message_delta"
-                    ):
+                    if isinstance(processed_first, dict) and processed_first.get("type") == "message_delta":
                         self.chunk_queue.append(
                             {
                                 "type": "content_block_stop",
@@ -705,7 +705,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
                         self.sent_content_block_finish = True
-                    self.chunk_queue.append(processed_first)
+                        self.chunk_queue.append(processed_first)
+                    elif self._delta_has_content(processed_first):
+                        self.chunk_queue.append(processed_first)
                 else:
                     self.chunk_queue.append(
                         {

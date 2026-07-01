@@ -138,7 +138,6 @@ def test_anthropic_stream_wrapper_single_tool_call():
     expected_types = [
         "message_start",
         "content_block_start",  # tool_use (from peek)
-        "content_block_delta",  # first tool chunk (empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",
@@ -194,12 +193,10 @@ def test_anthropic_stream_wrapper_back_to_back_tool_calls():
     expected_types = [
         "message_start",
         "content_block_start",  # tool_use (from peek)
-        "content_block_delta",  # first tool chunk (empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",
         "content_block_start",  # second tool_use
-        "content_block_delta",  # first chunk of second tool
         "content_block_delta",  # {"city":
         "content_block_delta",  # " SF"}
         "content_block_stop",
@@ -260,7 +257,6 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
     expected_types = [
         "message_start",
         "content_block_start",  # tool_use (from peek)
-        "content_block_delta",  # first tool chunk (empty args)
         "content_block_delta",  # {"city":
         "content_block_delta",  # "NY"}
         "content_block_stop",
@@ -268,12 +264,10 @@ def test_anthropic_stream_wrapper_interleaved_tool_calls_and_text():
         "content_block_delta",  # "The weather is nice today."
         "content_block_stop",
         "content_block_start",  # second tool_use
-        "content_block_delta",  # first chunk of second tool
         "content_block_delta",  # {"city":
         "content_block_delta",  # " SF"}
         "content_block_stop",
         "content_block_start",  # third tool_use
-        "content_block_delta",  # first chunk of third tool
         "content_block_delta",  # {"city":
         "content_block_delta",  # " CHI"}
         "content_block_stop",
