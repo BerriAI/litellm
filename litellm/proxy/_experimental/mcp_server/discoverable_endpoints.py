@@ -1085,18 +1085,18 @@ async def _build_oauth_protected_resource_response(
                 "unavailable, falling back to gateway-served AS metadata",
                 mcp_server.name,
             )
-        return {
-            "authorization_servers": [
-                (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
-            ],
-            "resource": resource_url,
-            "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
-        }
+        elif upstream_metadata is None:
+            verbose_logger.info(
+                "delegate-auth MCP server %r: upstream returned no resource "
+                "metadata (non-2xx or non-dict), falling back to gateway AS",
+                mcp_server.name,
+            )
 
+    authorization_servers = [
+        (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
+    ]
     return {
-        "authorization_servers": [
-            (f"{request_base_url}/{mcp_server_name}" if mcp_server_name else f"{request_base_url}")
-        ],
+        "authorization_servers": authorization_servers,
         "resource": resource_url,
         "scopes_supported": (mcp_server.scopes if mcp_server and mcp_server.scopes else []),
     }
