@@ -128,11 +128,14 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
     3. "reasoning" field (alias for reasoning_content) - clears from content
     """
 
-    started_reasoning_content: bool = False
-    finished_reasoning_content: bool = False
-    pending_reasoning: str = ""
-    plain_chunk_count: int = 0
     MAX_PLAIN_CHUNKS: int = 30
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.started_reasoning_content = False
+        self.finished_reasoning_content = False
+        self.pending_reasoning = ""
+        self.plain_chunk_count = 0
 
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         try:
@@ -146,7 +149,7 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                 reasoning_details = delta.get("reasoning_details")
                 if reasoning_details and isinstance(reasoning_details, list):
                     reasoning_text = "".join(
-                        d.get("text", "") for d in reasoning_details if isinstance(d, dict) and d.get("text")
+                        d["text"] for d in reasoning_details if isinstance(d, dict) and d.get("text")
                     )
                     if reasoning_text:
                         delta["reasoning_content"] = reasoning_text
@@ -176,7 +179,7 @@ class MinimaxChatResponseIterator(OpenAIChatCompletionStreamingHandler):
                         after = parts[1] if len(parts) > 1 else ""
                         if before:
                             delta["reasoning_content"] = before
-                        delta["content"] = after if after.strip() else ("" if not after else None)
+                        delta["content"] = after if after.strip() else None
                         self.finished_reasoning_content = True
                         self.plain_chunk_count = 0
                     elif (
