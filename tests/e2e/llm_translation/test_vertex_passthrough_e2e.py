@@ -126,7 +126,10 @@ def _costed_row(client: PassthroughClient, call_id: str | None) -> SpendLogRow:
     a billed Vertex call that LiteLLM did not track is the exact regression #31689
     guards against."""
     assert call_id, "vertex passthrough response had no x-litellm-call-id header"
-    rows = client.gateway.poll_logs_for_request_id(call_id, predicate=lambda rs: (rs[0].spend or 0) > 0)
+    rows = client.gateway.poll_logs_for_request_id(
+        call_id,
+        predicate=lambda rs: (rs[0].spend or 0) > 0,
+    )
     assert rows, f"no SpendLogs row for vertex passthrough call_id {call_id}"
     row = rows[0]
     assert row.call_type == "pass_through_endpoint", f"unexpected call_type: {row}"
