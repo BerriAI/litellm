@@ -813,11 +813,15 @@ async def test_generic_api_path_sets_failed_deployment_id():
 
 @pytest.mark.asyncio
 async def test_weighted_failover_works_on_generic_api_path():
-    """End-to-end: weighted failover via the _ageneric_api_call_with_fallbacks
-    path (used by /v1/messages, image_edit, generate_content, etc.) should
+    """End-to-end: weighted failover via _ageneric_api_call_with_fallbacks
+    (used by /v1/messages, image_edit, generate_content, etc.) should
     re-pick a healthy sibling in the same model group before falling back
-    to a cross-group fallback. Uses anthropic_messages to exercise the
-    exact code path reported in the bug."""
+    to a cross-group fallback.
+
+    Exercises the generic path directly with _acompletion (which supports
+    mock_response) to validate that the fix in
+    _ageneric_api_call_with_fallbacks_helper propagates through the full
+    async_function_with_fallbacks retry chain."""
     router = Router(
         model_list=[
             {
@@ -846,8 +850,9 @@ async def test_weighted_failover_works_on_generic_api_path():
         enable_weighted_failover=True,
     )
 
-    response = await router.anthropic_messages(
+    response = await router._ageneric_api_call_with_fallbacks(
         model="test-model",
+        original_function=router._acompletion,
         messages=[{"role": "user", "content": "hi"}],
     )
     assert response._hidden_params["model_id"] == "B"
