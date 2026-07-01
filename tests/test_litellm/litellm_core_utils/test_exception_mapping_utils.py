@@ -626,3 +626,70 @@ def test_replicate_422_maps_to_unprocessable_entity():
         )
 
     assert excinfo.value.llm_provider == "replicate"
+
+
+class TestTracebackNotLeakedToClient:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/30948
+
+    An unmapped provider exception (e.g. the Vertex/Gemini "Invalid Message
+    passed in" error triggered by a bad ``role``) was surfaced to API
+    clients with the full Python traceback - absolute file paths, line
+    numbers, and the proxy's internal call stack - embedded in the error
+    message. That is a CWE-209 information-disclosure leak.
+
+    By default the traceback must stay out of the client-facing message
+    (it is logged server-side instead) while the useful error text is
+    preserved. ``litellm.expose_traceback_in_errors = True`` restores the
+    legacy behavior (https://github.com/BerriAI/litellm/issues/4201).
+    """
+
+    _BAD_ROLE_ERROR = (
+        "Invalid Message passed in - {'role': 'admin', 'content': 'test'}. "
+        "File an issue https://github.com/BerriAI/litellm/issues"
+    )
+
+    def _map_unmapped_exception(self):
+        """Reproduce the real flow: raise, catch, and map from inside the
+        ``except`` block so traceback.format_exc() captures a real
+        traceback with file paths (as it would in production)."""
+        try:
+            raise Exception(self._BAD_ROLE_ERROR)
+        except Exception as e:  # noqa: BLE001
+            exception_type(
+                model="gemini/gemini-2.5-flash",
+                original_exception=e,
+                custom_llm_provider="vertex_ai",
+            )
+
+    def test_traceback_not_leaked_to_client_by_default(self):
+        prev = litellm.expose_traceback_in_errors
+        litellm.expose_traceback_in_errors = False
+        try:
+            with pytest.raises(litellm.APIConnectionError) as excinfo:
+                self._map_unmapped_exception()
+        finally:
+            litellm.expose_traceback_in_errors = prev
+
+        message = excinfo.value.message
+        # Useful, non-sensitive detail is preserved for the client.
+        assert "Invalid Message passed in" in message
+        # No stack trace / internal file paths leak to the client.
+        assert "Traceback (most recent call last)" not in message
+        assert "exception_mapping_utils.py" not in message
+        assert "site-packages" not in message
+        assert '.py", line' not in message
+
+    def test_traceback_exposed_when_explicitly_opted_in(self):
+        prev = litellm.expose_traceback_in_errors
+        litellm.expose_traceback_in_errors = True
+        try:
+            with pytest.raises(litellm.APIConnectionError) as excinfo:
+                self._map_unmapped_exception()
+        finally:
+            litellm.expose_traceback_in_errors = prev
+
+        message = excinfo.value.message
+        assert "Invalid Message passed in" in message
+        # Legacy opt-in behavior (#4201) is still available for debugging.
+        assert "Traceback (most recent call last)" in message
