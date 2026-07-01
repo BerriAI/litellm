@@ -4352,3 +4352,252 @@ class TestResponseCostHeaderForTypedDictResponses:
 
         assert "x-litellm-response-cost" not in fastapi_response.headers
         recompute.assert_not_called()
+
+
+class TestPreCallWithFallbacksOnLocalRateLimit:
+    """
+    Regression tests for LIT-3890: proxy fallbacks must trigger when local rate
+    limits (key-level TPM/RPM or dynamic_rate_limiter_v3) reject a request.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fallback_triggered_on_local_rate_limit(self):
+        """
+        When the primary model is locally rate-limited, the request should
+        proceed with a configured fallback model.
+        """
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        primary_model = "gpt-4"
+        fallback_model = "gpt-3.5-turbo"
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        call_count = 0
+
+        async def mock_pre_call_logic(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            model_in_data = processor.data.get("model")
+            if model_in_data == primary_model:
+                raise ProxyRateLimitError(
+                    detail="TPM limit exceeded for gpt-4",
+                    headers={"retry-after": "30"},
+                )
+            logging_obj = MagicMock()
+            return processor.data, logging_obj
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            data, logging_obj = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=MagicMock(router_settings=None),
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=primary_model,
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        assert processor.data["model"] == fallback_model
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_fallbacks_configured(self):
+        """
+        When no fallbacks are configured, the original rate limit error
+        should propagate unchanged.
+        """
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            raise ProxyRateLimitError(
+                detail="TPM limit exceeded",
+                headers={"retry-after": "30"},
+            )
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = None
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ProxyRateLimitError):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+    @pytest.mark.asyncio
+    async def test_raises_when_all_fallbacks_also_rate_limited(self):
+        """
+        When all fallback models are also locally rate-limited, the original
+        error for the primary model should be re-raised.
+        """
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            raise ProxyRateLimitError(
+                detail=f"TPM limit exceeded for {processor.data.get('model')}",
+                headers={"retry-after": "30"},
+            )
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo", "claude-3-haiku"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ProxyRateLimitError, match="gpt-4"):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        # Model should be restored to original
+        assert processor.data["model"] == "gpt-4"
+
+    @pytest.mark.asyncio
+    async def test_fallback_uses_key_level_router_settings(self):
+        """
+        Key-level router_settings fallbacks should take precedence over
+        router-level fallbacks.
+        """
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": "gpt-4"})
+
+        async def mock_pre_call_logic(**kwargs):
+            if processor.data.get("model") == "gpt-4":
+                raise ProxyRateLimitError(
+                    detail="TPM limit exceeded",
+                    headers={"retry-after": "30"},
+                )
+            return processor.data, MagicMock()
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.router_settings = {
+            "fallbacks": [{"gpt-4": ["claude-3-haiku"]}]
+        }
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            data, _ = await processor._pre_call_with_fallbacks(
+                request=MagicMock(),
+                general_settings={},
+                proxy_logging_obj=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+                version=None,
+                proxy_config=MagicMock(),
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model="gpt-4",
+                route_type="acompletion",
+                llm_router=mock_router,
+            )
+
+        # Should use key-level fallback, not router-level
+        assert processor.data["model"] == "claude-3-haiku"
+
+    @pytest.mark.asyncio
+    async def test_disable_fallbacks_flag_respected(self):
+        """
+        When disable_fallbacks is set in request data, local rate limit
+        errors should not trigger fallback logic.
+        """
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "gpt-4", "disable_fallbacks": True}
+        )
+
+        async def mock_pre_call_logic(**kwargs):
+            raise ProxyRateLimitError(
+                detail="TPM limit exceeded",
+                headers={"retry-after": "30"},
+            )
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ProxyRateLimitError):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
