@@ -442,12 +442,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             formValues={{
               ...form.getFieldsValue(),
               custom_llm_provider: "auto_router",
-              model_mappings: [{
-                public_name: form.getFieldValue("auto_router_name") || "auto_router",
-                litellm_model: routerType === "complexity"
-                  ? "auto_router/complexity_router"
-                  : `auto_router/${form.getFieldValue("auto_router_name") || "auto_router"}`,
-              }],
+              model_mappings: [
+                {
+                  public_name: form.getFieldValue("auto_router_name") || "auto_router",
+                  litellm_model:
+                    routerType === "complexity"
+                      ? "auto_router/complexity_router"
+                      : `auto_router/${form.getFieldValue("auto_router_name") || "auto_router"}`,
+                },
+              ],
             }}
             accessToken={accessToken}
             testMode="chat"
