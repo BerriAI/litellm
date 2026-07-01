@@ -783,22 +783,6 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
-            elif key == "object_permission":
-                _default_object_permission = litellm.default_key_generate_params.get("object_permission")
-                if _default_object_permission is not None:
-                    if value is None:
-                        setattr(
-                            data,
-                            key,
-                            LiteLLM_ObjectPermissionBase(**_default_object_permission),
-                        )
-                    else:
-                        for (
-                            _op_field,
-                            _op_default_value,
-                        ) in _default_object_permission.items():
-                            if getattr(value, _op_field, None) is None:
-                                setattr(value, _op_field, _op_default_value)
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
@@ -980,6 +964,23 @@ async def _common_key_generation_helper(
         team_obj=team_table,
         is_proxy_admin=_is_proxy_admin_caller,
     )
+
+    # Merge default_key_generate_params.object_permission in *after* the team-scope
+    # checks above, so an admin-configured default (e.g. vector_stores, search_tools)
+    # is never mistaken for a caller-requested permission and rejected by those
+    # non-admin/no-team checks. Only fields the caller left unset are filled in.
+    _default_object_permission = (
+        litellm.default_key_generate_params.get("object_permission")
+        if litellm.default_key_generate_params is not None
+        else None
+    )
+    if isinstance(_default_object_permission, dict):
+        _caller_object_permission = data_json.get("object_permission")
+        if _caller_object_permission is None:
+            data_json["object_permission"] = dict(_default_object_permission)
+        elif isinstance(_caller_object_permission, dict):
+            for _op_field, _op_default_value in _default_object_permission.items():
+                _caller_object_permission.setdefault(_op_field, _op_default_value)
 
     data_json = await _set_object_permission(
         data_json=data_json,

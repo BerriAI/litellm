@@ -7789,7 +7789,6 @@ async def test_default_key_generate_params_object_permission_applied_when_absent
     doesn't specify object_permission at all.
     """
     import litellm
-    from litellm.proxy._types import LiteLLM_ObjectPermissionBase
 
     mock_prisma_client = AsyncMock()
     mock_insert_data = AsyncMock(
@@ -7837,8 +7836,8 @@ async def test_default_key_generate_params_object_permission_applied_when_absent
             team_table=None,
         )
 
-        assert isinstance(request.object_permission, LiteLLM_ObjectPermissionBase)
-        assert request.object_permission.vector_stores == ["default-vs"]
+        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        assert created_data["vector_stores"] == ["default-vs"]
     finally:
         litellm.default_key_generate_params = original_value
 
@@ -7902,8 +7901,9 @@ async def test_default_key_generate_params_object_permission_merges_partial(
             team_table=None,
         )
 
-        assert request.object_permission.agents == ["agent-1"]
-        assert request.object_permission.vector_stores == ["default-vs"]
+        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        assert created_data["agents"] == ["agent-1"]
+        assert created_data["vector_stores"] == ["default-vs"]
     finally:
         litellm.default_key_generate_params = original_value
 
@@ -7968,7 +7968,73 @@ async def test_default_key_generate_params_object_permission_does_not_override_e
             team_table=None,
         )
 
-        assert request.object_permission.vector_stores == ["explicit-vs"]
+        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        assert created_data["vector_stores"] == ["explicit-vs"]
+    finally:
+        litellm.default_key_generate_params = original_value
+
+
+async def test_default_key_generate_params_object_permission_not_rejected_for_non_admin_personal_key(
+    monkeypatch,
+):
+    """
+    Regression test: a default_key_generate_params.object_permission containing
+    a team-scoped field (vector_stores) must not turn ordinary non-admin
+    personal key creation into a 403. The default is merged in *after* the
+    caller-scope validation, so it is never mistaken for a caller-requested
+    permission.
+    """
+    import litellm
+
+    mock_prisma_client = AsyncMock()
+    mock_insert_data = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.insert_data = mock_insert_data
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[]
+    )
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=MagicMock(
+            token="hashed_token_123", litellm_budget_table=None, object_permission=None
+        )
+    )
+    mock_prisma_client.db.litellm_objectpermissiontable = MagicMock()
+    mock_prisma_client.db.litellm_objectpermissiontable.create = AsyncMock(
+        return_value=MagicMock(object_permission_id="objperm-4")
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    original_value = litellm.default_key_generate_params
+    litellm.default_key_generate_params = {
+        "object_permission": {"vector_stores": ["default-vs"]}
+    }
+
+    try:
+        request = GenerateKeyRequest(user_id="alice")  # No object_permission specified
+        response = await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER,
+                api_key="sk-alice",
+                user_id="alice",
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+        assert response is not None
+        created_data = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args.kwargs["data"]
+        assert created_data["vector_stores"] == ["default-vs"]
     finally:
         litellm.default_key_generate_params = original_value
 
