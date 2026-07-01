@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from mcp import McpError
+from mcp.types import INTERNAL_ERROR, METHOD_NOT_FOUND, ErrorData
 
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../")
@@ -626,6 +628,73 @@ async def test_get_prompt_does_not_log_arguments():
     logged = _all_logged_messages(mock_logger)
     assert "my_prompt" in logged
     assert secret not in logged
+
+
+class TestMethodNotFoundDegradesQuietly:
+    """An upstream that does not implement resources/prompts replies with the
+    JSON-RPC ``-32601`` (Method not found) error. LiteLLM must treat that as an
+    empty capability list and log it at DEBUG, not ERROR/WARNING, so a tools-only
+    server (issue #31179) does not flood the logs.
+    """
+
+    def _client_raising(self, mock_session_cls, operation_name, error):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+
+        init_result = MagicMock()
+        init_result.instructions = None
+        mock_session = AsyncMock()
+        mock_session.initialize = AsyncMock(return_value=init_result)
+        setattr(mock_session, operation_name, AsyncMock(side_effect=error))
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+        client._create_transport_context = MagicMock(return_value=(transport_ctx, None))
+        return client
+
+    @pytest.mark.parametrize(
+        "list_method, operation_name",
+        [("list_resources", "list_resources"), ("list_prompts", "list_prompts")],
+    )
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_method_not_found_returns_empty_at_debug(
+        self, mock_session_cls, list_method, operation_name
+    ):
+        error = McpError(ErrorData(code=METHOD_NOT_FOUND, message="Method not found"))
+        client = self._client_raising(mock_session_cls, operation_name, error)
+
+        with patch.object(mcp_client_module, "verbose_logger") as mock_logger:
+            result = await getattr(client, list_method)()
+
+        assert result == []
+        mock_logger.error.assert_not_called()
+        mock_logger.warning.assert_not_called()
+        assert mock_logger.debug.called
+
+    @pytest.mark.parametrize(
+        "list_method, operation_name",
+        [("list_resources", "list_resources"), ("list_prompts", "list_prompts")],
+    )
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_other_mcp_error_still_logs_error(
+        self, mock_session_cls, list_method, operation_name
+    ):
+        error = McpError(ErrorData(code=INTERNAL_ERROR, message="boom"))
+        client = self._client_raising(mock_session_cls, operation_name, error)
+
+        with patch.object(mcp_client_module, "verbose_logger") as mock_logger:
+            result = await getattr(client, list_method)()
+
+        assert result == []
+        mock_logger.error.assert_called()
+        mock_logger.warning.assert_called()
 
 
 if __name__ == "__main__":
