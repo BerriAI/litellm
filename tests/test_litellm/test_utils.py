@@ -4532,4 +4532,3 @@ def test_aws_bedrock_project_id_excluded_from_bedrock_optional_params():
 
     assert "aws_bedrock_project_id" not in result
     assert result["aws_region_name"] == "us-east-1"
-
