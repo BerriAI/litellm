@@ -3896,7 +3896,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
 
     # Test Case 6: DB config exists but param_value is not a dict
     mock_db_config_invalid = MagicMock()
-    mock_db_config_invalid.param_value = 42
+    mock_db_config_invalid.param_value = "not_a_dict"
     mock_prisma_client.db.litellm_config.find_unique = AsyncMock(
         return_value=mock_db_config_invalid
     )
