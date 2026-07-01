@@ -267,6 +267,8 @@ def test_extract_response_content_with_citations():
                 "start_char_index": 0,
                 "end_char_index": 20,
                 "supported_text": "the grass is green",
+                "supported_text_start_char_index": 28,
+                "supported_text_end_char_index": 46,
             },
         ],
         [
@@ -278,6 +280,8 @@ def test_extract_response_content_with_citations():
                 "start_char_index": 20,
                 "end_char_index": 36,
                 "supported_text": "the sky is blue",
+                "supported_text_start_char_index": 51,
+                "supported_text_end_char_index": 66,
             },
         ],
     ]
@@ -5733,3 +5737,91 @@ def test_top_k_forwarded_at_transform_on_models_that_accept_it():
     )
 
     assert result["top_k"] == 40
+
+
+def test_opus_4_8_uses_native_structured_output():
+    """claude-opus-4-8 has supports_output_config=true in the model map,
+    so response_format should route to the native output_format path
+    rather than the tool-call emulation path"""
+    config = AnthropicConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "test_schema",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    optional_params = config.map_openai_params(
+        non_default_params={"response_format": response_format},
+        optional_params={},
+        model="claude-opus-4-8",
+        drop_params=False,
+    )
+
+    assert "output_format" in optional_params
+    assert optional_params["output_format"]["type"] == "json_schema"
+    assert "tools" not in optional_params
+    assert "tool_choice" not in optional_params
+    assert optional_params.get("json_mode") is True
+
+
+def test_map_tool_helper_eager_input_streaming_passthrough():
+    """eager_input_streaming on a custom tool must survive the mapping"""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "my_tool",
+            "description": "a tool",
+            "parameters": {"type": "object", "properties": {}},
+            "eager_input_streaming": True,
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result.get("eager_input_streaming") is True
+
+
+def test_map_tool_helper_eager_input_streaming_top_level():
+    """eager_input_streaming set at top level (not nested in function)"""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "eager_input_streaming": True,
+        "function": {
+            "name": "my_tool",
+            "description": "a tool",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result.get("eager_input_streaming") is True
+
+
+def test_map_tool_helper_eager_input_streaming_rejects_non_bool():
+    """eager_input_streaming must be a boolean"""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "my_tool",
+            "parameters": {"type": "object", "properties": {}},
+            "eager_input_streaming": "yes",
+        },
+    }
+
+    with pytest.raises(ValueError, match="eager_input_streaming must be a boolean"):
+        config._map_tool_helper(tool)
