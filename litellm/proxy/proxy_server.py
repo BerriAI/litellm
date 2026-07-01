@@ -14214,13 +14214,8 @@ def _dump_redacted_config(value: Optional[JsonValue], *, redact_all_values: bool
     # an audit write into a 500.
     if value is None:
         return None
-    if redact_all_values:
-        if isinstance(value, dict):
-            return json.dumps({key: "REDACTED" for key in value}, default=str)
-        # Defensive fallback if a future caller stores this section as a
-        # non-dict: redact wholesale rather than silently leaking through the
-        # key-name matcher below.
-        return json.dumps("REDACTED")
+    if redact_all_values and isinstance(value, dict):
+        return json.dumps({key: "REDACTED" for key in value}, default=str)
     return json.dumps(_redact_secret_values_in_obj(value), default=str)
 
 

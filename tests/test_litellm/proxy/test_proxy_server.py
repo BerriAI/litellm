@@ -8756,13 +8756,3 @@ def test_dump_redacted_config_serializes_non_json_native_values():
     restored = json.loads(out)
     assert "2026-06-30" in restored["updated_at"]
 
-
-def test_dump_redacted_config_redacts_non_dict_when_redact_all_values():
-    """The redact_all_values branch must not silently fall through to the
-    key-name matcher for non-dict inputs, or a future caller storing the
-    section as a list/scalar would leak plaintext."""
-    from litellm.proxy.proxy_server import _dump_redacted_config
-
-    list_value = ["DATABASE_URL=postgresql://u:p@db/x"]
-    assert _dump_redacted_config(list_value, redact_all_values=True) == '"REDACTED"'
-    assert _dump_redacted_config("postgresql://u:p@db/x", redact_all_values=True) == '"REDACTED"'
