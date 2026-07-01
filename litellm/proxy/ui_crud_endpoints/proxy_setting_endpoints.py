@@ -966,16 +966,24 @@ async def get_ui_theme_settings():
     Note: This endpoint is public (no authentication required) so all users can see custom branding.
     Only the /update/ui_theme_settings endpoint requires authentication for admins to change settings.
     """
+    import os
+
     from litellm.proxy.proxy_server import proxy_config
 
-    # Load existing config
     config = await proxy_config.get_config()
 
-    return await _get_settings_with_schema(
+    result = await _get_settings_with_schema(
         settings_key="ui_theme_config",
         settings_class=UIThemeConfig,
         config=config,
     )
+
+    if not result.get("values", {}).get("logo_url"):
+        env_logo = os.getenv("UI_LOGO_PATH", "")
+        if env_logo.startswith(("http://", "https://")):
+            result.setdefault("values", {})["logo_url"] = env_logo
+
+    return result
 
 
 def _validate_public_image_url(value: Optional[str], field_name: str) -> None:

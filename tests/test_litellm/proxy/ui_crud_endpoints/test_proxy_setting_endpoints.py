@@ -925,6 +925,54 @@ class TestProxySettingEndpoints:
         assert data["values"]["logo_url"] == "https://example.com/logo.png"
         assert data["values"]["favicon_url"] == "https://example.com/favicon.ico"
 
+    def test_get_ui_theme_settings_falls_back_to_env_var(
+        self, mock_proxy_config, monkeypatch
+    ):
+        """When no logo_url is stored in config, the endpoint should
+        fall back to the UI_LOGO_PATH env var (HTTP(S) URLs only)."""
+        monkeypatch.setenv(
+            "UI_LOGO_PATH", "https://cdn.example.com/custom-logo.png"
+        )
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert (
+            data["values"]["logo_url"]
+            == "https://cdn.example.com/custom-logo.png"
+        )
+
+    def test_get_ui_theme_settings_env_var_ignores_local_paths(
+        self, mock_proxy_config, monkeypatch
+    ):
+        """Local file paths in UI_LOGO_PATH must not leak through the
+        public endpoint; only http(s) URLs are returned."""
+        monkeypatch.setenv("UI_LOGO_PATH", "/etc/passwd")
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["logo_url"] is None
+
+    def test_get_ui_theme_settings_db_takes_precedence_over_env_var(
+        self, mock_proxy_config, monkeypatch
+    ):
+        """A logo_url stored in the config DB should win over the env var."""
+        monkeypatch.setenv(
+            "UI_LOGO_PATH", "https://cdn.example.com/env-logo.png"
+        )
+        mock_proxy_config["config"]["litellm_settings"]["ui_theme_config"] = {
+            "logo_url": "https://example.com/db-logo.png",
+        }
+
+        response = client.get("/get/ui_theme_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["logo_url"] == "https://example.com/db-logo.png"
+
     def test_get_ui_settings(self, mock_auth, monkeypatch):
         """Test retrieving UI settings with allowlist sanitization"""
         from unittest.mock import AsyncMock, MagicMock

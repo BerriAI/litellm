@@ -10,7 +10,7 @@ import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySett
 import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Tag } from "antd";
 import Link from "next/link";
-import React from "react";
+import React, { useCallback, useState } from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
@@ -42,7 +42,10 @@ const Navbar: React.FC<NavbarProps> = ({
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
 
-  const imageUrl = logoUrl || `${baseUrl}/get_image`;
+  const fallbackUrl = `${baseUrl}/get_image`;
+  const imageUrl = logoUrl || fallbackUrl;
+  const [imgFailed, setImgFailed] = useState(false);
+  const handleImgError = useCallback(() => setImgFailed(true), []);
 
   const handleLogout = () => {
     clearTokenCookies();
@@ -79,9 +82,10 @@ const Navbar: React.FC<NavbarProps> = ({
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
                     <img
-                      src={imageUrl}
+                      src={imgFailed ? fallbackUrl : imageUrl}
                       alt="LiteLLM Brand"
                       className="h-auto max-h-full w-auto max-w-full object-contain"
+                      onError={handleImgError}
                     />
                   </div>
                 </div>
