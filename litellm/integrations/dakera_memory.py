@@ -45,11 +45,7 @@ def _extract_text(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return " ".join(
-            p.get("text", "")
-            for p in content
-            if isinstance(p, dict) and p.get("type") == "text"
-        ).strip()
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text").strip()
     return str(content) if content else ""
 
 
@@ -82,15 +78,11 @@ class DakeraMemoryLogger(CustomLogger):
         session_id_key: str = "session_id",
     ) -> None:
         super().__init__()
-        self.base_url = (
-            base_url or os.getenv("DAKERA_API_URL", "http://localhost:3000")
-        ).rstrip("/")
+        self.base_url = (base_url or os.getenv("DAKERA_API_URL", "http://localhost:3000")).rstrip("/")
         self.api_key = api_key or os.getenv("DAKERA_API_KEY", "")
         self.top_k = top_k
         self.session_id_key = session_id_key
-        self._http_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.LoggingCallback
-        )
+        self._http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
 
     def _headers(self) -> Dict[str, str]:
         h: Dict[str, str] = {"Content-Type": "application/json"}
@@ -136,11 +128,7 @@ class DakeraMemoryLogger(CustomLogger):
             # Use the last user message as the semantic recall query.
             # _extract_text handles multimodal content (list of parts) gracefully.
             raw_content = next(
-                (
-                    m.get("content", "")
-                    for m in reversed(messages)
-                    if m.get("role") == "user"
-                ),
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
                 None,
             )
             if not raw_content:
@@ -170,26 +158,21 @@ class DakeraMemoryLogger(CustomLogger):
                 return data
 
             # Build memory context and inject before the first non-system message
-            memory_lines = "\n".join(
-                f"- {r.get('content', '')}" for r in results if r.get("content")
-            )
+            memory_lines = "\n".join(f"- {r.get('content', '')}" for r in results if r.get("content"))
             if not memory_lines:
                 return data
 
             memory_msg = {
                 "role": "system",
                 "content": (
-                    "Relevant context from prior sessions (retrieved from persistent memory):\n"
-                    f"{memory_lines}"
+                    f"Relevant context from prior sessions (retrieved from persistent memory):\n{memory_lines}"
                 ),
             }
             existing_system = [m for m in messages if m.get("role") == "system"]
             non_system = [m for m in messages if m.get("role") != "system"]
             data["messages"] = existing_system + [memory_msg] + non_system
 
-            verbose_logger.debug(
-                f"DakeraMemoryLogger: injected {len(results)} memories for session={session_id}"
-            )
+            verbose_logger.debug(f"DakeraMemoryLogger: injected {len(results)} memories for session={session_id}")
         except Exception as exc:
             verbose_logger.warning(f"DakeraMemoryLogger.async_pre_call_hook failed: {exc}")
 
@@ -212,11 +195,7 @@ class DakeraMemoryLogger(CustomLogger):
             session_id = self._session_id(kwargs.get("metadata"))
 
             raw_content = next(
-                (
-                    m.get("content", "")
-                    for m in reversed(messages)
-                    if m.get("role") == "user"
-                ),
+                (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
                 None,
             )
             if not raw_content:
@@ -248,10 +227,6 @@ class DakeraMemoryLogger(CustomLogger):
                 },
                 timeout=5.0,
             )
-            verbose_logger.debug(
-                f"DakeraMemoryLogger: stored exchange for session={session_id}"
-            )
+            verbose_logger.debug(f"DakeraMemoryLogger: stored exchange for session={session_id}")
         except Exception as exc:
-            verbose_logger.warning(
-                f"DakeraMemoryLogger.async_log_success_event failed: {exc}"
-            )
+            verbose_logger.warning(f"DakeraMemoryLogger.async_log_success_event failed: {exc}")
