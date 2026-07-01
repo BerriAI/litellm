@@ -81,9 +81,7 @@ def test_github_copilot_anthropic_messages_get_complete_url_normalizes_authentic
     not yield a double-slash URL."""
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = (
-        "https://api.business.githubcopilot.com/"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.business.githubcopilot.com/"
 
     url = config.get_complete_url(
         api_base=None,
@@ -184,11 +182,7 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
         headers={},
         model="github_copilot/claude-haiku-4.5",
         messages=[{"role": "user", "content": "Hello"}],
-        optional_params={
-            "context_management": {
-                "edits": [{"type": "clear_tool_uses_20250919"}]
-            }
-        },
+        optional_params={"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
         litellm_params={},
         api_key=None,
         api_base=None,
@@ -206,9 +200,7 @@ def test_github_copilot_anthropic_messages_validate_environment_auth_error():
 
     # Mock the authenticator to raise an error
     config.authenticator = MagicMock()
-    config.authenticator.get_api_key.side_effect = GetAPIKeyError(
-        status_code=401, message="No valid API key found"
-    )
+    config.authenticator.get_api_key.side_effect = GetAPIKeyError(status_code=401, message="No valid API key found")
 
     with pytest.raises(AuthenticationError):
         config.validate_anthropic_messages_environment(
@@ -225,9 +217,7 @@ def test_github_copilot_anthropic_messages_validate_environment_auth_error():
 def test_github_copilot_anthropic_messages_supported_params():
     """Test supported parameters list."""
     config = GithubCopilotAnthropicMessagesConfig()
-    params = config.get_supported_anthropic_messages_params(
-        "github_copilot/claude-haiku-4.5"
-    )
+    params = config.get_supported_anthropic_messages_params("github_copilot/claude-haiku-4.5")
 
     # Should inherit from AnthropicMessagesConfig
     assert "messages" in params
@@ -270,9 +260,7 @@ def test_github_copilot_anthropic_messages_validate_environment_normalizes_trail
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key"
-    config.authenticator.get_api_base.return_value = (
-        "https://api.business.githubcopilot.com/"
-    )
+    config.authenticator.get_api_base.return_value = "https://api.business.githubcopilot.com/"
 
     _, api_base = config.validate_anthropic_messages_environment(
         headers={},
@@ -310,18 +298,20 @@ def test_github_copilot_config_disables_anthropic_beta_filtering():
         headers={},
         model="github_copilot/claude-haiku-4.5",
         messages=[{"role": "user", "content": "Hello"}],
-        optional_params={
-            "context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}
-        },
+        optional_params={"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}},
         litellm_params={},
         api_key=None,
         api_base=None,
     )
 
     assert "context-management-2025-06-27" in headers["anthropic-beta"]
-    if config.should_filter_anthropic_beta_headers():
-        headers = update_headers_with_filtered_beta(headers=dict(headers), provider="github_copilot")
-    assert "context-management-2025-06-27" in headers.get("anthropic-beta", "")
+
+    # The override is load-bearing: had the config opted into the provider-scoped
+    # filter, the handler would have run it and dropped every value, since
+    # github_copilot has no mapping. Prove that here so a regression that flips
+    # should_filter back on is caught as the silent feature breakage it causes.
+    stripped = update_headers_with_filtered_beta(headers=dict(headers), provider="github_copilot")
+    assert "anthropic-beta" not in stripped
 
 
 def test_github_copilot_config_does_not_handle_web_search_natively():
