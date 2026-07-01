@@ -21,10 +21,12 @@ def initialize_guardrail(
     import litellm
 
     _cb = SingulrGuardrail(
-        api_base=litellm_params.api_base,
-        api_key=litellm_params.api_key,
-        enforcement_entity_id=getattr(litellm_params, "enforcement_entity_id", None),
-        guardrail_id=getattr(litellm_params, "guardrail_id", None),
+        singulr_api_base=getattr(litellm_params, "singulr_api_base", None)
+        or litellm_params.api_base,
+        singulr_api_key=getattr(litellm_params, "singulr_api_key", None)
+        or litellm_params.api_key,
+        singulr_application_id=getattr(litellm_params, "singulr_application_id", None),
+        singulr_guardrail_id=getattr(litellm_params, "singulr_guardrail_id", None),
         block_on_error=getattr(litellm_params, "block_on_error", None),
         guardrail_name=guardrail.get(
             "guardrail_name",

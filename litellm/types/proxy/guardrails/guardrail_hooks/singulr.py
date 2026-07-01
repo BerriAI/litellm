@@ -55,7 +55,7 @@ class SingulrGuardrailConfigModel(GuardrailConfigModel):
 
     singulr_application_id: Optional[str] = Field(
         default=None,
-        description="The Singulr application ID. Get application ID Singulr Platform.",
+        description="The Singulr application ID. Get application ID from Singulr Platform.",
     )
 
     singulr_guardrail_id: Optional[str] = Field(

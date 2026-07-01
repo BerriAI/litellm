@@ -24,10 +24,10 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
 def singulr_guardrail():
     """Create a SingulrGuardrail instance with test credentials."""
     return SingulrGuardrail(
-        api_base="https://api.test.singulr.ai",
-        api_key="test_token_1234",
-        guardrail_id="test_guardrail_id",
-        enforcement_entity_id="test_enforcement_entity",
+        singulr_api_base="https://api.test.singulr.ai",
+        singulr_api_key="test_token_1234",
+        singulr_guardrail_id="test_guardrail_id",
+        singulr_application_id="test_enforcement_entity",
         guardrail_name="test-singulr",
         event_hook="pre_call",
         default_on=True,
@@ -68,26 +68,28 @@ def _make_response(body: dict) -> MagicMock:
 class TestSingulrConfiguration:
     def test_init_with_explicit_credentials(self):
         guardrail = SingulrGuardrail(
-            api_key="test_key",
-            api_base="https://custom.api.local",
-            guardrail_id="id123",
-            enforcement_entity_id="entity123",
+            singulr_api_key="test_key",
+            singulr_api_base="https://custom.api.local",
+            singulr_guardrail_id="id123",
+            singulr_application_id="entity123",
             guardrail_name="my-guardrail",
         )
-        assert guardrail.api_key == "test_key"
-        assert guardrail.api_base == "https://custom.api.local"
-        assert guardrail.guardrail_id == "id123"
-        assert guardrail.enforcement_entity_id == "entity123"
+        assert guardrail.singulr_api_key == "test_key"
+        assert guardrail.singulr_api_base == "https://custom.api.local"
+        assert guardrail.singulr_guardrail_id == "id123"
+        assert guardrail.singulr_application_id == "entity123"
 
     def test_block_on_error_defaults_true(self):
-        guardrail = SingulrGuardrail(api_key="test_key")
+        guardrail = SingulrGuardrail(singulr_api_key="test_key")
         assert guardrail.block_on_error is True
 
     def test_http_remote_api_base_logs_warning(self):
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.singulr.singulr.verbose_proxy_logger"
         ) as mock_logger:
-            SingulrGuardrail(api_key="test_key", api_base="http://remote.singulr.ai")
+            SingulrGuardrail(
+                singulr_api_key="test_key", singulr_api_base="http://remote.singulr.ai"
+            )
             mock_logger.warning.assert_called_once()
             assert "plain HTTP" in mock_logger.warning.call_args.args[0]
 
@@ -95,21 +97,25 @@ class TestSingulrConfiguration:
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.singulr.singulr.verbose_proxy_logger"
         ) as mock_logger:
-            SingulrGuardrail(api_key="test_key", api_base="http://localhost:8000")
+            SingulrGuardrail(
+                singulr_api_key="test_key", singulr_api_base="http://localhost:8000"
+            )
             mock_logger.warning.assert_not_called()
 
     def test_https_remote_api_base_no_warning(self):
         with patch(
             "litellm.proxy.guardrails.guardrail_hooks.singulr.singulr.verbose_proxy_logger"
         ) as mock_logger:
-            SingulrGuardrail(api_key="test_key", api_base="https://remote.singulr.ai")
+            SingulrGuardrail(
+                singulr_api_key="test_key", singulr_api_base="https://remote.singulr.ai"
+            )
             mock_logger.warning.assert_not_called()
 
     def test_only_supports_pre_call_hook(self):
         """Singulr only forwards the original request; there is no response
         text available to scan on the post_call path, so post_call must not
         be registered as a supported event hook."""
-        guardrail = SingulrGuardrail(api_key="test_key")
+        guardrail = SingulrGuardrail(singulr_api_key="test_key")
         assert guardrail.supported_event_hooks == [GuardrailEventHooks.pre_call]
 
 
@@ -543,8 +549,8 @@ class TestSingulrNonJsonResponse:
         self, mock_request_data
     ):
         guardrail = SingulrGuardrail(
-            api_base="https://api.test.singulr.ai",
-            api_key="test_token_1234",
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
             guardrail_name="test-singulr",
             block_on_error=False,
         )
@@ -566,8 +572,8 @@ class TestSingulrNonJsonResponse:
         self, mock_request_data
     ):
         guardrail = SingulrGuardrail(
-            api_base="https://api.test.singulr.ai",
-            api_key="test_token_1234",
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
             guardrail_name="test-singulr",
             block_on_error=True,
         )
@@ -595,8 +601,8 @@ class TestSingulrTransportError:
         self, mock_request_data
     ):
         guardrail = SingulrGuardrail(
-            api_base="https://api.test.singulr.ai",
-            api_key="test_token_1234",
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
             guardrail_name="test-singulr",
             block_on_error=False,
         )
@@ -618,8 +624,8 @@ class TestSingulrTransportError:
         self, mock_request_data
     ):
         guardrail = SingulrGuardrail(
-            api_base="https://api.test.singulr.ai",
-            api_key="test_token_1234",
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
             guardrail_name="test-singulr",
             block_on_error=True,
         )
@@ -647,8 +653,8 @@ class TestSingulrHttpStatusError:
         self, mock_request_data
     ):
         guardrail = SingulrGuardrail(
-            api_base="https://api.test.singulr.ai",
-            api_key="test_token_1234",
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
             guardrail_name="test-singulr",
             block_on_error=True,
         )
@@ -676,8 +682,8 @@ class TestSingulrHttpStatusError:
         self, mock_request_data
     ):
         guardrail = SingulrGuardrail(
-            api_base="https://api.test.singulr.ai",
-            api_key="test_token_1234",
+            singulr_api_base="https://api.test.singulr.ai",
+            singulr_api_key="test_token_1234",
             guardrail_name="test-singulr",
             block_on_error=False,
         )
@@ -709,3 +715,34 @@ class TestSingulrInitializer:
         )
 
         assert callable(initialize_guardrail)
+
+    def test_initialize_guardrail_reads_singulr_prefixed_fields(self):
+        """Regression: the UI config form (and YAML config) populate the
+        singulr_-prefixed fields declared on SingulrGuardrailConfigModel, not
+        the generic api_base/api_key fields. initialize_guardrail must read
+        those, or a UI-configured singulr_api_base is silently ignored and
+        the guardrail falls back to the localhost default."""
+        from litellm.proxy.guardrails.guardrail_hooks.singulr import (
+            initialize_guardrail,
+        )
+        from litellm.types.guardrails import Guardrail, LitellmParams
+
+        litellm_params = LitellmParams(
+            guardrail="singulr",
+            mode="pre_call",
+            singulr_api_base="https://configured.singulr.ai",
+            singulr_api_key="configured_key",
+            singulr_application_id="configured_app_id",
+            singulr_guardrail_id="configured_guardrail_id",
+        )
+        guardrail: Guardrail = {
+            "guardrail_name": "test-singulr",
+            "litellm_params": litellm_params,
+        }
+
+        cb = initialize_guardrail(litellm_params, guardrail)
+
+        assert cb.singulr_api_base == "https://configured.singulr.ai"
+        assert cb.singulr_api_key == "configured_key"
+        assert cb.singulr_application_id == "configured_app_id"
+        assert cb.singulr_guardrail_id == "configured_guardrail_id"

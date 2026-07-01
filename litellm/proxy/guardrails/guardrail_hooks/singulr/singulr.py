@@ -39,18 +39,20 @@ _GUARD_ENDPOINT = "/api/v1/ai-gateway/litellm"
 class SingulrGuardrail(CustomGuardrail):
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        enforcement_entity_id: Optional[str] = None,
-        guardrail_id: Optional[str] = None,
+        singulr_api_key: Optional[str] = None,
+        singulr_api_base: Optional[str] = None,
+        singulr_application_id: Optional[str] = None,
+        singulr_guardrail_id: Optional[str] = None,
         block_on_error: Optional[bool] = None,
         **kwargs: Any,
     ) -> None:
-        self.api_key = api_key or os.environ.get("SINGULR_API_KEY")
+        self.singulr_api_key = singulr_api_key or os.environ.get("SINGULR_API_KEY")
 
-        self.api_base = (api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip("/")
+        self.singulr_api_base = (
+            singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE
+        ).rstrip("/")
 
-        parsed = urlparse(self.api_base)
+        parsed = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
             "localhost",
             "127.0.0.1",
@@ -59,11 +61,15 @@ class SingulrGuardrail(CustomGuardrail):
                 "Singulr: api_base %s uses plain HTTP. Guardrail payloads contain "
                 "full message content and will be sent unencrypted. Use HTTPS for "
                 "any non-local endpoint.",
-                self.api_base,
+                self.singulr_api_base,
             )
 
-        self.enforcement_entity_id = enforcement_entity_id or os.environ.get("SINGULR_ENFORCEMENT_ENTITY_ID")
-        self.guardrail_id = guardrail_id or os.environ.get("SINGULR_GUARDRAIL_ID")
+        self.singulr_application_id = singulr_application_id or os.environ.get(
+            "SINGULR_ENFORCEMENT_ENTITY_ID"
+        )
+        self.singulr_guardrail_id = singulr_guardrail_id or os.environ.get(
+            "SINGULR_GUARDRAIL_ID"
+        )
 
         if block_on_error is None:
             env = os.environ.get("SINGULR_BLOCK_ON_ERROR", "true")
@@ -107,18 +113,18 @@ class SingulrGuardrail(CustomGuardrail):
             (header, value)
             for header, value in (
                 ("Content-Type", "application/json"),
-                ("X-Singulr-Gateway-Token", self.api_key),
+                ("X-Singulr-Gateway-Token", self.singulr_api_key),
                 (
                     "X-Singulr-Enforcement-Entity-Id",
-                    self.enforcement_entity_id or "",
+                    self.singulr_application_id or "",
                 ),
-                ("X-Singulr-Guardrail-Id", self.guardrail_id or ""),
+                ("X-Singulr-Guardrail-Id", self.singulr_guardrail_id or ""),
             )
             if value
         )
 
     async def _call_api(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
-        endpoint = f"{self.api_base}{_GUARD_ENDPOINT}"
+        endpoint = f"{self.singulr_api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 
         try:
@@ -142,7 +148,9 @@ class SingulrGuardrail(CustomGuardrail):
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=(f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"),
+                    message=(
+                        f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"
+                    ),
                 ) from exc
             return None
 
@@ -156,7 +164,9 @@ class SingulrGuardrail(CustomGuardrail):
             return None
 
         except ValueError as exc:
-            verbose_proxy_logger.error("Singulr API returned non-JSON response: %s", str(exc))
+            verbose_proxy_logger.error(
+                "Singulr API returned non-JSON response: %s", str(exc)
+            )
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
