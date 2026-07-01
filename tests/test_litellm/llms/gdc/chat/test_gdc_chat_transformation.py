@@ -114,23 +114,20 @@ class TestGDCGeminiConfig:
             == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_LOCATION}/chat/completions"
         )
 
-    def test_get_complete_url_deployment_overrides_preformed_project(self):
+    def test_get_complete_url_preformed_base_is_authoritative_over_litellm_params(self):
         config = GDCGeminiConfig()
-        preformed = f"{TEST_API_BASE}/v1/projects/embedded-project/locations/embedded-loc/chat/completions"
+        preformed = f"{TEST_API_BASE}/v1/projects/pinned-project/locations/pinned-loc/chat/completions"
         url = config.get_complete_url(
             api_base=preformed,
             api_key=None,
             model=TEST_MODEL,
-            optional_params={},
+            optional_params={"vertex_project": "attacker-optional", "vertex_location": "attacker-loc"},
             litellm_params={
-                "vertex_project": "deployment-project",
-                "vertex_location": "deployment-loc",
+                "vertex_project": "attacker-project",
+                "vertex_location": "attacker-loc",
             },
         )
-        assert url == (
-            f"{TEST_API_BASE}/v1/projects/deployment-project"
-            "/locations/deployment-loc/chat/completions"
-        )
+        assert url == preformed
 
     def test_deployment_project_takes_precedence_over_request(self):
         config = GDCGeminiConfig()
@@ -468,7 +465,7 @@ class TestGDCGeminiConfig:
             )
         assert headers["x-goog-user-project"] == "projects/deployment-proj"
 
-    def test_validate_environment_quota_header_prefers_deployment_override(self):
+    def test_validate_environment_quota_header_pinned_to_preformed_url(self):
         config = GDCGeminiConfig()
         mock_creds = MagicMock()
         mock_creds.token = "tok"
@@ -486,7 +483,7 @@ class TestGDCGeminiConfig:
                 api_key=TEST_API_KEY,
                 api_base=preformed,
             )
-        assert headers["x-goog-user-project"] == "projects/override-proj"
+        assert headers["x-goog-user-project"] == "projects/url-proj"
 
     def test_transform_request(self):
         config = GDCGeminiConfig()

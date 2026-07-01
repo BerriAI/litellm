@@ -47,17 +47,10 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             or optional_params.get("vertex_ai_location")
         )
 
-    def _deployment_overrides_path(self, litellm_params: dict) -> bool:
-        return any(
-            litellm_params.get(k)
-            for k in ("vertex_project", "vertex_ai_project", "vertex_location", "vertex_ai_location")
-        )
-
     def _effective_project(self, api_base: str, optional_params: dict, litellm_params: dict) -> str | None:
-        if "/v1/projects/" in api_base and not self._deployment_overrides_path(litellm_params):
-            match = re.search(r"/v1/projects/([^/]+)", api_base)
-            if match:
-                return match.group(1)
+        match = re.search(r"/v1/projects/([^/]+)", api_base)
+        if match:
+            return match.group(1)
         return self._resolve_project(optional_params, litellm_params)
 
     def _validate_path_id(self, value: str, field: str, model: str) -> str:
@@ -103,9 +96,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         api_base = api_base.rstrip("/")
 
         if "/v1/projects/" in api_base:
-            if not self._deployment_overrides_path(litellm_params):
-                return api_base
-            api_base = api_base.split("/v1/projects/", 1)[0].rstrip("/")
+            return api_base
 
         if not location:
             raise litellm.utils.AuthenticationError(
