@@ -2473,6 +2473,14 @@ def test_has_tool_with_name_anthropic_custom_shape():
     assert not has_tool_with_name(tools, "other_tool")
 
 
+def test_has_tool_with_name_anthropic_shape_without_type_field():
+    # Anthropic's documented client tool format is just name + input_schema;
+    # "type" isn't required at all (type: "custom" is only one possible value).
+    tools = [{"name": "my_tool", "input_schema": {}}]
+    assert has_tool_with_name(tools, "my_tool")
+    assert not has_tool_with_name(tools, "other_tool")
+
+
 def test_has_tool_with_name_not_a_list():
     assert not has_tool_with_name(None, "my_tool")
     assert not has_tool_with_name("not a list", "my_tool")

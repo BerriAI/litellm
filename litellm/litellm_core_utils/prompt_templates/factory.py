@@ -5416,7 +5416,11 @@ def has_tool_with_name(tools: Any, tool_name: str) -> bool:
     Check whether a tools list (as sent to an LLM) includes a tool with the
     given name, regardless of shape: OpenAI-style function tools
     (``{"type": "function", "function": {"name": ...}}``) or Anthropic's
-    native tool shape (``{"type": "custom", "name": ...}``).
+    native tool shape (a top-level ``"name"``, e.g.
+    ``{"name": ..., "input_schema": ...}``). Anthropic's documented client
+    tool format doesn't require a ``"type"`` key at all -- ``"custom"`` is
+    only one of several possible values -- so any non-OpenAI-shaped tool is
+    matched on its top-level ``"name"``.
     """
     if not isinstance(tools, list):
         return False
@@ -5427,6 +5431,6 @@ def has_tool_with_name(tools: Any, tool_name: str) -> bool:
         if tool.get("type") == "function" and isinstance(function, dict):
             if function.get("name") == tool_name:
                 return True
-        if tool.get("type") == "custom" and tool.get("name") == tool_name:
+        elif tool.get("name") == tool_name:
             return True
     return False
