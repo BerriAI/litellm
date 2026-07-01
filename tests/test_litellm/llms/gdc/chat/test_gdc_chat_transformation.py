@@ -129,6 +129,18 @@ class TestGDCGeminiConfig:
         )
         assert url == preformed
 
+    def test_get_complete_url_preformed_base_needs_no_project_param(self):
+        config = GDCGeminiConfig()
+        preformed = f"{TEST_API_BASE}/v1/projects/pinned-project/locations/pinned-loc/chat/completions"
+        url = config.get_complete_url(
+            api_base=preformed,
+            api_key=None,
+            model=TEST_MODEL,
+            optional_params={},
+            litellm_params={},
+        )
+        assert url == preformed
+
     def test_deployment_project_takes_precedence_over_request(self):
         config = GDCGeminiConfig()
         url = config.get_complete_url(

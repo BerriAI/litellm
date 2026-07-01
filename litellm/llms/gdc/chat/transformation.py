@@ -82,6 +82,11 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         if not api_base.startswith("http"):
             api_base = f"https://{api_base}"
 
+        api_base = api_base.rstrip("/")
+
+        if "/v1/projects/" in api_base:
+            return api_base
+
         project = self._resolve_project(optional_params, litellm_params)
 
         if not project:
@@ -92,11 +97,6 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             )
 
         location = self._resolve_location(optional_params, litellm_params)
-
-        api_base = api_base.rstrip("/")
-
-        if "/v1/projects/" in api_base:
-            return api_base
 
         if not location:
             raise litellm.utils.AuthenticationError(
