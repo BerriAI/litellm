@@ -339,3 +339,58 @@ async def test_router_silent_experiment_aresponses():
         )
         assert primary_call is not None
         assert primary_call.kwargs["model"] == "openai/gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_silent_experiment_ageneric_no_recurse():
+    """
+    _silent_experiment_ageneric must not fire a second experiment when
+    is_silent_experiment is already True in metadata (infinite-loop guard).
+    """
+    model_list = [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    mock_aresponses = AsyncMock()
+
+    with patch.object(litellm, "aresponses", mock_aresponses):
+        await router._silent_experiment_ageneric(
+            silent_model="primary-model",
+            original_function=litellm.aresponses,
+            model="primary-model",
+            input=[{"role": "user", "content": "hi"}],
+            metadata={"is_silent_experiment": True},
+        )
+
+    mock_aresponses.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_silent_experiment_ageneric_error_is_caught():
+    """
+    _silent_experiment_ageneric must catch and log exceptions from the
+    downstream call without propagating them to the caller.
+    """
+    model_list = [
+        {
+            "model_name": "primary-model",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+
+    with patch.object(
+        router,
+        "_ageneric_api_call_with_fallbacks",
+        new_callable=AsyncMock,
+        side_effect=Exception("downstream failure"),
+    ):
+        await router._silent_experiment_ageneric(
+            silent_model="primary-model",
+            original_function=litellm.aresponses,
+            model="primary-model",
+            input=[{"role": "user", "content": "hi"}],
+        )
