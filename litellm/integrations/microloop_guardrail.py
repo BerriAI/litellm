@@ -13,7 +13,9 @@ Usage::
     litellm.callbacks = [MicroloopGuardrail(max_repeats=3)]
 """
 
+import hashlib
 import json
+import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
@@ -32,12 +34,17 @@ from litellm.types.utils import CallTypes
 
 
 class _CallHistory:
-    """Tracks tool call trajectories per session."""
+    """Tracks tool call trajectories per session with bounded memory."""
+
+    MAX_SESSIONS = 10000
 
     def __init__(self) -> None:
         self._store: dict[str, list[tuple[str, str, datetime]]] = {}
 
     def append(self, session_id: str, tool_name: str, args_json: str) -> None:
+        if len(self._store) >= self.MAX_SESSIONS and session_id not in self._store:
+            oldest_key = next(iter(self._store))
+            self._store.pop(oldest_key, None)
         if session_id not in self._store:
             self._store[session_id] = []
         self._store[session_id].append((tool_name, args_json, datetime.now(timezone.utc)))
@@ -72,24 +79,27 @@ def _parse_json_dict(raw: str) -> dict[str, object] | None:
         return None
 
 
-def _strip_volatile_fields(args_json: str, volatile_fields: set[str]) -> str:
-    """Remove known volatile fields from a JSON arguments string.
+def _canonicalize_args(args_json: str, volatile_fields: set[str]) -> str:
+    """Parse, canonicalize (sort keys), and optionally strip volatile fields.
+
+    Always parses and re-serializes with ``sort_keys=True`` so that
+    logically identical JSON objects produce the same hash regardless of
+    key ordering.
 
     Args:
         args_json: A JSON-encoded string of tool arguments.
         volatile_fields: Field names to strip from the JSON object.
 
     Returns:
-        The JSON string with volatile fields removed, or the original
+        Canonical JSON string with sorted keys, or the original
         string if it cannot be parsed or is not a JSON object.
     """
-    if not volatile_fields:
-        return args_json
     obj = _parse_json_dict(args_json)
     if obj is None:
         return args_json
-    for field in volatile_fields:
-        obj.pop(field, None)
+    if volatile_fields:
+        for field in volatile_fields:
+            obj.pop(field, None)
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
@@ -193,6 +203,10 @@ class MicroloopGuardrail(CustomGuardrail):
             guardrail_name: Name passed to parent guardrail.
             default_on: Whether the guardrail is active by default.
         """
+        if max_repeats < 2:
+            raise ValueError(
+                "max_repeats must be at least 2. A value of 1 would incorrectly block the first tool call."
+            )
         super().__init__(
             guardrail_name=guardrail_name,
             default_on=default_on,
@@ -231,7 +245,7 @@ class MicroloopGuardrail(CustomGuardrail):
         Raises:
             GuardrailRaisedException: If a tool call loop is detected.
         """
-        session_id = self._get_session_id(data)
+        session_id = self._get_session_id(data, user_api_key_dict)
         messages = data.get("messages", [])
         tool_pairs = self._extract_tool_calls(messages)
 
@@ -259,8 +273,8 @@ class MicroloopGuardrail(CustomGuardrail):
         """
         recent = self._history.get_recent(session_id, self._history_window)
 
-        # 1. Strip configured volatile fields
-        canonical = _strip_volatile_fields(raw_args, self._volatile_fields)
+        # 1. Canonicalize (parse + sort keys + strip volatile fields)
+        canonical = _canonicalize_args(raw_args, self._volatile_fields)
 
         # 2. Count exact matches in recent history
         match_count = self._count_matches(recent, tool_name, canonical)
@@ -270,10 +284,10 @@ class MicroloopGuardrail(CustomGuardrail):
             inferred = _auto_infer_volatile(recent, raw_args)
             if inferred:
                 combined = self._volatile_fields | inferred
-                canonical = _strip_volatile_fields(raw_args, combined)
+                canonical = _canonicalize_args(raw_args, combined)
                 match_count = 0
                 for past_tool, past_args in recent:
-                    stripped = _strip_volatile_fields(past_args, combined)
+                    stripped = _canonicalize_args(past_args, combined)
                     if past_tool == tool_name and stripped == canonical:
                         match_count += 1
 
@@ -284,7 +298,7 @@ class MicroloopGuardrail(CustomGuardrail):
                 message=(
                     f"Microloop: Loop detected on tool '{tool_name}' -- "
                     f"seen {match_count + 1}x (limit: {self._max_repeats})"
-                    f"{' in session ' + session_id if session_id != 'default' else ''}"
+                    f"{' in session ' + session_id if session_id else ''}"
                 ),
             )
 
@@ -293,17 +307,29 @@ class MicroloopGuardrail(CustomGuardrail):
 
     # ---- Helpers ---------------------------------------------------------
 
-    def _get_session_id(self, data: dict) -> str:
-        """Extract or derive a session identifier from request data.
+    def _get_session_id(self, data: dict, user_api_key_dict: object = None) -> str:
+        """Extract or derive a session identifier to prevent cross-tenant contamination.
+
+        1. Try explicit session ID from request metadata.
+        2. Fall back to a hash of the API key to isolate tenants.
+        3. Ultimate fallback: per-request UUID (disables loop detection for
+           stateless requests, preventing false positives).
 
         Args:
             data: The request data dictionary.
+            user_api_key_dict: The user API key auth object, if available.
 
         Returns:
-            A session identifier string, defaulting to ``"default"``.
+            A session identifier string.
         """
         result = get_session_id_from_request_data(data)
-        return result or "default"
+        if result:
+            return result
+        api_key = getattr(user_api_key_dict, "api_key", None) if user_api_key_dict is not None else None
+        if isinstance(api_key, str) and api_key:
+            hashed = hashlib.md5(api_key.encode()).hexdigest()[:16]
+            return f"api_key_{hashed}"
+        return f"req_{uuid.uuid4().hex}"
 
     @staticmethod
     def _count_matches(
