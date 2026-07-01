@@ -1036,6 +1036,21 @@ class LiteLLMUnknownProvider(BadRequestError):
         return self.message
 
 
+class ModelNotMappedError(BadRequestError, ValueError):
+    def __init__(self, model: str, custom_llm_provider: Optional[str] = None):
+        self.message = (
+            f"This model isn't mapped yet. model={model}, "
+            f"custom_llm_provider={custom_llm_provider}. Add it here - "
+            "https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+        )
+        super().__init__(
+            self.message, model=model, llm_provider=custom_llm_provider, response=None
+        )
+
+    def __str__(self):
+        return self.message
+
+
 class GuardrailRaisedException(Exception):
     def __init__(
         self,

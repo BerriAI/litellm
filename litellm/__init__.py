@@ -1312,6 +1312,7 @@ from .exceptions import (
     JSONSchemaValidationError,
     LITELLM_EXCEPTION_TYPES,
     MockException,
+    ModelNotMappedError,
 )
 from .budget_manager import BudgetManager
 from .proxy.proxy_cli import run_server
