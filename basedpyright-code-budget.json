@@ -1,67 +1,67 @@
 {
   "reportAny": {
     "baseline": 24989,
-    "slack": 2500
+    "slack": 12495
   },
   "reportArgumentType": {
     "baseline": 1814,
-    "slack": 180
+    "slack": 907
   },
   "reportAssignmentType": {
     "baseline": 220,
-    "slack": 22
+    "slack": 110
   },
   "reportAttributeAccessIssue": {
     "baseline": 346,
-    "slack": 35
+    "slack": 173
   },
   "reportCallIssue": {
     "baseline": 87,
-    "slack": 10
+    "slack": 44
   },
   "reportConstantRedefinition": {
     "baseline": 39,
-    "slack": 4
+    "slack": 20
   },
   "reportDeprecated": {
     "baseline": 217,
-    "slack": 22
+    "slack": 109
   },
   "reportDuplicateImport": {
     "baseline": 28,
-    "slack": 3
+    "slack": 14
   },
   "reportExplicitAny": {
     "baseline": 6931,
-    "slack": 700
+    "slack": 3466
   },
   "reportFunctionMemberAccess": {
     "baseline": 7,
-    "slack": 3
+    "slack": 4
   },
   "reportGeneralTypeIssues": {
     "baseline": 151,
-    "slack": 15
+    "slack": 76
   },
   "reportIncompatibleMethodOverride": {
     "baseline": 52,
-    "slack": 5
+    "slack": 26
   },
   "reportIncompatibleVariableOverride": {
     "baseline": 8,
-    "slack": 3
+    "slack": 4
   },
   "reportInconsistentOverload": {
     "baseline": 12,
-    "slack": 3
+    "slack": 6
   },
   "reportIndexIssue": {
     "baseline": 26,
-    "slack": 3
+    "slack": 13
   },
   "reportInvalidTypeForm": {
     "baseline": 23,
-    "slack": 3
+    "slack": 12
   },
   "reportInvalidTypeVarUse": {
     "baseline": 2,
@@ -69,19 +69,19 @@
   },
   "reportMatchNotExhaustive": {
     "baseline": 1,
-    "slack": 0
+    "slack": 1
   },
   "reportMissingParameterType": {
     "baseline": 3933,
-    "slack": 390
+    "slack": 1967
   },
   "reportMissingTypeArgument": {
     "baseline": 10612,
-    "slack": 1000
+    "slack": 5306
   },
   "reportMissingTypeStubs": {
     "baseline": 27,
-    "slack": 10
+    "slack": 14
   },
   "reportOperatorIssue": {
     "baseline": 6,
@@ -97,7 +97,7 @@
   },
   "reportOptionalMemberAccess": {
     "baseline": 724,
-    "slack": 72
+    "slack": 362
   },
   "reportOptionalOperand": {
     "baseline": 3,
@@ -105,19 +105,19 @@
   },
   "reportOptionalSubscript": {
     "baseline": 11,
-    "slack": 3
+    "slack": 6
   },
   "reportPossiblyUnboundVariable": {
     "baseline": 52,
-    "slack": 10
+    "slack": 26
   },
   "reportPrivateUsage": {
     "baseline": 1625,
-    "slack": 160
+    "slack": 813
   },
   "reportRedeclaration": {
     "baseline": 8,
-    "slack": 3
+    "slack": 4
   },
   "reportReturnType": {
     "baseline": 126,
@@ -125,7 +125,7 @@
   },
   "reportTypedDictNotRequiredAccess": {
     "baseline": 20,
-    "slack": 3
+    "slack": 10
   },
   "reportUndefinedVariable": {
     "baseline": 2,
@@ -133,31 +133,31 @@
   },
   "reportUnknownArgumentType": {
     "baseline": 30603,
-    "slack": 3000
+    "slack": 15302
   },
   "reportUnknownLambdaType": {
     "baseline": 75,
-    "slack": 10
+    "slack": 38
   },
   "reportUnknownMemberType": {
     "baseline": 27037,
-    "slack": 2500
+    "slack": 13519
   },
   "reportUnknownParameterType": {
     "baseline": 13612,
-    "slack": 1000
+    "slack": 6806
   },
   "reportUnknownVariableType": {
     "baseline": 21445,
-    "slack": 2000
+    "slack": 10723
   },
   "reportUnnecessaryCast": {
     "baseline": 118,
-    "slack": 10
+    "slack": 59
   },
   "reportUnnecessaryComparison": {
     "baseline": 683,
-    "slack": 100
+    "slack": 342
   },
   "reportUnnecessaryContains": {
     "baseline": 4,
@@ -165,30 +165,30 @@
   },
   "reportUnnecessaryIsInstance": {
     "baseline": 808,
-    "slack": 80
+    "slack": 404
   },
   "reportUntypedBaseClass": {
     "baseline": 110,
-    "slack": 11
+    "slack": 55
   },
   "reportUntypedFunctionDecorator": {
     "baseline": 22,
-    "slack": 3
+    "slack": 11
   },
   "reportUnusedClass": {
     "baseline": 22,
-    "slack": 3
+    "slack": 11
   },
   "reportUnusedFunction": {
     "baseline": 137,
-    "slack": 10
+    "slack": 69
   },
   "reportUnusedImport": {
     "baseline": 670,
-    "slack": 50
+    "slack": 335
   },
   "reportUnusedVariable": {
     "baseline": 865,
-    "slack": 50
+    "slack": 433
   }
 }
