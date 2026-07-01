@@ -417,6 +417,110 @@ class TestBatchIdRoundTripWithRetrieve:
 
 
 @pytest.mark.asyncio
+async def test_create_batch_swaps_alias_for_deployment_model_before_provider_call():
+    """
+    SCENARIO 1 (model-encoded input_file_id): the proxy must hand
+    litellm.acreate_batch the deployment's real provider model, not the proxy
+    alias. get_llm_provider cannot resolve an alias, so passing it straight
+    through reaches the Bedrock batch transform as an invalid modelId. The
+    response IDs must still be encoded with the ALIAS so retrieve routes back.
+    """
+    from litellm.proxy.batches_endpoints.endpoints import create_batch
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_file_id_with_model,
+    )
+
+    alias = "bedrock-batch-haiku"
+    real_model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    raw_input_file_id = "s3://bucket/litellm-bedrock-files/in.jsonl"
+    encoded_input_file_id = encode_file_id_with_model(
+        file_id=raw_input_file_id, model=alias
+    )
+    raw_batch_id = "batch_bedrock_123"
+
+    mock_response = _make_batch_response(batch_id=raw_batch_id)
+    mock_request = _make_mock_request(headers={})
+    mock_fastapi_response = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.parent_otel_span = None
+    mock_user_api_key_dict.user_id = "test_user"
+    mock_user_api_key_dict.team_metadata = {}
+
+    mock_router = MagicMock()
+    mock_router.get_deployment_model_for_alias = MagicMock(return_value=real_model)
+
+    mock_credentials = {
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "us-east-1",
+    }
+
+    request_body = {
+        "input_file_id": encoded_input_file_id,
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        "model": alias,
+    }
+
+    with (
+        patch(
+            "litellm.proxy.batches_endpoints.endpoints._read_request_body",
+            new=AsyncMock(return_value=dict(request_body)),
+        ),
+        patch(
+            "litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
+        ) as mock_processor_cls,
+        patch(
+            "litellm.proxy.batches_endpoints.endpoints.get_credentials_for_model",
+            return_value=mock_credentials,
+        ),
+        patch(
+            "litellm.proxy.batches_endpoints.endpoints.prepare_data_with_credentials",
+        ),
+        patch(
+            "litellm.acreate_batch",
+            new_callable=AsyncMock,
+        ) as mock_create_batch,
+        patch(
+            "litellm.proxy.batches_endpoints.endpoints.is_known_model",
+            return_value=False,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+            MagicMock(
+                post_call_success_hook=AsyncMock(return_value=mock_response),
+                update_request_status=AsyncMock(),
+            ),
+        ),
+    ):
+        mock_create_batch.return_value = mock_response
+        mock_processor = MagicMock()
+        mock_processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=(dict(request_body), MagicMock())
+        )
+        mock_processor_cls.return_value = mock_processor
+
+        response = await create_batch(
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            provider=None,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    mock_router.get_deployment_model_for_alias.assert_called_once_with(model_id=alias)
+    create_kwargs = mock_create_batch.call_args.kwargs
+    assert create_kwargs["model"] == real_model, (
+        "Bedrock batch transform receives modelId from this 'model'; it must be the "
+        f"deployment's real model, got {create_kwargs.get('model')!r}"
+    )
+    # The encoded response id must carry the ALIAS so retrieve routes back.
+    assert decode_model_from_file_id(response.id) == alias
+
+
+@pytest.mark.asyncio
 async def test_cancel_batch_with_unified_id_routes_with_decoded_model_and_batch_id():
     from litellm.proxy.batches_endpoints.endpoints import cancel_batch
 

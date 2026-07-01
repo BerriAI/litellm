@@ -5,7 +5,7 @@
 
 ######################################################################
 import asyncio
-from typing import Any, Dict, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
@@ -40,7 +40,32 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
+if TYPE_CHECKING:
+    from litellm.router import Router
+
 router = APIRouter()
+
+
+def _swap_alias_for_deployment_model(
+    create_batch_data: LiteLLMBatchCreateRequest,
+    alias: str,
+    llm_router: Optional["Router"],
+) -> None:
+    """
+    Replace a proxy model-group alias on the batch request with the
+    deployment's real provider model (in place).
+
+    ``litellm.create_batch`` runs the model through ``get_llm_provider``, which
+    cannot resolve a proxy alias, so a provider transform (e.g. Bedrock's, which
+    forwards ``model`` as the batch ``modelId``) would otherwise receive the
+    alias and the provider would reject it. Falls back to the alias when the
+    router is unavailable or the alias resolves to nothing.
+    """
+    if llm_router is None:
+        return
+    resolved_model = llm_router.get_deployment_model_for_alias(model_id=alias)
+    if resolved_model is not None:
+        create_batch_data["model"] = resolved_model
 
 
 @router.post(
@@ -170,6 +195,11 @@ async def create_batch(
                 data=_create_batch_data,  # type: ignore
                 credentials=credentials,
             )
+            _swap_alias_for_deployment_model(
+                create_batch_data=_create_batch_data,
+                alias=model_from_file_id,
+                llm_router=llm_router,
+            )
 
             # Create batch using model credentials
             response = await litellm.acreate_batch(
@@ -251,6 +281,11 @@ async def create_batch(
                 prepare_data_with_credentials(
                     data=_create_batch_data,  # type: ignore
                     credentials=credentials,
+                )
+                _swap_alias_for_deployment_model(
+                    create_batch_data=_create_batch_data,
+                    alias=model_param,
+                    llm_router=llm_router,
                 )
 
                 # Create batch using model credentials
