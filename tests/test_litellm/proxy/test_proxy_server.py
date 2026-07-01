@@ -6288,22 +6288,18 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
         # add_deployment should NOT have been called since store_model_in_db is False
         mock_proxy_config.add_deployment.assert_not_called()
 
-        # _init_mcp_servers_in_db should still be called even when
-        # store_model_in_db is False so DB-added MCP servers are loaded
-        # on restart (LIT-4128)
-        mock_proxy_config._init_mcp_servers_in_db.assert_awaited_once()
+        mock_proxy_config._init_non_llm_objects_in_db.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_mcp_servers_loaded_on_startup_without_store_model_in_db(monkeypatch):
+async def test_non_llm_objects_loaded_on_startup_without_store_model_in_db(monkeypatch):
     """
-    Regression test for LIT-4128: MCP servers added via the UI are stored
-    in the database but only loaded into the in-memory registry during
-    add_deployment, which is gated by store_model_in_db=True. When
-    store_model_in_db is False (common in single-instance deployments),
-    the registry stays empty after restart until a new server is added.
+    Regression test for LIT-4128: non-LLM DB objects (MCP servers, guardrails,
+    agents, etc.) are only loaded inside add_deployment, which is gated by
+    store_model_in_db=True. When that flag is False (common in single-instance
+    deployments), the in-memory registries stay empty after restart.
 
-    Verify that _init_mcp_servers_in_db is called during startup even when
+    Verify that _init_non_llm_objects_in_db is called during startup even when
     store_model_in_db is False.
     """
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
@@ -6331,11 +6327,8 @@ async def test_mcp_servers_loaded_on_startup_without_store_model_in_db(monkeypat
             proxy_logging_obj=mock_proxy_logging,
         )
 
-        # add_deployment should NOT be called (store_model_in_db is False)
         mock_proxy_config.add_deployment.assert_not_called()
-
-        # MCP servers should still be loaded from DB on startup
-        mock_proxy_config._init_mcp_servers_in_db.assert_awaited_once()
+        mock_proxy_config._init_non_llm_objects_in_db.assert_awaited_once()
 
 
 # =====================================================================

@@ -7535,7 +7535,7 @@ class ProxyStartupEvent:
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
         else:
-            await proxy_config._init_mcp_servers_in_db()
+            await proxy_config._init_non_llm_objects_in_db(prisma_client=prisma_client)
 
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
