@@ -177,7 +177,7 @@ class DakeraMemoryLogger(CustomLogger):
             data["messages"] = existing_system + [memory_msg] + non_system
 
             verbose_logger.debug(f"DakeraMemoryLogger: injected {len(results)} memories for session={session_id}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             verbose_logger.warning(f"DakeraMemoryLogger.async_pre_call_hook failed: {exc}")
 
         return data
@@ -232,5 +232,5 @@ class DakeraMemoryLogger(CustomLogger):
                 timeout=5.0,
             )
             verbose_logger.debug(f"DakeraMemoryLogger: stored exchange for session={session_id}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             verbose_logger.warning(f"DakeraMemoryLogger.async_log_success_event failed: {exc}")
