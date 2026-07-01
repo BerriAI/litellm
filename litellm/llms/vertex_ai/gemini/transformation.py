@@ -1188,7 +1188,8 @@ def _transform_request_body(
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
         _pop_and_merge_extra_body(data, optional_params)
-        _rewrite_google_maps_response_format(data)
+        if custom_llm_provider == LlmProviders.GEMINI:
+            _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
 
