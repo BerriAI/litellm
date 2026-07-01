@@ -36,7 +36,13 @@ from litellm import (
     log_raw_request_response,
     turn_off_message_logging,
 )
-from litellm._logging import _is_debugging_on, _redact_string, verbose_logger
+from litellm._logging import (
+    _is_debugging_on,
+    _redact_string,
+    set_session_id,
+    set_trace_id,
+    verbose_logger,
+)
 from litellm.exceptions import (
     BudgetExceededError,
     validate_rate_limit_category,
@@ -347,6 +353,12 @@ class Logging(LiteLLMLoggingBaseClass):
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
         self.litellm_trace_id: str = litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
+
+        set_trace_id(self.litellm_trace_id)
+        _sid = (kwargs or {}).get("litellm_session_id")
+        if _sid:
+            set_session_id(str(_sid))
+
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[Any] = []  # for generating complete stream response
