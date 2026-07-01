@@ -4355,7 +4355,7 @@ def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     timeout = ctx.timeout
 
     api_key = api_key or litellm.gdc_key or get_secret_str("GDC_API_KEY") or litellm.api_key
-    api_base = api_base or litellm.api_base or litellm.gdc_api_base or get_secret_str("GDC_API_BASE")
+    api_base = api_base or litellm.gdc_api_base or get_secret_str("GDC_API_BASE") or litellm.api_base
 
     return base_llm_http_handler.completion(
         model=model,

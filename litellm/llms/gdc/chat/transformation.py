@@ -28,15 +28,19 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     def _resolve_project(self, optional_params: dict, litellm_params: dict) -> str | None:
         return (
             litellm_params.get("vertex_project")
+            or litellm_params.get("vertex_ai_project")
             or getattr(litellm, "vertex_project", None)
             or optional_params.get("vertex_project")
+            or optional_params.get("vertex_ai_project")
         )
 
     def _resolve_location(self, optional_params: dict, litellm_params: dict) -> str | None:
         return (
             litellm_params.get("vertex_location")
+            or litellm_params.get("vertex_ai_location")
             or getattr(litellm, "vertex_location", None)
             or optional_params.get("vertex_location")
+            or optional_params.get("vertex_ai_location")
         )
 
     def get_complete_url(
@@ -48,7 +52,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = api_base or litellm.api_base or litellm.gdc_api_base
+        api_base = api_base or litellm.gdc_api_base or litellm.api_base
         if not api_base:
             raise litellm.utils.AuthenticationError(
                 message="api_base/host is required for GDC Gemini. Please set it or pass it.",
@@ -72,9 +76,14 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
 
         api_base = api_base.rstrip("/")
 
-        # If the endpoint structure is already in the api_base, don't append it again
+        deployment_overrides_path = any(
+            litellm_params.get(k)
+            for k in ("vertex_project", "vertex_ai_project", "vertex_location", "vertex_ai_location")
+        )
         if "/v1/projects/" in api_base:
-            return api_base
+            if not deployment_overrides_path:
+                return api_base
+            api_base = api_base.split("/v1/projects/", 1)[0].rstrip("/")
 
         if not location:
             raise litellm.utils.AuthenticationError(
@@ -86,18 +95,23 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         return f"{api_base}/v1/projects/{project}/locations/{location}/chat/completions"
 
     def _read_env_bool(self, val: Any, env_var: str, default: bool = True) -> bool | str:
+        def _parse(s: str) -> bool | str:
+            cleaned = s.strip().lower()
+            if cleaned in ("false", "0", "no", "off"):
+                return False
+            if cleaned in ("true", "1", "yes", "on"):
+                return True
+            return s
+
         if val is not None:
+            if isinstance(val, str):
+                return _parse(val)
             return val
 
         _env_val = os.getenv(env_var)
         if _env_val is None:
             return default
-        _clean = _env_val.strip().lower()
-        if _clean in ("false", "0", "no", "off"):
-            return False
-        if _clean in ("true", "1", "yes", "on"):
-            return True
-        return _env_val
+        return _parse(_env_val)
 
     def _fetch_auth(self, gdch_creds: Any, ssl_verify: bool | str) -> None:
         import requests
@@ -147,7 +161,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     ) -> dict:
         import google.auth.exceptions
 
-        api_base = api_base or litellm.api_base or litellm.gdc_api_base
+        api_base = api_base or litellm.gdc_api_base or litellm.api_base
         if not api_base:
             raise litellm.utils.AuthenticationError(
                 message="api_base/host is required for GDC Gemini. Please set it or pass it.",
@@ -232,7 +246,14 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         )
 
         # Remove extra params used for routing/auth
-        for param in ["vertex_project", "vertex_location", "ssl_verify", "gdc_token_caching"]:
+        for param in [
+            "vertex_project",
+            "vertex_ai_project",
+            "vertex_location",
+            "vertex_ai_location",
+            "ssl_verify",
+            "gdc_token_caching",
+        ]:
             data.pop(param, None)
 
         return data

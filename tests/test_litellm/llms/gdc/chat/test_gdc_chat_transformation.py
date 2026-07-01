@@ -97,6 +97,41 @@ class TestGDCGeminiConfig:
                 litellm_params={},
             )
 
+    def test_get_complete_url_accepts_vertex_ai_aliases(self):
+        config = GDCGeminiConfig()
+        url = config.get_complete_url(
+            api_base=TEST_API_BASE,
+            api_key=None,
+            model=TEST_MODEL,
+            optional_params={},
+            litellm_params={
+                "vertex_ai_project": TEST_PROJECT,
+                "vertex_ai_location": TEST_LOCATION,
+            },
+        )
+        assert (
+            url
+            == f"{TEST_API_BASE}/v1/projects/{TEST_PROJECT}/locations/{TEST_LOCATION}/chat/completions"
+        )
+
+    def test_get_complete_url_deployment_overrides_preformed_project(self):
+        config = GDCGeminiConfig()
+        preformed = f"{TEST_API_BASE}/v1/projects/embedded-project/locations/embedded-loc/chat/completions"
+        url = config.get_complete_url(
+            api_base=preformed,
+            api_key=None,
+            model=TEST_MODEL,
+            optional_params={},
+            litellm_params={
+                "vertex_project": "deployment-project",
+                "vertex_location": "deployment-loc",
+            },
+        )
+        assert url == (
+            f"{TEST_API_BASE}/v1/projects/deployment-project"
+            "/locations/deployment-loc/chat/completions"
+        )
+
     def test_deployment_project_takes_precedence_over_request(self):
         config = GDCGeminiConfig()
         url = config.get_complete_url(
@@ -244,6 +279,32 @@ class TestGDCGeminiConfig:
                     api_key=TEST_API_KEY,
                     api_base=TEST_API_BASE,
                 )
+
+    def test_validate_environment_string_false_disables_token_caching(self):
+        config = GDCGeminiConfig()
+        mock_creds = MagicMock()
+        mock_creds.token = "mock-token"
+        mock_creds.with_gdch_audience.return_value = mock_creds
+
+        with patch(
+            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
+        ), patch("requests.Session"), patch.object(
+            config, "_cached_fetch_token"
+        ) as mock_cached:
+            config.validate_environment(
+                headers={},
+                model=TEST_MODEL,
+                messages=[],
+                optional_params={},
+                litellm_params={
+                    "vertex_project": TEST_PROJECT,
+                    "gdc_token_caching": "false",
+                },
+                api_key=TEST_API_KEY,
+                api_base=TEST_API_BASE,
+            )
+
+        mock_cached.assert_not_called()
 
     def test_validate_environment_token_caching_path(self):
         config = GDCGeminiConfig()
@@ -437,3 +498,26 @@ class TestCompleteGDC:
         assert kwargs["api_key"] == "resolved-key"
         assert kwargs["api_base"] == "https://resolved-base.com"
         assert kwargs["provider_config"] is gdc_transformation
+
+    @patch("litellm.main.base_llm_http_handler.completion")
+    def test_complete_gdc_prefers_gdc_api_base_over_global(
+        self, mock_completion, monkeypatch
+    ):
+        mock_completion.return_value = MagicMock()
+        monkeypatch.setattr(litellm, "gdc_key", "resolved-key", raising=False)
+        monkeypatch.setattr(
+            litellm, "gdc_api_base", "https://gdc-specific.com", raising=False
+        )
+        monkeypatch.setattr(
+            litellm, "api_base", "https://other-provider.com", raising=False
+        )
+
+        litellm.completion(
+            model="gdc/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            vertex_project=TEST_PROJECT,
+            vertex_location=TEST_LOCATION,
+        )
+
+        _, kwargs = mock_completion.call_args
+        assert kwargs["api_base"] == "https://gdc-specific.com"
