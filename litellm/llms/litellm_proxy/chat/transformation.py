@@ -111,6 +111,40 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
 
         return model, custom_llm_provider, api_key, api_base
 
+    # Fields from requester_metadata that should be forwarded to the downstream proxy.
+    # Allowlist approach: requester_metadata also contains internal pipeline slots
+    # (user_api_key_* echoes, guardrails config) that must never be forwarded.
+    FORWARDED_METADATA_FIELDS: frozenset[str] = frozenset({"tags"})
+
+    def _build_forwarded_request_body(
+        self,
+        model: str,
+        messages: list["AllMessageValues"],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> dict:
+        request_body: dict = {
+            "model": model,
+            "messages": messages,
+            **optional_params,
+        }
+
+        metadata = litellm_params.get("metadata")
+        if metadata is not None:
+            requester_metadata = metadata.get("requester_metadata")
+            if requester_metadata is not None:
+                forwarded = {k: v for k, v in requester_metadata.items() if k in self.FORWARDED_METADATA_FIELDS}
+                if forwarded:
+                    request_body["metadata"] = forwarded
+
+        litellm_session_id = litellm_params.get("litellm_session_id")
+        if litellm_session_id is not None:
+            extra_body: dict = request_body.get("extra_body") or {}
+            if "litellm_session_id" not in extra_body:
+                request_body["extra_body"] = {**extra_body, "litellm_session_id": litellm_session_id}
+
+        return request_body
+
     def transform_request(
         self,
         model: str,
@@ -119,12 +153,12 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        # don't transform the request
-        return {
-            "model": model,
-            "messages": messages,
-            **optional_params,
-        }
+        return self._build_forwarded_request_body(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
 
     async def async_transform_request(
         self,
@@ -134,9 +168,9 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        # don't transform the request
-        return {
-            "model": model,
-            "messages": messages,
-            **optional_params,
-        }
+        return self._build_forwarded_request_body(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+        )
