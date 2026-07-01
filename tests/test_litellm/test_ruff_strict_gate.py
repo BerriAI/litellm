@@ -11,16 +11,16 @@ _spec.loader.exec_module(gate)
 Violation = gate.Violation
 
 
-def rule(name, baseline, slack):
-    return {name: {"baseline": baseline, "slack": slack}}
+def rule(name, limit):
+    return {name: {"limit": limit}}
 
 
 def test_under_ceiling_passes():
-    assert gate.evaluate({"ANN001": 100}, {"ANN001": 100}, rule("ANN001", 90, 20)) == []
+    assert gate.evaluate({"ANN001": 100}, {"ANN001": 100}, rule("ANN001", 110)) == []
 
 
-def test_ceiling_is_baseline_plus_slack_boundary():
-    budget = rule("ANN001", 90, 20)  # cap 110
+def test_ceiling_is_the_limit_boundary():
+    budget = rule("ANN001", 110)
     at = gate.evaluate({"ANN001": 110}, {"ANN001": 90}, budget)
     over = gate.evaluate({"ANN001": 111}, {"ANN001": 90}, budget)
     assert at == []
@@ -30,23 +30,23 @@ def test_ceiling_is_baseline_plus_slack_boundary():
 
 
 def test_over_ceiling_and_change_added_fails():
-    breaches = gate.evaluate({"C901": 11}, {"C901": 9}, rule("C901", 10, 0))
+    breaches = gate.evaluate({"C901": 11}, {"C901": 9}, rule("C901", 10))
     assert [b.rule for b in breaches] == ["C901"]
     assert breaches[0].added == 2
 
 
 def test_base_already_over_ceiling_change_added_nothing_is_not_blamed():
-    # drift safety: base is over cap, this change leaves the count where it is
-    assert gate.evaluate({"C901": 15}, {"C901": 15}, rule("C901", 10, 0)) == []
+    # drift safety: base is over limit, this change leaves the count where it is
+    assert gate.evaluate({"C901": 15}, {"C901": 15}, rule("C901", 10)) == []
 
 
 def test_change_that_reduces_an_over_ceiling_rule_is_not_blamed():
-    # still over cap, but moving the right direction
-    assert gate.evaluate({"C901": 14}, {"C901": 16}, rule("C901", 10, 0)) == []
+    # still over limit, but moving the right direction
+    assert gate.evaluate({"C901": 14}, {"C901": 16}, rule("C901", 10)) == []
 
 
 def test_rules_are_independent():
-    budget = {**rule("ANN001", 100, 50), **rule("C901", 10, 0)}
+    budget = {**rule("ANN001", 150), **rule("C901", 10)}
     breaches = gate.evaluate(
         {"ANN001": 130, "C901": 11}, {"ANN001": 100, "C901": 10}, budget
     )
@@ -54,7 +54,19 @@ def test_rules_are_independent():
 
 
 def test_missing_rule_counts_as_zero():
-    assert gate.evaluate({}, {}, rule("C901", 0, 0)) == []
+    assert gate.evaluate({}, {}, rule("C901", 0)) == []
+
+
+def test_update_ratchets_limit_down_by_what_the_branch_fixed_never_up():
+    budget = {**rule("ANN001", 150), **rule("C901", 10)}
+    # ANN001 fixed 20 (100 -> 80) so its limit falls 150 -> 130; C901 grew, so its
+    # limit holds flat at 10 (a fix must never loosen a ceiling).
+    current = {"ANN001": 80, "C901": 12}
+    base = {"ANN001": 100, "C901": 9}
+    assert gate.ratcheted_budget(budget, current, base) == {
+        "ANN001": {"limit": 130},
+        "C901": {"limit": 10},
+    }
 
 
 def test_parse_changed_lines_maps_added_lines_per_file():
