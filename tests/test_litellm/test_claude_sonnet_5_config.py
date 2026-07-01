@@ -76,12 +76,14 @@ def test_sonnet_5_pricing_and_capabilities():
         assert info["max_output_tokens"] == 128000
         assert info["max_tokens"] == 128000
 
-        # Standard Sonnet pricing: $3 / $15 per MTok, with the 1.25x cache-write
-        # and 0.1x cache-read multipliers.
-        assert info["input_cost_per_token"] == 3e-06
-        assert info["output_cost_per_token"] == 1.5e-05
-        assert info["cache_creation_input_token_cost"] == 3.75e-06
-        assert info["cache_read_input_token_cost"] == 3e-07
+        # Introductory Sonnet 5 pricing through 2026-08-31: $2 / $10 per MTok,
+        # with the 1.25x cache-write and 0.1x cache-read multipliers. Bumps back
+        # to the $3 / $15 sticker price on 2026-09-01.
+        assert info["input_cost_per_token"] == 2e-06
+        assert info["output_cost_per_token"] == 1e-05
+        assert info["cache_creation_input_token_cost"] == 2.5e-06
+        assert info["cache_creation_input_token_cost_above_1hr"] == 4e-06
+        assert info["cache_read_input_token_cost"] == 2e-07
 
         # gen-5 adaptive-thinking profile: effort-driven, no sampling params, no
         # assistant prefill.
@@ -102,16 +104,18 @@ def test_sonnet_5_bedrock_regional_pricing():
     model_data = _load_root_cost_map()
 
     base_pricing = {
-        "input_cost_per_token": 3e-06,
-        "output_cost_per_token": 1.5e-05,
-        "cache_creation_input_token_cost": 3.75e-06,
-        "cache_read_input_token_cost": 3e-07,
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 1e-05,
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
+        "cache_read_input_token_cost": 2e-07,
     }
     regional_pricing = {
-        "input_cost_per_token": 3.3e-06,
-        "output_cost_per_token": 1.65e-05,
-        "cache_creation_input_token_cost": 4.125e-06,
-        "cache_read_input_token_cost": 3.3e-07,
+        "input_cost_per_token": 2.2e-06,
+        "output_cost_per_token": 1.1e-05,
+        "cache_creation_input_token_cost": 2.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.4e-06,
+        "cache_read_input_token_cost": 2.2e-07,
     }
 
     expected = {
