@@ -1822,6 +1822,10 @@ async def get_users(
     user_ids: Optional[str] = fastapi.Query(default=None, description="Get list of users by user_ids"),
     sso_user_ids: Optional[str] = fastapi.Query(default=None, description="Get list of users by sso_user_id"),
     user_email: Optional[str] = fastapi.Query(default=None, description="Filter users by partial email match"),
+    search: Optional[str] = fastapi.Query(
+        default=None,
+        description="Search users by partial user_id, sso_user_id, user_email, or user_alias match",
+    ),
     team: Optional[str] = fastapi.Query(default=None, description="Filter users by team id"),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(default=25, ge=1, le=100, description="Number of items per page"),
@@ -1852,6 +1856,8 @@ async def get_users(
             Get list of users by sso_ids. Comma separated list of sso_ids.
         user_email: Optional[str]
             Filter users by partial email match
+        search: Optional[str]
+            Search users by partial user_id, sso_user_id, user_email, or user_alias match
         team: Optional[str]
             Filter users by team id. Will match if user has this team in their teams array.
         page: int
@@ -1910,6 +1916,36 @@ async def get_users(
             "contains": user_email,
             "mode": "insensitive",  # Case-insensitive search
         }
+
+    if search is not None and isinstance(search, str):
+        normalized_search = search.strip()
+        if normalized_search:
+            where_conditions["OR"] = [
+                {
+                    "user_id": {
+                        "contains": normalized_search,
+                        "mode": "insensitive",
+                    }
+                },
+                {
+                    "sso_user_id": {
+                        "contains": normalized_search,
+                        "mode": "insensitive",
+                    }
+                },
+                {
+                    "user_email": {
+                        "contains": normalized_search,
+                        "mode": "insensitive",
+                    }
+                },
+                {
+                    "user_alias": {
+                        "contains": normalized_search,
+                        "mode": "insensitive",
+                    }
+                },
+            ]
 
     if team is not None and isinstance(team, str):
         where_conditions["teams"] = {

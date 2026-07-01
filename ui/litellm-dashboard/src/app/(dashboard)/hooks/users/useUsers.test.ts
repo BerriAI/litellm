@@ -74,6 +74,21 @@ describe("useInfiniteUsers", () => {
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
+  const userListCallArgs = (page = 1, pageSize = 50, search: string | null = null) => [
+    "test-access-token",
+    null,
+    page,
+    pageSize,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    search,
+  ];
+
   it("should return paginated user data when query is successful", async () => {
     const mockResponse = buildUserListResponse(1, 2);
     (userListCall as any).mockResolvedValue(mockResponse);
@@ -86,7 +101,7 @@ describe("useInfiniteUsers", () => {
 
     expect(result.current.data?.pages).toHaveLength(1);
     expect(result.current.data?.pages[0]).toEqual(mockResponse);
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
+    expect(userListCall).toHaveBeenCalledWith(...userListCallArgs());
   });
 
   it("should use the default page size of 50", async () => {
@@ -99,7 +114,7 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
+    expect(userListCall).toHaveBeenCalledWith(...userListCallArgs());
   });
 
   it("should use a custom page size when provided", async () => {
@@ -115,15 +130,15 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, customPageSize, null);
+    expect(userListCall).toHaveBeenCalledWith(...userListCallArgs(1, customPageSize));
   });
 
-  it("should pass searchEmail to userListCall when provided", async () => {
-    const searchEmail = "search@example.com";
+  it("should pass search to userListCall when provided", async () => {
+    const search = "中文别名";
     const mockResponse = buildUserListResponse(1, 1, 1);
     (userListCall as any).mockResolvedValue(mockResponse);
 
-    const { result } = renderHook(() => useInfiniteUsers(50, searchEmail), {
+    const { result } = renderHook(() => useInfiniteUsers(50, search), {
       wrapper,
     });
 
@@ -131,10 +146,10 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, searchEmail);
+    expect(userListCall).toHaveBeenCalledWith(...userListCallArgs(1, 50, search));
   });
 
-  it("should pass null for searchEmail when not provided", async () => {
+  it("should pass null for search when not provided", async () => {
     const mockResponse = buildUserListResponse(1, 1);
     (userListCall as any).mockResolvedValue(mockResponse);
 
@@ -146,7 +161,7 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
+    expect(userListCall).toHaveBeenCalledWith(...userListCallArgs());
   });
 
   it("should fetch the next page when more pages are available", async () => {
@@ -175,7 +190,7 @@ describe("useInfiniteUsers", () => {
 
     expect(result.current.data?.pages[1]).toEqual(page2);
     expect(userListCall).toHaveBeenCalledTimes(2);
-    expect(userListCall).toHaveBeenLastCalledWith("test-access-token", null, 2, 50, null);
+    expect(userListCall).toHaveBeenLastCalledWith(...userListCallArgs(2));
   });
 
   it("should not have a next page when on the last page", async () => {
@@ -270,7 +285,7 @@ describe("useInfiniteUsers", () => {
     expect(result.current.data).toBeUndefined();
   });
 
-  it("should pass empty string searchEmail as null", async () => {
+  it("should pass empty string search as null", async () => {
     const mockResponse = buildUserListResponse(1, 1);
     (userListCall as any).mockResolvedValue(mockResponse);
 
@@ -282,6 +297,6 @@ describe("useInfiniteUsers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", null, 1, 50, null);
+    expect(userListCall).toHaveBeenCalledWith(...userListCallArgs());
   });
 });

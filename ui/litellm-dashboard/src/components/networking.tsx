@@ -964,6 +964,7 @@ export const userListCall = async (
   sortBy: string | null = null,
   sortOrder: "asc" | "desc" | null = null,
   organizationIds: string[] | null = null,
+  search: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -982,6 +983,7 @@ export const userListCall = async (
         sort_by: sortBy || undefined,
         sort_order: sortOrder || undefined,
         organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
+        search: search || undefined,
       },
     })) as UserListResponse;
     return data;
