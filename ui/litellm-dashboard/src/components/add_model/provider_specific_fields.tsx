@@ -212,23 +212,13 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         reader.onload = (e) => {
           if (e.target) {
             const jsonStr = e.target.result as string;
-            console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
             form.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values after setting:", form.getFieldsValue());
           }
         };
         reader.readAsText(file);
       }
       // Prevent upload
       return false;
-    },
-    onChange(info: any) {
-      console.log("Upload onChange triggered in ProviderSpecificFields");
-      console.log("Current form values:", form.getFieldsValue());
-
-      if (info.file.status !== "uploading") {
-        console.log(info.file, info.fileList);
-      }
     },
   };
 
@@ -271,16 +261,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               <Upload
                 {...handleUpload}
                 onChange={(info) => {
-                  // First call the original onChange
                   if (uploadProps?.onChange) {
                     uploadProps.onChange(info);
                   }
-
-                  // Check the field value after a short delay
-                  setTimeout(() => {
-                    const value = form.getFieldValue(field.key);
-                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
-                  }, 500);
                 }}
               >
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
