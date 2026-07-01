@@ -7344,6 +7344,83 @@ def _pop_complete_sse_frame(buffer: str) -> tuple[str | None, str]:
     return buffer[:frame_end], buffer[frame_end:]
 
 
+_STREAM_KEEPALIVE = object()
+
+_KEEPALIVE_MIN_SECONDS = 1.0
+_KEEPALIVE_MAX_SECONDS = 300.0
+
+
+async def _iter_with_keepalive(aiter: Any, keepalive_seconds: float) -> AsyncGenerator[Any, None]:
+    if keepalive_seconds <= 0:
+        async for item in aiter:
+            yield item
+        return
+
+    pending: asyncio.Task[Any] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(aiter.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=keepalive_seconds)
+            if not done:
+                yield _STREAM_KEEPALIVE
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                break
+            finally:
+                pending = None
+            yield item
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            try:
+                await pending
+            except BaseException:
+                pass
+
+
+def _keepalive_from_deployment_config(request_data: dict[str, Any], response: Any) -> Any:
+    if llm_router is None:
+        return None
+
+    hidden = getattr(response, "_hidden_params", None)
+    model_id = hidden.get("model_id") if isinstance(hidden, dict) else None
+    if model_id:
+        deployment = llm_router.get_deployment(model_id=model_id)
+        if deployment is not None:
+            return getattr(deployment.litellm_params, "keepalive_seconds", None)
+
+    for deployment_dict in llm_router.get_model_list(model_name=request_data.get("model")) or []:
+        raw = (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")
+        if raw is not None:
+            return raw
+    return None
+
+
+def _resolve_keepalive_seconds(request_data: dict[str, Any], response: Any = None) -> float:
+    raw = request_data.get("keepalive_seconds")
+    if raw is None:
+        raw = _keepalive_from_deployment_config(request_data, response)
+    try:
+        value = float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if value <= 0:
+        return 0.0
+    clamped = max(_KEEPALIVE_MIN_SECONDS, min(value, _KEEPALIVE_MAX_SECONDS))
+    if clamped != value:
+        verbose_proxy_logger.info(
+            "keepalive_seconds=%s clamped to %s [min=%s, max=%s]",
+            value,
+            clamped,
+            _KEEPALIVE_MIN_SECONDS,
+            _KEEPALIVE_MAX_SECONDS,
+        )
+    return clamped
+
+
 async def async_data_generator(
     response,
     user_api_key_dict: UserAPIKeyAuth,
@@ -7391,7 +7468,14 @@ async def async_data_generator(
         else:
             stream_iterator = response
 
-        async for chunk in stream_iterator:
+        _ka_secs = _resolve_keepalive_seconds(request_data, response)
+        stream_source = _iter_with_keepalive(stream_iterator.__aiter__(), _ka_secs) if _ka_secs > 0 else stream_iterator
+
+        async for item in stream_source:
+            if item is _STREAM_KEEPALIVE:
+                yield ": ping\n\n"
+                continue
+            chunk = cast(Any, item)
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
                 chunk, _str_so_far = await _apply_streaming_chunk_hooks(
