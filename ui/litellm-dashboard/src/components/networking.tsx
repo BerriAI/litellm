@@ -6754,11 +6754,13 @@ export const testMCPToolsListRequest = async (
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
-    if (accessToken) {
-      headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
-    }
     if (oauthAccessToken) {
       headers["Authorization"] = `Bearer ${oauthAccessToken}`;
+      if (accessToken && globalLitellmHeaderName !== "Authorization") {
+        headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
+      }
+    } else if (accessToken) {
+      headers[globalLitellmHeaderName] = `Bearer ${accessToken}`;
     }
 
     const response = await fetch(url, {
