@@ -41,7 +41,7 @@ from ..ai_gateway import (
 def _safe_snapshot(value: Any) -> Any:
     try:
         return copy.deepcopy(value)
-    except Exception:
+    except (copy.Error, TypeError, RecursionError):
         return dict(value) if isinstance(value, dict) else value
 
 
@@ -67,7 +67,7 @@ def _gateway_fallback_host(
 
     try:
         host = workspace_host_from_base(DatabricksConfig()._get_api_base(api_base))
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort host resolution; never mask the original error
         return None
 
     use_ai_gateway = parse_use_ai_gateway_flag(litellm_params, optional_params)

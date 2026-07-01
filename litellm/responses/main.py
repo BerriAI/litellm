@@ -4,6 +4,7 @@ from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Coroutine,
     Dict,
     Iterable,
@@ -882,6 +883,56 @@ async def _aemulate_or_reraise_primary(emulate_fn, primary_exc):
         raise
 
 
+def _run_responses_surface_chain_sync(
+    *,
+    configs_to_try: List[BaseResponsesAPIConfig],
+    run_config: Callable[[BaseResponsesAPIConfig], Any],
+    stamp_fn: Callable[[Any], Any],
+    emulate_fn: Callable[[], Any],
+    should_try_next: Callable[[Exception], bool],
+):
+    """Try each responses surface in order; on a fall-through-eligible error advance
+    to the next surface, else raise. Emulate via chat-completions if the chain is
+    exhausted. Extracted from ``_execute_responses_with_surface_fallback`` to keep
+    that function's complexity within the strict-lint budget."""
+    primary_exc: Optional[Exception] = None
+    for cfg in configs_to_try:
+        try:
+            return stamp_fn(run_config(cfg))
+        except Exception as inner_exc:
+            primary_exc = primary_exc or inner_exc
+            if should_try_next(inner_exc):
+                continue
+            raise
+    return _emulate_or_reraise_primary(emulate_fn, stamp_fn, primary_exc)
+
+
+async def _run_responses_surface_chain_async(
+    *,
+    configs_to_try: List[BaseResponsesAPIConfig],
+    run_config: Callable[[BaseResponsesAPIConfig], Any],
+    emulate_fn: Callable[[], Any],
+    should_try_next: Callable[[Exception], bool],
+):
+    """Async variant of :func:`_run_responses_surface_chain_sync`. Async callers
+    (``aresponses``) do their own response-id stamping, so no stamping happens here.
+    The handler returns a coroutine for real async calls but may return a plain value
+    (e.g. a mocked/sync handler), so only await when awaitable."""
+    primary_exc: Optional[Exception] = None
+    for cfg in configs_to_try:
+        try:
+            res = run_config(cfg)
+            if asyncio.iscoroutine(res):
+                res = await res
+            return res
+        except Exception as inner_exc:
+            primary_exc = primary_exc or inner_exc
+            if should_try_next(inner_exc):
+                continue
+            raise
+    return await _aemulate_or_reraise_primary(emulate_fn, primary_exc)
+
+
 def _execute_responses_with_surface_fallback(
     *,
     responses_api_provider_config: BaseResponsesAPIConfig,
@@ -991,37 +1042,20 @@ def _execute_responses_with_surface_fallback(
         return use_surface_fallback and responses_api_provider_config.should_fallback_on_responses_error(exc)
 
     if _is_async:
-        # Async callers (aresponses) await the returned coroutine and do their own
-        # response-id stamping, so don't stamp here (avoids double-stamping). The
-        # handler returns a coroutine for real async calls but may return a plain
-        # value (e.g. a mocked/sync handler), so only await when awaitable.
-        async def _aresponses_with_fallback():
-            primary_exc = None
-            for cfg in configs_to_try:
-                try:
-                    res = _run_responses_config(cfg)
-                    if asyncio.iscoroutine(res):
-                        res = await res
-                    return res
-                except Exception as inner_exc:
-                    primary_exc = primary_exc or inner_exc
-                    if _should_try_next_surface(inner_exc):
-                        continue
-                    raise
-            return await _aemulate_or_reraise_primary(_emulate_via_chat_completions, primary_exc)
+        return _run_responses_surface_chain_async(
+            configs_to_try=configs_to_try,
+            run_config=_run_responses_config,
+            emulate_fn=_emulate_via_chat_completions,
+            should_try_next=_should_try_next_surface,
+        )
 
-        return _aresponses_with_fallback()
-
-    primary_exc = None
-    for cfg in configs_to_try:
-        try:
-            return _stamp_response(_run_responses_config(cfg))
-        except Exception as inner_exc:
-            primary_exc = primary_exc or inner_exc
-            if _should_try_next_surface(inner_exc):
-                continue
-            raise
-    return _emulate_or_reraise_primary(_emulate_via_chat_completions, _stamp_response, primary_exc)
+    return _run_responses_surface_chain_sync(
+        configs_to_try=configs_to_try,
+        run_config=_run_responses_config,
+        stamp_fn=_stamp_response,
+        emulate_fn=_emulate_via_chat_completions,
+        should_try_next=_should_try_next_surface,
+    )
 
 
 @client

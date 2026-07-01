@@ -46,8 +46,7 @@ class ProviderFamily(str, Enum):
 def _bare_name(model: str) -> str:
     name = model.lower().strip()
     for prefix in _MODEL_PREFIXES:
-        if name.startswith(prefix):
-            name = name[len(prefix) :]
+        name = name.removeprefix(prefix)
     return name
 
 
@@ -93,8 +92,7 @@ _SERVING_ENDPOINTS_SUFFIX = "/serving-endpoints"
 def bare_endpoint_name(model: str) -> str:
     """Strip the ``databricks/`` provider prefix to get the bare endpoint name."""
     name = model.strip()
-    if name.startswith("databricks/"):
-        name = name[len("databricks/") :]
+    name = name.removeprefix("databricks/")
     return name
 
 
@@ -107,8 +105,7 @@ def normalize_gateway_base(host: str) -> str:
     h = host.rstrip("/")
     if h.endswith(_AI_GATEWAY_SUFFIX):
         return h
-    if h.endswith(_SERVING_ENDPOINTS_SUFFIX):
-        h = h[: -len(_SERVING_ENDPOINTS_SUFFIX)]
+    h = h.removesuffix(_SERVING_ENDPOINTS_SUFFIX)
     return h + _AI_GATEWAY_SUFFIX
 
 
@@ -118,7 +115,7 @@ def workspace_host_from_base(api_base: str) -> str:
     h = api_base.rstrip("/")
     for suffix in (_AI_GATEWAY_SUFFIX, _SERVING_ENDPOINTS_SUFFIX):
         if h.endswith(suffix):
-            return h[: -len(suffix)]
+            return h.removesuffix(suffix)
     return h
 
 
