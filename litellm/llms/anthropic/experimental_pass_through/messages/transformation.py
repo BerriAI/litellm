@@ -253,6 +253,38 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         existing_output_config.setdefault("effort", effort)
         optional_params["output_config"] = existing_output_config
 
+    @staticmethod
+    def _normalize_tool_input_schemas(tools: Optional[list[dict]]) -> None:
+        """
+        Normalize each tool's input_schema for Anthropic /v1/messages.
+
+        Anthropic requires ``input_schema.type == "object"`` and rejects the
+        request otherwise with:
+            tools.N.custom.input_schema.type: Field required
+
+        Tools emitted by Claude Code / MCP-backed clients sometimes omit ``type``
+        (declaring a JSON-schema ``$schema`` draft reference instead). The
+        /v1/chat/completions path already handles this in
+        ``AnthropicConfig._map_tool_helper``; the pass-through path had no
+        equivalent. Mirror that behavior: coerce ``type`` to ``"object"`` (and
+        ensure ``properties`` exists), and drop the ``$schema``/``$id`` reference
+        fields via the shared ``_remove_json_schema_refs`` helper (the same helper
+        the Mistral chat transformation uses). Mutates input_schema in place.
+        """
+        if not tools:
+            return
+        from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+        from litellm.utils import _remove_json_schema_refs
+
+        for tool in tools:
+            input_schema = tool.get("input_schema")
+            if not isinstance(input_schema, dict):
+                continue
+            _remove_json_schema_refs(input_schema, max_depth=DEFAULT_MAX_RECURSE_DEPTH)
+            if input_schema.get("type") != "object":
+                input_schema["type"] = "object"
+                input_schema.setdefault("properties", {})
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -308,6 +340,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # payload on every request regardless of log level (a full scan of the
         # request body on the hot path). Defer it to when DEBUG is enabled.
         verbose_logger.debug("TRANSFORMATION DEBUG - Messages: %s", messages)
+
+        # Normalize tool input_schema (coerce type->"object", drop $schema/$id).
+        # Anthropic rejects a missing/non-object type; the chat path already does
+        # this in _map_tool_helper, but the pass-through path did not.
+        self._normalize_tool_input_schemas(anthropic_messages_optional_request_params.get("tools"))
 
         # Auto-strip advisor blocks from history if advisor tool is absent.
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
