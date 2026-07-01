@@ -4575,3 +4575,49 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                     route_type="acompletion",
                     llm_router=mock_router,
                 )
+
+    @pytest.mark.asyncio
+    async def test_model_restored_on_non_rate_limit_exception(self):
+        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        primary_model = "gpt-4"
+
+        processor = ProxyBaseLLMRequestProcessing(data={"model": primary_model})
+
+        async def mock_pre_call_logic(**kwargs):
+            model_in_data = processor.data.get("model")
+            if model_in_data == primary_model:
+                raise ProxyRateLimitError(
+                    detail="TPM limit exceeded for gpt-4",
+                    headers={"retry-after": "30"},
+                )
+            raise ValueError("unexpected auth failure on fallback")
+
+        mock_router = MagicMock()
+        mock_router.fallbacks = [{"gpt-4": ["gpt-3.5-turbo"]}]
+
+        with patch.object(
+            processor,
+            "common_processing_pre_call_logic",
+            side_effect=mock_pre_call_logic,
+        ):
+            with pytest.raises(ValueError, match="unexpected auth failure"):
+                await processor._pre_call_with_fallbacks(
+                    request=MagicMock(),
+                    general_settings={},
+                    proxy_logging_obj=MagicMock(),
+                    user_api_key_dict=MagicMock(router_settings=None),
+                    version=None,
+                    proxy_config=MagicMock(),
+                    user_model=None,
+                    user_temperature=None,
+                    user_request_timeout=None,
+                    user_max_tokens=None,
+                    user_api_base=None,
+                    model="gpt-4",
+                    route_type="acompletion",
+                    llm_router=mock_router,
+                )
+
+        assert processor.data["model"] == primary_model

@@ -1229,29 +1229,33 @@ class ProxyBaseLLMRequestProcessing:
                 fallback_models,
             )
 
-            for fallback_model in fallback_models:
-                if fallback_model == original_model:
-                    continue
-                self.data["model"] = fallback_model
-                try:
-                    return await self.common_processing_pre_call_logic(
-                        request=request,
-                        general_settings=general_settings,
-                        proxy_logging_obj=proxy_logging_obj,
-                        user_api_key_dict=user_api_key_dict,
-                        version=version,
-                        proxy_config=proxy_config,
-                        user_model=user_model,
-                        user_temperature=user_temperature,
-                        user_request_timeout=user_request_timeout,
-                        user_max_tokens=user_max_tokens,
-                        user_api_base=user_api_base,
-                        model=fallback_model,
-                        route_type=route_type,
-                        llm_router=llm_router,
-                    )
-                except ProxyRateLimitError:
-                    continue
+            try:
+                for fallback_model in fallback_models:
+                    if fallback_model == original_model:
+                        continue
+                    self.data["model"] = fallback_model
+                    try:
+                        return await self.common_processing_pre_call_logic(
+                            request=request,
+                            general_settings=general_settings,
+                            proxy_logging_obj=proxy_logging_obj,
+                            user_api_key_dict=user_api_key_dict,
+                            version=version,
+                            proxy_config=proxy_config,
+                            user_model=user_model,
+                            user_temperature=user_temperature,
+                            user_request_timeout=user_request_timeout,
+                            user_max_tokens=user_max_tokens,
+                            user_api_base=user_api_base,
+                            model=fallback_model,
+                            route_type=route_type,
+                            llm_router=llm_router,
+                        )
+                    except ProxyRateLimitError:
+                        continue
+            except BaseException:
+                self.data["model"] = original_model
+                raise
 
             self.data["model"] = original_model
             raise original_exc
