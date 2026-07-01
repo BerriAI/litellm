@@ -6,6 +6,7 @@ from typing import Any, Callable, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import BUDGET_RESET_BATCH_SIZE
 from litellm.proxy._types import (
     LiteLLM_BudgetTableFull,
     LiteLLM_EndUserTable,
@@ -576,39 +577,58 @@ class ResetBudgetJob:
 
     async def reset_budget_for_litellm_teams(self):
         """
-        Resets the budget for all LiteLLM Internal Teams if their budget has expired
+        Resets the budget for all LiteLLM Internal Teams if their budget has expired.
+
+        Fetches teams in pages of BUDGET_RESET_BATCH_SIZE to avoid loading all
+        expired teams into memory at once (fixes OOM when many teams expire together).
         """
         now = datetime.utcnow()
         start_time = time.time()
-        teams_to_reset: Optional[List[LiteLLM_TeamTable]] = None
+        total_found = 0
+        updated_teams: List[LiteLLM_TeamTable] = []
+        failed_teams = []
         try:
-            teams_to_reset = await self.prisma_client.get_data(table_name="team", query_type="find_all", reset_at=now)
-            updated_teams: List[LiteLLM_TeamTable] = []
-            failed_teams = []
-            if teams_to_reset is not None and len(teams_to_reset) > 0:
-                for team in teams_to_reset:
+            offset = 0
+            while True:
+                teams_batch = await self.prisma_client.get_data(
+                    table_name="team",
+                    query_type="find_all",
+                    reset_at=now,
+                    limit=BUDGET_RESET_BATCH_SIZE,
+                    offset=offset,
+                )
+                if not teams_batch:
+                    break
+                total_found += len(teams_batch)
+                batch_updated: List[LiteLLM_TeamTable] = []
+                for team in teams_batch:
                     try:
                         updated_team = await ResetBudgetJob._reset_budget_for_team(team=team, current_time=now)
                         if updated_team is not None:
-                            updated_teams.append(updated_team)
+                            batch_updated.append(updated_team)
                         else:
                             failed_teams.append(
                                 {
-                                    "team": team,
+                                    "team_id": getattr(team, "team_id", None),
                                     "error": "Returned None without exception",
                                 }
                             )
                     except Exception as e:
-                        failed_teams.append({"team": team, "error": str(e)})
+                        failed_teams.append({"team_id": getattr(team, "team_id", None), "error": str(e)})
                         verbose_proxy_logger.exception("Failed to reset budget for team: %s", team)
 
-                verbose_proxy_logger.debug("Updated teams %s", json.dumps(updated_teams, indent=4, default=str))
-                if updated_teams:
-                    await self._write_team_reset_updates(updated_teams=updated_teams)
-                    for t in updated_teams:
+                if batch_updated:
+                    verbose_proxy_logger.debug("Resetting %d teams (offset %d)", len(batch_updated), offset)
+                    await self._write_team_reset_updates(updated_teams=batch_updated)
+                    for t in batch_updated:
                         team_id = getattr(t, "team_id", None)
                         if team_id:
                             await self._invalidate_spend_counter(f"spend:team:{team_id}")
+                    updated_teams.extend(batch_updated)
+
+                if len(teams_batch) < BUDGET_RESET_BATCH_SIZE:
+                    break
+                offset += BUDGET_RESET_BATCH_SIZE
 
             end_time = time.time()
             if len(failed_teams) > 0:  # If any teams failed to reset
@@ -622,12 +642,9 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
-                        "teams_found": json.dumps(teams_to_reset, indent=4, default=str),
+                        "num_teams_found": total_found,
                         "num_teams_updated": len(updated_teams),
-                        "teams_updated": json.dumps(updated_teams, indent=4, default=str),
                         "num_teams_failed": len(failed_teams),
-                        "teams_failed": json.dumps(failed_teams, indent=4, default=str),
                     },
                 )
             )
@@ -642,8 +659,8 @@ class ResetBudgetJob:
                     start_time=start_time,
                     end_time=end_time,
                     event_metadata={
-                        "num_teams_found": len(teams_to_reset) if teams_to_reset else 0,
-                        "teams_found": json.dumps(teams_to_reset, indent=4, default=str),
+                        "num_teams_found": total_found,
+                        "num_teams_failed": len(failed_teams),
                     },
                 )
             )

@@ -3264,6 +3264,8 @@ class PrismaClient:
                                 r.expires = r.expires.isoformat()
                 elif query_type == "find_all" and expires is not None and reset_at is not None:
                     response = await VerificationTokenRepository(self).table.find_many(
+                        take=limit,
+                        skip=offset,
                         where={  # type: ignore
                             "OR": [
                                 {"expires": None},
@@ -3322,6 +3324,8 @@ class PrismaClient:
                     )  # type: ignore
                 elif query_type == "find_all" and reset_at is not None:
                     response = await UserRepository(self).table.find_many(
+                        take=limit,
+                        skip=offset,
                         where={  # type: ignore
                             "budget_reset_at": {"lt": reset_at},
                         }
@@ -3408,6 +3412,8 @@ class PrismaClient:
                     )
                 elif query_type == "find_all" and reset_at is not None:
                     response = await TeamRepository(self).table.find_many(
+                        take=limit,
+                        skip=offset,
                         where={  # type: ignore
                             "budget_reset_at": {"lt": reset_at},
                         }
