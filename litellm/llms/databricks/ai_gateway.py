@@ -254,9 +254,14 @@ def build_gemini_generate_content_url(
     endpoint name lives in the URL path (not the body). This surface exists only
     on the AI Gateway, so the workspace host is always used.
     """
+    from urllib.parse import quote
+
     host = workspace_host_from_base(host_or_base)
     base = normalize_gateway_base(host)
-    endpoint = bare_endpoint_name(model)
+    # Encode as a single path segment (``safe=""`` also escapes ``/``) so a crafted
+    # model name (e.g. "gemini/../../api/2.0/...") cannot traverse to a different
+    # Databricks path while still carrying the workspace bearer token.
+    endpoint = quote(bare_endpoint_name(model), safe="")
     action = "streamGenerateContent" if stream else "generateContent"
     url = f"{base}/gemini/v1beta/models/{endpoint}:{action}"
     if stream:

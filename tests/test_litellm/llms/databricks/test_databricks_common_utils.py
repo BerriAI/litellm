@@ -191,3 +191,48 @@ class TestDatabricksRequestTags:
         headers = {"Content-Type": "application/json"}
         base.apply_request_tags_header(headers, optional_params={}, litellm_params={})
         assert "Databricks-Ai-Gateway-Request-Tags" not in headers
+
+
+class TestDatabricksEmbeddingRequestTags:
+    """The embeddings handler must forward ``litellm_params`` so standard ``tags``
+    set there reach the ``Databricks-Ai-Gateway-Request-Tags`` header (parity with
+    the chat / responses paths)."""
+
+    def test_embedding_forwards_litellm_params_tags_to_header(self):
+        from litellm.llms.databricks.embed.handler import DatabricksEmbeddingHandler
+
+        handler = DatabricksEmbeddingHandler()
+        captured = {}
+
+        def fake_validate_environment(api_base, headers=None, **kwargs):
+            return (
+                api_base or "https://h.databricks.com/serving-endpoints",
+                dict(headers or {}),
+            )
+
+        def fake_super_embedding(*args, **kwargs):
+            captured["headers"] = kwargs.get("headers")
+            return "ok"
+
+        with patch.object(
+            handler, "databricks_validate_environment", fake_validate_environment
+        ), patch(
+            "litellm.llms.openai_like.embedding.handler.OpenAILikeEmbeddingHandler.embedding",
+            fake_super_embedding,
+        ):
+            handler.embedding(
+                model="databricks/bge-large-en",
+                input=["hello"],
+                timeout=30.0,
+                logging_obj=MagicMock(),
+                api_key="dapi-test",
+                api_base="https://h.databricks.com/serving-endpoints",
+                optional_params={},
+                litellm_params={"tags": ["team:fe", "env:prod"]},
+            )
+
+        assert captured["headers"][
+            "Databricks-Ai-Gateway-Request-Tags"
+        ] == json.dumps(
+            {"tags": "team:fe,env:prod"}, separators=(",", ":"), sort_keys=True
+        )

@@ -316,6 +316,20 @@ class TestBuildNativeUrls:
             "databricks-gemini-2-5-pro:streamGenerateContent?alt=sse"
         )
 
+    def test_gemini_url_endpoint_is_single_segment_no_traversal(self):
+        """A crafted model name must be percent-encoded into one path segment so
+        it cannot traverse to a different Databricks API path."""
+        url = build_gemini_generate_content_url(
+            "https://h.databricks.com",
+            "databricks/../../../../api/2.0/clusters/list",
+        )
+        # No unescaped traversal survives; slashes are encoded (%2F), so the
+        # request stays under the gemini models path.
+        assert "/ai-gateway/gemini/v1beta/models/" in url
+        assert "/api/2.0/" not in url
+        assert "%2F" in url
+        assert url.endswith(":generateContent")
+
 
 class TestReactiveGatewayCache:
     """The per-host cache is populated reactively (no preflight probe)."""
