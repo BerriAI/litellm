@@ -2768,7 +2768,8 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     - failure_callback with type="failure"
     - callbacks (success_and_failure) with type="success_and_failure"
     """
-    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.proxy_server import app, user_api_key_auth
 
     # Create a mock config with all three callback types
     mock_config_data = {
@@ -2790,11 +2791,16 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     }
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
 
-    with patch.object(
-        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
-    ):
-        response = client_no_auth.get("/get/config/callbacks")
+    try:
+        with patch.object(
+            proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+        ):
+            response = client_no_auth.get("/get/config/callbacks")
 
         assert response.status_code == 200
         result = response.json()
@@ -2838,15 +2844,19 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
         success_and_failure_names = [cb["name"] for cb in success_and_failure_callbacks]
         assert "otel" in success_and_failure_names
         assert "langsmith" in success_and_failure_names
+    finally:
+        app.dependency_overrides = original_overrides
 
 
 @pytest.mark.asyncio
 async def test_get_config_callbacks_environment_variables(client_no_auth):
     """
     Test that /get/config/callbacks correctly includes environment variables
-    for each callback type. Values are returned as-is from the config (no decryption).
+    for each callback type. Values are returned as-is from the config (no decryption)
+    when the caller is a full admin.
     """
-    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.proxy_server import app, user_api_key_auth
 
     # Create a mock config with callbacks and their env vars
     mock_config_data = {
@@ -2867,18 +2877,21 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
     }
 
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
 
-    with patch.object(
-        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
-    ):
-        response = client_no_auth.get("/get/config/callbacks")
+    try:
+        with patch.object(
+            proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+        ):
+            response = client_no_auth.get("/get/config/callbacks")
 
         assert response.status_code == 200
         result = response.json()
-
         callbacks = result["callbacks"]
 
-        # Find langfuse callback (success type)
         langfuse_callback = next(
             (cb for cb in callbacks if cb["name"] == "langfuse"), None
         )
@@ -2886,29 +2899,22 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_callback["type"] == "success"
         assert "variables" in langfuse_callback
 
-        # Verify langfuse env vars are present (values returned as-is, no decryption)
         langfuse_vars = langfuse_callback["variables"]
-        assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
         assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "test-public-key"
-        assert "LANGFUSE_SECRET_KEY" in langfuse_vars
         assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
-        assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
 
-        # Find otel callback (success_and_failure type)
         otel_callback = next((cb for cb in callbacks if cb["name"] == "otel"), None)
         assert otel_callback is not None
         assert otel_callback["type"] == "success_and_failure"
         assert "variables" in otel_callback
 
-        # Verify otel env vars are present
         otel_vars = otel_callback["variables"]
-        assert "OTEL_EXPORTER" in otel_vars
         assert otel_vars["OTEL_EXPORTER"] == "otlp"
-        assert "OTEL_ENDPOINT" in otel_vars
         assert otel_vars["OTEL_ENDPOINT"] == "http://localhost:4317"
-        assert "OTEL_HEADERS" in otel_vars
         assert otel_vars["OTEL_HEADERS"] == "key=value"
+    finally:
+        app.dependency_overrides = original_overrides
 
 
 @pytest.mark.asyncio
