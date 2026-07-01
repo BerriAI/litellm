@@ -908,6 +908,103 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
 
 
 @pytest.mark.asyncio
+async def test_test_model_connection_authorized_team_admin_passes_real_auth():
+    """
+    Positive-path companion to the cross-tenant denies above. When the caller
+    is a genuine admin of the team that owns the loaded deployment, the real
+    (unmocked) auth check must pass and the endpoint must reach the outbound
+    health probe. Guards against a regression that swaps the auth `team_id`
+    for something deny-all on the legit path.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        ModelManagementAuthChecks,
+    )
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    mock_request = MagicMock()
+
+    owner_team_id = "team-owner"
+    owner_admin_user_id = "team-owner-admin"
+    owned_deployment_id = "owned-deployment-id"
+
+    owner_admin_api_key_dict = UserAPIKeyAuth(
+        token="owner-admin-token",
+        user_id=owner_admin_user_id,
+        team_id=owner_team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_prisma_client = MagicMock()
+
+    owned_deployment = Deployment(
+        model_name="owner-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_base="https://owner-real-api.invalid/v1",
+            api_key="owner-team-api-key",
+        ),
+        model_info=ModelInfo(id=owned_deployment_id, team_id=owner_team_id),
+    )
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = owned_deployment
+
+    async def fake_find_unique(*, where):
+        if where["team_id"] == owner_team_id:
+            return SimpleNamespace(
+                model_dump=lambda: LiteLLM_TeamTable(
+                    team_id=owner_team_id,
+                    members_with_roles=[
+                        {"user_id": owner_admin_user_id, "role": "admin"}
+                    ],
+                ).model_dump()
+            )
+        return None
+
+    health_result = {"status": "healthy", "response_time_ms": 50}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(
+            ModelManagementAuthChecks,
+            "can_user_make_model_call",
+            wraps=ModelManagementAuthChecks.can_user_make_model_call,
+        ) as spy_auth_check,
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.TeamRepository"
+        ) as MockTeamRepo,
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            AsyncMock(return_value=health_result),
+        ),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            AsyncMock(return_value=health_result),
+        ),
+    ):
+        mock_team_repo_instance = MagicMock()
+        mock_team_repo_instance.table.find_unique = AsyncMock(
+            side_effect=fake_find_unique
+        )
+        MockTeamRepo.return_value = mock_team_repo_instance
+
+        result = await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "openai/gpt-4o-mini"},
+            model_info={"id": owned_deployment_id, "team_id": owner_team_id},
+            user_api_key_dict=owner_admin_api_key_dict,
+        )
+
+        assert result["status"] == "success"
+        passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
+        assert passed_model_params.model_info.team_id == owner_team_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "status,error_message",
     [
