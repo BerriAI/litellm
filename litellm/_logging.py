@@ -1,4 +1,5 @@
 import ast
+import contextvars
 import logging
 import os
 import sys
@@ -11,6 +12,18 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
 set_verbose = False
+
+session_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("session_id", default="")
+trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="")
+
+
+def set_session_id(session_id: str) -> None:
+    session_id_var.set(session_id)
+
+
+def set_trace_id(trace_id: str) -> None:
+    trace_id_var.set(trace_id)
+
 
 if set_verbose is True:
     logging.warning(
@@ -183,6 +196,13 @@ class JsonFormatter(Formatter):
             json_record["component"] = record.name
         if "logger" not in json_record:
             json_record["logger"] = f"{record.filename}:{record.lineno}"
+
+        session_id = session_id_var.get()
+        if session_id:
+            json_record["session_id"] = session_id
+        trace_id = trace_id_var.get()
+        if trace_id:
+            json_record["trace_id"] = trace_id
 
         if record.exc_info:
             json_record["stacktrace"] = record.exc_text or self.formatException(record.exc_info)
