@@ -456,6 +456,43 @@ def _extract_requested_mcp_toolsets(
     return set()
 
 
+def _validate_all_mcp_servers_sentinel(
+    object_permission: Optional[ObjectPermissionDict],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    is_proxy_admin: bool,
+) -> None:
+    if not _has_all_mcp_servers_sentinel(object_permission):
+        return
+
+    if team_obj is None and is_proxy_admin:
+        return
+
+    if team_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "Key is not in a team. The 'all-mcp-servers' sentinel "
+                    "cannot be assigned to personal keys by non-admin callers."
+                )
+            },
+        )
+
+    team_op = team_obj.object_permission
+    team_mcp_servers = (team_op.mcp_servers or []) if team_op else []
+    if SpecialMCPServerNames.all_mcp_servers.value not in team_mcp_servers:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"Key requests 'all-mcp-servers' but team '{team_obj.team_id}' "
+                    f"does not grant the all-mcp-servers sentinel. "
+                    f"Team allows: {sorted(team_mcp_servers)}."
+                )
+            },
+        )
+
+
 async def validate_key_mcp_servers_against_team(
     object_permission: Optional[ObjectPermissionDict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
@@ -485,33 +522,7 @@ async def validate_key_mcp_servers_against_team(
 
     requested_toolsets = _extract_requested_mcp_toolsets(object_permission)
 
-    if has_all_sentinel:
-        if teamless_admin_assignment:
-            pass
-        elif team_obj is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": (
-                        "Key is not in a team. The 'all-mcp-servers' sentinel "
-                        "cannot be assigned to personal keys by non-admin callers."
-                    )
-                },
-            )
-        else:
-            team_op = team_obj.object_permission
-            team_mcp_servers = (team_op.mcp_servers or []) if team_op else []
-            if SpecialMCPServerNames.all_mcp_servers.value not in team_mcp_servers:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": (
-                            f"Key requests 'all-mcp-servers' but team '{team_obj.team_id}' "
-                            f"does not grant the all-mcp-servers sentinel. "
-                            f"Team allows: {sorted(team_mcp_servers)}."
-                        )
-                    },
-                )
+    _validate_all_mcp_servers_sentinel(object_permission, team_obj, is_proxy_admin)
 
     # Nothing to validate
     if not requested_servers and not requested_access_groups and not requested_toolsets and not has_all_sentinel:
