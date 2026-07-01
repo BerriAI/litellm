@@ -3490,6 +3490,7 @@ async def generate_key_helper_fn(
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
+    budget_fallbacks: Optional[dict] = None,
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     mcp_rpm_limit: Optional[dict] = None,
@@ -3580,6 +3581,7 @@ async def generate_key_helper_fn(
     metadata_json = json.dumps(metadata)
     validate_model_max_budget(model_max_budget)
     model_max_budget_json = json.dumps(model_max_budget)
+    budget_fallbacks_json = json.dumps(budget_fallbacks or {})
     user_role = user_role
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
@@ -3632,6 +3634,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "budget_fallbacks": budget_fallbacks_json,
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
@@ -3982,6 +3985,7 @@ def _transform_verification_tokens_to_deleted_records(
             "metadata",
             "model_spend",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
         ]:
             if json_field in record and record[json_field] is not None:
