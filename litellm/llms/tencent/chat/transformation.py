@@ -23,9 +23,7 @@ class TencentChatConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        optional_params = super().map_openai_params(
-            non_default_params, optional_params, model, drop_params
-        )
+        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
@@ -41,11 +39,7 @@ class TencentChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = (
-            api_base
-            or get_secret_str("TENCENT_API_BASE")
-            or "https://tokenhub-intl.tencentcloudmaas.com/v1"
-        )
+        api_base = api_base or get_secret_str("TENCENT_API_BASE") or "https://tokenhub-intl.tencentcloudmaas.com/v1"
         dynamic_api_key = api_key or get_secret_str("TENCENT_API_KEY")
         return api_base, dynamic_api_key
 

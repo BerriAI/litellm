@@ -56,11 +56,7 @@ class TencentAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> Tuple[dict, Optional[str]]:
         dynamic_api_key = self.get_api_key(api_key=api_key)
 
-        if (
-            "x-api-key" not in headers
-            and "authorization" not in headers
-            and dynamic_api_key is not None
-        ):
+        if "x-api-key" not in headers and "authorization" not in headers and dynamic_api_key is not None:
             headers["x-api-key"] = dynamic_api_key
 
         if "anthropic-version" not in headers:
