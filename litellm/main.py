@@ -4337,6 +4337,7 @@ def _complete_gradient_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatc
         logging_obj=logging,
     )
 
+
 def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion
     api_base = ctx.api_base
@@ -4353,17 +4354,8 @@ def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     stream = ctx.stream
     timeout = ctx.timeout
 
-    if api_key is None:
-        api_key = (
-            litellm.gdc_key
-            or get_secret_str("GDC_API_KEY")
-            or litellm.api_key
-        )
-        api_base = (
-            litellm.api_base
-            or getattr(litellm, "gdc_api_base", None) 
-            or get_secret_str("GDC_API_BASE")
-        )
+    api_key = api_key or litellm.gdc_key or get_secret_str("GDC_API_KEY") or litellm.api_key
+    api_base = api_base or litellm.api_base or litellm.gdc_api_base or get_secret_str("GDC_API_BASE")
 
     return base_llm_http_handler.completion(
         model=model,
@@ -4384,7 +4376,6 @@ def _complete_gdc(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
         provider_config=gdc_transformation,
     )
 
-    
 
 def _complete_bytez(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
     acompletion = ctx.acompletion

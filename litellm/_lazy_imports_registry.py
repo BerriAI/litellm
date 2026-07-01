@@ -1158,7 +1158,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
     ),
-    "GDCGeminiConfig": ("litellm.llms.gdc.chat.transformation", "GDCGeminiConfig"),    
+    "GDCGeminiConfig": (
+        ".llms.gdc.chat.transformation",
+        "GDCGeminiConfig",
+    ),
     "ModelScopeChatConfig": (
         ".llms.modelscope.chat.transformation",
         "ModelScopeChatConfig",

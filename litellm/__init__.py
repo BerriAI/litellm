@@ -264,6 +264,7 @@ anthropic_key: Optional[str] = None
 replicate_key: Optional[str] = None
 bytez_key: Optional[str] = None
 gdc_key: Optional[str] = None
+gdc_api_base: Optional[str] = None
 cohere_key: Optional[str] = None
 infinity_key: Optional[str] = None
 clarifai_key: Optional[str] = None

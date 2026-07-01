@@ -14,11 +14,30 @@ from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 class GDCGeminiConfig(OpenAILikeChatConfig):
     supports_vertex_params: bool = True  # Tell LiteLLM utilities not to strip vertex_ params
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._creds_lock = threading.Lock()
+        self._gdch_creds_cache: dict = {}
+
     def get_supported_openai_params(self, model: str) -> list:
         return [
             "vertex_project",
             "vertex_location",
         ] + super().get_supported_openai_params(model)
+
+    def _resolve_project(self, optional_params: dict, litellm_params: dict) -> str | None:
+        return (
+            litellm_params.get("vertex_project")
+            or getattr(litellm, "vertex_project", None)
+            or optional_params.get("vertex_project")
+        )
+
+    def _resolve_location(self, optional_params: dict, litellm_params: dict) -> str | None:
+        return (
+            litellm_params.get("vertex_location")
+            or getattr(litellm, "vertex_location", None)
+            or optional_params.get("vertex_location")
+        )
 
     def get_complete_url(
         self,
@@ -29,7 +48,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = api_base or litellm.api_base or getattr(litellm, "gdc_api_base", None)
+        api_base = api_base or litellm.api_base or litellm.gdc_api_base
         if not api_base:
             raise litellm.utils.AuthenticationError(
                 message="api_base/host is required for GDC Gemini. Please set it or pass it.",
@@ -40,11 +59,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         if not api_base.startswith("http"):
             api_base = f"https://{api_base}"
 
-        project = (
-            optional_params.get("vertex_project")
-            or litellm_params.get("vertex_project")
-            or getattr(litellm, "vertex_project", None)
-        )
+        project = self._resolve_project(optional_params, litellm_params)
 
         if not project:
             raise litellm.utils.AuthenticationError(
@@ -53,11 +68,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
                 model=model,
             )
 
-        location = (
-            optional_params.get("vertex_location")
-            or litellm_params.get("vertex_location")
-            or getattr(litellm, "vertex_location", None)
-        )
+        location = self._resolve_location(optional_params, litellm_params)
 
         api_base = api_base.rstrip("/")
 
@@ -97,18 +108,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
         auth_request = auth_requests.Request(session=auth_session)
         gdch_creds.refresh(auth_request)
 
-    def _cached_fetch_token(
-        self,
-        creds: Any,
-        audience: str,
-        ssl_verify: bool | str,
-        api_key: str | None = None
-    ) -> str:
-        if not hasattr(self, "_creds_lock"):
-            self._creds_lock = threading.Lock()
-        if not hasattr(self, "_gdch_creds_cache"):
-            self._gdch_creds_cache = {}
-
+    def _cached_fetch_token(self, creds: Any, audience: str, ssl_verify: bool | str, api_key: str | None = None) -> str:
         # Key cache by both audience and credential identity to prevent cross-caller contamination
         cache_key = (audience.rstrip("/"), api_key or str(id(creds)))
 
@@ -121,25 +121,19 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             if not getattr(gdch_creds, "valid", False) or not getattr(gdch_creds, "token", None):
                 self._fetch_auth(gdch_creds, ssl_verify)
 
-        return gdch_creds.token
+            token = gdch_creds.token
 
-    def _load_creds_from_key(self, api_key: str, model: str) -> tuple[Any, bool]:
-        """Helper to safely parse service account JSON files or strings to reduce complexity."""
+        return token
+
+    def _load_creds_from_key(self, api_key: str) -> tuple[Any, bool]:
         import google.auth
-
-        # Limit length to avoid OSError for 'File name too long'
-        if len(api_key) < 2000 and os.path.exists(api_key):
-            with open(api_key, "r") as f:
-                json_obj = json.load(f)
-            creds, _ = google.auth.load_credentials_from_dict(json_obj)
-            return creds, True
 
         try:
             json_obj = json.loads(api_key)
-            creds, _ = google.auth.load_credentials_from_dict(json_obj)
-            return creds, True
         except json.JSONDecodeError:
             return None, False
+        creds, _ = google.auth.load_credentials_from_dict(json_obj)
+        return creds, True
 
     def validate_environment(
         self,
@@ -153,7 +147,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
     ) -> dict:
         import google.auth.exceptions
 
-        api_base = api_base or litellm.api_base or getattr(litellm, "gdc_api_base", None)
+        api_base = api_base or litellm.api_base or litellm.gdc_api_base
         if not api_base:
             raise litellm.utils.AuthenticationError(
                 message="api_base/host is required for GDC Gemini. Please set it or pass it.",
@@ -168,11 +162,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
                 model=model,
             )
 
-        project = (
-            optional_params.get("vertex_project")
-            or litellm_params.get("vertex_project")
-            or getattr(litellm, "vertex_project", None)
-        )
+        project = self._resolve_project(optional_params, litellm_params)
         if not project:
             raise litellm.utils.AuthenticationError(
                 message="project is required for GDC Gemini. Please pass vertex_project.",
@@ -180,14 +170,12 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
                 model=model,
             )
 
-        audience = api_base if api_base.startswith("http") else f"https://{api_base}"
+        audience = (api_base if api_base.startswith("http") else f"https://{api_base}").rstrip("/")
 
         try:
-            creds, is_service_account = self._load_creds_from_key(api_key, model)
+            creds, is_service_account = self._load_creds_from_key(api_key)
         except (
             google.auth.exceptions.GoogleAuthError,
-            OSError,
-            UnicodeDecodeError,
             ValueError,
             TypeError,
             KeyError,
