@@ -11,6 +11,10 @@ streamed function_call. (Responses API streaming restore is not yet implemented.
 On the failure path the map is dropped from metadata as well, so it cannot reach a
 failure spend-log.
 
+If `block_entities` is configured, a request containing any of those PII types is
+rejected with an HTTP 400 in the pre-call hook, before anything is forwarded to the
+model. The error names the offending type(s) only, never the underlying value.
+
 It reuses PrivAiTe's engine, so there is no detection or masking logic here. The
 'privaite' package is imported lazily so this module stays importable (for the
 guardrail registry) even when PrivAiTe is not installed.
@@ -60,6 +64,9 @@ class PrivaiteGuardrail(CustomGuardrail):
         self.deanonymize = (
             deanon if isinstance(deanon, bool) else str(deanon).strip().lower() not in ("false", "0", "no", "")
         )
+        # PII TYPES to reject outright (empty = mask everything, the default).
+        # Accepts a list or a comma-separated string.
+        self.block_entities = self._parse_block_entities(kwargs.pop("block_entities", None))
         if "supported_event_hooks" not in kwargs:
             kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
@@ -92,8 +99,16 @@ class PrivaiteGuardrail(CustomGuardrail):
         langs = [lang.strip() for lang in self.languages.split(",") if lang.strip()]
         return langs or ["en"]
 
+    @staticmethod
+    def _parse_block_entities(raw: object) -> list:
+        if isinstance(raw, str):
+            return [e.strip() for e in raw.split(",") if e.strip()]
+        if isinstance(raw, (list, tuple)):
+            return [str(e).strip() for e in raw if str(e).strip()]
+        return []
+
     async def _engine_for(self, languages: list) -> Any:
-        key = (self.preset, tuple(languages), self.deanonymize)
+        key = (self.preset, tuple(languages), self.deanonymize, tuple(self.block_entities))
         if self._engine is not None and self._engine_key == key:
             return self._engine
 
@@ -116,12 +131,23 @@ class PrivaiteGuardrail(CustomGuardrail):
                     "Install it with: pip install 'privaite>=0.2.4'"
                 ) from exc
 
+            if self.block_entities and "block_entities" not in PIIConfig.model_fields:
+                # PIIConfig uses extra="allow", so an older privaite would silently
+                # swallow block_entities and forward the PII anyway. Fail closed
+                # rather than give a false sense of a policy gate that is not there.
+                raise RuntimeError(
+                    "block_entities is set but the installed privaite does not "
+                    "support it; upgrade privaite to a version that enforces "
+                    "pii.block_entities."
+                )
+
             config = PIIConfig(
                 enabled=True,
                 preset=self.preset,
                 detectors=DetectorsConfig(presidio=PresidioDetectorConfig(enabled=True, languages=languages)),
                 anonymization=AnonymizationConfig(method="placeholder"),
                 deanonymization=DeanonymizationConfig(enabled=self.deanonymize),
+                block_entities=self.block_entities,
             )
             engine = PIIEngine(config)
             try:
@@ -214,7 +240,16 @@ class PrivaiteGuardrail(CustomGuardrail):
             return data
 
         engine = await self._engine_for(self._languages())
-        mapping = await self._anonymize_request(data, engine)
+        from privaite.pii.engine import PIIBlockedError
+
+        try:
+            mapping = await self._anonymize_request(data, engine)
+        except PIIBlockedError as exc:
+            # A blocked PII type was found: reject the request outright with a 400,
+            # forwarding nothing. The message names TYPES only, never the values.
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
         if mapping is not None and self.deanonymize and not mapping.is_empty:
             # Carry a plain fake->original dict to the post-call hook on the same
