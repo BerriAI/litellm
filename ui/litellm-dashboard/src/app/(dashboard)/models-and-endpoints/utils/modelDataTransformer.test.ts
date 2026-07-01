@@ -36,31 +36,9 @@ describe("transformModelData", () => {
     expect(result.data[0]).toHaveProperty("max_input_tokens", 128000);
     expect(result.data[0]).toHaveProperty("api_base", "https://api.openai.com");
     expect(result.data[0]).toHaveProperty("litellm_model_name", "gpt-4");
-    expect(result.data[0]).toHaveProperty("display_litellm_model_name", "gpt-4");
     expect(result.data[0]).toHaveProperty("cleanedLitellmParams");
     expect(result.data[0].cleanedLitellmParams).not.toHaveProperty("model");
     expect(result.data[0].cleanedLitellmParams).not.toHaveProperty("api_base");
-  });
-
-  it("should prefer team_public_model_name for display_litellm_model_name", () => {
-    const rawData = {
-      data: [
-        {
-          model_name: "claude-opus-4-8",
-          litellm_params: {
-            model: "anthropic/claude-opus-4-8",
-          },
-          model_info: {
-            team_public_model_name: "claude-opus-4-8",
-          },
-        },
-      ],
-    };
-
-    const result = transformModelData(rawData, mockGetProviderFromModel);
-
-    expect(result.data[0]).toHaveProperty("litellm_model_name", "anthropic/claude-opus-4-8");
-    expect(result.data[0]).toHaveProperty("display_litellm_model_name", "claude-opus-4-8");
   });
 
   it("should handle empty data", () => {

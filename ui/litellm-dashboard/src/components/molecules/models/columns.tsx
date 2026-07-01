@@ -89,7 +89,6 @@ export const columns = (
     cell: ({ row }) => {
       const model = row.original;
       const displayName = getDisplayModelName(row.original) || "-";
-      const displayLiteLLMModelName = model.display_litellm_model_name || model.litellm_model_name || "-";
       const popoverContent = (
         <Space direction="vertical" size={12} style={{ minWidth: 220 }}>
           <Flex align="center" gap={8}>
@@ -115,11 +114,11 @@ export const columns = (
               </Text>
               <Text
                 style={{ fontSize: 13 }}
-                copyable={{ text: displayLiteLLMModelName }}
+                copyable={{ text: model.litellm_model_name || "-" }}
                 ellipsis
-                title={displayLiteLLMModelName}
+                title={model.litellm_model_name || "-"}
               >
-                {displayLiteLLMModelName}
+                {model.litellm_model_name || "-"}
               </Text>
             </Space>
           </Space>
@@ -151,7 +150,7 @@ export const columns = (
                 {displayName}
               </Text>
               <Text ellipsis type="secondary" style={{ fontSize: 12, lineHeight: "16px", marginTop: 2 }}>
-                {displayLiteLLMModelName}
+                {model.litellm_model_name || "-"}
               </Text>
             </div>
           </div>

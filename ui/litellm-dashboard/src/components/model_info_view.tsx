@@ -128,13 +128,6 @@ export default function ModelInfoView({
             null,
         };
       }
-      if (!processedModelData.display_litellm_model_name) {
-        processedModelData = {
-          ...processedModelData,
-          display_litellm_model_name:
-            processedModelData?.model_info?.team_public_model_name ?? processedModelData?.litellm_model_name ?? null,
-        };
-      }
       setLocalModelData(processedModelData);
 
       // Check if cache control is enabled
@@ -170,13 +163,6 @@ export default function ModelInfoView({
             specificModelData?.litellm_params?.model ??
             specificModelData?.model_info?.key ??
             null,
-        };
-      }
-      if (specificModelData && !specificModelData.display_litellm_model_name) {
-        specificModelData = {
-          ...specificModelData,
-          display_litellm_model_name:
-            specificModelData?.model_info?.team_public_model_name ?? specificModelData?.litellm_model_name ?? null,
         };
       }
       setLocalModelData(specificModelData);
@@ -601,9 +587,9 @@ export default function ModelInfoView({
               <Card>
                 <Text>LiteLLM Model</Text>
                 <div className="mt-2 overflow-hidden">
-                  <Tooltip title={modelData.display_litellm_model_name || modelData.litellm_model_name || "Not Set"}>
+                  <Tooltip title={modelData.litellm_model_name || "Not Set"}>
                     <div className="break-all text-sm font-medium leading-relaxed cursor-pointer">
-                      {modelData.display_litellm_model_name || modelData.litellm_model_name || "Not Set"}
+                      {modelData.litellm_model_name || "Not Set"}
                     </div>
                   </Tooltip>
                 </div>
@@ -759,9 +745,7 @@ export default function ModelInfoView({
                             <TextInput placeholder="Enter LiteLLM model name" />
                           </Form.Item>
                         ) : (
-                          <div className="mt-1 p-2 bg-gray-50 rounded">
-                            {localModelData.display_litellm_model_name || localModelData.litellm_model_name}
-                          </div>
+                          <div className="mt-1 p-2 bg-gray-50 rounded">{localModelData.litellm_model_name}</div>
                         )}
                       </div>
 

@@ -204,21 +204,6 @@ def reconstruct_model_name(
     """Reconstruct full model name with provider prefix for logging."""
     # Check if deployment model name from router metadata is available (has original prefix)
     deployment_model_name = metadata.get("deployment")
-    model_group = metadata.get("model_group")
-    if isinstance(model_group, str) and model_group and "/" not in model_group:
-        model_name_without_provider = model_name.split("/", 1)[-1]
-        deployment_without_provider = (
-            deployment_model_name.split("/", 1)[-1]
-            if isinstance(deployment_model_name, str)
-            else None
-        )
-        if model_group in {
-            model_name,
-            model_name_without_provider,
-            deployment_model_name,
-            deployment_without_provider,
-        }:
-            return model_group
     if deployment_model_name and "/" in deployment_model_name:
         # Use the deployment model name which preserves the original provider prefix
         return deployment_model_name

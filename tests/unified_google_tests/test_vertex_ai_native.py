@@ -13,4 +13,4 @@ class TestVertexAIGenerateContent(BaseGoogleGenAITest, BaseGoogleGenAIProxySDKTe
 
     @property
     def proxy_model_name(self) -> str:
-        return "gemini-2.5-flash-lite"
+        return "vertex-gemini-2.5-flash-lite"
