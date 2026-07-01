@@ -2260,6 +2260,12 @@ class TestHashApiKeyForSpendLog:
         hashed = "bcfe8173f5447f10be0e7fb37aaa8b97829d5c9e0498232152f9d123456789ab"
         assert _hash_api_key_for_spend_log(hashed) == hashed
 
+    def test_bearer_prefixed_non_sk_key_strips_prefix(self):
+        raw = "Bearer some-other-token-format"
+        result = _hash_api_key_for_spend_log(raw)
+        assert result == "some-other-token-format"
+        assert not result.startswith("Bearer")
+
     def test_bearer_and_bare_produce_same_hash(self):
         bare = "sk-WLi4iRn4JmbVlTaYw12IOA"
         bearer = "Bearer sk-WLi4iRn4JmbVlTaYw12IOA"

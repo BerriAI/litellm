@@ -59,7 +59,7 @@ def _hash_api_key_for_spend_log(api_key: str) -> str:
     stripped = api_key[7:] if api_key[:7].lower() == "bearer " else api_key
     if stripped.startswith("sk-"):
         return hash_token(stripped)
-    return api_key
+    return stripped
 
 
 def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
