@@ -14645,7 +14645,10 @@ async def get_config(
         _failure_callbacks = normalize_callback(_failure_callbacks)
         _success_and_failure_callbacks = normalize_callback(_success_and_failure_callbacks)
 
-        is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        is_full_admin = (
+            not isinstance(user_api_key_dict, UserAPIKeyAuth)
+            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        )
 
         _all_callbacks = [
             *((cb, "success") for cb in _success_callbacks),
