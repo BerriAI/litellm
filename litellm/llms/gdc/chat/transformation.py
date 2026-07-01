@@ -4,6 +4,7 @@ GDC Gemini chat completion transformation
 
 import json
 import os
+import re
 import threading
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -15,6 +16,7 @@ from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 class GDCGeminiConfig(OpenAILikeChatConfig):
     supports_vertex_params: bool = True  # Tell LiteLLM utilities not to strip vertex_ params
     _GDCH_CREDENTIAL_TYPE: Final[str] = "gdch_service_account"
+    _PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-zA-Z0-9_-]+$")
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -44,6 +46,15 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
             or optional_params.get("vertex_location")
             or optional_params.get("vertex_ai_location")
         )
+
+    def _validate_path_id(self, value: str, field: str, model: str) -> str:
+        if not self._PATH_ID_PATTERN.match(value):
+            raise litellm.utils.AuthenticationError(
+                message=f"{field} must be a plain identifier of letters, digits, hyphens or underscores.",
+                llm_provider="gdc",
+                model=model,
+            )
+        return value
 
     def get_complete_url(
         self,
@@ -93,6 +104,9 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
                 llm_provider="gdc",
                 model=model,
             )
+
+        project = self._validate_path_id(project, "vertex_project", model)
+        location = self._validate_path_id(location, "vertex_location", model)
 
         return f"{api_base}/v1/projects/{project}/locations/{location}/chat/completions"
 
@@ -191,6 +205,7 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
                 llm_provider="gdc",
                 model=model,
             )
+        project = self._validate_path_id(project, "vertex_project", model)
 
         _audience_parts = urlsplit(api_base if api_base.startswith("http") else f"https://{api_base}")
         audience = f"{_audience_parts.scheme}://{_audience_parts.netloc}"

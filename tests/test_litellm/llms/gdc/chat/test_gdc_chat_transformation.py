@@ -373,6 +373,57 @@ class TestGDCGeminiConfig:
         assert headers["Content-Type"] == "text/plain"
         assert headers["x-goog-user-project"] == "projects/other"
 
+    @pytest.mark.parametrize(
+        "bad", ["p/locations/l/chat/completions?", "a/b", "a?b", "a#b", "..", "a b", "a:b", "a%2Fb"]
+    )
+    def test_get_complete_url_rejects_project_path_injection(self, bad):
+        config = GDCGeminiConfig()
+        with pytest.raises(Exception, match="vertex_project must be a plain identifier"):
+            config.get_complete_url(
+                api_base=TEST_API_BASE,
+                api_key=None,
+                model=TEST_MODEL,
+                optional_params={"vertex_project": bad, "vertex_location": TEST_LOCATION},
+                litellm_params={},
+            )
+
+    @pytest.mark.parametrize("bad", ["../../evil", "l/chat/completions", "l?x", ".."])
+    def test_get_complete_url_rejects_location_path_injection(self, bad):
+        config = GDCGeminiConfig()
+        with pytest.raises(Exception, match="vertex_location must be a plain identifier"):
+            config.get_complete_url(
+                api_base=TEST_API_BASE,
+                api_key=None,
+                model=TEST_MODEL,
+                optional_params={"vertex_project": TEST_PROJECT, "vertex_location": bad},
+                litellm_params={},
+            )
+
+    @pytest.mark.parametrize("good", ["test-project", "us-central1", "123456", "proj_1", "MyProj-2"])
+    def test_get_complete_url_accepts_valid_ids(self, good):
+        config = GDCGeminiConfig()
+        url = config.get_complete_url(
+            api_base=TEST_API_BASE,
+            api_key=None,
+            model=TEST_MODEL,
+            optional_params={"vertex_project": good, "vertex_location": good},
+            litellm_params={},
+        )
+        assert url == f"{TEST_API_BASE}/v1/projects/{good}/locations/{good}/chat/completions"
+
+    def test_validate_environment_rejects_project_path_injection(self):
+        config = GDCGeminiConfig()
+        with pytest.raises(Exception, match="vertex_project must be a plain identifier"):
+            config.validate_environment(
+                headers={},
+                model=TEST_MODEL,
+                messages=[],
+                optional_params={"vertex_project": "p/../admin"},
+                litellm_params={},
+                api_key="raw-token",
+                api_base=TEST_API_BASE,
+            )
+
     def test_transform_request(self):
         config = GDCGeminiConfig()
         data = config.transform_request(
