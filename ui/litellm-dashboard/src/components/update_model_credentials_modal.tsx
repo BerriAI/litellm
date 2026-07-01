@@ -56,7 +56,8 @@ export default function UpdateModelCredentialsModal({
   return (
     <Modal title="Update API Key" open={open} onCancel={close} footer={null} width={520} destroyOnHidden={true}>
       <Text className="block mb-4 text-gray-500">
-        Update this model&apos;s API key. Only the new key is sent; the rest of the deployment configuration is left untouched.
+        Update this model&apos;s API key. Only the new key is sent; the rest of the deployment configuration is left
+        untouched.
       </Text>
       <Alert
         type="warning"
