@@ -21,10 +21,17 @@ vi.mock("@/utils/mcpTokenStore", () => ({
 const oauthHook = vi.hoisted(() => ({
   tokenResponse: null as Record<string, unknown> | null,
   reset: vi.fn(),
-  onTokenReceived: null as ((token: Record<string, unknown> | null) => void) | null,
+  onTokenReceived: null as
+    | ((token: Record<string, unknown> | null, registeredClient?: { clientId?: string; clientSecret?: string }) => void)
+    | null,
 }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
-  useMcpOAuthFlow: (opts: { onTokenReceived: (token: Record<string, unknown> | null) => void }) => {
+  useMcpOAuthFlow: (opts: {
+    onTokenReceived: (
+      token: Record<string, unknown> | null,
+      registeredClient?: { clientId?: string; clientSecret?: string },
+    ) => void;
+  }) => {
     oauthHook.onTokenReceived = opts.onTokenReceived;
     return {
       startOAuthFlow: vi.fn(),
@@ -493,6 +500,53 @@ describe("CreateMCPServer", () => {
 
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.token_validation).toEqual({ organization: "my-org", "team.id": "42" });
+    });
+
+    it("invalidates the DCR client and OAuth flow when the MCP URL changes after Authorize & Fetch", async () => {
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "Url_Change_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://b.example.com/mcp" } });
+      });
+
+      await waitFor(() => expect(oauthHook.reset).toHaveBeenCalled());
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "Url_Change_Server",
+        alias: "Url_Change_Server",
+        url: "https://b.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials?.client_id).toBeUndefined();
+      expect(payload.credentials?.client_secret).toBeUndefined();
     });
 
     it("omits token_validation from payload when token_validation_json is empty", async () => {

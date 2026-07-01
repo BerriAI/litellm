@@ -89,6 +89,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | undefined>(undefined);
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
+  const [authorizedUrl, setAuthorizedUrl] = useState<string | undefined>(undefined);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
   const {
@@ -179,7 +180,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         env: values.env,
       };
     },
-    onTokenReceived: (token) => {
+    onTokenReceived: (token, registeredClient) => {
       setOauthAccessToken(token?.access_token ?? null);
 
       if (token?.access_token) {
@@ -188,9 +189,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ...(token.refresh_token && { refresh_token: token.refresh_token }),
           ...(token.expires_in && { expires_in: token.expires_in }),
           ...(token.scope && { scope: token.scope }),
+          ...(registeredClient?.clientId && { client_id: registeredClient.clientId }),
+          ...(registeredClient?.clientSecret && { client_secret: registeredClient.clientSecret }),
         };
 
         form.setFieldsValue({ credentials });
+        setAuthorizedUrl(form.getFieldValue("url") || form.getFieldValue("spec_path"));
 
         NotificationsManager.success(
           "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
@@ -629,7 +633,26 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         <Form
           form={form}
           onFinish={handleCreate}
-          onValuesChange={(_, allValues) => setFormValues(allValues)}
+          onValuesChange={(changedValues, allValues) => {
+            const serverUrlChanged = "url" in changedValues || "spec_path" in changedValues;
+            const nextServerUrl = (allValues.url as string | undefined) || (allValues.spec_path as string | undefined);
+            if (serverUrlChanged && authorizedUrl !== undefined && nextServerUrl !== authorizedUrl) {
+              const invalidated = {
+                credentials: undefined,
+                authorization_url: undefined,
+                token_url: undefined,
+                registration_url: undefined,
+              };
+              form.setFieldsValue(invalidated);
+              setOauthAccessToken(null);
+              clearTools();
+              resetOAuthFlow();
+              setAuthorizedUrl(undefined);
+              setFormValues({ ...allValues, ...invalidated });
+              return;
+            }
+            setFormValues(allValues);
+          }}
           layout="vertical"
           className="space-y-6"
         >
