@@ -49,7 +49,7 @@ def get_current_weather(location, unit="fahrenheit"):
         "mistral/mistral-large-latest",
         "claude-haiku-4-5-20251001",
         "gemini/gemini-2.5-flash-lite",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
@@ -267,7 +267,6 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
 
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
-
 _PARALLEL_TOOL_HISTORY_MESSAGES = [
     {
         "role": "user",
@@ -303,7 +302,7 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
     [
         # Bedrock Converse still requires modify_params to inject the dummy tool.
         (
-            "anthropic.claude-3-sonnet-20240229-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             _PARALLEL_TOOL_HISTORY_MESSAGES,
             True,
         ),
@@ -314,7 +313,7 @@ _PARALLEL_TOOL_HISTORY_MESSAGES = [
             False,
         ),
         (
-            "anthropic.claude-3-sonnet-20240229-v1:0",
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             [
                 {
                     "role": "user",
@@ -579,7 +578,7 @@ def test_groq_parallel_function_call():
 @pytest.mark.parametrize(
     "model",
     [
-        "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )
 def test_passing_tool_result_as_list(model):

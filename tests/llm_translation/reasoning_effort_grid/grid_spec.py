@@ -364,6 +364,12 @@ BEDROCK_CONVERSE_MODELS: Tuple[ModelEntry, ...] = (
         caps=_CAPS_XHIGH_MAX,
         bedrock_effort_ceiling="xhigh",
         unavailable_error="is not available for this account",
+        fail_reason=(
+            "claude-opus-4-7 is not entitled on the Bedrock CI account "
+            "941277531214 (model access requires an AWS Sales request, not "
+            "self-serve); this cell fails on purpose so it stays loud in CI — "
+            "remove this fail_reason once access is granted"
+        ),
     ),
     ModelEntry(
         alias="bedrock-claude-opus-4-6",
