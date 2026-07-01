@@ -236,6 +236,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Deployment budgets
     max_budget: Optional[float] = None
     budget_duration: Optional[str] = None
+    keepalive_seconds: Optional[float] = None
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
     use_chat_completions_api: Optional[bool] = None
@@ -411,6 +412,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # deployment budgets
     max_budget: Optional[float]
     budget_duration: Optional[str]
+    keepalive_seconds: Optional[float]
 
 
 class DeploymentTypedDict(TypedDict, total=False):
