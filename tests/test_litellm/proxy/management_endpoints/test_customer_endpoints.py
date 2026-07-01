@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request, status
@@ -507,3 +507,42 @@ async def test_get_customer_daily_activity_service_account_key_is_rejected(monke
     assert exc_info.value.status_code == 401
     assert "Admin-only endpoint" in str(exc_info.value.detail)
     get_daily_activity_mock.assert_not_called()
+
+
+def test_delete_customer_invalidates_spend_counters(
+    mock_prisma_client, mock_user_api_key_auth
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/31839
+
+    When a customer is deleted, the Redis spend counter `spend:end_user:{id}`
+    must be invalidated. Otherwise re-creating the same user_id inherits the
+    stale spend value and budget checks fail immediately.
+    """
+    mock_end_user_1 = MagicMock()
+    mock_end_user_1.user_id = "customer-a"
+    mock_end_user_2 = MagicMock()
+    mock_end_user_2.user_id = "customer-b"
+
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[mock_end_user_1, mock_end_user_2]
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=2)
+
+    with patch(
+        "litellm.proxy.proxy_server._invalidate_spend_counter", new_callable=AsyncMock
+    ) as mock_invalidate:
+        response = client.post(
+            "/customer/delete",
+            json={"user_ids": ["customer-a", "customer-b"]},
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+        assert response.status_code == 200
+        mock_invalidate.assert_has_calls(
+            [
+                call("spend:end_user:customer-a"),
+                call("spend:end_user:customer-b"),
+            ],
+            any_order=False,
+        )

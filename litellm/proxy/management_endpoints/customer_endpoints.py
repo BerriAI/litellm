@@ -728,6 +728,13 @@ async def delete_end_user(
                 where={"user_id": {"in": data.user_ids}}
             )
             verbose_proxy_logger.debug(f"received response from updating prisma client. response={response}")
+
+            # Invalidate Redis spend counters so re-created customers start fresh
+            from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+            for user_id in data.user_ids:
+                await _invalidate_spend_counter(f"spend:end_user:{user_id}")
+
             return {
                 "deleted_customers": response,
                 "message": "Successfully deleted customers with ids: " + str(data.user_ids),
