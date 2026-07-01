@@ -851,16 +851,32 @@ def _map_traffic_type_to_service_tier(traffic_type: Optional[str]) -> Optional[s
 
 def _normalize_service_tier(service_tier: object) -> str | None:
     """
-    Reduce a service_tier value to a concrete billable tier string or None.
+    Reduce a service_tier value to a tier string used by cost calculation.
 
     "auto" is a routing preference and any non-string value is not a billable
     tier, so both defer to standard pricing (or to the tier the provider reports
     on the response usage) instead of crashing the downstream cost-key lookup,
-    which calls service_tier.lower()
+    which calls service_tier.lower().
+
+    Keep string values like "default" and "standard" so a provider-reported
+    served tier can override a request-level "priority" preference. The cost-key
+    resolver maps non-premium strings to standard pricing.
     """
     if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
         return None
     return service_tier
+
+
+def _get_normalized_service_tier_from_object(service_tier_object: Any) -> str | None:
+    if service_tier_object is None:
+        return None
+    if isinstance(service_tier_object, BaseModel):
+        service_tier = getattr(service_tier_object, "service_tier", None)
+    elif isinstance(service_tier_object, dict):
+        service_tier = service_tier_object.get("service_tier")
+    else:
+        service_tier = getattr(service_tier_object, "service_tier", None)
+    return _normalize_service_tier(service_tier)
 
 
 def _get_usage_object(
@@ -1178,29 +1194,16 @@ def completion_cost(
         cost_per_token_usage_object: Optional[Usage] = _get_usage_object(completion_response=completion_response)
         rerank_billed_units: Optional[RerankBilledUnits] = None
 
-        # Extract service_tier from optional_params if not provided directly
-        if service_tier is None and optional_params is not None:
-            service_tier = optional_params.get("service_tier")
-
-        service_tier = _normalize_service_tier(service_tier)
-
-        # Extract service_tier from completion_response if not provided
-        if service_tier is None and completion_response is not None:
-            if isinstance(completion_response, BaseModel):
-                service_tier = getattr(completion_response, "service_tier", None)
-            elif isinstance(completion_response, dict):
-                service_tier = completion_response.get("service_tier")
-
-        service_tier = _normalize_service_tier(service_tier)
-
-        # Extract service_tier from usage object if not provided
-        if service_tier is None and cost_per_token_usage_object is not None:
-            if isinstance(cost_per_token_usage_object, BaseModel):
-                service_tier = getattr(cost_per_token_usage_object, "service_tier", None)
-            elif isinstance(cost_per_token_usage_object, dict):
-                service_tier = cost_per_token_usage_object.get("service_tier")
-
-        service_tier = _normalize_service_tier(service_tier)
+        # Prefer the provider-reported served tier over the request preference.
+        # OpenAI Responses can accept service_tier="priority" but return
+        # service_tier="default" when priority processing was not used; billing
+        # must follow the served tier when present.
+        response_service_tier = _get_normalized_service_tier_from_object(completion_response)
+        usage_service_tier = _get_normalized_service_tier_from_object(cost_per_token_usage_object)
+        request_service_tier = _normalize_service_tier(service_tier)
+        if request_service_tier is None and optional_params is not None:
+            request_service_tier = _normalize_service_tier(optional_params.get("service_tier"))
+        service_tier = response_service_tier or usage_service_tier or request_service_tier
 
         selected_model = _select_model_name_for_cost_calc(
             model=model,
