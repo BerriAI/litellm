@@ -5,7 +5,7 @@ import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall } from "../networking";
 import ConnectionErrorDisplay from "./model_connection_test";
 import { all_admin_roles } from "@/utils/roles";
-import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
+import { buildAutoRouterModelConfig, handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "./RouterConfigBuilder";
 import ComplexityRouterConfig from "./ComplexityRouterConfig";
@@ -20,6 +20,7 @@ interface AddAutoRouterTabProps {
 }
 
 type RouterType = "complexity" | "semantic";
+type ConnectionParams = Record<string, unknown>;
 
 interface ComplexityTiers {
   SIMPLE: string;
@@ -35,6 +36,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
   const [isResultModalVisible, setIsResultModalVisible] = useState<boolean>(false);
   const [isTestingConnection, setIsTestingConnection] = useState<boolean>(false);
   const [connectionTestId, setConnectionTestId] = useState<string>("");
+  const [preparedConnectionRequest, setPreparedConnectionRequest] = useState<
+    | {
+        litellmParamsObj: ConnectionParams;
+        modelInfoObj: ConnectionParams;
+        mode?: string;
+      }
+    | undefined
+  >();
 
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -80,6 +89,27 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
 
   // Test connection when button is clicked
   const handleTestConnection = async () => {
+    const currentFormValues = form.getFieldsValue();
+    setPreparedConnectionRequest(undefined);
+
+    if (routerType === "complexity") {
+      const defaultModel =
+        complexityTiers.MEDIUM || complexityTiers.SIMPLE || complexityTiers.COMPLEX || complexityTiers.REASONING;
+      const autoRouterConfig = buildAutoRouterModelConfig({
+        ...currentFormValues,
+        auto_router_default_model: defaultModel,
+        model_type: "complexity_router",
+        complexity_router_config: {
+          tiers: complexityTiers,
+        },
+      });
+
+      setPreparedConnectionRequest({
+        litellmParamsObj: autoRouterConfig.litellm_params as ConnectionParams,
+        modelInfoObj: (autoRouterConfig.model_info || {}) as ConnectionParams,
+      });
+    }
+
     setIsTestingConnection(true);
     setConnectionTestId(`test-${Date.now()}`);
     setIsResultModalVisible(true);
@@ -444,6 +474,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             accessToken={accessToken}
             testMode="chat"
             modelName={form.getFieldValue("auto_router_name")}
+            preparedConnectionRequest={preparedConnectionRequest}
             onClose={() => {
               setIsResultModalVisible(false);
               setIsTestingConnection(false);

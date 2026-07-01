@@ -6,11 +6,18 @@ import { prepareModelAddRequest } from "./handle_add_model_submit";
 import NotificationsManager from "../molecules/notifications_manager";
 const { Text } = Typography;
 
+type ConnectionParams = Record<string, unknown>;
+
 interface ModelConnectionTestProps {
   formValues: Record<string, any>;
   accessToken: string;
   testMode: string;
   modelName?: string;
+  preparedConnectionRequest?: {
+    litellmParamsObj: ConnectionParams;
+    modelInfoObj: ConnectionParams;
+    mode?: string;
+  };
   onClose?: () => void;
   onTestComplete?: () => void;
 }
@@ -20,6 +27,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   accessToken,
   testMode,
   modelName = "this model",
+  preparedConnectionRequest,
   onClose,
   onTestComplete,
 }) => {
@@ -43,9 +51,24 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
 
     try {
       console.log("Testing connection with form values:", formValues);
-      const result = await prepareModelAddRequest(formValues, accessToken, null);
+      let connectionRequest = preparedConnectionRequest;
 
-      if (!result) {
+      if (!connectionRequest) {
+        const result = await prepareModelAddRequest(formValues, accessToken, null);
+        if (!result || result.length === 0) {
+          console.log("No result from prepareModelAddRequest");
+          setError("Failed to prepare model data. Please check your form inputs.");
+          setIsSuccess(false);
+          setIsLoading(false);
+          return;
+        }
+
+        console.log("Result from prepareModelAddRequest:", result);
+        const { litellmParamsObj, modelInfoObj } = result[0];
+        connectionRequest = { litellmParamsObj, modelInfoObj };
+      }
+
+      if (!connectionRequest) {
         console.log("No result from prepareModelAddRequest");
         setError("Failed to prepare model data. Please check your form inputs.");
         setIsSuccess(false);
@@ -53,11 +76,10 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
         return;
       }
 
-      console.log("Result from prepareModelAddRequest:", result);
+      const { litellmParamsObj, modelInfoObj, mode } = connectionRequest;
+      const requestMode = mode ?? (typeof modelInfoObj.mode === "string" ? modelInfoObj.mode : undefined);
 
-      const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result[0];
-
-      const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
+      const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, requestMode as string);
       if (response.status === "success") {
         NotificationsManager.success("Connection test successful!");
         setError(null);
