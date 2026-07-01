@@ -91,13 +91,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
-  const { tools, isLoadingTools, toolsError, toolsErrorStatus, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } =
-    useTestMCPConnection({
-      accessToken,
-      oauthAccessToken,
-      formValues,
-      enabled: true,
-    });
+  const {
+    tools,
+    isLoadingTools,
+    toolsError,
+    toolsErrorStatus,
+    toolsErrorStackTrace,
+    canFetchTools,
+    fetchTools,
+    clearTools,
+  } = useTestMCPConnection({
+    accessToken,
+    oauthAccessToken,
+    formValues,
+    enabled: true,
+  });
 
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
