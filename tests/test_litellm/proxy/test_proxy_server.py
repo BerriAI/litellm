@@ -8658,3 +8658,109 @@ def test_config_field_info_returns_raw_secrets_for_full_admin(monkeypatch):
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def _fake_prisma_with_config(existing_param_value):
+    """MagicMock prisma whose litellm_config row returns existing_param_value and
+    whose litellm_auditlog.create records the written audit row."""
+    fake = MagicMock()
+    config_row = MagicMock()
+    config_row.param_value = existing_param_value
+    fake.db.litellm_config.find_first = AsyncMock(return_value=config_row)
+    fake.db.litellm_config.upsert = AsyncMock(return_value=config_row)
+    fake.db.litellm_auditlog.create = AsyncMock()
+    return fake
+
+
+def test_dump_redacted_config_redacts_secret_leaves():
+    from litellm.proxy.proxy_server import _dump_redacted_config
+
+    assert _dump_redacted_config(None) is None
+
+    restored = json.loads(
+        _dump_redacted_config(
+            {
+                "api_key": "sk-leak",
+                "model": "gpt-4",
+                "nested": {"aws_secret_access_key": "abc", "region": "us-east-1"},
+            }
+        )
+    )
+    assert restored["api_key"] == "REDACTED"
+    assert restored["model"] == "gpt-4"
+    assert restored["nested"]["aws_secret_access_key"] == "REDACTED"
+    assert restored["nested"]["region"] == "us-east-1"
+
+
+@pytest.mark.asyncio
+async def test_create_config_audit_log_writes_redacted_entry(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import LitellmTableNames
+    from litellm.proxy.proxy_server import create_config_audit_log
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    caller = UserAPIKeyAuth(api_key="hashed-key-abc", user_id="admin-7")
+    await create_config_audit_log(
+        "router_settings",
+        "updated",
+        {"routing_strategy": "simple-shuffle", "api_key": "sk-old"},
+        {"routing_strategy": "latency-based", "api_key": "sk-new"},
+        caller,
+    )
+
+    fake.db.litellm_auditlog.create.assert_awaited_once()
+    written = fake.db.litellm_auditlog.create.call_args.kwargs["data"]
+    assert written["table_name"] == LitellmTableNames.CONFIG_TABLE_NAME.value
+    assert written["object_id"] == "router_settings"
+    assert written["action"] == "updated"
+    assert written["changed_by"] == "admin-7"
+    assert written["changed_by_api_key"] == "hashed-key-abc"
+
+    before = json.loads(written["before_value"])
+    after = json.loads(written["updated_values"])
+    assert before["routing_strategy"] == "simple-shuffle"
+    assert after["routing_strategy"] == "latency-based"
+    assert "sk-old" not in written["before_value"]
+    assert "sk-new" not in written["updated_values"]
+    assert before["api_key"] != "sk-old"
+    assert after["api_key"] != "sk-new"
+
+
+@pytest.mark.asyncio
+async def test_create_config_audit_log_noop_when_store_audit_logs_disabled(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import create_config_audit_log
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+    monkeypatch.setattr(proxy_server_module, "premium_user", True)
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    await create_config_audit_log(
+        "router_settings",
+        "updated",
+        {},
+        {"a": 1},
+        UserAPIKeyAuth(api_key="k", user_id="u"),
+    )
+    fake.db.litellm_auditlog.create.assert_not_called()
+
+
+def test_dump_redacted_config_serializes_non_json_native_values():
+    """YAML-loaded config can contain datetime/date/custom values that plain
+    json.dumps refuses. Without default=str the audit write turns into a 500
+    after the config change has already committed; the sibling audit-log
+    serializers in team_endpoints.py use default=str for the same reason."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.proxy_server import _dump_redacted_config
+
+    out = _dump_redacted_config({"updated_at": datetime(2026, 6, 30, tzinfo=timezone.utc)})
+    assert out is not None
+    restored = json.loads(out)
+    assert "2026-06-30" in restored["updated_at"]
+
