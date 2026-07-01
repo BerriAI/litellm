@@ -77,10 +77,9 @@ class TencentAnthropicMessagesConfig(AnthropicMessagesConfig):
         if base_url.endswith("/v1/messages"):
             return base_url
 
-        if base_url.endswith("/v1"):
+        if base_url.endswith("/v1/chat/completions"):
+            base_url = base_url[: -len("/v1/chat/completions")]
+        elif base_url.endswith("/v1"):
             base_url = base_url[: -len("/v1")]
 
-        if not base_url.endswith("/v1/messages"):
-            base_url = f"{base_url}/v1/messages"
-
-        return base_url
+        return f"{base_url}/v1/messages"

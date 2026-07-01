@@ -90,6 +90,21 @@ def test_messages_url_with_base_ending_in_v1_messages():
     assert url == "https://tokenhub-intl.tencentcloudmaas.com/v1/messages"
 
 
+def test_messages_url_with_base_ending_in_v1_chat_completions():
+    config = TencentAnthropicMessagesConfig()
+
+    assert (
+        config.get_complete_url(
+            api_base="https://tokenhub-intl.tencentcloudmaas.com/v1/chat/completions",
+            api_key=None,
+            model="deepseek-v4-pro",
+            optional_params={},
+            litellm_params={},
+        )
+        == "https://tokenhub-intl.tencentcloudmaas.com/v1/messages"
+    )
+
+
 def test_messages_url_with_custom_base_no_v1():
     config = TencentAnthropicMessagesConfig()
 
