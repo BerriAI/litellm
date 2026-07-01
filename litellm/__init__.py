@@ -1801,6 +1801,9 @@ if TYPE_CHECKING:
     from .llms.deepseek.chat.transformation import (
         DeepSeekChatConfig as _DeepSeekChatConfig,
     )
+    from .llms.tencent.chat.transformation import (
+        TencentChatConfig as _TencentChatConfig,
+    )
     from .llms.sap.chat.transformation import (
         GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig,
     )
@@ -1843,6 +1846,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    TencentChatConfig: Type[_TencentChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
