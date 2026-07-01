@@ -697,18 +697,12 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
 
 
 @pytest.mark.asyncio
-async def test_test_model_connection_rejects_cross_tenant_deployment_probe():
+async def test_test_model_connection_uses_loaded_deployment_team_id():
     """
-    Regression test (VERIA-441): a team admin must not be able to probe a
-    deployment owned by another team by passing the victim deployment's
-    `model_info.id` together with their own `model_info.team_id`. The
-    /health/test_connection endpoint loads the deployment by id (so the
-    victim's `api_key` gets merged into the outbound `litellm_params`),
-    then merges request params on top -- letting the attacker swap the
-    `api_base` to a server they control. The authorization check must
-    therefore validate against the LOADED deployment's `team_id`, not
-    the caller-supplied one. Before the fix, the call would succeed
-    (cross-tenant credential exfiltration + SSRF).
+    /health/test_connection must authorize using the team_id of the
+    deployment it actually loaded (by model_info.id), not the team_id
+    supplied in the request body. Requesting team A's deployment while
+    authenticated as an admin of team B must be denied.
     """
     from fastapi import HTTPException
 
@@ -720,50 +714,50 @@ async def test_test_model_connection_rejects_cross_tenant_deployment_probe():
 
     mock_request = MagicMock()
 
-    attacker_team_id = "team-attacker"
-    victim_team_id = "team-victim"
-    victim_deployment_id = "victim-deployment-id"
+    requester_team_id = "team-b"
+    deployment_owner_team_id = "team-a"
+    deployment_id = "team-a-deployment-id"
 
-    attacker_user_api_key_dict = UserAPIKeyAuth(
-        token="attacker-token",
-        user_id="attacker-admin-user",
-        team_id=attacker_team_id,
+    requester_user_api_key_dict = UserAPIKeyAuth(
+        token="requester-token",
+        user_id="team-b-admin-user",
+        team_id=requester_team_id,
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
 
     mock_prisma_client = MagicMock()
 
-    victim_deployment = Deployment(
-        model_name="victim-model",
+    other_team_deployment = Deployment(
+        model_name="team-a-model",
         litellm_params=LiteLLM_Params(
             model="openai/gpt-4o",
-            api_base="https://victim-real-api.invalid/v1",
-            api_key="VICTIM-SECRET-KEY",
+            api_base="https://team-a-api.invalid/v1",
+            api_key="TEAM-A-API-KEY",
         ),
-        model_info=ModelInfo(id=victim_deployment_id, team_id=victim_team_id),
+        model_info=ModelInfo(id=deployment_id, team_id=deployment_owner_team_id),
     )
 
     mock_router = MagicMock()
-    mock_router.get_deployment.return_value = victim_deployment
+    mock_router.get_deployment.return_value = other_team_deployment
 
     async def fake_find_unique(*, where):
         team_id = where["team_id"]
-        if team_id == attacker_team_id:
+        if team_id == requester_team_id:
             return SimpleNamespace(
                 model_dump=lambda: LiteLLM_TeamTable(
-                    team_id=attacker_team_id,
+                    team_id=requester_team_id,
                     members_with_roles=[
                         {
-                            "user_id": "attacker-admin-user",
+                            "user_id": "team-b-admin-user",
                             "role": "admin",
                         }
                     ],
                 ).model_dump()
             )
-        if team_id == victim_team_id:
+        if team_id == deployment_owner_team_id:
             return SimpleNamespace(
                 model_dump=lambda: LiteLLM_TeamTable(
-                    team_id=victim_team_id,
+                    team_id=deployment_owner_team_id,
                     members_with_roles=[],
                 ).model_dump()
             )
@@ -794,24 +788,22 @@ async def test_test_model_connection_rejects_cross_tenant_deployment_probe():
                 mode="chat",
                 litellm_params={
                     "model": "openai/gpt-4o",
-                    "api_base": "https://attacker-controlled.invalid/v1",
+                    "api_base": "https://swapped-base.invalid/v1",
                 },
                 model_info={
-                    "id": victim_deployment_id,
-                    "team_id": attacker_team_id,
+                    "id": deployment_id,
+                    "team_id": requester_team_id,
                 },
-                user_api_key_dict=attacker_user_api_key_dict,
+                user_api_key_dict=requester_user_api_key_dict,
             )
 
         assert exc_info.value.status_code == 403
         assert spy_auth_check.called
         passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
-        assert passed_model_params.model_info.team_id == victim_team_id, (
-            "Auth check must run against the LOADED deployment's team_id "
-            f"({victim_team_id!r}); got {passed_model_params.model_info.team_id!r}. "
-            "Without this, a team admin can claim ownership of another team's "
-            "deployment by passing its id, leaking that team's api_key to an "
-            "attacker-controlled api_base."
+        assert passed_model_params.model_info.team_id == deployment_owner_team_id, (
+            "Auth check must run against the loaded deployment's team_id "
+            f"({deployment_owner_team_id!r}); got "
+            f"{passed_model_params.model_info.team_id!r}."
         )
 
 
@@ -833,38 +825,41 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
 
     mock_request = MagicMock()
 
-    attacker_team_id = "team-attacker-2"
-    victim_team_id = "team-victim-2"
+    requester_team_id = "team-b-2"
+    deployment_owner_team_id = "team-a-2"
 
-    attacker_user_api_key_dict = UserAPIKeyAuth(
-        token="attacker-token-2",
-        user_id="attacker-admin-user-2",
-        team_id=attacker_team_id,
+    requester_user_api_key_dict = UserAPIKeyAuth(
+        token="requester-token-2",
+        user_id="team-b-admin-user-2",
+        team_id=requester_team_id,
         user_role=LitellmUserRoles.INTERNAL_USER,
     )
 
     mock_prisma_client = MagicMock()
 
-    victim_deployment_dict = {
+    other_team_deployment_dict = {
         "model_name": "shared-model-name",
         "litellm_params": {
             "model": "openai/gpt-4o",
-            "api_base": "https://victim-real-api-2.invalid/v1",
-            "api_key": "VICTIM-SECRET-KEY-2",
+            "api_base": "https://team-a-api-2.invalid/v1",
+            "api_key": "TEAM-A-API-KEY-2",
         },
-        "model_info": {"id": "victim-deployment-id-2", "team_id": victim_team_id},
+        "model_info": {
+            "id": "team-a-deployment-id-2",
+            "team_id": deployment_owner_team_id,
+        },
     }
 
     mock_router = MagicMock()
-    mock_router.get_model_list.return_value = [victim_deployment_dict]
+    mock_router.get_model_list.return_value = [other_team_deployment_dict]
 
     async def fake_find_unique(*, where):
         return SimpleNamespace(
             model_dump=lambda: LiteLLM_TeamTable(
                 team_id=where["team_id"],
                 members_with_roles=(
-                    [{"user_id": "attacker-admin-user-2", "role": "admin"}]
-                    if where["team_id"] == attacker_team_id
+                    [{"user_id": "team-b-admin-user-2", "role": "admin"}]
+                    if where["team_id"] == requester_team_id
                     else []
                 ),
             ).model_dump()
@@ -895,23 +890,23 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
                 mode="chat",
                 litellm_params={
                     "model": "shared-model-name",
-                    "api_base": "https://attacker-controlled-2.invalid/v1",
+                    "api_base": "https://swapped-base-2.invalid/v1",
                 },
-                model_info={"team_id": attacker_team_id},
-                user_api_key_dict=attacker_user_api_key_dict,
+                model_info={"team_id": requester_team_id},
+                user_api_key_dict=requester_user_api_key_dict,
             )
 
         assert exc_info.value.status_code == 403
 
         passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
-        assert passed_model_params.model_info.team_id == victim_team_id
+        assert passed_model_params.model_info.team_id == deployment_owner_team_id
 
 
 @pytest.mark.asyncio
 async def test_test_model_connection_authorized_team_admin_passes_real_auth():
     """
-    Positive-path companion to the cross-tenant denies above. When the caller
-    is a genuine admin of the team that owns the loaded deployment, the real
+    Positive-path companion to the deny tests above. When the caller is a
+    genuine admin of the team that owns the loaded deployment, the real
     (unmocked) auth check must pass and the endpoint must reach the outbound
     health probe. Guards against a regression that swaps the auth `team_id`
     for something deny-all on the legit path.
