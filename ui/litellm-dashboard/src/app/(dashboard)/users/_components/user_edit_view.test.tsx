@@ -1,14 +1,14 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../tests/test-utils";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import { UserEditView } from "./user_edit_view";
 
-vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
+vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: vi.fn((model: string) => model),
 }));
 
-vi.mock("../utils/roles", () => ({
+vi.mock("@/utils/roles", () => ({
   all_admin_roles: ["Admin", "Admin Viewer", "proxy_admin", "proxy_admin_viewer", "org_admin"],
 }));
 

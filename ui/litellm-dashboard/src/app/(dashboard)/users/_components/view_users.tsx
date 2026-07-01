@@ -3,7 +3,7 @@ import React, { useEffect, useState } from "react";
 
 import { Button } from "antd";
 import BulkEditUserModal from "./BulkEditUsers";
-import { CreateUserButton } from "./CreateUserButton";
+import { CreateUserButton } from "@/components/CreateUserButton";
 import EditUserModal from "./edit_user";
 import {
   getPossibleUserRoles,
@@ -12,21 +12,21 @@ import {
   userListCall,
   UserListResponse,
   userUpdateUserCall,
-} from "./networking";
-import OnboardingModal, { InvitationLink } from "./onboarding_link";
+} from "@/components/networking";
+import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 
 import { updateExistingKeys } from "@/utils/dataUtils";
 import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Typography } from "antd";
-import DeleteResourceModal from "./common_components/DeleteResourceModal";
-import NotificationsManager from "./molecules/notifications_manager";
-import { modelAvailableCall, userDeleteCall } from "./networking";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { modelAvailableCall, userDeleteCall } from "@/components/networking";
 import DefaultUserSettings from "./DefaultUserSettings";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
-import { UserInfo } from "./view_users/types";
+import { UserInfo } from "@/components/networking";
 import { Skeleton } from "antd";
 
 const { Text, Title } = Typography;

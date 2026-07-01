@@ -1,15 +1,15 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import DefaultUserSettings from "./DefaultUserSettings";
-import * as networking from "./networking";
+import * as networking from "@/components/networking";
 
-vi.mock("./networking", () => ({
+vi.mock("@/components/networking", () => ({
   getInternalUserSettings: vi.fn(),
   updateInternalUserSettings: vi.fn(),
   modelAvailableCall: vi.fn(),
 }));
 
-vi.mock("./common_components/budget_duration_dropdown", () => ({
+vi.mock("@/components/common_components/budget_duration_dropdown", () => ({
   default: ({ value, onChange }: { value: string | null; onChange: (value: string | null) => void }) => (
     <select data-testid="budget-duration" value={value || ""} onChange={(e) => onChange(e.target.value || null)}>
       <option value="">Select duration</option>
@@ -20,7 +20,7 @@ vi.mock("./common_components/budget_duration_dropdown", () => ({
   getBudgetDurationLabel: (value: string) => value,
 }));
 
-vi.mock("./key_team_helpers/fetch_available_models_team_key", () => ({
+vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: (model: string) => model,
 }));
 
