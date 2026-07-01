@@ -6288,6 +6288,55 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
         # add_deployment should NOT have been called since store_model_in_db is False
         mock_proxy_config.add_deployment.assert_not_called()
 
+        # _init_mcp_servers_in_db should still be called even when
+        # store_model_in_db is False so DB-added MCP servers are loaded
+        # on restart (LIT-4128)
+        mock_proxy_config._init_mcp_servers_in_db.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_servers_loaded_on_startup_without_store_model_in_db(monkeypatch):
+    """
+    Regression test for LIT-4128: MCP servers added via the UI are stored
+    in the database but only loaded into the in-memory registry during
+    add_deployment, which is gated by store_model_in_db=True. When
+    store_model_in_db is False (common in single-instance deployments),
+    the registry stays empty after restart until a new server is added.
+
+    Verify that _init_mcp_servers_in_db is called during startup even when
+    store_model_in_db is False.
+    """
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_config = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+    ):
+        await ProxyStartupEvent.initialize_scheduled_background_jobs(
+            general_settings={},
+            prisma_client=mock_prisma_client,
+            proxy_budget_rescheduler_min_time=1,
+            proxy_budget_rescheduler_max_time=2,
+            proxy_batch_write_at=5,
+            proxy_logging_obj=mock_proxy_logging,
+        )
+
+        # add_deployment should NOT be called (store_model_in_db is False)
+        mock_proxy_config.add_deployment.assert_not_called()
+
+        # MCP servers should still be loaded from DB on startup
+        mock_proxy_config._init_mcp_servers_in_db.assert_awaited_once()
+
 
 # =====================================================================
 # Spend counter tests (v2 — Redis-backed spend counters)

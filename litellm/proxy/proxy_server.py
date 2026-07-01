@@ -7534,6 +7534,8 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+        else:
+            await proxy_config._init_mcp_servers_in_db()
 
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
