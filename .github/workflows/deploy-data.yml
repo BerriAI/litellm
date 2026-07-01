@@ -3,7 +3,7 @@ name: Deploy Data Reply Instance
 on:
   push:
     branches:
-      - datareply-instance
+      - datareply/prod
   workflow_dispatch:
 
 permissions:
@@ -50,5 +50,5 @@ jobs:
 
 
       - name: Terraform Apply
-        if: github.ref == 'refs/heads/datareply-instance'
+        if: github.ref == 'refs/heads/datareply/prod'
         run: terraform apply -auto-approve tfplan
