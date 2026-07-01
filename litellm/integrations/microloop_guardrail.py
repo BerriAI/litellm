@@ -14,18 +14,17 @@ Usage::
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from litellm.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     get_session_id_from_request_data,
 )
-from litellm.types.utils import CallTypes
-from litellm.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-
+from litellm.types.utils import CallTypes
 
 # ---------------------------------------------------------------------------
 # In-memory call history store
@@ -36,14 +35,14 @@ class _CallHistory:
     """Tracks tool call trajectories per session."""
 
     def __init__(self) -> None:
-        self._store: Dict[str, List[Tuple[str, str, datetime]]] = {}
+        self._store: dict[str, list[tuple[str, str, datetime]]] = {}
 
     def append(self, session_id: str, tool_name: str, args_json: str) -> None:
         if session_id not in self._store:
             self._store[session_id] = []
         self._store[session_id].append((tool_name, args_json, datetime.now(timezone.utc)))
 
-    def get_recent(self, session_id: str, window: int) -> List[Tuple[str, str]]:
+    def get_recent(self, session_id: str, window: int) -> list[tuple[str, str]]:
         entries = self._store.get(session_id, [])
         return [(t, a) for t, a, _ in entries[-window:]]
 
@@ -61,7 +60,7 @@ class _CallHistory:
 # ---------------------------------------------------------------------------
 
 
-def _strip_volatile_fields(args_json: str, volatile_fields: Set[str]) -> str:
+def _strip_volatile_fields(args_json: str, volatile_fields: set[str]) -> str:
     """Remove known volatile fields from a JSON arguments string.
 
     Args:
@@ -86,10 +85,10 @@ def _strip_volatile_fields(args_json: str, volatile_fields: Set[str]) -> str:
 
 
 def _auto_infer_volatile(
-    recent_calls: Sequence[Tuple[str, str]],
+    recent_calls: Sequence[tuple[str, str]],
     current_args: str,
     min_occurrences: int = 2,
-) -> Set[str]:
+) -> set[str]:
     """Detect fields that consistently differ across consecutive calls.
 
     A field is considered volatile only if:
@@ -108,9 +107,9 @@ def _auto_infer_volatile(
     Returns:
         Set of field names inferred as volatile.
     """
-    inferred: Set[str] = set()
-    diff_counts: Dict[str, int] = {}
-    const_fields: Set[str] = set()
+    inferred: set[str] = set()
+    diff_counts: dict[str, int] = {}
+    const_fields: set[str] = set()
 
     try:
         current = json.loads(current_args)
@@ -127,8 +126,8 @@ def _auto_infer_volatile(
         except (json.JSONDecodeError, TypeError):
             continue
 
-        diffs: List[str] = []
-        consts: List[str] = []
+        diffs: list[str] = []
+        consts: list[str] = []
         all_keys = set(current.keys()) | set(past.keys())
         for k in all_keys:
             if current.get(k) != past.get(k):
@@ -173,10 +172,10 @@ class MicroloopGuardrail(CustomGuardrail):
     def __init__(
         self,
         max_repeats: int = 3,
-        history_window: Optional[int] = None,
-        volatile_fields: Optional[List[str]] = None,
+        history_window: int | None = None,
+        volatile_fields: list[str] | None = None,
         auto_infer_volatile: bool = True,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         """
         Args:
@@ -203,7 +202,7 @@ class MicroloopGuardrail(CustomGuardrail):
         )
         self._max_repeats = max_repeats
         self._history_window = history_window or (max_repeats * 2)
-        self._volatile_fields: Set[str] = set(volatile_fields or [])
+        self._volatile_fields: set[str] = set(volatile_fields or [])
         self._auto_infer_volatile = auto_infer_volatile
         self._history = _CallHistory()
 
@@ -215,7 +214,7 @@ class MicroloopGuardrail(CustomGuardrail):
         cache: DualCache,
         data: dict,
         call_type: CallTypes,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """LiteLLM hook called before each LLM API request.
 
         Examines ``data["messages"]`` for tool call history and raises
@@ -311,7 +310,7 @@ class MicroloopGuardrail(CustomGuardrail):
 
     @staticmethod
     def _count_matches(
-        recent: List[Tuple[str, str]],
+        recent: list[tuple[str, str]],
         tool_name: str,
         canonical: str,
     ) -> int:
@@ -321,7 +320,7 @@ class MicroloopGuardrail(CustomGuardrail):
     @staticmethod
     def _extract_tool_calls(
         messages: object,
-    ) -> List[Tuple[str, str]]:
+    ) -> list[tuple[str, str]]:
         """Extract ``(tool_name, arguments_json)`` pairs from assistant messages.
 
         Supports both OpenAI ``tool_calls`` and Anthropic ``tool_use`` formats.
@@ -336,7 +335,7 @@ class MicroloopGuardrail(CustomGuardrail):
         if not isinstance(messages, list):
             return []
 
-        pairs: List[Tuple[str, str]] = []
+        pairs: list[tuple[str, str]] = []
         for msg in reversed(messages):
             if not isinstance(msg, dict):
                 continue
