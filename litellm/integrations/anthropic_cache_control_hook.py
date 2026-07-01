@@ -229,42 +229,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return message
 
     @staticmethod
-    def _count_system_cache_control_blocks(system: str | list | None) -> int:
-        if system is None:
-            return 0
-        if isinstance(system, str):
-            return 0
-        count = 0
-        for block in system:
-            if isinstance(block, dict) and block.get("cache_control") is not None:
-                count += 1
-        return count
-
-    @staticmethod
-    def _insert_cache_control_in_system(
-        system: str | list,
-        control: ChatCompletionCachedContent,
-    ) -> list:
-        if isinstance(system, str):
-            return [{"type": "text", "text": system, "cache_control": control}]
-        if len(system) > 0 and isinstance(system[-1], dict):
-            system[-1]["cache_control"] = control
-        return system
-
-    @staticmethod
     def apply_to_anthropic_messages_request(
         messages: List[Dict],
         system: str | list | None,
         injection_points: List[CacheControlInjectionPoint],
     ) -> Tuple[List[Dict], str | list | None, List[CacheControlInjectionPoint]]:
-        """Apply cache control injection for the v1/messages endpoint.
+        """Apply cache control injection for the Anthropic-native v1/messages endpoint.
 
-        Unlike ``get_chat_completion_prompt`` (OpenAI-format messages), this
-        handles the Anthropic Messages format where system is a separate
-        parameter and messages only contain user/assistant roles.
-
-        Returns (messages, system, remaining_non_message_points) so callers
-        can forward tool_config points to provider transforms.
+        Returns (messages, system, remaining_non_message_points).
         """
         if not injection_points:
             return messages, system, []
@@ -289,24 +261,27 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks = 1 if any(p.get("location") == "tool_config" for p in remaining_points) else 0
         max_blocks = MAX_CACHE_CONTROL_BLOCKS - reserved_blocks
 
-        used_blocks = AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system)
-        used_blocks += sum(
+        used_blocks = sum(
             AnthropicCacheControlHook._count_cache_control_blocks(cast(AllMessageValues, msg))
             for msg in processed_messages
         )
+        if isinstance(processed_system, list):
+            used_blocks += sum(
+                1 for b in processed_system if isinstance(b, dict) and b.get("cache_control") is not None
+            )
 
-        for point in system_points:
-            if used_blocks >= max_blocks:
-                break
-            if processed_system is None:
-                continue
-            if AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system) > 0:
-                continue
-            control = point.get("control") or ChatCompletionCachedContent(type="ephemeral")
-            processed_system = AnthropicCacheControlHook._insert_cache_control_in_system(processed_system, control)
-            used_blocks += 1
-
-        system_blocks_after = AnthropicCacheControlHook._count_system_cache_control_blocks(processed_system)
+        if system_points and processed_system is not None and used_blocks < max_blocks:
+            system_already_has_cc = isinstance(processed_system, list) and any(
+                isinstance(b, dict) and b.get("cache_control") is not None for b in processed_system
+            )
+            if not system_already_has_cc:
+                control = system_points[0].get("control") or ChatCompletionCachedContent(type="ephemeral")
+                if isinstance(processed_system, str):
+                    processed_system = [{"type": "text", "text": processed_system, "cache_control": control}]
+                    used_blocks += 1
+                elif len(processed_system) > 0 and isinstance(processed_system[-1], dict):
+                    processed_system[-1] = {**processed_system[-1], "cache_control": control}
+                    used_blocks += 1
 
         for i, msg in enumerate(processed_messages):
             content = msg.get("content")
@@ -316,7 +291,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         processed_messages = AnthropicCacheControlHook._apply_message_injections(
             points=message_points,
             messages=cast(List[AllMessageValues], processed_messages),
-            max_blocks=max_blocks - system_blocks_after,
+            max_blocks=max_blocks - used_blocks,
         )
 
         return processed_messages, processed_system, remaining_points
