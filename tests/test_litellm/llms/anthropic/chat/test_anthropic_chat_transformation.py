@@ -919,7 +919,7 @@ def test_anthropic_chat_transform_request_includes_context_management():
     assert result["context_management"] == _sample_context_management_payload()
 
 
-def test_anthropic_structured_output_beta_header():
+def test_anthropic_structured_output_beta_header(local_model_cost_map):
     from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
 
@@ -966,7 +966,7 @@ def test_anthropic_structured_output_beta_header():
         "claude-opus-4.5-20251101",
     ],
 )
-def test_opus_uses_native_structured_output(model_name):
+def test_opus_uses_native_structured_output(model_name, local_model_cost_map):
     """
     Test that Opus 4.5 and 4.6 models use native Anthropic structured outputs
     (output_format) rather than the tool-based workaround.
@@ -1008,7 +1008,7 @@ def test_opus_uses_native_structured_output(model_name):
     assert optional_params.get("json_mode") is True
 
 
-def test_non_structured_output_model_uses_tool_workaround():
+def test_non_structured_output_model_uses_tool_workaround(local_model_cost_map):
     """
     Test that models NOT in the native structured output list still use the
     tool-based workaround for response_format.
@@ -5739,7 +5739,7 @@ def test_top_k_forwarded_at_transform_on_models_that_accept_it():
     assert result["top_k"] == 40
 
 
-def test_opus_4_8_uses_native_structured_output():
+def test_opus_4_8_uses_native_structured_output(local_model_cost_map):
     """claude-opus-4-8 has supports_output_config=true in the model map,
     so response_format should route to the native output_format path
     rather than the tool-call emulation path"""

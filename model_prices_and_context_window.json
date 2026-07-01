@@ -10438,6 +10438,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_output_config": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -10469,6 +10470,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_output_config": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
@@ -10585,6 +10587,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_output_config": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -10612,6 +10615,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_output_config": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
