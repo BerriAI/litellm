@@ -206,6 +206,30 @@ class TestGDCGeminiConfig:
 
         mock_creds.with_gdch_audience.assert_called_once_with("https://gdc-endpoint.com")
 
+    def test_validate_environment_audience_is_host_for_preformed_base(self):
+        config = GDCGeminiConfig()
+        mock_creds = MagicMock()
+        mock_creds.token = "mock-token"
+        mock_creds.with_gdch_audience.return_value = mock_creds
+
+        with patch(
+            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
+        ), patch("requests.Session"):
+            config.validate_environment(
+                headers={},
+                model=TEST_MODEL,
+                messages=[],
+                optional_params={},
+                litellm_params={
+                    "vertex_project": "deployment-project",
+                    "vertex_location": "deployment-loc",
+                },
+                api_key=TEST_API_KEY,
+                api_base=f"{TEST_API_BASE}/v1/projects/embedded/locations/embedded/chat/completions",
+            )
+
+        mock_creds.with_gdch_audience.assert_called_once_with(TEST_API_BASE)
+
     def test_validate_environment_missing_api_base(self, monkeypatch):
         monkeypatch.setattr(litellm, "api_base", None, raising=False)
         monkeypatch.setattr(litellm, "gdc_api_base", None, raising=False)

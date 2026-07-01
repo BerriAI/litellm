@@ -6,6 +6,7 @@ import json
 import os
 import threading
 from typing import Any
+from urllib.parse import urlsplit
 
 import litellm
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -184,7 +185,8 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
                 model=model,
             )
 
-        audience = (api_base if api_base.startswith("http") else f"https://{api_base}").rstrip("/")
+        _audience_parts = urlsplit(api_base if api_base.startswith("http") else f"https://{api_base}")
+        audience = f"{_audience_parts.scheme}://{_audience_parts.netloc}"
 
         try:
             creds, is_service_account = self._load_creds_from_key(api_key)
