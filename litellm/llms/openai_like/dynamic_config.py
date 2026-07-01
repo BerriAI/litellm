@@ -94,6 +94,9 @@ def create_config_class(provider: SimpleProviderConfig):
             from litellm.utils import supports_function_calling
 
             supported_params = super().get_supported_openai_params(model=model)
+            supported_params = list(
+                dict.fromkeys([*supported_params, *provider.extra_supported_params])
+            )
 
             _supports_fc = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 

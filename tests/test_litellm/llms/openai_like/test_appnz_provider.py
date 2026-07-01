@@ -20,6 +20,7 @@ class TestAppNZProviderConfig:
         assert app_nz.api_key_env == "APP_NZ_API_KEY"
         assert app_nz.api_base_env == "APP_NZ_API_BASE"
         assert app_nz.base_class == "openai_gpt"
+        assert app_nz.extra_supported_params == ["reasoning_effort"]
 
     def test_appnz_provider_resolution(self):
         """Resolving an app_nz/* model returns the default app.nz base URL"""
@@ -82,3 +83,24 @@ class TestAppNZProviderConfig:
         )
 
         assert url == "https://app.nz/v1/chat/completions"
+
+    def test_appnz_supports_reasoning_effort(self):
+        """app.nz forwards its documented reasoning_effort parameter"""
+        from litellm.llms.openai_like.dynamic_config import create_config_class
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        provider = JSONProviderRegistry.get("app_nz")
+        config_class = create_config_class(provider)
+        config = config_class()
+
+        supported_params = config.get_supported_openai_params(model="app/auto")
+        assert "reasoning_effort" in supported_params
+
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": "auto"},
+            optional_params={},
+            model="app/auto",
+            drop_params=False,
+        )
+
+        assert optional_params["reasoning_effort"] == "auto"
