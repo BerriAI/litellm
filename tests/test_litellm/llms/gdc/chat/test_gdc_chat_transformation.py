@@ -424,6 +424,46 @@ class TestGDCGeminiConfig:
                 api_base=TEST_API_BASE,
             )
 
+    def test_validate_environment_quota_header_bound_to_deployment_url(self):
+        config = GDCGeminiConfig()
+        mock_creds = MagicMock()
+        mock_creds.token = "tok"
+        mock_creds.with_gdch_audience.return_value = mock_creds
+        preformed = f"{TEST_API_BASE}/v1/projects/deployment-proj/locations/us-central1/chat/completions"
+        with patch(
+            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
+        ):
+            headers = config.validate_environment(
+                headers={},
+                model=TEST_MODEL,
+                messages=[],
+                optional_params={"vertex_project": "attacker-proj"},
+                litellm_params={},
+                api_key=TEST_API_KEY,
+                api_base=preformed,
+            )
+        assert headers["x-goog-user-project"] == "projects/deployment-proj"
+
+    def test_validate_environment_quota_header_prefers_deployment_override(self):
+        config = GDCGeminiConfig()
+        mock_creds = MagicMock()
+        mock_creds.token = "tok"
+        mock_creds.with_gdch_audience.return_value = mock_creds
+        preformed = f"{TEST_API_BASE}/v1/projects/url-proj/locations/us-central1/chat/completions"
+        with patch(
+            "google.auth.load_credentials_from_dict", return_value=(mock_creds, None)
+        ):
+            headers = config.validate_environment(
+                headers={},
+                model=TEST_MODEL,
+                messages=[],
+                optional_params={"vertex_project": "attacker-proj"},
+                litellm_params={"vertex_project": "override-proj"},
+                api_key=TEST_API_KEY,
+                api_base=preformed,
+            )
+        assert headers["x-goog-user-project"] == "projects/override-proj"
+
     def test_transform_request(self):
         config = GDCGeminiConfig()
         data = config.transform_request(
