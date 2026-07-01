@@ -281,6 +281,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Deployment budgets
     max_budget: float | None = None
     budget_duration: str | None = None
+    keepalive_seconds: float | None = None
     use_in_pass_through: bool | None = False
     use_litellm_proxy: bool | None = False
     use_chat_completions_api: bool | None = None
@@ -457,6 +458,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     # deployment budgets
     max_budget: float | None
     budget_duration: str | None
+    keepalive_seconds: float | None
 
     # per-deployment cooldown override
     cooldown_time: float | None

@@ -914,3 +914,199 @@ def test_select_data_generator_missing_required_kwarg_raises_type_error():
     streaming starts."""
     with pytest.raises(TypeError):
         select_data_generator(response=_async_iter([]), user_api_key_dict=_user_auth())  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------------------
+# SSE keepalive helpers
+# ---------------------------------------------------------------------------
+
+
+from litellm.proxy.proxy_server import (  # noqa: E402
+    _iter_with_keepalive,
+    _keepalive_from_deployment_config,
+    _resolve_keepalive_seconds,
+)
+from litellm.proxy.proxy_server import _KEEPALIVE_MAX_SECONDS, _KEEPALIVE_MIN_SECONDS  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_iter_with_keepalive_hot_path_no_task_wrapping():
+    """When keepalive_seconds <= 0, the generator is a transparent pass-through."""
+    chunks = [_simple_chunk(content="a"), _simple_chunk(content="b")]
+    out = []
+    async for item in _iter_with_keepalive(_async_iter(chunks), keepalive_seconds=0):
+        out.append(item)
+
+    assert out == chunks
+    assert ps._STREAM_KEEPALIVE not in out
+
+
+@pytest.mark.asyncio
+async def test_iter_with_keepalive_emits_sentinel_when_stream_stalls():
+    """With a short keepalive interval and a stalled upstream, _STREAM_KEEPALIVE
+    sentinels appear before the delayed chunk arrives."""
+    import asyncio
+
+    async def _slow_stream():
+        yield _simple_chunk(content="first")
+        await asyncio.sleep(0.3)
+        yield _simple_chunk(content="second")
+
+    items = []
+    async for item in _iter_with_keepalive(_slow_stream(), keepalive_seconds=0.05):
+        items.append(item)
+
+    sentinels = [i for i in items if i is ps._STREAM_KEEPALIVE]
+    real_chunks = [i for i in items if i is not ps._STREAM_KEEPALIVE]
+
+    assert len(sentinels) >= 2, f"expected >= 2 sentinels during 0.3s stall; got {len(sentinels)}"
+    assert len(real_chunks) == 2
+    assert real_chunks[0].choices[0].delta.content == "first"
+    assert real_chunks[1].choices[0].delta.content == "second"
+
+
+@pytest.mark.asyncio
+async def test_iter_with_keepalive_cancel_on_early_close():
+    """Closing the generator early cancels the in-flight task without raising."""
+    import asyncio
+
+    async def _infinite_stream():
+        while True:
+            await asyncio.sleep(10)
+            yield _simple_chunk()
+
+    gen = _iter_with_keepalive(_infinite_stream(), keepalive_seconds=0.05)
+    # Advance once to get the sentinel; then close before the real chunk.
+    first = await gen.__anext__()
+    assert first is ps._STREAM_KEEPALIVE
+    # aclose must not raise, and must drain the cancelled task cleanly.
+    await gen.aclose()
+
+
+def test_resolve_keepalive_seconds_request_value_wins(monkeypatch):
+    monkeypatch.setattr(ps, "llm_router", None)
+    result = _resolve_keepalive_seconds({"keepalive_seconds": 30}, response=None)
+    assert result == 30.0
+
+
+def test_resolve_keepalive_seconds_explicit_zero_disables(monkeypatch):
+    monkeypatch.setattr(ps, "llm_router", None)
+    result = _resolve_keepalive_seconds({"keepalive_seconds": 0}, response=None)
+    assert result == 0.0
+
+
+def test_resolve_keepalive_seconds_clamps_below_minimum(monkeypatch):
+    monkeypatch.setattr(ps, "llm_router", None)
+    result = _resolve_keepalive_seconds({"keepalive_seconds": 0.001}, response=None)
+    assert result == _KEEPALIVE_MIN_SECONDS
+
+
+def test_resolve_keepalive_seconds_clamps_above_maximum(monkeypatch):
+    monkeypatch.setattr(ps, "llm_router", None)
+    result = _resolve_keepalive_seconds({"keepalive_seconds": 9999}, response=None)
+    assert result == _KEEPALIVE_MAX_SECONDS
+
+
+def test_resolve_keepalive_seconds_non_numeric_returns_zero(monkeypatch):
+    monkeypatch.setattr(ps, "llm_router", None)
+    result = _resolve_keepalive_seconds({"keepalive_seconds": "not-a-number"}, response=None)
+    assert result == 0.0
+
+
+def test_resolve_keepalive_seconds_absent_returns_zero(monkeypatch):
+    monkeypatch.setattr(ps, "llm_router", None)
+    result = _resolve_keepalive_seconds({}, response=None)
+    assert result == 0.0
+
+
+def test_keepalive_from_deployment_config_reads_by_model_id(monkeypatch):
+    from unittest.mock import MagicMock
+
+    deployment = MagicMock()
+    deployment.litellm_params.keepalive_seconds = 45.0
+
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {"model_id": "deploy-abc"}
+
+    result = _keepalive_from_deployment_config({"model": "my-model"}, response)
+    assert result == 45.0
+    router.get_deployment.assert_called_once_with(model_id="deploy-abc")
+
+
+def test_keepalive_from_deployment_config_fallback_by_name(monkeypatch):
+    from unittest.mock import MagicMock
+
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 20.0}},
+    ]
+
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    response = MagicMock()
+    response._hidden_params = {}
+
+    result = _keepalive_from_deployment_config({"model": "slow-model"}, response)
+    assert result == 20.0
+    router.get_model_list.assert_called_once_with(model_name="slow-model")
+
+
+def test_keepalive_from_deployment_config_no_router_returns_none(monkeypatch):
+    monkeypatch.setattr(ps, "llm_router", None)
+    result = _keepalive_from_deployment_config({"model": "gpt-4"}, None)
+    assert result is None
+
+
+def test_keepalive_seconds_in_all_litellm_params():
+    from litellm.types.utils import all_litellm_params
+
+    assert "keepalive_seconds" in all_litellm_params
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_emits_ping_heartbeat(monkeypatch):
+    """When keepalive_seconds is set, ': ping' frames appear during upstream stalls."""
+    import asyncio
+
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(ps, "_KEEPALIVE_MIN_SECONDS", 0.05)
+
+    async def _slow_response():
+        yield _simple_chunk(content="hello")
+        await asyncio.sleep(0.4)
+        yield _simple_chunk(content="world")
+
+    out = []
+    async for line in async_data_generator(
+        response=_slow_response(),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4", "keepalive_seconds": 0.05},
+    ):
+        out.append(line)
+
+    pings = [item for item in out if item == ": ping\n\n"]
+    assert len(pings) >= 2, f"expected >= 2 ping frames; got {len(pings)}"
+    assert out[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_no_keepalive_no_pings(monkeypatch):
+    """Without keepalive_seconds, no ': ping' frames are emitted."""
+    _patch_logging_flags(monkeypatch)
+
+    out = []
+    async for line in async_data_generator(
+        response=_async_iter([_simple_chunk(content="hello")]),
+        user_api_key_dict=_user_auth(),
+        request_data={"model": "gpt-4"},
+    ):
+        out.append(line)
+
+    assert ": ping\n\n" not in out
+    assert out[-1] == "data: [DONE]\n\n"
