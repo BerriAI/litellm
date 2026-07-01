@@ -9436,6 +9436,137 @@ async def test_team_info_forwards_key_limit_to_get_data():
     assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
 
 
+def _team_with_permission(team_id, members, permissions):
+    return LiteLLM_TeamTable(
+        team_id=team_id,
+        members_with_roles=members,
+        team_member_permissions=permissions,
+    )
+
+
+def test_full_team_view_sso_member_with_permission_not_in_members_with_roles():
+    """Regression: an SSO/JWT member is recorded in LiteLLM_UserTable.teams but
+    not in the team's members_with_roles. When that team grants the
+    /team/daily/activity permission, the caller must get full team view.
+
+    The old members_with_roles-only check (_team_member_has_permission) returns
+    False for exactly this input, which is what silently scoped the caller to
+    their own keys and returned zero team usage.
+    """
+    from litellm.proxy.management_endpoints.common_utils import (
+        _team_member_has_permission,
+        _user_has_full_team_view,
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id="sso-user", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    team = _team_with_permission(
+        team_id="team-clinical",
+        members=[Member(user_id="someone-else", role="admin")],
+        permissions=["/team/daily/activity"],
+    )
+
+    assert (
+        _team_member_has_permission(
+            user_api_key_dict=caller,
+            team_obj=team,
+            permission="/team/daily/activity",
+        )
+        is False
+    )
+    assert (
+        _user_has_full_team_view(
+            user_api_key_dict=caller,
+            team_obj=team,
+            permission="/team/daily/activity",
+            is_confirmed_member=True,
+        )
+        is True
+    )
+
+
+def test_full_team_view_member_without_permission_stays_scoped():
+    """A confirmed member of a team that did NOT grant the permission and who is
+    not an admin gets no full view (still scoped to their own keys)."""
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_full_team_view,
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id="sso-user", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    team = _team_with_permission(
+        team_id="team-clinical",
+        members=[Member(user_id="someone-else", role="admin")],
+        permissions=["/key/info"],
+    )
+
+    assert (
+        _user_has_full_team_view(
+            user_api_key_dict=caller,
+            team_obj=team,
+            permission="/team/daily/activity",
+            is_confirmed_member=True,
+        )
+        is False
+    )
+
+
+def test_full_team_view_team_admin_always_sees_team():
+    """A team admin (present in members_with_roles with role admin) gets full
+    view regardless of the member-permission list."""
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_full_team_view,
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id="team-admin", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    team = _team_with_permission(
+        team_id="team-clinical",
+        members=[Member(user_id="team-admin", role="admin")],
+        permissions=[],
+    )
+
+    assert (
+        _user_has_full_team_view(
+            user_api_key_dict=caller,
+            team_obj=team,
+            permission="/team/daily/activity",
+            is_confirmed_member=True,
+        )
+        is True
+    )
+
+
+def test_full_team_view_denied_when_not_a_confirmed_member():
+    """Defensive: even if a team granted the permission, a caller who is not a
+    confirmed member (not in their own teams list) and not an admin is denied."""
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_full_team_view,
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id="outsider", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    team = _team_with_permission(
+        team_id="team-clinical",
+        members=[Member(user_id="someone-else", role="admin")],
+        permissions=["/team/daily/activity"],
+    )
+
+    assert (
+        _user_has_full_team_view(
+            user_api_key_dict=caller,
+            team_obj=team,
+            permission="/team/daily/activity",
+            is_confirmed_member=False,
+        )
+        is False
+    )
+
+
 class TestEmitTeamMembersMetric:
     """The _emit_team_members_metric seam between the team handlers and Prometheus."""
 

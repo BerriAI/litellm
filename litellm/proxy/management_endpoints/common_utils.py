@@ -162,6 +162,27 @@ def _team_member_has_permission(
     return False
 
 
+def _user_has_full_team_view(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_obj: LiteLLM_TeamTable,
+    permission: str,
+    is_confirmed_member: bool,
+) -> bool:
+    """Whether a non-admin caller may see a team's full activity vs only their own keys.
+
+    Membership comes from ``is_confirmed_member`` (the caller's own ``teams``
+    list), not from ``team.members_with_roles``: SSO/JWT sync records a user in
+    ``LiteLLM_UserTable.teams`` but only materializes ``members_with_roles`` for
+    the request's active team, so a member of a permission-granting team would
+    otherwise be invisible here and silently scoped to their own keys.
+    """
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return True
+    if not is_confirmed_member:
+        return False
+    return permission in (team_obj.team_member_permissions or [])
+
+
 async def _user_has_admin_privileges(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
