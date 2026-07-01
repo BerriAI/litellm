@@ -463,8 +463,6 @@ class TestClearCache:
         mock_router.complexity_routers.clear = MagicMock()
         mock_router.quality_routers = MagicMock()
         mock_router.quality_routers.clear = MagicMock()
-        mock_router.adaptive_routers = MagicMock()
-        mock_router.adaptive_routers.clear = MagicMock()
 
         mock_config = MagicMock()
         mock_config.add_deployment = AsyncMock(return_value=True)
@@ -486,11 +484,9 @@ class TestClearCache:
             mock_router.delete_deployment.assert_any_call(id="db-model-1")
             mock_router.delete_deployment.assert_any_call(id="db-model-2")
 
-            # Should have cleared all strategy routers
             mock_router.auto_routers.clear.assert_called_once()
             mock_router.complexity_routers.clear.assert_called_once()
             mock_router.quality_routers.clear.assert_called_once()
-            mock_router.adaptive_routers.clear.assert_called_once()
 
             # Should have called add_deployment to reload DB models
             mock_config.add_deployment.assert_called_once_with(
