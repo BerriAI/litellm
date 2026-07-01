@@ -17,7 +17,6 @@ import hashlib
 import json
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timezone
 
 from litellm.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
@@ -39,7 +38,7 @@ class _CallHistory:
     MAX_SESSIONS = 10000
 
     def __init__(self) -> None:
-        self._store: dict[str, list[tuple[str, str, datetime]]] = {}
+        self._store: dict[str, list[tuple[str, str]]] = {}
 
     def append(self, session_id: str, tool_name: str, args_json: str) -> None:
         if len(self._store) >= self.MAX_SESSIONS and session_id not in self._store:
@@ -47,11 +46,11 @@ class _CallHistory:
             self._store.pop(oldest_key, None)
         if session_id not in self._store:
             self._store[session_id] = []
-        self._store[session_id].append((tool_name, args_json, datetime.now(timezone.utc)))
+        self._store[session_id].append((tool_name, args_json))
 
     def get_recent(self, session_id: str, window: int) -> list[tuple[str, str]]:
         entries = self._store.get(session_id, [])
-        return [(t, a) for t, a, _ in entries[-window:]]
+        return entries[-window:]
 
     def trim(self, session_id: str, max_len: int) -> None:
         entries = self._store.get(session_id, [])
@@ -308,12 +307,15 @@ class MicroloopGuardrail(CustomGuardrail):
     # ---- Helpers ---------------------------------------------------------
 
     def _get_session_id(self, data: dict, user_api_key_dict: object = None) -> str:
-        """Extract or derive a session identifier to prevent cross-tenant contamination.
+        """Extract or derive a session identifier.
 
         1. Try explicit session ID from request metadata.
-        2. Fall back to a hash of the API key to isolate tenants.
+        2. Fall back to hashed API key for best-effort per-tenant isolation.
+           Note: all conversations using the same key without a session_id
+           share one history bucket, which can cause false positives across
+           independent agent conversations.
         3. Ultimate fallback: per-request UUID (disables loop detection for
-           stateless requests, preventing false positives).
+           truly anonymous requests).
 
         Args:
             data: The request data dictionary.
@@ -327,7 +329,7 @@ class MicroloopGuardrail(CustomGuardrail):
             return result
         api_key = getattr(user_api_key_dict, "api_key", None) if user_api_key_dict is not None else None
         if isinstance(api_key, str) and api_key:
-            hashed = hashlib.md5(api_key.encode()).hexdigest()[:16]
+            hashed = hashlib.md5(api_key.encode(), usedforsecurity=False).hexdigest()[:16]
             return f"api_key_{hashed}"
         return f"req_{uuid.uuid4().hex}"
 
