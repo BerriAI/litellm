@@ -2881,7 +2881,7 @@
       }
     },
     "empiriolabs": {
-      "display_name": "EmpirioLabs (`empiriolabs`)",
+      "display_name": "EmpirioLabs AI (`empiriolabs`)",
       "url": "https://docs.litellm.ai/docs/providers/empiriolabs",
       "endpoints": {
         "chat_completions": true,
