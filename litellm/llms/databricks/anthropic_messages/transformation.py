@@ -61,9 +61,9 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
             or litellm_params.get("user_agent")
         )
 
-        databricks_profile = optional_params.pop(
-            "databricks_profile", None
-        ) or self.resolve_databricks_profile(litellm_params)
+        databricks_profile = optional_params.pop("databricks_profile", None) or self.resolve_databricks_profile(
+            litellm_params
+        )
 
         # Reuse the shared Databricks auth core (M2M / PAT / PROFILE / SDK unified).
         # It sets `Authorization: Bearer <token>` and never appends an endpoint path.

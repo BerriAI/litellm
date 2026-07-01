@@ -224,9 +224,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         )
 
         # Named CLI profile (popped so it never leaks into the request body).
-        databricks_profile = optional_params.pop(
-            "databricks_profile", None
-        ) or litellm_params.get("databricks_profile")
+        databricks_profile = optional_params.pop("databricks_profile", None) or litellm_params.get("databricks_profile")
 
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,

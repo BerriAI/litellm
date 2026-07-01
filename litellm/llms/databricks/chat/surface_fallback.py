@@ -71,9 +71,7 @@ def _gateway_fallback_host(
         return None
 
     use_ai_gateway = parse_use_ai_gateway_flag(litellm_params, optional_params)
-    surface = resolve_surface(
-        api_base=api_base, use_ai_gateway=use_ai_gateway, host=host
-    )
+    surface = resolve_surface(api_base=api_base, use_ai_gateway=use_ai_gateway, host=host)
     return host if surface == "ai_gateway" else None
 
 
@@ -108,9 +106,7 @@ def databricks_chat_completion_with_surface_fallback(
                     res = await res
                 return res
             except Exception as exc:
-                host = _gateway_fallback_host(
-                    exc, api_base, op_snapshot, litellm_params
-                )
+                host = _gateway_fallback_host(exc, api_base, op_snapshot, litellm_params)
                 if host is None:
                     raise
                 mark_gateway_absent(host)

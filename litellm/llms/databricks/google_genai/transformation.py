@@ -36,9 +36,7 @@ class DatabricksGoogleGenAIConfig(DatabricksBase, GoogleGenAIConfig):
     ) -> dict:
         params = dict(litellm_params or {})
         resolved_key = api_key or params.get("api_key") or params.get("databricks_key")
-        custom_user_agent = params.get("user_agent") or params.get(
-            "databricks_user_agent"
-        )
+        custom_user_agent = params.get("user_agent") or params.get("databricks_user_agent")
 
         _, resolved_headers = self.databricks_resolve_auth(
             api_key=resolved_key,
@@ -49,9 +47,7 @@ class DatabricksGoogleGenAIConfig(DatabricksBase, GoogleGenAIConfig):
             databricks_profile=self.resolve_databricks_profile(params),
         )
         resolved_headers["Content-Type"] = "application/json"
-        resolved_headers = self.apply_request_tags_header(
-            resolved_headers, litellm_params=params
-        )
+        resolved_headers = self.apply_request_tags_header(resolved_headers, litellm_params=params)
         return resolved_headers
 
     def sync_get_auth_token_and_url(

@@ -282,9 +282,7 @@ class BaseResponsesAPIConfig(ABC):
     #########################################################
     ########## RESPONSES SURFACE FALLBACK (opt-in) ##########
     #########################################################
-    def get_responses_surface_fallbacks(
-        self, model: str
-    ) -> List["BaseResponsesAPIConfig"]:
+    def get_responses_surface_fallbacks(self, model: str) -> List["BaseResponsesAPIConfig"]:
         """Ordered list of responses configs to try for ``model`` (opt-in).
 
         Some providers expose the same model across multiple responses surfaces

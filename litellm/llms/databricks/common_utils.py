@@ -206,10 +206,7 @@ class DatabricksBase:
         import json
 
         def _read(key: str, pop: bool = False) -> Any:
-            if (
-                isinstance(optional_params, dict)
-                and optional_params.get(key) is not None
-            ):
+            if isinstance(optional_params, dict) and optional_params.get(key) is not None:
                 return optional_params.pop(key) if pop else optional_params.get(key)
             if litellm_params is None:
                 return None
@@ -378,9 +375,7 @@ class DatabricksBase:
             # Register LiteLLM as partner for Databricks telemetry attribution
             useragent.with_partner("litellm")
 
-            databricks_client = (
-                WorkspaceClient(profile=profile) if profile else WorkspaceClient()
-            )
+            databricks_client = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
 
             api_base = api_base or f"{databricks_client.config.host}/serving-endpoints"
 
@@ -492,9 +487,7 @@ class DatabricksBase:
         elif api_key is None and not headers:
             if profile:
                 # PROFILE: authenticate via a named ~/.databrickscfg profile.
-                verbose_logger.debug(
-                    f"Using Databricks CLI profile '{profile}' for authentication"
-                )
+                verbose_logger.debug(f"Using Databricks CLI profile '{profile}' for authentication")
                 api_base, headers = self._get_databricks_credentials(
                     api_base=api_base,
                     api_key=api_key,

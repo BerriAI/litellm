@@ -129,9 +129,7 @@ def is_gateway_base(api_base: Optional[str]) -> bool:
 
 def is_serving_endpoints_base(api_base: Optional[str]) -> bool:
     """True if the base already targets the legacy serving-endpoints surface."""
-    return api_base is not None and api_base.rstrip("/").endswith(
-        _SERVING_ENDPOINTS_SUFFIX
-    )
+    return api_base is not None and api_base.rstrip("/").endswith(_SERVING_ENDPOINTS_SUFFIX)
 
 
 def has_explicit_custom_path(api_base: Optional[str]) -> bool:
@@ -244,9 +242,7 @@ def build_surface_base(host_or_base: str, surface: Surface) -> str:
     return host + _SERVING_ENDPOINTS_SUFFIX
 
 
-def build_gemini_generate_content_url(
-    host_or_base: str, model: str, stream: bool = False
-) -> str:
+def build_gemini_generate_content_url(host_or_base: str, model: str, stream: bool = False) -> str:
     """Native Gemini generateContent URL on the gateway.
 
     ``<host>/ai-gateway/gemini/v1beta/models/<endpoint>:generateContent`` (or

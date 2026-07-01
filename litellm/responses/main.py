@@ -912,9 +912,7 @@ def _execute_responses_with_surface_fallback(
     provider. Streaming uses the primary surface only.
     """
     surface_fallback_chain: List[BaseResponsesAPIConfig] = (
-        responses_api_provider_config.get_responses_surface_fallbacks(model)
-        if not stream
-        else []
+        responses_api_provider_config.get_responses_surface_fallbacks(model) if not stream else []
     )
     if surface_fallback_chain:
         configs_to_try = surface_fallback_chain
@@ -940,14 +938,8 @@ def _execute_responses_with_surface_fallback(
                 "aresponses": _is_async,
                 "litellm_call_id": litellm_call_id,
                 "model_info": kwargs.get("model_info"),
-                "data_residency": infer_openai_data_residency(
-                    custom_llm_provider, litellm_params.api_base
-                ),
-                "metadata": (
-                    kwargs["litellm_metadata"]
-                    if "litellm_metadata" in kwargs
-                    else kwargs.get("metadata")
-                ),
+                "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
+                "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -964,9 +956,7 @@ def _execute_responses_with_surface_fallback(
             timeout=timeout or request_timeout,
             _is_async=_is_async,
             client=kwargs.get("client"),
-            fake_stream=cfg.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
+            fake_stream=cfg.should_fake_stream(model=model, stream=stream, custom_llm_provider=custom_llm_provider),
             litellm_metadata=kwargs.get("litellm_metadata", {}),
             shared_session=kwargs.get("shared_session"),
         )
@@ -998,10 +988,7 @@ def _execute_responses_with_surface_fallback(
         return response
 
     def _should_try_next_surface(exc: Exception) -> bool:
-        return (
-            use_surface_fallback
-            and responses_api_provider_config.should_fallback_on_responses_error(exc)
-        )
+        return use_surface_fallback and responses_api_provider_config.should_fallback_on_responses_error(exc)
 
     if _is_async:
         # Async callers (aresponses) await the returned coroutine and do their own
@@ -1021,9 +1008,7 @@ def _execute_responses_with_surface_fallback(
                     if _should_try_next_surface(inner_exc):
                         continue
                     raise
-            return await _aemulate_or_reraise_primary(
-                _emulate_via_chat_completions, primary_exc
-            )
+            return await _aemulate_or_reraise_primary(_emulate_via_chat_completions, primary_exc)
 
         return _aresponses_with_fallback()
 
@@ -1036,9 +1021,7 @@ def _execute_responses_with_surface_fallback(
             if _should_try_next_surface(inner_exc):
                 continue
             raise
-    return _emulate_or_reraise_primary(
-        _emulate_via_chat_completions, _stamp_response, primary_exc
-    )
+    return _emulate_or_reraise_primary(_emulate_via_chat_completions, _stamp_response, primary_exc)
 
 
 @client
