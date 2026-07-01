@@ -921,7 +921,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                 label={
                   <span>
                     Models{" "}
-                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team. Leave empty to allow access to all models.">
+                    <Tooltip title="Select which models this key can access. 'All Proxy Models' grants access to every model on the proxy. 'All Team Models' inherits the team's allowlist and requires the key to be assigned to a team. Leave empty to allow access to all models.">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
@@ -941,7 +941,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   style={{ width: "100%" }}
                   disabled={keyType === "management" || keyType === "read_only"}
                   onChange={(values) => {
-                    if (values.includes("all-team-models")) {
+                    if (values.includes("all-proxy-models")) {
+                      form.setFieldsValue({ models: ["all-proxy-models"] });
+                    } else if (values.includes("all-team-models")) {
                       form.setFieldsValue({ models: ["all-team-models"] });
                     }
                   }}
