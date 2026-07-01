@@ -396,6 +396,23 @@ class _CallbackCapabilities:
     resolved_callbacks: Tuple[Any, ...] = field(default_factory=tuple)
 
 
+def _lift_logging_obj_fields_to_request_data(request_data: dict) -> None:
+    _logging_obj = request_data.get("litellm_logging_obj")
+    if _logging_obj is None:
+        return
+    _model_call_details = getattr(_logging_obj, "model_call_details", {})
+    _first_handoff = _model_call_details.get("first_api_call_start_time")
+    if _first_handoff is not None:
+        request_data["first_api_call_start_time"] = _first_handoff
+    _recovered_usage = _model_call_details.get("combined_usage_object")
+    if _recovered_usage is not None:
+        request_data["combined_usage_object"] = _recovered_usage
+        request_data["response_cost"] = _model_call_details.get("response_cost")
+    _slo = _model_call_details.get("standard_logging_object")
+    if _slo is not None and not request_data.get("standard_logging_object"):
+        request_data["standard_logging_object"] = _slo
+
+
 class ProxyLogging:
     """
     Logging/Custom Handlers for proxy.
@@ -2038,32 +2055,7 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        # Lift the first-handoff instant onto request_data (top-level
-        # internal key, not metadata) so failure-path callbacks can still
-        # compute preprocessing latency after the logging object is popped.
-        _logging_obj = request_data.get("litellm_logging_obj")
-        if _logging_obj is not None:
-            _model_call_details = getattr(_logging_obj, "model_call_details", {})
-            _first_handoff = _model_call_details.get("first_api_call_start_time")
-            if _first_handoff is not None:
-                request_data["first_api_call_start_time"] = _first_handoff
-
-            # A stream that broke mid-flight still billed the provider for the
-            # chunks already delivered; the streaming handler stashes that
-            # recovered usage and cost here. Lift them onto request_data so the
-            # failure-path spend callbacks (which run after the logging object
-            # is popped) record the real partial spend instead of zero.
-            _recovered_usage = _model_call_details.get("combined_usage_object")
-            if _recovered_usage is not None:
-                request_data["combined_usage_object"] = _recovered_usage
-                request_data["response_cost"] = _model_call_details.get("response_cost")
-
-            # Lift standard_logging_object so failure-path spend tracking can
-            # read model_id, model_group, and other fields that are only
-            # available on the logging object's model_call_details.
-            _slo = _model_call_details.get("standard_logging_object")
-            if _slo is not None and not request_data.get("standard_logging_object"):
-                request_data["standard_logging_object"] = _slo
+        _lift_logging_obj_fields_to_request_data(request_data)
 
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
