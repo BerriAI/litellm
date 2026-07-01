@@ -183,9 +183,14 @@ def test_is_combined_false_when_delta_missing():
     assert _CombinedChunkSplitter._is_combined(chunk) is False
 
 
-def test_split_clears_reasoning_and_thinking_on_finish_chunk():
-    """When the combined delta carries reasoning/thinking, only the content
-    chunk keeps them — the finish chunk is cleared."""
+def test_split_separates_reasoning_content_and_finish():
+    """A delta carrying reasoning + content + finish_reason splits three ways:
+    a reasoning-only chunk, then a content-only chunk, then a finish-only chunk.
+
+    Reasoning must come first (Anthropic requires the thinking block before the
+    text block), and reasoning must never share a chunk with content — otherwise
+    the wrapper opens a text block and emits a thinking_delta into it, which
+    Anthropic clients reject with "Content block is not a thinking block"."""
     delta = SimpleNamespace(
         content="hi",
         tool_calls=None,
@@ -196,9 +201,134 @@ def test_split_clears_reasoning_and_thinking_on_finish_chunk():
         choices=[SimpleNamespace(finish_reason="stop", delta=delta)]
     )
 
-    content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
+    reasoning_chunk, content_chunk, finish_chunk = _CombinedChunkSplitter._split(chunk)
 
-    assert content_chunk.choices[0].delta.reasoning_content == "some reasoning"
-    assert content_chunk.choices[0].delta.thinking_blocks == [{"type": "thinking"}]
+    assert reasoning_chunk.choices[0].delta.reasoning_content == "some reasoning"
+    assert reasoning_chunk.choices[0].delta.thinking_blocks == [{"type": "thinking"}]
+    assert reasoning_chunk.choices[0].delta.content is None
+    assert reasoning_chunk.choices[0].finish_reason is None
+
+    assert content_chunk.choices[0].delta.content == "hi"
+    assert content_chunk.choices[0].delta.reasoning_content is None
+    assert content_chunk.choices[0].delta.thinking_blocks is None
+    assert content_chunk.choices[0].finish_reason is None
+
+    assert finish_chunk.choices[0].finish_reason == "stop"
+    assert finish_chunk.choices[0].delta.content is None
     assert finish_chunk.choices[0].delta.reasoning_content is None
-    assert finish_chunk.choices[0].delta.thinking_blocks is None
+
+
+def _open_block_type_by_index(events):
+    """Map content-block index -> the type it was opened with."""
+    return {
+        event["index"]: event["content_block"]["type"]
+        for event in events
+        if event.get("type") == "content_block_start"
+    }
+
+
+def _assert_no_delta_block_mismatch(events):
+    """Every thinking/signature delta must land in a thinking block and every
+    text delta in a text block. A mismatch is exactly what makes Anthropic
+    clients (e.g. Claude Code) raise "Content block is not a thinking block"."""
+    open_types = _open_block_type_by_index(events)
+    for event in events:
+        if event.get("type") != "content_block_delta":
+            continue
+        delta_type = event["delta"]["type"]
+        block_type = open_types.get(event["index"])
+        if delta_type in ("thinking_delta", "signature_delta"):
+            assert block_type == "thinking", (
+                f"{delta_type} emitted into a {block_type!r} block: {event}"
+            )
+        elif delta_type == "text_delta":
+            assert block_type == "text", (
+                f"text_delta emitted into a {block_type!r} block: {event}"
+            )
+
+
+def _reasoning_then_answer_chunks():
+    """Mimic a vLLM reasoning model whose boundary chunk carries the last
+    reasoning token together with the first answer token (verified live with
+    hosted_vllm/qwen)."""
+    return [
+        ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0, delta=Delta(reasoning_content="Let me think."), finish_reason=None
+                )
+            ]
+        ),
+        ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(reasoning_content="\n", content="Hi there!"),
+                    finish_reason=None,
+                )
+            ]
+        ),
+        ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(), finish_reason="stop")]
+        ),
+    ]
+
+
+def _text_deltas(events):
+    return [
+        event["delta"]["text"]
+        for event in events
+        if event.get("type") == "content_block_delta"
+        and event["delta"].get("type") == "text_delta"
+    ]
+
+
+def _thinking_deltas(events):
+    return [
+        event["delta"]["thinking"]
+        for event in events
+        if event.get("type") == "content_block_delta"
+        and event["delta"].get("type") == "thinking_delta"
+    ]
+
+
+def test_boundary_reasoning_content_chunk_sync():
+    """Sync: a boundary chunk with reasoning+content must not emit a
+    thinking_delta into a text block, and must not drop the answer text."""
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter(_reasoning_then_answer_chunks()), model="qwen"
+    )
+    events = [event for event in wrapper if isinstance(event, dict)]
+
+    _assert_no_delta_block_mismatch(events)
+    assert "".join(_thinking_deltas(events)) == "Let me think.\n"
+    assert "".join(_text_deltas(events)) == "Hi there!"
+
+
+def test_boundary_reasoning_content_chunk_async():
+    """Async: same guarantees as the sync path."""
+
+    class _AsyncStream:
+        def __init__(self, chunks):
+            self._it = iter(chunks)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    async def _run():
+        wrapper = AnthropicStreamWrapper(
+            completion_stream=_AsyncStream(_reasoning_then_answer_chunks()), model="qwen"
+        )
+        return [event async for event in wrapper if isinstance(event, dict)]
+
+    events = asyncio.run(_run())
+
+    _assert_no_delta_block_mismatch(events)
+    assert "".join(_thinking_deltas(events)) == "Let me think.\n"
+    assert "".join(_text_deltas(events)) == "Hi there!"

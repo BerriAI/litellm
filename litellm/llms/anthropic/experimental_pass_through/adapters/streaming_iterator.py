@@ -32,16 +32,24 @@ if TYPE_CHECKING:
 
 class _CombinedChunkSplitter:
     """
-    Splits a streaming chunk that carries BOTH response content and a
-    ``finish_reason`` into two chunks: a content-only chunk followed by a
-    finish-only chunk.
+    Splits a streaming chunk that packs multiple Anthropic content blocks into
+    one so each emitted piece maps to exactly one block. Two independent splits
+    compose here:
 
-    ``AnthropicStreamWrapper`` (via ``translate_streaming_openai_response_to_anthropic``)
-    assumes content and ``finish_reason`` never arrive in the same chunk — true for
-    real provider streams, but false for fake-streamed providers (e.g. Vertex AI
-    Gemma ``:predict``) where ``MockResponseIterator`` collapses the entire response
-    into a single chunk. Without this split the assumption causes all content to be
-    silently dropped (only the ``message_delta`` stop event is emitted).
+    - reasoning + response content: vLLM/SGLang reasoning models emit a boundary
+      chunk that carries the last ``reasoning_content`` token together with the
+      first answer ``content`` (or ``tool_calls``) token. These belong to two
+      different Anthropic blocks — a thinking block then a text/tool_use block.
+      Left combined, ``AnthropicStreamWrapper`` opens a ``text`` block but emits a
+      ``thinking_delta`` into it (Anthropic clients such as Claude Code reject this
+      with "Content block is not a thinking block") and the answer text is dropped.
+
+    - response content + ``finish_reason``: fake-streamed providers (e.g. Vertex AI
+      Gemma ``:predict``) collapse the entire response into a single chunk via
+      ``MockResponseIterator``. ``translate_streaming_openai_response_to_anthropic``
+      assumes content and ``finish_reason`` never share a chunk — true for real
+      provider streams — so without this split all content is silently dropped
+      (only the ``message_delta`` stop event is emitted).
 
     Supports both sync and async iteration, since ``AnthropicStreamWrapper`` exposes
     both ``__next__`` and ``__anext__``. An instance is single-mode: callers must
@@ -76,8 +84,25 @@ class _CombinedChunkSplitter:
         )
 
     @staticmethod
-    def _split(chunk: Any) -> List[Any]:
-        """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
+    def _has_reasoning_and_content(chunk: Any) -> bool:
+        """True if ``chunk`` carries reasoning AND answer content in one delta.
+
+        These map to two different Anthropic blocks (thinking, then text/tool_use)
+        and must be split so a ``thinking_delta`` is never emitted into a text block.
+        """
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            return False
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return False
+        has_reasoning = bool(getattr(delta, "reasoning_content", None) or getattr(delta, "thinking_blocks", None))
+        has_content = bool(getattr(delta, "content", None) or getattr(delta, "tool_calls", None))
+        return has_reasoning and has_content
+
+    @staticmethod
+    def _split_finish(chunk: Any) -> List[Any]:
+        """Split a content + ``finish_reason`` chunk into content then finish."""
         if not _CombinedChunkSplitter._is_combined(chunk):
             return [chunk]
 
@@ -96,6 +121,37 @@ class _CombinedChunkSplitter:
         if hasattr(finish_delta, "thinking_blocks"):
             finish_delta.thinking_blocks = None
         return [content_chunk, finish_chunk]
+
+    @staticmethod
+    def _split(chunk: Any) -> List[Any]:
+        """Split a chunk that packs multiple blocks into ordered sub-chunks.
+
+        Reasoning is peeled off first (Anthropic requires the thinking block before
+        the text/tool_use block); the remaining content chunk then flows through the
+        content + ``finish_reason`` split.
+        """
+        if not _CombinedChunkSplitter._has_reasoning_and_content(chunk):
+            return _CombinedChunkSplitter._split_finish(chunk)
+
+        # Reasoning chunk: keep reasoning, drop content/tool_calls and finish_reason
+        # (the finish belongs with the trailing content).
+        reasoning_chunk = copy.deepcopy(chunk)
+        reasoning_chunk.choices[0].finish_reason = None
+        reasoning_delta = reasoning_chunk.choices[0].delta
+        reasoning_delta.content = None
+        if hasattr(reasoning_delta, "tool_calls"):
+            reasoning_delta.tool_calls = None
+
+        # Content chunk: drop reasoning, keep content/tool_calls (and finish_reason,
+        # which the finish split below separates out when present).
+        content_chunk = copy.deepcopy(chunk)
+        content_delta = content_chunk.choices[0].delta
+        if hasattr(content_delta, "reasoning_content"):
+            content_delta.reasoning_content = None
+        if hasattr(content_delta, "thinking_blocks"):
+            content_delta.thinking_blocks = None
+
+        return [reasoning_chunk, *_CombinedChunkSplitter._split_finish(content_chunk)]
 
     def __iter__(self) -> "Iterator[Any]":
         return self
