@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -31,7 +32,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import get_server_root_path
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 if TYPE_CHECKING:
@@ -614,6 +615,75 @@ async def exchange_token_with_server(
     return JSONResponse(result, headers=TOKEN_NO_CACHE_HEADERS)
 
 
+class _DcrClientRegistration(BaseModel):
+    """RFC 7591 dynamic client registration response, narrowed to the fields the gateway
+    must persist to authenticate later token-endpoint calls. Extra members are ignored."""
+
+    client_id: str
+    client_secret: Optional[str] = None
+    token_endpoint_auth_method: Optional[str] = None
+
+
+async def _persist_dcr_client_registration(mcp_server: MCPServer, registration_response: object) -> None:
+    """Persist the dynamically registered OAuth client (RFC 7591) onto the MCP server row.
+
+    The interactive authorization_code flow mints a ``client_id`` via Dynamic Client
+    Registration that discovery cannot re-derive; without persisting it the autonomous
+    ``refresh_token`` grant has no client identity, so an expired access token forces a
+    full re-authorization instead of a silent refresh. Mirrors the ``encrypt_credentials``
+    write that ``client_credentials`` and token exchange already use. Failures are logged,
+    never raised: registration still returns to the caller even when persistence fails.
+    """
+    try:
+        registration = _DcrClientRegistration.model_validate(registration_response)
+    except ValidationError as exc:
+        verbose_logger.warning(
+            "register_client_with_server: DCR response has no usable client_id for server_id=%s; "
+            "client registration not persisted (%s)",
+            mcp_server.server_id,
+            exc,
+        )
+        return
+
+    credentials: MCPCredentials = {
+        "client_id": registration.client_id,
+        **({"client_secret": registration.client_secret} if registration.client_secret is not None else {}),
+        **(
+            {"token_endpoint_auth_method": "client_secret_basic"}
+            if registration.token_endpoint_auth_method == "client_secret_basic"
+            else {}
+        ),
+    }
+
+    from litellm.proxy._experimental.mcp_server.db import update_mcp_server  # noqa: PLC0415
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import UpdateMCPServerRequest  # noqa: PLC0415
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+
+    try:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Cannot persist MCP OAuth client registration."
+        )
+        updated_row = await update_mcp_server(
+            prisma_client=prisma_client,
+            data=UpdateMCPServerRequest(
+                server_id=mcp_server.server_id,
+                credentials=credentials,
+                **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
+            ),
+            touched_by="mcp_oauth_dcr",
+        )
+        await global_mcp_server_manager.update_server(updated_row)
+    except Exception as exc:  # noqa: BLE001
+        verbose_logger.warning(
+            "register_client_with_server: failed to persist DCR client registration for server_id=%s: %s",
+            mcp_server.server_id,
+            exc,
+        )
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -622,6 +692,7 @@ async def register_client_with_server(
     response_types: Optional[list],
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
+    persist_credentials: bool = False,
 ):
     _raise_if_not_oauth2(mcp_server)
     request_base_url = get_request_base_url(request)
@@ -631,7 +702,7 @@ async def register_client_with_server(
         "redirect_uris": [f"{request_base_url}/callback"],
     }
 
-    if mcp_server.client_id and mcp_server.client_secret:
+    if mcp_server.client_id:
         return dummy_return
 
     if mcp_server.authorization_url is None:
@@ -666,6 +737,9 @@ async def register_client_with_server(
     response.raise_for_status()
 
     token_response = response.json()
+
+    if persist_credentials:
+        await _persist_dcr_client_registration(mcp_server, token_response)
 
     return JSONResponse(token_response)
 

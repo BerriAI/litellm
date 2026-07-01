@@ -1705,6 +1705,7 @@ if MCP_AVAILABLE:
             response_types=data.get("response_types", []),
             token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
             fallback_client_id=server_id,
+            persist_credentials=_user_is_full_admin(user_api_key_dict),
         )
 
     @router.delete(
