@@ -966,7 +966,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 alt="LiteLLM"
                 style={{ height: 28, maxWidth: 120, objectFit: "contain", flexShrink: 0 }}
               />
-              <span style={{ fontWeight: 700, fontSize: 15, color: "#111827", letterSpacing: "-0.01em" }}>LiteLLM</span>
             </div>
           )}
           <Tooltip title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} placement="right">
