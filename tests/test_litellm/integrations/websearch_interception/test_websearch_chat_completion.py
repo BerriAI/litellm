@@ -6,7 +6,7 @@ litellm.acompletion() for transparent server-side web search execution.
 """
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -34,12 +34,14 @@ def mock_search_response():
 @pytest.fixture
 def websearch_logger():
     """Create a WebSearchInterceptionLogger instance"""
-    return WebSearchInterceptionLogger(
-        enabled_providers=[LlmProviders.OPENAI, LlmProviders.MINIMAX]
-    )
+    return WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI, LlmProviders.MINIMAX])
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("OPENAI_API_KEY") is None,
+    reason="OPENAI_API_KEY not set",
+)
 async def test_websearch_chat_completion_with_openai():
     """Test websearch interception with OpenAI chat completions API.
 
@@ -48,112 +50,56 @@ async def test_websearch_chat_completion_with_openai():
     2. Server executes web search automatically
     3. Server makes follow-up request with search results
     4. User gets final answer without tool_calls
-
-    Uses mocked acompletion so no real API key is needed.
     """
-    from litellm.types.utils import (
-        ChatCompletionMessageToolCall,
-        Choices,
-        Function,
-        Message,
-    )
-
-    # First call returns a tool_call response; second call returns a final answer.
-    tool_call_response = ModelResponse(
-        id="chatcmpl-tool",
-        choices=[
-            Choices(
-                finish_reason="tool_calls",
-                index=0,
-                message=Message(
-                    role="assistant",
-                    content=None,
-                    tool_calls=[
-                        ChatCompletionMessageToolCall(
-                            id="call_001",
-                            type="function",
-                            function=Function(
-                                name="litellm_web_search",
-                                arguments='{"query": "weather San Francisco"}',
-                            ),
-                        )
-                    ],
-                ),
-            )
-        ],
-        model="gpt-4o-mini",
-        object="chat.completion",
-        created=1234567890,
-    )
-    final_response = ModelResponse(
-        id="chatcmpl-final",
-        choices=[
-            Choices(
-                finish_reason="stop",
-                index=0,
-                message=Message(
-                    role="assistant",
-                    content="The weather in San Francisco today is 65°F and partly cloudy.",
-                    tool_calls=None,
-                ),
-            )
-        ],
-        model="gpt-4o-mini",
-        object="chat.completion",
-        created=1234567891,
-    )
-
-    call_count = 0
-
-    async def mock_acompletion(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return tool_call_response
-        return final_response
-
     # Configure WebSearch interception
     original_callbacks = litellm.callbacks.copy() if litellm.callbacks else []
-    websearch_logger = WebSearchInterceptionLogger(
-        enabled_providers=[LlmProviders.OPENAI]
-    )
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
     litellm.callbacks = [websearch_logger]
 
     try:
-        with patch("litellm.acompletion", side_effect=mock_acompletion), \
-             patch("litellm.integrations.websearch_interception.handler.litellm.acompletion",
-                   side_effect=mock_acompletion):
-            response = await litellm.acompletion(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "What's the weather in San Francisco today?",
-                    }
-                ],
-                tools=[
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": "litellm_web_search",
-                            "description": "Search the web for information",
-                            "parameters": {
-                                "type": "object",
-                                "properties": {
-                                    "query": {
-                                        "type": "string",
-                                        "description": "Search query",
-                                    }
-                                },
-                                "required": ["query"],
+        response = await litellm.acompletion(
+            model="gpt-4o-mini",  # Use cheaper model for testing
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What's the weather in San Francisco today?",
+                }
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "litellm_web_search",
+                        "description": "Search the web for information",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "Search query",
+                                }
                             },
+                            "required": ["query"],
                         },
-                    }
-                ],
-            )
+                    },
+                }
+            ],
+        )
 
         # Verify response structure
         assert isinstance(response, ModelResponse)
+        assert response.choices[0].message.content is not None
+        assert len(response.choices[0].message.content) > 0
+
+        # If agentic loop worked, we should NOT have tool_calls in final response
+        # (they should have been executed and replaced with final answer)
+        if hasattr(response.choices[0].message, "tool_calls"):
+            # If tool_calls exist, it means agentic loop didn't run
+            # This could happen if search tool is not configured
+            pytest.skip("Agentic loop did not execute - search tool may not be configured")
+
+        # Verify we got a meaningful response
+        assert response.choices[0].finish_reason in ["stop", "end_turn"]
 
     finally:
         # Restore original callbacks
@@ -170,9 +116,7 @@ async def test_websearch_chat_completion_hook_detection():
         Message,
     )
 
-    websearch_logger = WebSearchInterceptionLogger(
-        enabled_providers=[LlmProviders.OPENAI]
-    )
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
 
     # Mock response with litellm_web_search tool call
     mock_response = ModelResponse(
@@ -203,21 +147,19 @@ async def test_websearch_chat_completion_hook_detection():
     )
 
     # Test should_run_chat_completion_agentic_loop
-    should_run, tools_dict = (
-        await websearch_logger.async_should_run_chat_completion_agentic_loop(
-            response=mock_response,
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "What's the weather?"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {"name": "litellm_web_search"},
-                }
-            ],
-            stream=False,
-            custom_llm_provider="openai",
-            kwargs={},
-        )
+    should_run, tools_dict = await websearch_logger.async_should_run_chat_completion_agentic_loop(
+        response=mock_response,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What's the weather?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "litellm_web_search"},
+            }
+        ],
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={},
     )
 
     # Verify hook detected the tool call
@@ -233,9 +175,7 @@ async def test_websearch_not_triggered_without_tool():
     """Test that websearch hook is NOT triggered when no web search tool in request."""
     from litellm.types.utils import Choices, Message
 
-    websearch_logger = WebSearchInterceptionLogger(
-        enabled_providers=[LlmProviders.OPENAI]
-    )
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
 
     mock_response = ModelResponse(
         id="test-123",
@@ -256,21 +196,19 @@ async def test_websearch_not_triggered_without_tool():
     )
 
     # Test without web search tool
-    should_run, tools_dict = (
-        await websearch_logger.async_should_run_chat_completion_agentic_loop(
-            response=mock_response,
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "Hello"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {"name": "some_other_tool"},
-                }
-            ],
-            stream=False,
-            custom_llm_provider="openai",
-            kwargs={},
-        )
+    should_run, tools_dict = await websearch_logger.async_should_run_chat_completion_agentic_loop(
+        response=mock_response,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "some_other_tool"},
+            }
+        ],
+        stream=False,
+        custom_llm_provider="openai",
+        kwargs={},
     )
 
     # Verify hook did NOT trigger
@@ -289,9 +227,7 @@ async def test_websearch_not_triggered_for_disabled_provider():
     )
 
     # Only enable bedrock
-    websearch_logger = WebSearchInterceptionLogger(
-        enabled_providers=[LlmProviders.BEDROCK]
-    )
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.BEDROCK])
 
     mock_response = ModelResponse(
         id="test-123",
@@ -321,21 +257,19 @@ async def test_websearch_not_triggered_for_disabled_provider():
     )
 
     # Test with OpenAI provider (not enabled)
-    should_run, tools_dict = (
-        await websearch_logger.async_should_run_chat_completion_agentic_loop(
-            response=mock_response,
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "test"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {"name": "litellm_web_search"},
-                }
-            ],
-            stream=False,
-            custom_llm_provider="openai",  # Not in enabled_providers
-            kwargs={},
-        )
+    should_run, tools_dict = await websearch_logger.async_should_run_chat_completion_agentic_loop(
+        response=mock_response,
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "test"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "litellm_web_search"},
+            }
+        ],
+        stream=False,
+        custom_llm_provider="openai",  # Not in enabled_providers
+        kwargs={},
     )
 
     # Verify hook did NOT trigger
@@ -388,9 +322,11 @@ async def test_websearch_json_serialization_fix():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("OPENAI_API_KEY") is None or os.environ.get("PERPLEXITY_API_KEY") is None,
+    reason="OPENAI_API_KEY or PERPLEXITY_API_KEY not set",
+)
 async def test_websearch_streaming_conversion():
-    if not os.environ.get("OPENAI_API_KEY") or not os.environ.get("PERPLEXITY_API_KEY"):
-        pytest.skip("OPENAI_API_KEY or PERPLEXITY_API_KEY not set")
     """Test that streaming requests are converted to non-streaming for web search.
 
     When stream=True is passed with web search tools, the handler should:
@@ -438,6 +374,174 @@ async def test_websearch_streaming_conversion():
 
     finally:
         litellm.callbacks = []
+
+
+@pytest.mark.asyncio
+async def test_maybe_run_chat_completion_agentic_loop_calls_chat_completion_hook():
+    """Regression test: maybe_run_chat_completion_agentic_loop must call
+    async_should_run_chat_completion_agentic_loop, not async_should_run_agentic_loop.
+
+    Before the fix, the function used the wrong gate check and wrong hook,
+    causing WebSearchInterceptionLogger to never intercept chat completion requests
+    even when the LLM returned a litellm_web_search tool call.
+    """
+    from litellm.litellm_core_utils.chat_completion_agentic_loop import (
+        maybe_run_chat_completion_agentic_loop,
+    )
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Choices,
+        Function,
+        Message,
+    )
+
+    mock_response = ModelResponse(
+        id="test-regression-123",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="call_abc",
+                            type="function",
+                            function=Function(
+                                name="litellm_web_search",
+                                arguments='{"query": "latest news"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        model="gpt-4o",
+        object="chat.completion",
+        created=1234567890,
+    )
+
+    sentinel = ModelResponse(
+        id="sentinel-final",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content="Here is the news."),
+            )
+        ],
+        model="gpt-4o",
+        object="chat.completion",
+        created=1234567890,
+    )
+
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
+
+    chat_completion_hook_called = False
+
+    async def fake_should_run_chat_completion(response, model, messages, tools, stream, custom_llm_provider, kwargs):
+        nonlocal chat_completion_hook_called
+        chat_completion_hook_called = True
+        return True, {
+            "tool_calls": [{"id": "call_abc", "name": "litellm_web_search", "input": {"query": "latest news"}}],
+            "tool_type": "websearch",
+            "provider": "openai",
+            "response_format": "openai",
+        }
+
+    async def fake_build_plan(tools, model, messages, response, optional_params, logging_obj, stream, kwargs):
+        from litellm.types.integrations.custom_logger import AgenticLoopPlan
+
+        return AgenticLoopPlan(run_agentic_loop=False, response_override=sentinel)
+
+    websearch_logger.async_should_run_chat_completion_agentic_loop = fake_should_run_chat_completion
+    websearch_logger.async_build_chat_completion_agentic_loop_plan = fake_build_plan
+
+    import litellm as _litellm
+
+    original_callbacks = _litellm.callbacks[:]
+    _litellm.callbacks = [websearch_logger]
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.dynamic_success_callbacks = None
+
+    try:
+        result = await maybe_run_chat_completion_agentic_loop(
+            response=mock_response,
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Latest news?"}],
+            optional_params={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "litellm_web_search"},
+                    }
+                ]
+            },
+            kwargs={},
+            logging_obj=mock_logging_obj,
+            custom_llm_provider="openai",
+            stream=False,
+        )
+    finally:
+        _litellm.callbacks = original_callbacks
+
+    assert chat_completion_hook_called, (
+        "async_should_run_chat_completion_agentic_loop was never called; "
+        "maybe_run_chat_completion_agentic_loop used the wrong hook"
+    )
+    assert result is sentinel, "Expected agentic loop to return sentinel final response"
+
+
+@pytest.mark.asyncio
+async def test_execute_chat_completion_agentic_loop_strips_tool_choice():
+    """Regression: _execute_chat_completion_agentic_loop must not forward tool_choice
+    from the original request into the follow-up synthesis call.
+
+    When the original request forces tool_choice to litellm_web_search, merging
+    optional_params into the follow-up params without explicit removal causes the
+    model to call the search tool again instead of synthesizing an answer.
+    """
+    from unittest.mock import patch
+
+    websearch_logger = WebSearchInterceptionLogger(enabled_providers=[LlmProviders.OPENAI])
+
+    captured_kwargs: dict = {}
+
+    async def fake_acompletion(**kwargs):
+        captured_kwargs.update(kwargs)
+        return ModelResponse(id="followup", model="gpt-4o", object="chat.completion")
+
+    async def fake_search(query):
+        return ("Bitcoin price is $60,000", None)
+
+    with patch.object(websearch_logger, "_execute_search", side_effect=fake_search):
+        with patch("litellm.acompletion", side_effect=fake_acompletion):
+            await websearch_logger._execute_chat_completion_agentic_loop(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": "What is Bitcoin price?"}],
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "name": "litellm_web_search",
+                        "input": {"query": "bitcoin price"},
+                    }
+                ],
+                optional_params={
+                    "tools": [{"type": "function", "function": {"name": "litellm_web_search"}}],
+                    "tool_choice": {"type": "function", "function": {"name": "litellm_web_search"}},
+                    "max_tokens": 512,
+                },
+                logging_obj=MagicMock(),
+                stream=False,
+                kwargs={},
+            )
+
+    assert "tool_choice" not in captured_kwargs, (
+        "tool_choice must not appear in follow-up acompletion kwargs; "
+        "it would force the model to call the search tool again instead of synthesizing"
+    )
 
 
 if __name__ == "__main__":

@@ -3804,6 +3804,10 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
 ) -> Dict[str, Any]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
+
+    Includes top-level scalar fields from the standard logging metadata (e.g.
+    user_api_key_project_alias, user_api_key_team_alias) so they are accessible
+    via custom_prometheus_metadata_labels configuration.
     """
     if not isinstance(standard_logging_payload, dict):
         return {}
@@ -3817,6 +3821,7 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
     spend_logs_metadata = standard_logging_metadata.get("spend_logs_metadata")
 
     return {
+        **{k: v for k, v in standard_logging_metadata.items() if not isinstance(v, dict)},
         **(requester_metadata if isinstance(requester_metadata, dict) else {}),
         **(user_api_key_auth_metadata if isinstance(user_api_key_auth_metadata, dict) else {}),
         **(spend_logs_metadata if isinstance(spend_logs_metadata, dict) else {}),
