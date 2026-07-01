@@ -54,11 +54,9 @@ class DataDogHandler:
 
         # if not cached, create a new datadog logger and cache it
         if temp_datadog_logger is None:
-            temp_datadog_logger = (
-                DataDogHandler._create_datadog_logger_from_credentials(
-                    credentials=credentials_dict,
-                    in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
-                )
+            temp_datadog_logger = DataDogHandler._create_datadog_logger_from_credentials(
+                credentials=credentials_dict,
+                in_memory_dynamic_logger_cache=in_memory_dynamic_logger_cache,
             )
 
         return temp_datadog_logger
@@ -73,10 +71,7 @@ class DataDogHandler:
         """
         # When the destination is caller-supplied (dd_agent_host/dd_site), never fall back to the
         # proxy's DD_API_KEY env var, otherwise it would be sent to a team-controlled host.
-        allow_env_credentials = (
-            credentials.get("dd_agent_host") is None
-            and credentials.get("dd_site") is None
-        )
+        allow_env_credentials = credentials.get("dd_agent_host") is None and credentials.get("dd_site") is None
         datadog_logger = DataDogLogger(
             dd_api_key=credentials.get("dd_api_key"),
             dd_site=credentials.get("dd_site"),
@@ -89,9 +84,7 @@ class DataDogHandler:
             service_name="datadog",
             logging_obj=datadog_logger,
         )
-        verbose_logger.debug(
-            "Datadog: Created and cached new DataDogLogger for team-scoped credentials"
-        )
+        verbose_logger.debug("Datadog: Created and cached new DataDogLogger for team-scoped credentials")
         return datadog_logger
 
     @staticmethod

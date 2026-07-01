@@ -11,7 +11,12 @@ lint.external = [
     "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
 ]
 line-length = 120
-exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+
+format.exclude = ["**/enterprise/**"]
+
+# Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths
+# (Black did) while `ruff check` keeps skipping them.
+lint.exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
 
 
 [lint.per-file-ignores]

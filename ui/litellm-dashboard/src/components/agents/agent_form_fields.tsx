@@ -52,9 +52,18 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({
                     : undefined
                 }
                 tooltip={field.tooltip}
+                extra={field.helpText}
               >
                 {field.type === "textarea" ? (
                   <Input.TextArea rows={field.rows} placeholder={field.placeholder} />
+                ) : field.type === "select" ? (
+                  <Select placeholder={field.placeholder}>
+                    {(field.options ?? []).map((opt) => (
+                      <Select.Option key={opt} value={opt}>
+                        {opt}
+                      </Select.Option>
+                    ))}
+                  </Select>
                 ) : (
                   <Input placeholder={field.placeholder} />
                 )}

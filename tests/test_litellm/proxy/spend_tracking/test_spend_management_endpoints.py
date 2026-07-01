@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import os
+import re
 import sys
 from datetime import timezone
 
@@ -60,31 +61,115 @@ def _filter_logs_by_date_range(logs, where):
     return filtered
 
 
+def _reconstruct_ui_where_from_sql(sql_query, params):
+    """
+    Rebuild the Prisma-style ``where`` dict the filter_fns below expect from the
+    raw SQL + params the endpoint emits.
+
+    ``ui_view_spend_logs`` folds the total into the page query via
+    ``COUNT(*) OVER ()`` and no longer issues a separate ``count(where=...)``
+    call, so the mock derives the active filter from the one query it sees
+    instead of from the (now absent) count call.
+    """
+    where: dict = {}
+    clause = re.search(r"WHERE (.*) ORDER BY", sql_query, re.DOTALL)
+    if clause is None:
+        return where
+
+    def _iso(value):
+        return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+    eq_cols = {
+        "team_id": "team_id",
+        '"user"': "user",
+        "api_key": "api_key",
+        "request_id": "request_id",
+        "model": "model",
+        "model_id": "model_id",
+        "model_group": "model_group",
+        "end_user": "end_user",
+    }
+    date_bounds: dict = {}
+    metadata_conds: list = []
+    for cond in (c.strip() for c in clause.group(1).split(" AND ")):
+        gte = re.search(r'"startTime" >= \(\$(\d+)', cond)
+        lte = re.search(r'"startTime" <= \(\$(\d+)', cond)
+        alias = re.search(r"user_api_key_alias' LIKE \$(\d+)", cond)
+        code = re.search(r"error_code' = \$(\d+)", cond)
+        msg = re.search(r"error_message' LIKE \$(\d+)", cond)
+        status = re.fullmatch(r"status = \$(\d+)", cond)
+        if gte:
+            date_bounds["gte"] = _iso(params[int(gte.group(1)) - 1])
+        elif lte:
+            date_bounds["lte"] = _iso(params[int(lte.group(1)) - 1])
+        elif "OR team_id = ANY" in cond:
+            where["OR"] = where.get("OR", []) + [{"multi_team": True}]
+        elif "status = 'success'" in cond:
+            where["OR"] = where.get("OR", []) + [{"status": "success"}]
+        elif status:
+            where["status"] = {"equals": params[int(status.group(1)) - 1]}
+        elif alias:
+            metadata_conds.append(
+                {
+                    "path": ["user_api_key_alias"],
+                    "string_contains": str(params[int(alias.group(1)) - 1]).strip("%"),
+                }
+            )
+        elif code:
+            metadata_conds.append(
+                {
+                    "path": ["error_information", "error_code"],
+                    "equals": params[int(code.group(1)) - 1],
+                }
+            )
+        elif msg:
+            metadata_conds.append(
+                {
+                    "path": ["error_information", "error_message"],
+                    "string_contains": str(params[int(msg.group(1)) - 1]).strip("%"),
+                }
+            )
+        else:
+            for sql_col, key in eq_cols.items():
+                eq = re.fullmatch(rf"{re.escape(sql_col)} = \$(\d+)", cond)
+                if eq:
+                    where[key] = params[int(eq.group(1)) - 1]
+                    break
+
+    if date_bounds:
+        where["startTime"] = date_bounds
+    if len(metadata_conds) == 1:
+        where["metadata"] = metadata_conds[0]
+    elif len(metadata_conds) > 1:
+        where["AND"] = [{"metadata": cond} for cond in metadata_conds]
+    return where
+
+
 def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=None):
     """
     Create a MockPrismaClient for /spend/logs/ui endpoint tests.
 
     Args:
         mock_spend_logs: List of mock spend log dicts.
-        filter_fn: Callable[[dict], list] - receives where_conditions from count(),
-                   returns the filtered list of logs for that query.
+        filter_fn: Callable[[dict], list] - receives the reconstructed
+                   where_conditions, returns the filtered list of logs.
         team_lookup_fn: Optional async callable for team RBAC (find_unique).
                         If provided, adds litellm_teamtable to db.
     """
-    filtered_holder = []
 
     class MockDB:
         async def count(self, *args, **kwargs):
-            where = kwargs.get("where", {})
-            filtered = filter_fn(where)
-            filtered_holder.clear()
-            filtered_holder.extend(filtered)
-            return len(filtered)
+            return len(filter_fn(kwargs.get("where", {})))
 
         async def query_raw(self, sql_query, *params):
+            filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
             page_size = params[-2] if len(params) >= 2 else 50
             skip = params[-1] if len(params) >= 1 else 0
-            return filtered_holder[skip : skip + page_size]
+            total = len(filtered)
+            return [
+                {**row, "total_count": total}
+                for row in filtered[skip : skip + page_size]
+            ]
 
     class MockPrismaClient:
         def __init__(self):
@@ -342,6 +427,7 @@ def test_ui_view_request_response_forbids_non_admin_without_db(client, monkeypat
 
 ignored_keys = [
     "request_id",
+    "metadata.litellm_call_id",
     "session_id",
     "startTime",
     "endTime",
@@ -607,7 +693,10 @@ async def test_ui_view_spend_logs_sort_by_and_sort_order(
         sorted_logs = _sort_logs(base_logs, order)
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return sorted_logs[skip : skip + page_size]
+        return [
+            {**row, "total_count": len(base_logs)}
+            for row in sorted_logs[skip : skip + page_size]
+        ]
 
     class MockPrismaClient:
         def __init__(self):
@@ -747,7 +836,10 @@ async def test_ui_view_spend_logs_sort_by_request_duration_ms(client, monkeypatc
         )
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return sorted_logs[skip : skip + page_size]
+        return [
+            {**row, "total_count": len(base_logs)}
+            for row in sorted_logs[skip : skip + page_size]
+        ]
 
     class MockPrismaClient:
         def __init__(self):
@@ -845,7 +937,10 @@ async def test_ui_view_spend_logs_sort_by_model(
         )
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
-        return sorted_logs[skip : skip + page_size]
+        return [
+            {**row, "total_count": len(base_logs)}
+            for row in sorted_logs[skip : skip + page_size]
+        ]
 
     class MockPrismaClient:
         def __init__(self):
@@ -956,7 +1051,7 @@ async def test_ui_view_spend_logs_sort_by_ttft_ms(client, monkeypatch):
         page_size = params[-2] if len(params) >= 2 else 50
         skip = params[-1] if len(params) >= 1 else 0
         return [
-            {k: v for k, v in row.items() if k != "_ttft_ms"}
+            {**{k: v for k, v in row.items() if k != "_ttft_ms"}, "total_count": len(base_logs)}
             for row in sorted_logs[skip : skip + page_size]
         ]
 
@@ -3667,7 +3762,7 @@ async def test_ui_view_spend_logs_rehydrates_metadata_jsonb_text(client, monkeyp
         return 1
 
     async def mock_query_raw(sql_query, *params):
-        return [raw_row]
+        return [{**raw_row, "total_count": 1}]
 
     class MockPrismaClient:
         def __init__(self):
@@ -3753,7 +3848,7 @@ async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict
         return 1
 
     async def mock_query_raw(sql_query, *params):
-        return [raw_row]
+        return [{**raw_row, "total_count": 1}]
 
     class MockPrismaClient:
         def __init__(self):
@@ -3784,5 +3879,300 @@ async def test_ui_view_spend_logs_metadata_invalid_json_falls_back_to_empty_dict
         body = response.json()
         assert body["data"]
         assert body["data"][0]["metadata"] == {}
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+class _FakeColdStorageLogger:
+    """Injectable cold storage logger that records the object key it was asked for."""
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.requested_object_keys = []
+
+    async def get_proxy_server_request_from_cold_storage_with_object_key(
+        self, object_key
+    ):
+        self.requested_object_keys.append(object_key)
+        return self._payload
+
+
+def _cold_storage_handler(payload):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger(payload)
+    return ColdStorageHandler(cold_storage_logger=logger), logger
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, False),
+        ("", False),
+        ("   ", False),
+        ("{}", False),
+        ("[]", False),
+        ("null", False),
+        ('{"a": 1}', True),
+        ({}, False),
+        ({"a": 1}, True),
+        ([], False),
+        ([1], True),
+        (5, True),
+    ],
+)
+def test_spend_log_field_has_content(value, expected):
+    assert spend_management_endpoints._spend_log_field_has_content(value) is expected
+
+
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        (None, None),
+        ("{}", None),
+        ("not-json", None),
+        ({"cold_storage_object_key": ""}, None),
+        ({"cold_storage_object_key": "k/req-1.json"}, "k/req-1.json"),
+        ('{"cold_storage_object_key": "k/req-2.json"}', "k/req-2.json"),
+    ],
+)
+def test_cold_storage_object_key_from_metadata(metadata, expected):
+    assert (
+        spend_management_endpoints._cold_storage_object_key_from_metadata(metadata)
+        == expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_prefers_pg_and_skips_cold_storage():
+    handler, logger = _cold_storage_handler({"messages": "X", "response": "Y"})
+    row = {
+        "messages": "{}",
+        "response": '{"choices": [{"message": {"content": "hi"}}]}',
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/req.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert resolved.response == '{"choices": [{"message": {"content": "hi"}}]}'
+    assert logger.requested_object_keys == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_fetches_from_cold_storage_when_pg_empty():
+    cold_payload = {
+        "messages": [{"role": "user", "content": "what is 2+2"}],
+        "response": {"choices": [{"message": {"content": "4"}}]},
+        "proxy_server_request": {"body": {"model": "gpt-4o-mini"}},
+    }
+    handler, logger = _cold_storage_handler(cold_payload)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "llm-gateway/prod/req-42.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["llm-gateway/prod/req-42.json"]
+    assert resolved.messages == cold_payload["messages"]
+    assert resolved.response == cold_payload["response"]
+    assert resolved.proxy_server_request == cold_payload["proxy_server_request"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_metadata_as_json_string():
+    cold_payload = {"messages": "in", "response": "out", "proxy_server_request": None}
+    handler, logger = _cold_storage_handler(cold_payload)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": json.dumps({"cold_storage_object_key": "k/str-meta.json"}),
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["k/str-meta.json"]
+    assert resolved.response == "out"
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_no_object_key_returns_empty_without_fetch():
+    handler, logger = _cold_storage_handler({"messages": "should-not-be-used"})
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == []
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_cold_storage_miss_falls_back_to_pg_values():
+    handler, logger = _cold_storage_handler(None)
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/missing.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert logger.requested_object_keys == ["k/missing.json"]
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_payload_cold_storage_exception_falls_back_to_pg_values():
+    """A backend error during fetch degrades to PG values instead of bubbling a 500."""
+
+    class _RaisingLogger:
+        async def get_proxy_server_request_from_cold_storage_with_object_key(
+            self, object_key
+        ):
+            raise RuntimeError("cold storage backend unavailable")
+
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    handler = ColdStorageHandler(cold_storage_logger=_RaisingLogger())
+    row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/boom.json"},
+    }
+
+    resolved = await spend_management_endpoints._resolve_request_response_payload(
+        row, cold_storage_handler=handler
+    )
+
+    assert resolved == spend_management_endpoints.RequestResponsePayload(
+        "{}", "{}", "{}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_uses_injected_logger():
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger({"messages": "in", "response": "out"})
+    handler = ColdStorageHandler(cold_storage_logger=logger)
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result == {"messages": "in", "response": "out"}
+    assert logger.requested_object_keys == ["k/req.json"]
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_returns_none_when_no_logger_configured(monkeypatch):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", None, raising=False)
+    handler = ColdStorageHandler()
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_cold_storage_handler_resolves_configured_logger_from_registry(monkeypatch):
+    from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
+
+    logger = _FakeColdStorageLogger({"messages": "from-registry"})
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2", raising=False)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_custom_logger_for_callback_name",
+        lambda name: logger if name == "s3_v2" else None,
+    )
+    handler = ColdStorageHandler()
+
+    result = await handler.get_proxy_server_request_from_cold_storage_with_object_key(
+        object_key="k/req.json"
+    )
+
+    assert result == {"messages": "from-registry"}
+    assert logger.requested_object_keys == ["k/req.json"]
+
+
+def test_ui_view_request_response_reads_from_cold_storage(client, monkeypatch):
+    """End-to-end: a placeholder row with a cold_storage_object_key is served from
+    cold storage through the detail endpoint."""
+    from types import SimpleNamespace
+
+    placeholder_row = {
+        "messages": "{}",
+        "response": "{}",
+        "proxy_server_request": "{}",
+        "metadata": {"cold_storage_object_key": "k/cold.json"},
+    }
+
+    async def _query_raw(_sql, *_args):
+        return [placeholder_row]
+
+    fake_prisma = SimpleNamespace(db=SimpleNamespace(query_raw=_query_raw))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", fake_prisma)
+
+    cold_logger = _FakeColdStorageLogger(
+        {
+            "messages": [{"role": "user", "content": "hi"}],
+            "response": {"choices": [{"message": {"content": "hello"}}]},
+            "proxy_server_request": None,
+        }
+    )
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2", raising=False)
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_additional_logging_utils_from_custom_logger",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "get_active_custom_logger_for_callback_name",
+        lambda name: cold_logger if name == "s3_v2" else None,
+    )
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui/req-cold",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["messages"] == [{"role": "user", "content": "hi"}]
+        assert body["response"] == {"choices": [{"message": {"content": "hello"}}]}
+        assert cold_logger.requested_object_keys == ["k/cold.json"]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)

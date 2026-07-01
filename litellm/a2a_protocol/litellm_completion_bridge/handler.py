@@ -137,9 +137,7 @@ class A2ACompletionBridgeHandler:
             )
 
             if a2a_provider_config is not None:
-                verbose_logger.info(
-                    f"A2A: Using provider config for {custom_llm_provider}"
-                )
+                verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider}")
 
                 return await a2a_provider_config.handle_non_streaming(
                     request_id=request_id,
@@ -153,9 +151,7 @@ class A2ACompletionBridgeHandler:
         message = params.get("message", {})
 
         # Transform A2A message to OpenAI format
-        openai_messages = (
-            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
-        )
+        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
 
         # Get completion params
         custom_llm_provider = litellm_params.get("custom_llm_provider")
@@ -168,9 +164,7 @@ class A2ACompletionBridgeHandler:
         else:
             full_model = model
 
-        verbose_logger.info(
-            f"A2A completion bridge: model={full_model}, api_base={api_base}"
-        )
+        verbose_logger.info(f"A2A completion bridge: model={full_model}, api_base={api_base}")
 
         # Build completion params dict
         completion_params: Dict[str, Any] = {
@@ -205,11 +199,9 @@ class A2ACompletionBridgeHandler:
         response = await _run_completion(completion_params, litellm_params)
 
         # Transform response to A2A format
-        a2a_response = (
-            A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
-                response=response,
-                request_id=request_id,
-            )
+        a2a_response = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
+            response=response,
+            request_id=request_id,
         )
 
         verbose_logger.info(f"A2A completion bridge completed: request_id={request_id}")
@@ -254,9 +246,7 @@ class A2ACompletionBridgeHandler:
             )
 
             if a2a_provider_config is not None:
-                verbose_logger.info(
-                    f"A2A: Using provider config for {custom_llm_provider} (streaming)"
-                )
+                verbose_logger.info(f"A2A: Using provider config for {custom_llm_provider} (streaming)")
 
                 async for chunk in a2a_provider_config.handle_streaming(
                     request_id=request_id,
@@ -279,9 +269,7 @@ class A2ACompletionBridgeHandler:
         )
 
         # Transform A2A message to OpenAI format
-        openai_messages = (
-            A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
-        )
+        openai_messages = A2ACompletionBridgeTransformation.a2a_message_to_openai_messages(message)
 
         # Get completion params
         custom_llm_provider = litellm_params.get("custom_llm_provider")
@@ -294,9 +282,7 @@ class A2ACompletionBridgeHandler:
         else:
             full_model = model
 
-        verbose_logger.info(
-            f"A2A completion bridge streaming: model={full_model}, api_base={api_base}"
-        )
+        verbose_logger.info(f"A2A completion bridge streaming: model={full_model}, api_base={api_base}")
 
         # Build completion params dict
         completion_params: Dict[str, Any] = {
@@ -368,11 +354,9 @@ class A2ACompletionBridgeHandler:
 
         # Emit artifact update with accumulated content
         if accumulated_text:
-            artifact_event = (
-                A2ACompletionBridgeTransformation.create_artifact_update_event(
-                    ctx=ctx,
-                    text=accumulated_text,
-                )
+            artifact_event = A2ACompletionBridgeTransformation.create_artifact_update_event(
+                ctx=ctx,
+                text=accumulated_text,
             )
             yield artifact_event
 
@@ -384,9 +368,7 @@ class A2ACompletionBridgeHandler:
         )
         yield completed_event
 
-        verbose_logger.info(
-            f"A2A completion bridge streaming completed: request_id={request_id}, chunks={chunk_count}"
-        )
+        verbose_logger.info(f"A2A completion bridge streaming completed: request_id={request_id}, chunks={chunk_count}")
 
 
 # Convenience functions that delegate to the class methods

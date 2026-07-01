@@ -84,9 +84,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Get the complete url for the request
         """
         ### SET RUNTIME ENDPOINT ###
-        aws_bedrock_runtime_endpoint = optional_params.get(
-            "aws_bedrock_runtime_endpoint", None
-        )
+        aws_bedrock_runtime_endpoint = optional_params.get("aws_bedrock_runtime_endpoint", None)
 
         # Extract ARN from model string
         agent_runtime_arn = self._get_agent_runtime_arn(model)
@@ -233,9 +231,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             dict: Payload dict containing the prompt and (optionally) the OpenAI
             content list.
         """
-        verbose_logger.debug(
-            f"AgentCore transform_request - optional_params keys: {list(optional_params.keys())}"
-        )
+        verbose_logger.debug(f"AgentCore transform_request - optional_params keys: {list(optional_params.keys())}")
 
         # Use the last message content as the prompt
         prompt = convert_content_list_to_str(messages[-1])
@@ -250,8 +246,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if self._should_forward_multimodal_content(optional_params, litellm_params):
             last_content = messages[-1].get("content")
             if isinstance(last_content, list) and any(
-                isinstance(block, dict) and block.get("type") not in (None, "text")
-                for block in last_content
+                isinstance(block, dict) and block.get("type") not in (None, "text") for block in last_content
             ):
                 # Copy so the payload never aliases messages[-1]["content"]; shallow,
                 # not deep, to avoid cloning large base64 media on the request path.
@@ -273,9 +268,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         return payload
 
     @staticmethod
-    def _should_forward_multimodal_content(
-        optional_params: dict, litellm_params: dict
-    ) -> bool:
+    def _should_forward_multimodal_content(optional_params: dict, litellm_params: dict) -> bool:
         """Whether to forward raw OpenAI content blocks under ``payload["content"]``.
 
         Opt-in via the ``forward_multimodal_content`` litellm param (default ``False``)
@@ -346,15 +339,9 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         if not isinstance(content_list, list):
             return ""
 
-        return "".join(
-            block["text"]
-            for block in content_list
-            if isinstance(block, dict) and "text" in block
-        )
+        return "".join(block["text"] for block in content_list if isinstance(block, dict) and "text" in block)
 
-    def _calculate_usage(
-        self, model: str, messages: List[AllMessageValues], content: str
-    ) -> Optional[Usage]:
+    def _calculate_usage(self, model: str, messages: List[AllMessageValues], content: str) -> Optional[Usage]:
         """
         Calculate token usage using LiteLLM's token counter.
 
@@ -370,9 +357,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             from litellm.utils import token_counter
 
             prompt_tokens = token_counter(model=model, messages=messages)
-            completion_tokens = token_counter(
-                model=model, text=content, count_response_tokens=True
-            )
+            completion_tokens = token_counter(model=model, text=content, count_response_tokens=True)
             total_tokens = prompt_tokens + completion_tokens
 
             verbose_logger.debug(
@@ -402,10 +387,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         # Guard: if json.loads() returned a non-dict (e.g. array or primitive),
         # skip strategy matching and fall back to raw JSON string
         if not isinstance(response_json, dict):
-            verbose_logger.warning(
-                "AgentCore: JSON response is not a dict. "
-                "Returning raw JSON as content."
-            )
+            verbose_logger.warning("AgentCore: JSON response is not a dict. Returning raw JSON as content.")
             return AgentCoreParsedResponse(
                 content=json.dumps(response_json),
                 usage=None,
@@ -466,9 +448,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             final_message=None,
         )
 
-    def _get_parsed_response(
-        self, raw_response: httpx.Response
-    ) -> AgentCoreParsedResponse:
+    def _get_parsed_response(self, raw_response: httpx.Response) -> AgentCoreParsedResponse:
         """
         Parse AgentCore response based on content type.
 
@@ -492,9 +472,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             # SSE stream response (text/event-stream or default)
             verbose_logger.debug("Parsing SSE stream response")
             response_text = raw_response.text
-            verbose_logger.debug(
-                f"AgentCore response (first 500 chars): {response_text[:500]}"
-            )
+            verbose_logger.debug(f"AgentCore response (first 500 chars): {response_text[:500]}")
             return self._parse_sse_stream(response_text)
 
     def _parse_sse_stream(self, response_text: str) -> AgentCoreParsedResponse:
@@ -528,9 +506,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             # Process event data
             if "event" in data and isinstance(data["event"], dict):
                 event_payload = data["event"]
-                verbose_logger.debug(
-                    f"Event payload keys: {list(event_payload.keys())}"
-                )
+                verbose_logger.debug(f"Event payload keys: {list(event_payload.keys())}")
 
                 # Extract usage metadata
                 if usage := self._extract_usage_from_event(data):
@@ -542,17 +518,11 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                     content_blocks.append(text)
 
         # Build final content
-        content = (
-            self._extract_content_from_message(final_message)
-            if final_message
-            else "".join(content_blocks)
-        )
+        content = self._extract_content_from_message(final_message) if final_message else "".join(content_blocks)
 
         verbose_logger.debug(f"Final usage_data: {usage_data}")
 
-        return AgentCoreParsedResponse(
-            content=content, usage=usage_data, final_message=final_message
-        )
+        return AgentCoreParsedResponse(content=content, usage=usage_data, final_message=final_message)
 
     def _stream_agentcore_response_sync(
         self,
@@ -693,9 +663,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         if response.status_code != 200:
-            raise BedrockError(
-                status_code=response.status_code, message=str(response.read())
-            )
+            raise BedrockError(status_code=response.status_code, message=str(response.read()))
 
         # LOGGING
         logging_obj.post_call(
@@ -709,8 +677,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         content_type = response.headers.get("content-type", "").lower()
         if "application/json" in content_type:
             verbose_logger.debug(
-                "AgentCore streaming: received JSON response instead of SSE, "
-                "converting to single-chunk stream"
+                "AgentCore streaming: received JSON response instead of SSE, converting to single-chunk stream"
             )
             try:
                 body = response.read()
@@ -895,9 +862,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(
-                llm_provider=cast(Any, "bedrock"), params={}
-            )
+            client = get_async_httpx_client(llm_provider=cast(Any, "bedrock"), params={})
 
         verbose_logger.debug(f"Making async streaming request to: {api_base}")
 
@@ -911,9 +876,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         if response.status_code != 200:
-            raise BedrockError(
-                status_code=response.status_code, message=str(await response.aread())
-            )
+            raise BedrockError(status_code=response.status_code, message=str(await response.aread()))
 
         # LOGGING
         logging_obj.post_call(
@@ -927,8 +890,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         content_type = response.headers.get("content-type", "").lower()
         if "application/json" in content_type:
             verbose_logger.debug(
-                "AgentCore streaming: received JSON response instead of SSE, "
-                "converting to single-chunk stream"
+                "AgentCore streaming: received JSON response instead of SSE, converting to single-chunk stream"
             )
             try:
                 body = await response.aread()
@@ -940,9 +902,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 )
             parsed = self._parse_json_response(response_json)
 
-            async def _json_as_async_stream() -> (
-                AsyncGenerator[ModelResponseStream, None]
-            ):
+            async def _json_as_async_stream() -> AsyncGenerator[ModelResponseStream, None]:
                 # Content chunk
                 content_chunk = ModelResponseStream(
                     id=f"chatcmpl-{uuid.uuid4()}",
@@ -1055,9 +1015,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
                 setattr(model_response, "usage", usage)
             else:
                 # Calculate token usage using LiteLLM's token counter
-                verbose_logger.debug(
-                    "No usage data from AgentCore - calculating tokens"
-                )
+                verbose_logger.debug("No usage data from AgentCore - calculating tokens")
                 calculated_usage = self._calculate_usage(model, messages, content)
                 if calculated_usage:
                     setattr(model_response, "usage", calculated_usage)
@@ -1065,9 +1023,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
             return model_response
 
         except Exception as e:
-            verbose_logger.error(
-                f"Error processing Bedrock AgentCore response: {str(e)}"
-            )
+            verbose_logger.error(f"Error processing Bedrock AgentCore response: {str(e)}")
             raise BedrockError(
                 message=f"Error processing response: {str(e)}",
                 status_code=raw_response.status_code,
