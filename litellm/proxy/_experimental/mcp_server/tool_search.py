@@ -14,9 +14,7 @@ MCP_TOOL_SEARCH_TOOL_NAME: str = "mcp_tool_search"
 MCP_TOOL_CALL_TOOL_NAME: str = "mcp_tool_call"
 
 
-def search_tools(
-    query: str, tools: list[dict[str, Any]], top_k: int = 5
-) -> list[dict[str, Any]]:
+def search_tools(query: str, tools: list[dict[str, Any]], top_k: int = 5) -> list[dict[str, Any]]:
     if not query:
         return []
     tokens = query.lower().split()
@@ -26,9 +24,7 @@ def search_tools(
         return sum(1 for t in tokens if t in haystack)
 
     scored = ((s, tool) for tool in tools if (s := _score(tool)) > 0)
-    return [
-        tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]
-    ]
+    return [tool for _, tool in sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]]
 
 
 def get_virtual_tool_definitions() -> list[dict[str, Any]]:
@@ -104,9 +100,7 @@ async def handle_mcp_tool_search(
         for t in mcp_tools
     ]
     results = search_tools(query, tools, top_k)
-    return CallToolResult(
-        content=[TextContent(type="text", text=json.dumps(results))], isError=False
-    )
+    return CallToolResult(content=[TextContent(type="text", text=json.dumps(results))], isError=False)
 
 
 async def handle_mcp_tool_call(
@@ -138,9 +132,7 @@ async def handle_mcp_tool_call(
     if not allowed_mcp_servers:
         from fastapi import HTTPException
 
-        raise HTTPException(
-            status_code=403, detail="User not allowed to call this tool."
-        )
+        raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
     return await execute_mcp_tool(
         name=tool_name,

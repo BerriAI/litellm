@@ -771,9 +771,7 @@ if MCP_AVAILABLE:
                     virtual_mcp_server_auth_headers,
                     virtual_raw_headers,
                 ) = _extract_mcp_headers_from_request(request, MCPRequestHandler)
-                virtual_oauth2_headers = (
-                    MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
-                )
+                virtual_oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(request.headers)
                 if tool_name == MCP_TOOL_SEARCH_TOOL_NAME:
                     return await handle_mcp_tool_search(
                         query=tool_arguments.get("query", ""),
@@ -791,9 +789,7 @@ if MCP_AVAILABLE:
                     (
                         _,
                         virtual_logging_obj,
-                    ) = await ProxyBaseLLMRequestProcessing(
-                        data=data
-                    ).common_processing_pre_call_logic(
+                    ) = await ProxyBaseLLMRequestProcessing(data=data).common_processing_pre_call_logic(
                         request=request,
                         user_api_key_dict=user_api_key_dict,
                         proxy_config=proxy_config,
