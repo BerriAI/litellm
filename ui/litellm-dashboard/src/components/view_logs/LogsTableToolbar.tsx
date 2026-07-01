@@ -193,7 +193,14 @@ export function LogsTableToolbar({
           </div>
 
           <div className="flex items-center space-x-4">
-            <span className="text-sm text-gray-700 whitespace-nowrap">
+            <span
+              className="text-sm text-gray-700 whitespace-nowrap"
+              title={
+                !isLoading && filteredLogs?.total_is_capped
+                  ? `Showing the first ${filteredLogs.total.toLocaleString()} results. Narrow the date range or add filters to see more.`
+                  : undefined
+              }
+            >
               Showing {isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
               {isLoading ? "..." : filteredLogs ? Math.min(currentPage * pageSize, filteredLogs.total) : 0} of{" "}
               {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0}

@@ -349,17 +349,20 @@ async def test_spend_logs_ui_caps_total_for_large_result_sets(monkeypatch):
 @pytest.mark.asyncio
 async def test_spend_logs_ui_empty_page_reports_zero_total(monkeypatch):
     """
-    When nothing matches, the bounded count query returns no rows, so the total
-    is zero without issuing an unbounded prisma `.count()`.
+    When nothing matches, the bounded count query returns a single row with a
+    zero count (real `COUNT(*)` always returns one row) and the page query
+    returns no rows, so the total is zero without an unbounded prisma `.count()`.
     """
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.spend_tracking.spend_management_endpoints import (
         ui_view_spend_logs,
     )
 
+    # First query_raw call is the bounded count (0 matches), second is the empty
+    # page.
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[[{"total_count": 0}], []])
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
 
