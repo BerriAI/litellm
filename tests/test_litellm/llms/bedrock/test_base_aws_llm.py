@@ -2663,9 +2663,7 @@ class TestGetBedrockModelIdArnHandling:
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
-    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(
-        self,
-    ):
+    def test_arn_with_compound_bedrock_invoke_prefix_is_fully_stripped_and_encoded(self):
         """bedrock/invoke/arn:... — compound prefix — must be fully stripped.
 
         The old fix used ``break`` after the first matched prefix, so
@@ -2692,7 +2690,7 @@ class TestGetBedrockModelIdArnHandling:
         assert "%3A" in model_id, f"ARN not URL-encoded; got: {model_id}"
         assert "%2F" in model_id, f"ARN slashes not URL-encoded; got: {model_id}"
 
-        def test_arn_url_matches_expected(self):
+    def test_arn_url_matches_expected(self):
         """Full URL built from messages config must match expected encoded form."""
         import urllib.parse
         from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
@@ -2716,7 +2714,6 @@ class TestGetBedrockModelIdArnHandling:
         assert (
             url == expected
         ), f"URL mismatch:\n  got:      {url}\n  expected: {expected}"
-
 
     def test_regular_model_id_unaffected(self):
         """Non-ARN model IDs must continue to work as before."""
