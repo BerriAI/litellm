@@ -806,7 +806,6 @@ async def test_generate_key_helper_fn_with_budget_fallbacks(monkeypatch):
         request_type="key",
         table_name="key",
         user_id="test-user",
-        model_max_budget={"anthropic-haiku-4-5": {"budget_limit": 0.000001, "time_period": "1d"}},
         budget_fallbacks={"anthropic-haiku-4-5": ["gpt-5.5"]},
     )
 
