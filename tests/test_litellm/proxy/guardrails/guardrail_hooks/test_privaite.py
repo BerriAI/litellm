@@ -37,12 +37,22 @@ class _FakeMapping:
         self._fakes[fake] = original
 
 
+class _FakePIIBlockedError(Exception):
+    """Stand-in for privaite.pii.engine.PIIBlockedError. Names TYPES, not values."""
+
+    def __init__(self, entity_types):
+        self.entity_types = sorted(entity_types)
+        super().__init__("request blocked: contains disallowed PII type(s): " + ", ".join(self.entity_types))
+
+
 class _FakeEngine:
     """Stand-in for privaite.pii.engine.PIIEngine.
 
     Scrubs the known reals on the way out, restores the known fakes on the way
     back. ``raise_oserror_until`` lets a test force the spaCy-download retry path
-    in the guardrail's _engine_for by failing the first N initialize() calls.
+    in the guardrail's _engine_for by failing the first N initialize() calls. If
+    ``config.block_entities`` names a type present in the text, process_request
+    raises _FakePIIBlockedError, exactly as the real engine would.
     """
 
     raise_oserror_until = 0
@@ -82,6 +92,13 @@ class _FakeEngine:
             new_message = dict(message)
             new_message["content"] = self._scrub(message.get("content", ""), mapping)
             anonymized.append(new_message)
+        blocked = set(getattr(self.config, "block_entities", None) or [])
+        if blocked:
+            # placeholder "<EMAIL_ADDRESS_1>" -> type "EMAIL_ADDRESS"
+            detected = {fake.strip("<>").rsplit("_", 1)[0] for fake in mapping.get_all_fakes()}
+            hit = detected & blocked
+            if hit:
+                raise _FakePIIBlockedError(hit)
         return anonymized, mapping
 
     async def process_response(self, text, _mapping):
@@ -124,6 +141,14 @@ class _Config:
         self.__dict__.update(kwargs)
 
 
+class _PIIConfig(_Config):
+    """PIIConfig stand-in. ``model_fields`` mirrors a modern privaite that declares
+    block_entities, so the guardrail's fail-closed guard sees the field as present.
+    A test can override model_fields to simulate an older privaite."""
+
+    model_fields = {"preset": None, "languages": None, "block_entities": None}
+
+
 @pytest.fixture(autouse=True)
 def _fake_privaite_package(monkeypatch):
     """Install a fake 'privaite' (and 'spacy') package tree so the guardrail's
@@ -142,11 +167,11 @@ def _fake_privaite_package(monkeypatch):
         AnonymizationConfig=_Config,
         DeanonymizationConfig=_Config,
         DetectorsConfig=_Config,
-        PIIConfig=_Config,
+        PIIConfig=_PIIConfig,
         PresidioDetectorConfig=_Config,
     )
     mapping = _module("privaite.pii.mapping", PIIMapping=_FakeMapping)
-    engine = _module("privaite.pii.engine", PIIEngine=_FakeEngine)
+    engine = _module("privaite.pii.engine", PIIEngine=_FakeEngine, PIIBlockedError=_FakePIIBlockedError)
     buffer = _module("privaite.streaming.buffer", StreamingDeAnonymizer=_FakeStreamingDeAnonymizer)
     config_pkg = _module("privaite.config", schema=schema)
     pii_pkg = _module("privaite.pii", mapping=mapping, engine=engine)
@@ -634,3 +659,79 @@ async def test_post_call_failure_hook_pops_map():
     # missing metadata and a non-dict request_data are safe no-ops
     assert await gr.async_post_call_failure_hook({}, RuntimeError("x"), None) is None
     assert await gr.async_post_call_failure_hook(None, RuntimeError("x"), None) is None
+
+
+def test_block_entities_config_model_field():
+    from litellm.types.proxy.guardrails.guardrail_hooks.privaite import (
+        PrivaiteGuardrailConfigModel,
+    )
+
+    assert PrivaiteGuardrailConfigModel.model_fields["block_entities"].default is None
+
+
+def test_block_entities_parsed_from_string_and_list():
+    assert _make_guardrail(block_entities="US_SSN, CREDIT_CARD").block_entities == [
+        "US_SSN",
+        "CREDIT_CARD",
+    ]
+    assert _make_guardrail(block_entities=["EMAIL_ADDRESS"]).block_entities == ["EMAIL_ADDRESS"]
+    assert _make_guardrail().block_entities == []
+
+
+def test_initialize_guardrail_passes_block_entities():
+    from litellm.proxy.guardrails.guardrail_hooks.privaite import initialize_guardrail
+
+    litellm_params = types.SimpleNamespace(
+        mode="pre_call",
+        default_on=False,
+        preset="light",
+        languages="en",
+        deanonymize=True,
+        block_entities=["US_SSN"],
+    )
+    callback = initialize_guardrail(litellm_params, {"guardrail_name": "privaite"})
+    assert callback.block_entities == ["US_SSN"]
+
+
+@pytest.mark.asyncio
+async def test_block_entities_rejects_with_400():
+    from fastapi import HTTPException
+
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    data = {"messages": [{"role": "user", "content": "reach marie@acme.com"}]}
+    with pytest.raises(HTTPException) as ei:
+        await gr.async_pre_call_hook(None, None, data, "completion")
+
+    assert ei.value.status_code == 400
+    detail = ei.value.detail
+    msg = detail["error"] if isinstance(detail, dict) else str(detail)
+    assert "EMAIL_ADDRESS" in msg
+    assert "marie@acme.com" not in msg  # the value never leaks into the error
+    assert "privaite_map" not in (data.get("metadata") or {})  # nothing forwarded
+
+
+@pytest.mark.asyncio
+async def test_block_entities_ignores_types_not_present():
+    # a blocked type that is absent must not disturb a normal request: the other
+    # PII is still masked and the request goes through with a restore map.
+    gr = _make_guardrail(block_entities=["US_SSN"])
+    data = {"messages": [{"role": "user", "content": "I am Marie Dupont, marie@acme.com"}]}
+    out = await gr.async_pre_call_hook(None, None, data, "completion")
+
+    serialized = str(out["messages"])
+    assert "Marie Dupont" not in serialized
+    assert "marie@acme.com" not in serialized
+    assert out.get("metadata", {}).get("privaite_map")
+
+
+@pytest.mark.asyncio
+async def test_block_entities_fails_closed_when_privaite_too_old(monkeypatch):
+    # simulate an older privaite whose PIIConfig has no block_entities field:
+    # extra="allow" would swallow it silently, so the guardrail must refuse.
+    schema = sys.modules["privaite.config.schema"]
+    monkeypatch.setattr(schema.PIIConfig, "model_fields", {"preset": None, "languages": None})
+
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    data = {"messages": [{"role": "user", "content": "marie@acme.com"}]}
+    with pytest.raises(RuntimeError, match="block_entities"):
+        await gr.async_pre_call_hook(None, None, data, "completion")
