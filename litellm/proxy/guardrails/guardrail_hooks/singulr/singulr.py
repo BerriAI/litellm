@@ -48,9 +48,9 @@ class SingulrGuardrail(CustomGuardrail):
     ) -> None:
         self.singulr_api_key = singulr_api_key or os.environ.get("SINGULR_API_KEY")
 
-        self.singulr_api_base = (
-            singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE
-        ).rstrip("/")
+        self.singulr_api_base = (singulr_api_base or os.environ.get("SINGULR_API_BASE") or _DEFAULT_API_BASE).rstrip(
+            "/"
+        )
 
         parsed = urlparse(self.singulr_api_base)
         if parsed.scheme == "http" and parsed.hostname not in (
@@ -64,12 +64,8 @@ class SingulrGuardrail(CustomGuardrail):
                 self.singulr_api_base,
             )
 
-        self.singulr_application_id = singulr_application_id or os.environ.get(
-            "SINGULR_ENFORCEMENT_ENTITY_ID"
-        )
-        self.singulr_guardrail_id = singulr_guardrail_id or os.environ.get(
-            "SINGULR_GUARDRAIL_ID"
-        )
+        self.singulr_application_id = singulr_application_id or os.environ.get("SINGULR_ENFORCEMENT_ENTITY_ID")
+        self.singulr_guardrail_id = singulr_guardrail_id or os.environ.get("SINGULR_GUARDRAIL_ID")
 
         if block_on_error is None:
             env = os.environ.get("SINGULR_BLOCK_ON_ERROR", "true")
@@ -148,9 +144,7 @@ class SingulrGuardrail(CustomGuardrail):
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
-                    message=(
-                        f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"
-                    ),
+                    message=(f"Singulr API returned HTTP {exc.response.status_code}: {exc.response.text}"),
                 ) from exc
             return None
 
@@ -164,9 +158,7 @@ class SingulrGuardrail(CustomGuardrail):
             return None
 
         except ValueError as exc:
-            verbose_proxy_logger.error(
-                "Singulr API returned non-JSON response: %s", str(exc)
-            )
+            verbose_proxy_logger.error("Singulr API returned non-JSON response: %s", str(exc))
             if self.block_on_error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,

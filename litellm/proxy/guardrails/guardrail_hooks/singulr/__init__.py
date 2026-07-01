@@ -21,10 +21,8 @@ def initialize_guardrail(
     import litellm
 
     _cb = SingulrGuardrail(
-        singulr_api_base=getattr(litellm_params, "singulr_api_base", None)
-        or litellm_params.api_base,
-        singulr_api_key=getattr(litellm_params, "singulr_api_key", None)
-        or litellm_params.api_key,
+        singulr_api_base=getattr(litellm_params, "singulr_api_base", None) or litellm_params.api_base,
+        singulr_api_key=getattr(litellm_params, "singulr_api_key", None) or litellm_params.api_key,
         singulr_application_id=getattr(litellm_params, "singulr_application_id", None),
         singulr_guardrail_id=getattr(litellm_params, "singulr_guardrail_id", None),
         block_on_error=getattr(litellm_params, "block_on_error", None),
