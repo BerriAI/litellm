@@ -4,7 +4,7 @@ output "alb_dns_name" {
 }
 
 output "alb_url" {
-  description = "Proxy URL. Switches scheme based on whether acm_certificate_arn is set; the underlying DNS name is the ALB. The dashboard is served at /, the API at /v1/*."
+  description = "Proxy URL. Switches scheme based on whether acm_certificate_domain_name is set; the underlying DNS name is the ALB. The dashboard is served at /, the API at /v1/*."
   value       = "${local.tls_enabled ? "https" : "http"}://${aws_lb.this.dns_name}"
 }
 

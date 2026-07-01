@@ -49,8 +49,8 @@ variable "ui_password" {
 }
 
 # TLS — provide an ACM cert for production, or opt into HTTP-only for dev.
-variable "acm_certificate_arn" {
-  description = "ACM cert ARN for the ALB HTTPS listener. Empty → no TLS."
+variable "acm_certificate_domain_name" {
+  description = "ACM cert domain name for the ALB HTTPS listener. Empty → no TLS."
   type        = string
   default     = ""
 }

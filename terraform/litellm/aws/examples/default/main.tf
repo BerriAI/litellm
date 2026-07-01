@@ -28,10 +28,10 @@ module "litellm" {
   litellm_license    = var.litellm_license
   ui_password        = var.ui_password
 
-  acm_certificate_arn = var.acm_certificate_arn
-  allow_plaintext_alb = var.allow_plaintext_alb
-  s3_force_destroy    = var.s3_force_destroy
-  skip_final_snapshot = var.skip_final_snapshot
+  acm_certificate_domain_name = var.acm_certificate_domain_name
+  allow_plaintext_alb         = var.allow_plaintext_alb
+  s3_force_destroy            = var.s3_force_destroy
+  skip_final_snapshot         = var.skip_final_snapshot
 
   proxy_config          = var.proxy_config
   gateway_extra_env     = var.gateway_extra_env

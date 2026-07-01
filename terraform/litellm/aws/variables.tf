@@ -330,7 +330,7 @@ variable "redis_num_replicas" {
 
 # ---------- TLS ----------
 
-variable "acm_certificate_arn" {
+variable "acm_certificate_domain_name" {
   description = <<-EOT
     ACM certificate ARN for the ALB's HTTPS listener. When set, the stack
     provisions a 443 listener carrying the same path-routing rules as the 80
@@ -345,7 +345,7 @@ variable "acm_certificate_arn" {
 variable "allow_plaintext_alb" {
   description = <<-EOT
     Opt into HTTP-only mode on the ALB (port 80, no TLS). Default false:
-    `terraform plan` fails when `acm_certificate_arn = ""` so the operator
+    `terraform plan` fails when `acm_certificate_domain_name = ""` so the operator
     must either provide an ACM cert or consciously opt out. Intended for
     short-lived trial / dev stacks only.
   EOT

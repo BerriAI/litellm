@@ -19,7 +19,7 @@ env    = "stage"
 
 # TLS: provide an ACM cert for production. Without one, plan fails unless
 # allow_plaintext_alb = true is set explicitly (trial/dev only).
-# acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
+# acm_certificate_domain_name = "your.domain.here"
 # allow_plaintext_alb = true
 
 # Storage retention: false (default) makes `terraform destroy` refuse on a

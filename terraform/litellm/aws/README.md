@@ -299,7 +299,7 @@ is the supported posture. Two paths:
 
 1. Create or import an ACM cert in `var.region` covering the DNS name you
    plan to point at the ALB.
-2. Set `acm_certificate_arn = "arn:aws:acm:..."` in tfvars and apply.
+2. Set `acm_certificate_domain_name = "your.domain..."` in tfvars and apply.
 
 Result: a 443 listener carries the path-routing rules; the 80 listener
 serves a permanent 301 redirect to HTTPS, so HTTP clients are

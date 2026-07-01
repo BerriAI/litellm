@@ -1,0 +1,54 @@
+name: Deploy Data Reply Instance
+
+on:
+  push:
+    branches:
+      - datareply-instance
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read 
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./terraform/litellm/aws/
+
+
+jobs:
+  terraform:
+    name: Terraform Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          audience: sts.amazonaws.com
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/github-oidc-provider-role
+          role-session-name: github-actions
+          aws-region: eu-central-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Terraform Init
+        run: terraform init -backend-config=config/prod/backend.tfbackend
+
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=config/prod/variables.tfvars -out=tfplan
+
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/datareply-instance'
+        run: terraform apply -auto-approve tfplan

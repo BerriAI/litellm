@@ -455,7 +455,7 @@ module "litellm" {
 
   # Production: provide an ACM cert. Without one, set allow_plaintext_alb = true
   # (dev/trial only).
-  # acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
+  # acm_certificate_domain_name = "your.domain.here"
   allow_plaintext_alb = true
 }
 

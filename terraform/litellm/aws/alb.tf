@@ -1,3 +1,14 @@
+resource "aws_acm_certificate" "cert" {
+  count             = local.tls_enabled ? 1 : 0
+  domain_name       = var.acm_certificate_domain_name
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+
 resource "aws_lb" "this" {
   name               = local.name
   load_balancer_type = "application"
@@ -13,7 +24,7 @@ resource "aws_lb" "this" {
 locals {
   # When an ACM cert ARN is provided we provision a 443 listener carrying
   # the path-routing rules and downgrade the 80 listener to a redirect.
-  tls_enabled        = var.acm_certificate_arn != ""
+  tls_enabled        = var.acm_certificate_domain_name != ""
   rules_listener_arn = local.tls_enabled ? aws_lb_listener.https[0].arn : aws_lb_listener.http.arn
 }
 
@@ -111,7 +122,7 @@ resource "aws_lb_listener" "http" {
   lifecycle {
     precondition {
       condition     = local.tls_enabled || var.allow_plaintext_alb
-      error_message = "ALB has no HTTPS listener. Either set `acm_certificate_arn` to enable TLS, or set `allow_plaintext_alb = true` to opt into HTTP-only (trial / dev only)."
+      error_message = "ALB has no HTTPS listener. Either set `acm_certificate_domain_name` to enable TLS, or set `allow_plaintext_alb = true` to opt into HTTP-only (trial / dev only)."
     }
   }
 
@@ -126,7 +137,7 @@ resource "aws_lb_listener" "https" {
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = var.acm_certificate_arn
+  certificate_arn   = aws_acm_certificate.cert.arn
 
   default_action {
     type             = "forward"

@@ -174,7 +174,7 @@ only where the underlying cloud forces it.
 | Pre-shared master key / license  | `litellm_master_key`, `litellm_license`                 | `litellm_master_key`, `litellm_license`                   |
 | UI admin password                | `ui_password`                                           | `ui_password`                                             |
 | Per-deployment tags / labels     | `tags` (`map(string)`)                                  | `labels` (`map(string)`)                                  |
-| TLS posture                      | `acm_certificate_arn`, `allow_plaintext_alb`            | `lb_domains`, `allow_plaintext_lb`                        |
+| TLS posture                      | `acm_certificate_domain_name`, `allow_plaintext_alb`            | `lb_domains`, `allow_plaintext_lb`                        |
 | Force destroy of object store    | `s3_force_destroy`                                      | `gcs_force_destroy`                                       |
 | Database deletion protection     | `skip_final_snapshot`                                   | `cloudsql_deletion_protection`                            |
 | `proxy_config` (typed YAML map)  | `proxy_config`                                          | `proxy_config`                                            |
