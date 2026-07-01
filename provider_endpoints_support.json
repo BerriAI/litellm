@@ -1991,6 +1991,23 @@
         "a2a": false
       }
     },
+    "siliconflow": {
+      "display_name": "SiliconFlow (`siliconflow`)",
+      "url": "https://docs.siliconflow.cn/en/api-reference/models/get-model-list",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": true,
+        "a2a": false
+      }
+    },
     "poe": {
       "display_name": "Poe (`poe`)",
       "endpoints": {

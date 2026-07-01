@@ -2788,6 +2788,9 @@ def register_model(model_cost: Union[str, dict]):
         elif value.get("litellm_provider") == "novita":
             if key not in litellm.novita_models:
                 litellm.novita_models.add(key)
+        elif value.get("litellm_provider") == "siliconflow":
+            if key not in litellm.siliconflow_models:
+                litellm.siliconflow_models.add(key)
     return model_cost
 
 
@@ -6057,6 +6060,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("NOVITA_API_KEY")
+        elif custom_llm_provider == "siliconflow":
+            if "SILICONFLOW_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("SILICONFLOW_API_KEY")
         elif custom_llm_provider == "nebius":
             if "NEBIUS_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6182,6 +6190,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("NOVITA_API_KEY")
+        elif model in litellm.siliconflow_models:
+            if "SILICONFLOW_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("SILICONFLOW_API_KEY")
         elif model in litellm.nebius_models:
             if "NEBIUS_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7644,6 +7657,7 @@ class ProviderConfigManager:
             ),
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
+            LlmProviders.SILICONFLOW: (lambda: litellm.SiliconFlowChatConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
@@ -7862,6 +7876,8 @@ class ProviderConfigManager:
             return litellm.SnowflakeEmbeddingConfig()
         elif litellm.LlmProviders.COMETAPI == provider:
             return litellm.CometAPIEmbeddingConfig()
+        elif litellm.LlmProviders.SILICONFLOW == provider:
+            return litellm.SiliconFlowEmbeddingConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotEmbeddingConfig()
         elif litellm.LlmProviders.OPENROUTER == provider:
@@ -7914,6 +7930,8 @@ class ProviderConfigManager:
             return litellm.HuggingFaceRerankConfig()
         elif litellm.LlmProviders.DEEPINFRA == provider:
             return litellm.DeepinfraRerankConfig()
+        elif litellm.LlmProviders.SILICONFLOW == provider:
+            return litellm.SiliconFlowRerankConfig()
         elif litellm.LlmProviders.NVIDIA_NIM == provider:
             from litellm.llms.nvidia_nim.rerank.common_utils import (
                 get_nvidia_nim_rerank_config,
@@ -8498,6 +8516,12 @@ class ProviderConfigManager:
             )
 
             return get_cometapi_image_generation_config(model)
+        elif LlmProviders.SILICONFLOW == provider:
+            from litellm.llms.siliconflow.image_generation import (
+                get_siliconflow_image_generation_config,
+            )
+
+            return get_siliconflow_image_generation_config(model)
         elif LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.image_generation import (
                 get_gemini_image_generation_config,

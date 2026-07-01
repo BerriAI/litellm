@@ -475,6 +475,7 @@ LITELLM_CHAT_PROVIDERS = [
     "helicone",
     "openrouter",
     "cometapi",
+    "siliconflow",
     "vertex_ai",
     "vertex_ai_beta",
     "gemini",
@@ -712,6 +713,7 @@ openai_compatible_endpoints: List = [
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
+    "https://api.siliconflow.cn/v1",
     "https://pinstripes.io/v1",
 ]
 
@@ -773,6 +775,7 @@ openai_compatible_providers: List = [
     "aiml",
     "wandb",
     "cometapi",
+    "siliconflow",
     "clarifai",
     "docker_model_runner",
     "ragflow",
@@ -1537,6 +1540,7 @@ SENTRY_DENYLIST = [
     "BASETEN_KEY",
     "OPENROUTER_KEY",
     "COMETAPI_KEY",
+    "SILICONFLOW_API_KEY",
     "DATAROBOT_API_TOKEN",
     "FIREWORKS_API_KEY",
     "FIREWORKS_AI_API_KEY",

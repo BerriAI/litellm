@@ -163,6 +163,7 @@ LLM_CONFIG_NAMES = (
     "TogetherAITextCompletionConfig",
     "CloudflareChatConfig",
     "NovitaConfig",
+    "SiliconFlowChatConfig",
     "PetalsConfig",
     "OllamaChatConfig",
     "OllamaConfig",
@@ -319,6 +320,8 @@ LLM_CONFIG_NAMES = (
     "OVHCloudChatConfig",
     "OVHCloudEmbeddingConfig",
     "CometAPIEmbeddingConfig",
+    "SiliconFlowEmbeddingConfig",
+    "SiliconFlowRerankConfig",
     "LemonadeChatConfig",
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
@@ -706,6 +709,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "CloudflareChatConfig",
     ),
     "NovitaConfig": (".llms.novita.chat.transformation", "NovitaConfig"),
+    "SiliconFlowChatConfig": (
+        ".llms.siliconflow.chat.transformation",
+        "SiliconFlowChatConfig",
+    ),
     "PetalsConfig": (".llms.petals.completion.transformation", "PetalsConfig"),
     "OllamaChatConfig": (".llms.ollama.chat.transformation", "OllamaChatConfig"),
     "OllamaConfig": (".llms.ollama.completion.transformation", "OllamaConfig"),
@@ -1191,6 +1198,14 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "CometAPIEmbeddingConfig": (
         ".llms.cometapi.embed.transformation",
         "CometAPIEmbeddingConfig",
+    ),
+    "SiliconFlowEmbeddingConfig": (
+        ".llms.siliconflow.embed.transformation",
+        "SiliconFlowEmbeddingConfig",
+    ),
+    "SiliconFlowRerankConfig": (
+        ".llms.siliconflow.rerank.transformation",
+        "SiliconFlowRerankConfig",
     ),
     "LemonadeChatConfig": (".llms.lemonade.chat.transformation", "LemonadeChatConfig"),
     "SnowflakeEmbeddingConfig": (

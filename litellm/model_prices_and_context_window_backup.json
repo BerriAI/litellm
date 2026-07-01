@@ -43734,6 +43734,146 @@
         "supports_reasoning": false,
         "source": "https://pinstripes.io/pricing"
     },
+    "siliconflow/deepseek-ai/DeepSeek-V4-Flash": {
+        "litellm_provider": "siliconflow",
+        "mode": "chat",
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "cache_read_input_token_cost": 2.8e-09,
+        "max_input_tokens": 32768,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_reasoning": true,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/deepseek-ai/DeepSeek-V4-Pro": {
+        "litellm_provider": "siliconflow",
+        "mode": "chat",
+        "input_cost_per_token": 1.68e-06,
+        "output_cost_per_token": 3.36e-06,
+        "cache_read_input_token_cost": 1.4e-08,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_reasoning": true,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/zai-org/GLM-5.2": {
+        "litellm_provider": "siliconflow",
+        "mode": "chat",
+        "input_cost_per_token": 1.12e-06,
+        "output_cost_per_token": 3.92e-06,
+        "cache_read_input_token_cost": 2.8e-07,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_prompt_caching": true,
+        "supports_system_messages": true,
+        "supports_reasoning": true,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/Qwen/Qwen3.6-35B-A3B": {
+        "litellm_provider": "siliconflow",
+        "mode": "chat",
+        "input_cost_per_token": 2.52e-07,
+        "output_cost_per_token": 1.512e-06,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_reasoning": true,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/BAAI/bge-m3": {
+        "litellm_provider": "siliconflow",
+        "mode": "embedding",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/Pro/BAAI/bge-m3": {
+        "litellm_provider": "siliconflow",
+        "mode": "embedding",
+        "input_cost_per_token": 9.8e-09,
+        "output_cost_per_token": 0.0,
+        "max_input_tokens": 8192,
+        "max_tokens": 8192,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/BAAI/bge-reranker-v2-m3": {
+        "litellm_provider": "siliconflow",
+        "mode": "rerank",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/Pro/BAAI/bge-reranker-v2-m3": {
+        "litellm_provider": "siliconflow",
+        "mode": "rerank",
+        "input_cost_per_token": 9.8e-09,
+        "output_cost_per_token": 0.0,
+        "max_input_tokens": 8000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/Tongyi-MAI/Z-Image-Turbo": {
+        "litellm_provider": "siliconflow",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.014,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/Qwen/Qwen-Image": {
+        "litellm_provider": "siliconflow",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.042,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/Qwen/Qwen-Image-Edit": {
+        "litellm_provider": "siliconflow",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.042,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://siliconflow.cn/pricing"
+    },
+    "siliconflow/Kwai-Kolors/Kolors": {
+        "litellm_provider": "siliconflow",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "source": "https://siliconflow.cn/pricing"
+    },
   "fallback_generalizations": {
     "rules": [
       {

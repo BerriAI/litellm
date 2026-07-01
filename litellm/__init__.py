@@ -290,6 +290,7 @@ nebius_key: Optional[str] = None
 wandb_key: Optional[str] = None
 heroku_key: Optional[str] = None
 cometapi_key: Optional[str] = None
+siliconflow_api_key: Optional[str] = None
 ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
 sap_service_key: Optional[str] = None
@@ -633,6 +634,7 @@ hyperbolic_models: Set = set()
 black_forest_labs_models: Set = set()
 recraft_models: Set = set()
 cometapi_models: Set = set()
+siliconflow_models: Set = set()
 oci_models: Set = set()
 vercel_ai_gateway_models: Set = set()
 volcengine_models: Set = set()
@@ -893,6 +895,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             recraft_models.add(key)
         elif value.get("litellm_provider") == "cometapi":
             cometapi_models.add(key)
+        elif value.get("litellm_provider") == "siliconflow":
+            siliconflow_models.add(key)
         elif value.get("litellm_provider") == "oci":
             oci_models.add(key)
         elif value.get("litellm_provider") == "volcengine":
@@ -1033,6 +1037,7 @@ model_list = list(
     | black_forest_labs_models
     | recraft_models
     | cometapi_models
+    | siliconflow_models
     | oci_models
     | heroku_models
     | vercel_ai_gateway_models
@@ -1139,6 +1144,7 @@ models_by_provider: dict = {
     "black_forest_labs": black_forest_labs_models,
     "recraft": recraft_models,
     "cometapi": cometapi_models,
+    "siliconflow": siliconflow_models,
     "oci": oci_models,
     "volcengine": volcengine_models,
     "wandb": wandb_models,
@@ -1561,6 +1567,9 @@ if TYPE_CHECKING:
         CloudflareChatConfig as CloudflareChatConfig,
     )
     from .llms.novita.chat.transformation import NovitaConfig as NovitaConfig
+    from .llms.siliconflow.chat.transformation import (
+        SiliconFlowChatConfig as SiliconFlowChatConfig,
+    )
     from .llms.petals.completion.transformation import PetalsConfig as PetalsConfig
     from .llms.ollama.chat.transformation import OllamaChatConfig as OllamaChatConfig
     from .llms.ollama.completion.transformation import OllamaConfig as OllamaConfig
@@ -1983,6 +1992,12 @@ if TYPE_CHECKING:
     )
     from .llms.cometapi.embed.transformation import (
         CometAPIEmbeddingConfig as CometAPIEmbeddingConfig,
+    )
+    from .llms.siliconflow.embed.transformation import (
+        SiliconFlowEmbeddingConfig as SiliconFlowEmbeddingConfig,
+    )
+    from .llms.siliconflow.rerank.transformation import (
+        SiliconFlowRerankConfig as SiliconFlowRerankConfig,
     )
     from .llms.lemonade.chat.transformation import (
         LemonadeChatConfig as LemonadeChatConfig,
