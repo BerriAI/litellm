@@ -153,6 +153,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_converted_stream",
     "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_session_scoped",
     "max_agentic_loops",
 )
 

@@ -182,10 +182,25 @@ model_list:
     litellm_params:
       model: openai/gpt-5.5
       api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
 
 general_settings:
   master_key: sk-1234
 
+sandbox_tools:
+  - sandbox_tool_name: e2b_sandbox
+    litellm_params:
+      sandbox_provider: e2b
+      api_key: os.environ/E2B_API_KEY
+
 litellm_settings:
   drop_params: True
   telemetry: False
+  code_interpreter_interception_params:
+    enabled: true
+    sandbox_tool_name: e2b_sandbox
+  callbacks:
+    - code_interpreter_interception
