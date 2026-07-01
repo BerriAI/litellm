@@ -120,7 +120,24 @@ def test_validate_environment_sets_headers():
 
     assert headers["x-api-key"] == "sk-tencent-key"
     assert headers["anthropic-version"] == "2023-06-01"
+    assert headers["content-type"] == "application/json"
     assert api_base == "https://custom.test"
+
+
+def test_validate_environment_injects_anthropic_beta_headers():
+    config = TencentAnthropicMessagesConfig()
+
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="deepseek-v4-pro",
+        messages=[],
+        optional_params={"speed": "fast"},
+        litellm_params={},
+        api_key="sk-tencent-key",
+        api_base=None,
+    )
+
+    assert "anthropic-beta" in headers
 
 
 def test_validate_environment_preserves_existing_headers():

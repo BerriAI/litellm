@@ -4607,3 +4607,21 @@ class TestGetOptionalParamsTencent:
         assert config.custom_llm_provider == "tencent"
 
 
+class TestValidateEnvironmentTencent:
+    """Tests that validate_environment resolves TENCENT_API_KEY for the tencent provider."""
+
+    def test_reports_key_present(self):
+        with patch.dict(os.environ, {"TENCENT_API_KEY": "sk-tencent"}):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is True
+        assert result["missing_keys"] == []
+
+    def test_reports_key_missing(self):
+        with patch.dict(os.environ, {}, clear=True):
+            result = litellm.validate_environment(model="tencent/deepseek-v4-pro")
+
+        assert result["keys_in_environment"] is False
+        assert "TENCENT_API_KEY" in result["missing_keys"]
+
+

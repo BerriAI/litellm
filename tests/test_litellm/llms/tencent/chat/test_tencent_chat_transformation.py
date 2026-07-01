@@ -181,3 +181,27 @@ def test_get_complete_url_does_not_append_to_full_url():
     )
 
     assert url == "https://tokenhub.tencentcloudmaas.com/v1/chat/completions"
+
+
+def test_provider_info_falls_back_to_default_base():
+    config = TencentChatConfig()
+
+    with patch("litellm.llms.tencent.chat.transformation.get_secret_str", return_value=None):
+        api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key="sk-arg")
+
+    assert api_base == "https://tokenhub-intl.tencentcloudmaas.com/v1"
+    assert api_key == "sk-arg"
+
+
+def test_provider_info_reads_env_secrets():
+    config = TencentChatConfig()
+
+    secrets = {"TENCENT_API_BASE": "https://env.tencent/v1", "TENCENT_API_KEY": "sk-env"}
+    with patch(
+        "litellm.llms.tencent.chat.transformation.get_secret_str",
+        side_effect=lambda key: secrets.get(key),
+    ):
+        api_base, api_key = config._get_openai_compatible_provider_info(api_base=None, api_key=None)
+
+    assert api_base == "https://env.tencent/v1"
+    assert api_key == "sk-env"

@@ -53,15 +53,15 @@ class TencentAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> tuple[dict, Optional[str]]:
-        dynamic_api_key = self.get_api_key(api_key=api_key)
-
-        if "x-api-key" not in headers and "authorization" not in headers and dynamic_api_key is not None:
-            headers["x-api-key"] = dynamic_api_key
-
-        if "anthropic-version" not in headers:
-            headers["anthropic-version"] = "2023-06-01"
-
-        return headers, api_base
+        return super().validate_anthropic_messages_environment(
+            headers=headers,
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            api_key=self.get_api_key(api_key=api_key),
+            api_base=api_base,
+        )
 
     def get_complete_url(
         self,
