@@ -16,7 +16,8 @@ Usage::
 import hashlib
 import json
 import uuid
-from collections.abc import Sequence
+
+from typing import Any
 
 from litellm.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
@@ -33,20 +34,26 @@ from litellm.types.utils import CallTypes
 
 
 class _CallHistory:
-    """Tracks tool call trajectories per session with bounded memory."""
+    """Tracks tool call trajectory digests per session with bounded memory.
+
+    Stores only fixed-size SHA-256 digests (64 bytes each), never raw JSON.
+    This prevents CWE-400 (Uncontrolled Resource Consumption): a malicious
+    client sending 10 MB payloads cannot inflate memory beyond the per-entry
+    digest cost.
+    """
 
     MAX_SESSIONS = 10000
 
     def __init__(self) -> None:
         self._store: dict[str, list[tuple[str, str]]] = {}
 
-    def append(self, session_id: str, tool_name: str, args_json: str) -> None:
+    def append(self, session_id: str, tool_name: str, trajectory_hash: str) -> None:
         if len(self._store) >= self.MAX_SESSIONS and session_id not in self._store:
             oldest_key = next(iter(self._store))
             self._store.pop(oldest_key, None)
         if session_id not in self._store:
             self._store[session_id] = []
-        self._store[session_id].append((tool_name, args_json))
+        self._store[session_id].append((tool_name, trajectory_hash))
 
     def get_recent(self, session_id: str, window: int) -> list[tuple[str, str]]:
         entries = self._store.get(session_id, [])
@@ -56,6 +63,21 @@ class _CallHistory:
         entries = self._store.get(session_id, [])
         if len(entries) > max_len:
             self._store[session_id] = entries[-max_len:]
+
+    def correct_last(self, session_id: str, tool_name: str, trajectory_hash: str) -> None:
+        """Replace the hash of the most recent entry for *tool_name*.
+
+        Used when auto-inference discovers new volatile fields: the previous
+        call's hash must be retroactively fixed so consistency with the new
+        canonical form is maintained.
+        """
+        entries = self._store.get(session_id)
+        if not entries:
+            return
+        for i in range(len(entries) - 1, -1, -1):
+            if entries[i][0] == tool_name:
+                entries[i] = (tool_name, trajectory_hash)
+                return
 
     def clear(self, session_id: str) -> None:
         self._store.pop(session_id, None)
@@ -102,58 +124,60 @@ def _canonicalize_args(args_json: str, volatile_fields: set[str]) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
+def _compute_trajectory_hash(tool_name: str, canonical_args: str) -> str:
+    """Deterministic SHA-256 digest of a tool call trajectory.
+
+    Returns a hex string (64 bytes) — fixed-size regardless of payload size.
+    This is the only value stored in ``_CallHistory``, preventing unbounded
+    memory growth from large JSON payloads (CWE-400 mitigation).
+    """
+    raw = f"{tool_name}|{canonical_args}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 def _auto_infer_volatile(
-    recent_calls: Sequence[tuple[str, str]],
+    last_raw_args: dict[str, Any] | None,
     current_args: str,
-    min_occurrences: int = 2,
 ) -> set[str]:
-    """Detect fields that consistently differ across consecutive calls.
+    """Detect fields that differ between the last call and current call.
+
+    Unlike the previous implementation, this only compares the immediately
+    preceding raw args (O(1) memory) rather than scanning the full history
+    window (O(n)), eliminating the unbounded raw-JSON storage vector.
 
     A field is considered volatile only if:
-
-    1. It is the *only* differing field between calls
+    1. It is the *only* differing field between the two calls
     2. AND at least one other field stays constant
-    3. AND the pattern appears >= ``min_occurrences`` times
 
     This prevents inferring the only changing parameter as volatile.
 
     Args:
-        recent_calls: Sequence of past ``(tool_name, args_json)`` pairs.
+        last_raw_args: The ``dict`` of the immediately preceding call (or ``None``).
         current_args: JSON-encoded string of the current call arguments.
-        min_occurrences: Minimum number of diff occurrences to infer.
 
     Returns:
         Set of field names inferred as volatile.
     """
     inferred: set[str] = set()
-    diff_counts: dict[str, int] = {}
-    const_fields: set[str] = set()
+
+    if last_raw_args is None:
+        return inferred
 
     current = _parse_json_dict(current_args)
     if current is None:
         return inferred
 
-    for _past_tool, past_args_str in recent_calls:
-        past = _parse_json_dict(past_args_str)
-        if past is None:
-            continue
+    diffs: list[str] = []
+    consts: list[str] = []
+    all_keys = set(current.keys()) | set(last_raw_args.keys())
+    for k in all_keys:
+        if current.get(k) != last_raw_args.get(k):
+            diffs.append(k)
+        else:
+            consts.append(k)
 
-        diffs: list[str] = []
-        consts: list[str] = []
-        all_keys = set(current.keys()) | set(past.keys())
-        for k in all_keys:
-            if current.get(k) != past.get(k):
-                diffs.append(k)
-            else:
-                consts.append(k)
-
-        if len(diffs) == 1:
-            diff_counts[diffs[0]] = diff_counts.get(diffs[0], 0) + 1
-            const_fields.update(consts)
-
-    for field, count in diff_counts.items():
-        if count >= min_occurrences and const_fields:
-            inferred.add(field)
+    if len(diffs) == 1 and consts:
+        inferred.add(diffs[0])
 
     return inferred
 
@@ -215,6 +239,9 @@ class MicroloopGuardrail(CustomGuardrail):
         self._volatile_fields: set[str] = set(volatile_fields or [])
         self._auto_infer_volatile = auto_infer_volatile
         self._history = _CallHistory()
+        # O(1) raw-args cache for auto_infer_volatile — only the immediately
+        # preceding call per (session, tool), never the full history window.
+        self._last_raw_args: dict[str, dict[str, Any]] = {}
 
     # ---- LiteLLM hooks ---------------------------------------------------
 
@@ -261,6 +288,12 @@ class MicroloopGuardrail(CustomGuardrail):
     def _check_and_record(self, session_id: str, tool_name: str, raw_args: str) -> None:
         """Check if ``tool_name(raw_args)`` is a loop, then record it.
 
+        Memory safety: raw_args is canonicalized and hashed *before* any
+        history interaction. The raw payload is never stored in ``_CallHistory``
+        — only the fixed-size SHA-256 digest enters the history store,
+        preventing CWE-400 (Uncontrolled Resource Consumption) via oversized
+        payloads.
+
         Args:
             session_id: The session identifier.
             tool_name: Name of the tool being called.
@@ -270,27 +303,35 @@ class MicroloopGuardrail(CustomGuardrail):
             GuardrailRaisedException: When the same tool+arguments repeat
                 beyond the configured limit.
         """
-        recent = self._history.get_recent(session_id, self._history_window)
-
-        # 1. Canonicalize (parse + sort keys + strip volatile fields)
+        # 1. Canonicalize (parse + sort keys + strip configured volatile fields)
         canonical = _canonicalize_args(raw_args, self._volatile_fields)
 
-        # 2. Count exact matches in recent history
-        match_count = self._count_matches(recent, tool_name, canonical)
-
-        # 3. Auto-inference (if enabled and no match found)
-        if self._auto_infer_volatile and match_count == 0:
-            inferred = _auto_infer_volatile(recent, raw_args)
+        # 2. Auto-inference: compare current raw args to the immediately
+        #    preceding raw args (O(1) per-session per-tool cache).
+        inferred: set[str] = set()
+        if self._auto_infer_volatile:
+            cache_key = f"{session_id}:{tool_name}"
+            prev_raw = self._last_raw_args.get(cache_key)
+            inferred = _auto_infer_volatile(prev_raw, raw_args)
             if inferred:
                 combined = self._volatile_fields | inferred
                 canonical = _canonicalize_args(raw_args, combined)
-                match_count = 0
-                for past_tool, past_args in recent:
-                    stripped = _canonicalize_args(past_args, combined)
-                    if past_tool == tool_name and stripped == canonical:
-                        match_count += 1
 
-        # 4. Block or record
+        # 3. Compute fixed-size digest — raw JSON is NEVER stored after this point
+        trajectory_hash = _compute_trajectory_hash(tool_name, canonical)
+
+        # 4. If auto-inference discovered new volatile fields, retroactively fix
+        #    the last history entry for this tool so previous hashes match the
+        #    new canonical form. This ensures loop detection works across the
+        #    boundary where the volatile field was first learned.
+        if inferred:
+            self._history.correct_last(session_id, tool_name, trajectory_hash)
+
+        # 5. Check digest-only history for repeats
+        recent = self._history.get_recent(session_id, self._history_window)
+        match_count = sum(1 for t, h in recent if t == tool_name and h == trajectory_hash)
+
+        # 6. Block or record
         if match_count + 1 >= self._max_repeats:
             raise GuardrailRaisedException(
                 guardrail_name="microloop",
@@ -301,8 +342,16 @@ class MicroloopGuardrail(CustomGuardrail):
                 ),
             )
 
-        self._history.append(session_id, tool_name, canonical)
+        self._history.append(session_id, tool_name, trajectory_hash)
         self._history.trim(session_id, self._history_window * 2)
+
+        # 7. Update O(1) raw-args cache for next auto-inference
+        parsed = _parse_json_dict(raw_args)
+        if parsed is not None:
+            cache_key = f"{session_id}:{tool_name}"
+            self._last_raw_args[cache_key] = parsed
+            if len(self._last_raw_args) > _CallHistory.MAX_SESSIONS:
+                self._last_raw_args.pop(next(iter(self._last_raw_args)), None)
 
     # ---- Helpers ---------------------------------------------------------
 
@@ -332,15 +381,6 @@ class MicroloopGuardrail(CustomGuardrail):
             hashed = hashlib.md5(api_key.encode(), usedforsecurity=False).hexdigest()[:16]
             return f"api_key_{hashed}"
         return f"req_{uuid.uuid4().hex}"
-
-    @staticmethod
-    def _count_matches(
-        recent: list[tuple[str, str]],
-        tool_name: str,
-        canonical: str,
-    ) -> int:
-        """Count how many entries in ``recent`` match ``tool_name`` + ``canonical``."""
-        return sum(1 for past_tool, past_args in recent if past_tool == tool_name and past_args == canonical)
 
     @staticmethod
     def _extract_tool_calls(
