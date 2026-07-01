@@ -265,9 +265,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)
         else:
-            _region_from_model, _model_for_id = extract_bedrock_region_and_model_id(
-                model
-            )
+            _region_from_model, _model_for_id = extract_bedrock_region_and_model_id(model)
             for _nova_prefix in ["nova-2/", "nova/"]:
                 if _model_for_id.startswith(_nova_prefix):
                     _model_for_id = _model_for_id.replace(_nova_prefix, "", 1)
