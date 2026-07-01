@@ -492,13 +492,28 @@ def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_o
     assert result["tools"][0]["type"] == "custom"
 
 
-def test_remove_ttl_from_cache_control_processes_tools():
+def _stub_bedrock_ttl_predicate(monkeypatch, extended_ttl_models):
+    """Replace ``_get_model_info`` so the predicate flag depends on the model name only.
+
+    Avoids relying on the live ``model_prices_and_context_window.json`` lookup,
+    which fetches from a remote URL in CI and only contains the flag in this PR.
+    """
+    import litellm.llms.bedrock.common_utils as bedrock_common_utils
+
+    def fake(model, custom_llm_provider=None):
+        return {"bedrock_supports_extended_cache_ttl": model in extended_ttl_models}
+
+    monkeypatch.setattr(bedrock_common_utils, "_get_model_info", fake)
+
+
+def test_remove_ttl_from_cache_control_processes_tools(monkeypatch):
     """
     Ensure _remove_ttl_from_cache_control also sanitizes cache_control on tools.
 
     Without this, tools keep unsupported ttl values while system/messages have
     them stripped, causing TTL ordering violations on Bedrock.
     """
+    _stub_bedrock_ttl_predicate(monkeypatch, set())
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
@@ -538,11 +553,14 @@ def test_remove_ttl_from_cache_control_processes_tools():
     assert "ttl" not in request["system"][0]["cache_control"]
 
 
-def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
+def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5(monkeypatch):
     """
     For Claude 4.5+ models, ttl in ["5m", "1h"] should be preserved on tools,
     just like it is for system and messages.
     """
+    _stub_bedrock_ttl_predicate(
+        monkeypatch, {"us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+    )
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
 
@@ -564,7 +582,7 @@ def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
     }
 
     cfg._remove_ttl_from_cache_control(
-        request, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        request, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
 
     # Both tools and system should preserve ttl for Claude 4.5

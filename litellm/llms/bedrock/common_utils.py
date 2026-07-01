@@ -683,39 +683,24 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
-def is_claude_4_5_on_bedrock(model: str) -> bool:
+def bedrock_supports_extended_cache_ttl(model: str) -> bool:
     """
-    Check if the model is a Claude 4.5 model on Bedrock.
-    Claude 4.5 models support prompt caching with '5m' and '1h' TTL on Bedrock.
+    True when the Bedrock model accepts both ``5m`` and ``1h`` cachePoint TTLs.
+
+    Reads ``bedrock_supports_extended_cache_ttl`` from
+    ``model_prices_and_context_window.json``. The flag is Bedrock-specific
+    because Bedrock's 1h support is narrower than Anthropic's native API; it
+    must be set explicitly on each Bedrock model entry per the AWS docs.
     """
-    model_lower = model.lower()
-    claude_4_5_patterns = [
-        "sonnet-4.5",
-        "sonnet_4.5",
-        "sonnet-4-5",
-        "sonnet_4_5",
-        "haiku-4.5",
-        "haiku_4.5",
-        "haiku-4-5",
-        "haiku_4_5",
-        "opus-4.5",
-        "opus_4.5",
-        "opus-4-5",
-        "opus_4_5",
-        "sonnet-4.6",
-        "sonnet_4.6",
-        "sonnet-4-6",
-        "sonnet_4_6",
-        "opus-4.6",
-        "opus_4.6",
-        "opus-4-6",
-        "opus_4_6",
-        "opus-4.7",
-        "opus_4.7",
-        "opus-4-7",
-        "opus_4_7",
-    ]
-    return any(pattern in model_lower for pattern in claude_4_5_patterns)
+    try:
+        model_info = get_cached_model_info()(
+            model=model,
+            custom_llm_provider="bedrock",
+        )
+    except Exception:
+        return False
+
+    return bool(model_info.get("bedrock_supports_extended_cache_ttl"))
 
 
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:

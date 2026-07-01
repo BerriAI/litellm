@@ -76,9 +76,9 @@ from litellm.utils import (
 from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
+    bedrock_supports_extended_cache_ttl,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
-    is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
 )
 
@@ -1110,7 +1110,7 @@ class AmazonConverseConfig(BaseConfig):
         if isinstance(cache_control, dict) and "ttl" in cache_control:
             ttl = cache_control["ttl"]
             if ttl in ["5m", "1h"] and model is not None:
-                if is_claude_4_5_on_bedrock(model):
+                if bedrock_supports_extended_cache_ttl(model):
                     cache_point["ttl"] = ttl
 
         if block_type == "system":
@@ -1241,7 +1241,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
-        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+        if parallel_tool_use_config is not None and bedrock_supports_extended_cache_ttl(model):
             for key, value in parallel_tool_use_config.items():
                 if (
                     key in additional_request_params

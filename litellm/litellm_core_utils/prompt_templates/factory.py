@@ -4946,7 +4946,7 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 
 
 def add_cache_point_tool_block(tool: dict, model: Optional[str] = None) -> Optional[BedrockToolBlock]:
-    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+    from litellm.llms.bedrock.common_utils import bedrock_supports_extended_cache_ttl
 
     cache_control = tool.get("cache_control", None)
     if cache_control is not None:
@@ -4955,7 +4955,7 @@ def add_cache_point_tool_block(tool: dict, model: Optional[str] = None) -> Optio
             cache_point_block: CachePointBlock = {"type": "default"}
             if isinstance(cache_control, dict) and "ttl" in cache_control:
                 ttl = cache_control["ttl"]
-                if ttl in ["5m", "1h"] and model is not None and is_claude_4_5_on_bedrock(model):
+                if ttl in ["5m", "1h"] and model is not None and bedrock_supports_extended_cache_ttl(model):
                     cache_point_block["ttl"] = ttl
             return {"cachePoint": cache_point_block}
     return None

@@ -388,6 +388,56 @@ def test_model_has_route_prefix_exercises_both_branches():
     )
 
 
+def test_bedrock_supports_extended_cache_ttl_reads_json_flag(monkeypatch):
+    """
+    The predicate gates off ``bedrock_supports_extended_cache_ttl`` set on each
+    Bedrock entry in ``model_prices_and_context_window.json``. Models with the
+    flag return True regardless of name; future releases only need a JSON edit.
+    """
+    import litellm.llms.bedrock.common_utils as mod
+
+    def fake(model, custom_llm_provider=None):
+        assert custom_llm_provider == "bedrock"
+        return {"bedrock_supports_extended_cache_ttl": True}
+
+    monkeypatch.setattr(mod, "_get_model_info", fake)
+
+    assert mod.bedrock_supports_extended_cache_ttl("some-custom-alias") is True
+
+
+def test_bedrock_supports_extended_cache_ttl_false_when_flag_absent(monkeypatch):
+    import litellm.llms.bedrock.common_utils as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_get_model_info",
+        lambda model, custom_llm_provider=None: {
+            "cache_creation_input_token_cost": 3.75e-06
+        },
+    )
+
+    assert (
+        mod.bedrock_supports_extended_cache_ttl("anthropic.claude-3-sonnet") is False
+    )
+
+
+def test_bedrock_supports_extended_cache_ttl_swallows_lookup_errors(monkeypatch):
+    """
+    Unknown models must not raise; ``get_model_info`` failures mean we cannot
+    promise extended TTL support, so the predicate returns False.
+    """
+    import litellm.llms.bedrock.common_utils as mod
+
+    def boom(model, custom_llm_provider=None):
+        raise ValueError("no such model")
+
+    monkeypatch.setattr(mod, "_get_model_info", boom)
+
+    assert (
+        mod.bedrock_supports_extended_cache_ttl("bedrock/totally-made-up") is False
+    )
+
+
 @pytest.mark.parametrize(
     "route_method, token",
     [
@@ -445,3 +495,54 @@ def test_explicit_invoke_route_does_not_match_async_invoke():
         BedrockModelInfo._explicit_async_invoke_route(f"bedrock/{async_invoke_model}")
         is True
     )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-4-7",
+        "jp.anthropic.claude-opus-4-7",
+        "anthropic.claude-sonnet-4-6",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+        "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "claude-sonnet-4-5-20250929-v1:0",
+        "eu.anthropic.claude-opus-4-5-20251101-v1:0",
+        "anthropic.claude-fable-5",
+    ],
+)
+def test_bundled_bedrock_entries_advertise_extended_cache_ttl(model):
+    """
+    Every Bedrock entry that AWS documents as supporting 1h cache TTL must
+    carry ``bedrock_supports_extended_cache_ttl: true`` in the bundled JSON.
+    Regression guard for the original bug where Opus 4.8 was registered
+    without the flag. Reads the bundled JSON directly so the assertion holds
+    in CI without relying on the remote cost-map URL.
+    """
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    cost_map = GetModelCostMap.load_local_model_cost_map()
+    assert cost_map[model].get("bedrock_supports_extended_cache_ttl") is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+        "anthropic.claude-opus-4-20250514-v1:0",
+    ],
+)
+def test_bundled_bedrock_5m_only_entries_omit_extended_cache_ttl_flag(model):
+    """
+    Bedrock's prompt-caching docs list 3.5/3.7 Sonnet, 3 Haiku, and Claude
+    Opus 4 as 5m-only, so their bundled entries must not carry the extended
+    TTL flag.
+    """
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    cost_map = GetModelCostMap.load_local_model_cost_map()
+    assert "bedrock_supports_extended_cache_ttl" not in cost_map[model]
