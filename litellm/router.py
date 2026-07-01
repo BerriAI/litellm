@@ -4819,7 +4819,7 @@ class Router:
 
         passthrough_on_no_deployment = kwargs.pop("passthrough_on_no_deployment", False)
         function_name = "_ageneric_api_call_with_fallbacks"
-        deployment: Optional[dict] = None
+        selected_deployment: Optional[dict] = None
         try:
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             try:
@@ -4834,6 +4834,7 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            selected_deployment = deployment
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name=function_name
             )
@@ -4907,8 +4908,8 @@ class Router:
             )
             if model is not None:
                 self.fail_calls[model] += 1
-            if deployment is not None:
-                self._set_failed_deployment_id_on_exception(e, deployment)
+            if selected_deployment is not None:
+                self._set_failed_deployment_id_on_exception(e, selected_deployment)
             raise e
 
     async def _aresponses_with_streaming_fallbacks(
