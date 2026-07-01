@@ -469,7 +469,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
 
         NotificationsManager.success(
-          isAdmin ? "MCP Server created successfully" : "MCP Server submitted for admin review",
+          isAdmin
+            ? "MCP Server created successfully"
+            : {
+                message: "MCP Server submitted for admin review",
+                description: "Once an admin approves it, the server will appear in your MCP Servers list.",
+              },
         );
         form.resetFields();
         setCostConfig({});
@@ -622,8 +627,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         >
           {!isAdmin && (
             <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              Your submission will be sent for admin review before it becomes active. Note: the request must be made
-              with a team-scoped API key.
+              Your submission will be sent for admin review. Once approved, the server will appear in your MCP Servers
+              list. The request must be made with a team-scoped API key.
             </div>
           )}
           <div className="grid grid-cols-1 gap-6">
