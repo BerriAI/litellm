@@ -1,6 +1,8 @@
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from litellm._logging import verbose_logger
+
 import httpx
 
 import litellm
@@ -84,8 +86,11 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    elif k == "imageConfig" and isinstance(v, dict):
-                        mapped_params["imageConfig"] = v
+                    elif k == "imageConfig":
+                        if isinstance(v, dict):
+                            mapped_params["imageConfig"] = v
+                        else:
+                            verbose_logger.warning("imageConfig must be a dict, got %s — ignoring.", type(v).__name__)
                     elif k not in ("tools", "web_search_options", "imageConfig"):
                         mapped_params[k] = v
 
