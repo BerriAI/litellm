@@ -8954,6 +8954,19 @@
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
+    "bedrock/eu-west-1/qwen.qwen3-next-80b-a3b": {
+        "input_cost_per_token": 1.8e-07,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 1.41e-06,
+        "supports_function_calling": true,
+        "supports_native_structured_output": true,
+        "supports_system_messages": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "bedrock/eu-west-2/meta.llama3-70b-instruct-v1:0": {
         "input_cost_per_token": 3.45e-06,
         "litellm_provider": "bedrock",
