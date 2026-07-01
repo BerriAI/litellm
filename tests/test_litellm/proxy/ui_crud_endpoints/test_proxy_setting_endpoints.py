@@ -2367,3 +2367,4 @@ def test_update_ui_settings_writes_audit_log(monkeypatch):
         assert after["disable_custom_api_keys"] is True
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
+
