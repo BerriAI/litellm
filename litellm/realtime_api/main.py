@@ -25,7 +25,6 @@ from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
 from ..llms.bedrock.realtime.handler import BedrockRealtime
-from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 from ..llms.vertex_ai.vertex_llm_base import VertexBase
@@ -494,8 +493,43 @@ async def _arealtime(
             litellm_metadata=_build_litellm_metadata(kwargs),
             query_params=query_params,
         )
+    elif _is_openai_compatible_realtime_provider(_custom_llm_provider):
+        api_base = (
+            dynamic_api_base or litellm_params.api_base or litellm.api_base or openai_realtime._get_default_api_base()
+        )
+        api_key = dynamic_api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY") or ""
+
+        await openai_realtime.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            client=None,
+            timeout=timeout,
+            query_params=query_params,
+            user_api_key_dict=kwargs.get("user_api_key_dict"),
+            litellm_metadata=_build_litellm_metadata(kwargs),
+        )
     else:
         raise ValueError(f"Unsupported model: {model}")
+
+
+def _is_openai_compatible_realtime_provider(custom_llm_provider: str) -> bool:
+    return custom_llm_provider in litellm.openai_compatible_providers or custom_llm_provider == "vllm"
+
+
+async def _realtime_health_check_connect(url: str, headers: dict[str, str]) -> bool:
+    import websockets
+
+    ssl_config = openai_realtime._get_ssl_config(url)
+    async with websockets.connect(  # type: ignore
+        url,
+        additional_headers=headers,
+        max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+        ssl=ssl_config,
+    ):
+        return True
 
 
 async def _realtime_health_check(
@@ -522,9 +556,8 @@ async def _realtime_health_check(
     Raises:
         Exception - if the connection is not successful
     """
-    import websockets
-
     url: Optional[str] = None
+    headers: dict[str, str] = {}
     if custom_llm_provider == "azure":
         url = azure_realtime._construct_url(
             api_base=api_base or "",
@@ -532,13 +565,16 @@ async def _realtime_health_check(
             api_version=api_version or "2024-10-01-preview",
             realtime_protocol=realtime_protocol,
         )
+        headers = {"api-key": api_key or ""}
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
             api_base=api_base or "https://api.openai.com/",
             query_params={"model": model},
         )
+        headers = {"api-key": api_key or ""}
     elif custom_llm_provider == "xai":
         url = xai_realtime._construct_url(api_base=api_base or "https://api.x.ai/v1", query_params={"model": model})
+        headers = {"api-key": api_key or ""}
     elif custom_llm_provider == "vertex_ai":
         vertex_location = litellm.vertex_location or get_secret_str("VERTEXAI_LOCATION")
         resolved_location = vertex_llm_base.get_vertex_region(vertex_region=vertex_location, model=model)
@@ -556,24 +592,22 @@ async def _realtime_health_check(
             location=resolved_location,
         )
         url = vertex_realtime_config.get_complete_url(api_base=api_base, model=model)
-        ssl_context = get_shared_realtime_ssl_context()
         headers = vertex_realtime_config.validate_environment(headers={}, model=model, api_key=None)
-        async with websockets.connect(  # type: ignore
-            url,
-            additional_headers=headers,
-            max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-            ssl=ssl_context,
-        ):
-            return True
+    elif _is_openai_compatible_realtime_provider(custom_llm_provider):
+        resolved_api_base = api_base or litellm.api_base or openai_realtime._get_default_api_base()
+        resolved_api_key = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY") or ""
+        url = openai_realtime._construct_url(
+            api_base=resolved_api_base,
+            query_params={"model": model},
+        )
+        headers = openai_realtime._get_additional_headers(
+            resolved_api_key,
+            openai_beta_realtime=False,
+        )
     else:
         raise ValueError(f"Unsupported model: {model}")
-    ssl_context = get_shared_realtime_ssl_context()
-    async with websockets.connect(  # type: ignore
-        url,
-        additional_headers={
-            "api-key": api_key,  # type: ignore
-        },
-        max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-        ssl=ssl_context,
-    ):
-        return True
+
+    if url is None:
+        raise ValueError(f"Unsupported model: {model}")
+
+    return await _realtime_health_check_connect(url=url, headers=headers)
