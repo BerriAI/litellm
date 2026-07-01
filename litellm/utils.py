@@ -8230,7 +8230,11 @@ class ProviderConfigManager:
         elif LlmProviders.OPENAI == provider:
             return litellm.OpenAIGPTConfig()
         elif LlmProviders.CUSTOM_OPENAI == provider:
-            return litellm.OpenAIGPTConfig()
+            from litellm.llms.openai_like.chat.transformation import (
+                CustomOpenAIChatConfig,
+            )
+
+            return CustomOpenAIChatConfig()
         elif LlmProviders.GEMINI == provider:
             return litellm.GeminiModelInfo()
         elif LlmProviders.VERTEX_AI == provider:

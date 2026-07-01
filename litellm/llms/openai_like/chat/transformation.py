@@ -166,3 +166,11 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
             mapped_params.pop("max_completion_tokens", None)
 
         return mapped_params
+
+
+class CustomOpenAIChatConfig(OpenAILikeChatConfig):
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+        if api_base is None:
+            raise ValueError("api_base must be set to discover models for the custom_openai provider")
+        models = super().get_models(api_key=api_key, api_base=api_base)
+        return [f"custom_openai/{model}" for model in models]

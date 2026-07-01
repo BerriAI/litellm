@@ -1683,7 +1683,14 @@ def test_get_valid_models_custom_openai(monkeypatch):
             api_key="sk-1234",
             api_base="https://my-openai-compatible-endpoint/v1",
         )
-        assert "my-custom-model" in valid_models
+        assert "custom_openai/my-custom-model" in valid_models
+
+
+def test_custom_openai_get_models_requires_api_base():
+    from litellm.llms.openai_like.chat.transformation import CustomOpenAIChatConfig
+
+    with pytest.raises(ValueError):
+        CustomOpenAIChatConfig().get_models(api_base=None)
 
 
 def test_get_valid_models_fireworks_ai(monkeypatch):
