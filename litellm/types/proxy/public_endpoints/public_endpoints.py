@@ -68,3 +68,7 @@ class SupportedEndpoint(BaseModel):
 
 class SupportedEndpointsResponse(BaseModel):
     endpoints: List[SupportedEndpoint]
+
+
+class VersionResponse(BaseModel):
+    version: str
