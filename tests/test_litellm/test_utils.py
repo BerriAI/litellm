@@ -4717,6 +4717,7 @@ class TestValidateEnvironmentTencent:
         "vertex_ai/gemini-3-pro-image-preview",
         "vertex_ai/gemini-3.1-flash-image-preview",
         "gemini/gemini-2.5-flash-image",
+        "gemini/gemini-3-pro-image",
         "gemini/gemini-3-pro-image-preview",
         "gemini/gemini-3.1-flash-image-preview",
     ],

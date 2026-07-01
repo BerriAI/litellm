@@ -18814,7 +18814,8 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query"
+        "web_search_billing_unit": "per_query",
+        "supports_reasoning": false
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
