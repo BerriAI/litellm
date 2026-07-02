@@ -3,8 +3,8 @@ import { TextInput, SelectItem } from "@tremor/react";
 
 import { Button as Button2, Modal, Form, Select as Select2, InputNumber } from "antd";
 
-import NumericalInput from "./shared/numerical_input";
-import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
+import NumericalInput from "@/components/shared/numerical_input";
+import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
 
 interface EditUserModalProps {
   visible: boolean;

@@ -1,11 +1,11 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
 import BulkEditUserModal from "./BulkEditUsers";
-import { userBulkUpdateUserCall, teamBulkMemberAddCall } from "./networking";
-import NotificationsManager from "./molecules/notifications_manager";
+import { userBulkUpdateUserCall, teamBulkMemberAddCall } from "@/components/networking";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 
-vi.mock("./networking", () => ({
+vi.mock("@/components/networking", () => ({
   userBulkUpdateUserCall: vi.fn(),
   teamBulkMemberAddCall: vi.fn(),
 }));

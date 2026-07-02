@@ -2,11 +2,13 @@ import React, { useState, useEffect } from "react";
 import { Card, Title, Text, Divider, TextInput } from "@tremor/react";
 import { Button, Typography, Spin, Switch, Select, InputNumber } from "antd";
 import { PlusOutlined, DeleteOutlined } from "@ant-design/icons";
-import { getInternalUserSettings, updateInternalUserSettings, modelAvailableCall } from "./networking";
-import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import { getInternalUserSettings, updateInternalUserSettings, modelAvailableCall } from "@/components/networking";
+import BudgetDurationDropdown, {
+  getBudgetDurationLabel,
+} from "@/components/common_components/budget_duration_dropdown";
+import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import NotificationManager from "./molecules/notifications_manager";
+import NotificationManager from "@/components/molecules/notifications_manager";
 
 interface DefaultUserSettingsProps {
   accessToken: string | null;

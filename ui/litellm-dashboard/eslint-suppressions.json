@@ -376,7 +376,7 @@
       "count": 1
     }
   },
-  "src/components/DefaultUserSettings.tsx": {
+  "src/app/(dashboard)/users/_components/DefaultUserSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1001,7 +1001,7 @@
       "count": 1
     }
   },
-  "src/components/edit_user.tsx": {
+  "src/app/(dashboard)/users/_components/edit_user.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1957,12 +1957,12 @@
       "count": 2
     }
   },
-  "src/components/user_edit_view.test.tsx": {
+  "src/app/(dashboard)/users/_components/user_edit_view.test.tsx": {
     "react/display-name": {
       "count": 1
     }
   },
-  "src/components/user_edit_view.tsx": {
+  "src/app/(dashboard)/users/_components/user_edit_view.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2047,7 +2047,7 @@
       "count": 2
     }
   },
-  "src/components/view_users.tsx": {
+  "src/app/(dashboard)/users/_components/view_users.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2055,7 +2055,7 @@
       "count": 1
     }
   },
-  "src/components/view_users/columns.tsx": {
+  "src/app/(dashboard)/users/_components/view_users/columns.tsx": {
     "max-params": {
       "count": 1
     },
@@ -2063,12 +2063,12 @@
       "count": 1
     }
   },
-  "src/components/view_users/table.tsx": {
+  "src/app/(dashboard)/users/_components/view_users/table.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/view_users/user_info_view.tsx": {
+  "src/app/(dashboard)/users/_components/view_users/user_info_view.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
