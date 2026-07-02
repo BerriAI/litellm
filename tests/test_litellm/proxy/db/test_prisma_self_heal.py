@@ -576,3 +576,31 @@ async def test_db_health_watchdog_should_not_reconnect_healthy_writer(
         await client._db_health_watchdog_loop()
 
     client.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_direct_reconnect_probe_success_clears_writer_unavailable(
+    mock_proxy_logging,
+):
+    """If the writer probe inside _do_direct_reconnect succeeds (engine already
+    reconnected by another path, e.g. an IAM token refresh), the early return
+    skips recreate_prisma_client — the degraded-writer flag must still be
+    cleared there or the watchdog fires reconnect attempts forever."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    writer = MagicMock()
+    writer.query_raw = AsyncMock(return_value=[{"result": 1}])
+    reader = MagicMock()
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = True
+    client.db = routing
+    client._start_engine_watcher = AsyncMock()
+
+    with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
+        await client._run_reconnect_cycle(timeout_seconds=5.0)
+
+    writer.query_raw.assert_awaited_once_with("SELECT 1")
+    assert routing.writer_unavailable is False

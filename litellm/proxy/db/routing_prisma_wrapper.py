@@ -110,6 +110,15 @@ class RoutingPrismaWrapper:
     def writer_unavailable(self) -> bool:
         return self._writer_unavailable
 
+    def mark_writer_recovered(self) -> None:
+        """Clear the degraded-writer flag after an external health probe proved
+        the writer reachable. Needed when recovery happens without
+        `recreate_prisma_client` (e.g. an IAM token refresh already recreated
+        the writer engine), which is otherwise the only runtime path that
+        clears the flag — without this, the watchdog would keep firing
+        reconnect attempts against an already-healthy writer."""
+        self._writer_unavailable = False
+
     def _should_use_reader(self) -> bool:
         return not self._reader_unavailable
 

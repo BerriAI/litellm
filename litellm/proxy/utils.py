@@ -4527,6 +4527,8 @@ class PrismaClient:
                         "Writer healthy on probe; skipping recreate (engine "
                         "likely already replaced by a token refresh)."
                     )
+                    if isinstance(self.db, RoutingPrismaWrapper):
+                        self.db.mark_writer_recovered()
                     await self._start_engine_watcher()
                     return
                 except Exception as probe_err:
