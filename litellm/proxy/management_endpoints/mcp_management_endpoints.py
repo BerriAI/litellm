@@ -1158,6 +1158,7 @@ if MCP_AVAILABLE:
             server_id,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         )
+        await global_mcp_server_manager.invalidate_byom_submitted_servers_cache(approved.submitted_by)
         await global_mcp_server_manager.reload_servers_from_database()
 
         return _redact_mcp_credentials(approved)
