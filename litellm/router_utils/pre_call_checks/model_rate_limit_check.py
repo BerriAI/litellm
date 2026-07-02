@@ -1,11 +1,10 @@
 """
-Enforce TPM/RPM rate limits set on model deployments.
+Enforce TPM/RPM or separate ITPM/OTPM rate limits set on model deployments.
 
-This pre-call check ensures that model-level TPM/RPM limits are enforced
-across all requests, regardless of routing strategy.
+When enabled via router_settings.optional_pre_call_checks: ["enforce_model_rate_limits"]
 
-When enabled via `enforce_model_rate_limits: true` in litellm_settings,
-requests that exceed the configured TPM/RPM limits will receive a 429 error.
+- tpm/rpm: combined TPM + optional RPM (legacy)
+- itpm/otpm: separate input/output tokens per minute
 """
 
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
@@ -16,6 +15,13 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    async_io_token_pre_call_check,
+    async_io_token_reconcile_success,
+    async_io_token_refund_failure,
+    deployment_has_io_token_limits,
+    ITPM_RESERVED_KEY,
+)
 from litellm.types.router import RouterErrors
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
@@ -34,7 +40,7 @@ class RoutingArgs:
 
 class ModelRateLimitingCheck(CustomLogger):
     """
-    Pre-call check that enforces TPM/RPM limits on model deployments.
+    Pre-call check that enforces TPM/RPM or ITPM/OTPM limits on model deployments.
 
     This check runs before each request and raises a RateLimitError
     if the deployment has exceeded its configured TPM or RPM limits.
@@ -46,7 +52,9 @@ class ModelRateLimitingCheck(CustomLogger):
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
 
-    def _get_deployment_limits(self, deployment: Dict) -> tuple[Optional[int], Optional[int]]:
+    def _get_deployment_limits(
+        self, deployment: Dict
+    ) -> tuple[Optional[int], Optional[int]]:
         """
         Extract TPM and RPM limits from a deployment configuration.
 
@@ -129,7 +137,9 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check RPM limit (atomic increment-first to avoid race conditions)
             if rpm_limit is not None:
-                current_rpm = self.dual_cache.increment_cache(key=rpm_key, value=1, ttl=RoutingArgs.ttl)
+                current_rpm = self.dual_cache.increment_cache(
+                    key=rpm_key, value=1, ttl=RoutingArgs.ttl
+                )
                 if current_rpm is not None and current_rpm > rpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. RPM limit={rpm_limit}, current usage={current_rpm}",
@@ -151,17 +161,28 @@ class ModelRateLimitingCheck(CustomLogger):
         except litellm.RateLimitError:
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {str(e)}")
+            verbose_router_logger.debug(
+                f"Error in ModelRateLimitingCheck.pre_call_check: {str(e)}"
+            )
             # Don't fail the request if rate limit check fails
             return deployment
 
-    async def async_pre_call_check(self, deployment: Dict, parent_otel_span: Optional[Span] = None) -> Optional[Dict]:
+    async def async_pre_call_check(
+        self, deployment: Dict, parent_otel_span: Optional[Span] = None
+    ) -> Optional[Dict]:
         """
         Async pre-call check for model rate limits.
 
-        Raises RateLimitError if deployment exceeds TPM/RPM limits.
+        Raises RateLimitError if deployment exceeds TPM/RPM or ITPM/OTPM limits.
         """
         try:
+            if deployment_has_io_token_limits(deployment):
+                return await async_io_token_pre_call_check(
+                    self.dual_cache,
+                    deployment,
+                    parent_otel_span=parent_otel_span,
+                )
+
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
             # If no limits are set, allow the request
@@ -179,7 +200,9 @@ class ModelRateLimitingCheck(CustomLogger):
             # Check TPM limit
             if tpm_limit is not None:
                 # First check local cache
-                current_tpm = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+                current_tpm = await self.dual_cache.async_get_cache(
+                    key=tpm_key, local_only=True
+                )
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -227,19 +250,21 @@ class ModelRateLimitingCheck(CustomLogger):
         except litellm.RateLimitError:
             raise
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {str(e)}")
+            verbose_router_logger.debug(
+                f"Error in ModelRateLimitingCheck.async_pre_call_check: {str(e)}"
+            )
             # Don't fail the request if rate limit check fails
             return deployment
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        """
-        Track TPM usage after successful request.
+        from litellm.litellm_core_utils.core_helpers import (
+            _get_parent_otel_span_from_kwargs,
+        )
 
-        This updates the TPM counter with the actual tokens used.
-        Always tracks tokens - the pre-call check handles enforcement.
-        """
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
             if standard_logging_object is None:
                 return
 
@@ -247,8 +272,25 @@ class ModelRateLimitingCheck(CustomLogger):
             if model_id is None:
                 return
 
+            metadata = (
+                (standard_logging_object.get("metadata") or {})
+                if standard_logging_object
+                else {}
+            )
+            kwargs_metadata = kwargs.get("metadata") or {}
+            if ITPM_RESERVED_KEY in metadata or ITPM_RESERVED_KEY in kwargs_metadata:
+                await async_io_token_reconcile_success(
+                    self.dual_cache,
+                    kwargs,
+                    response_obj,
+                    parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+                )
+                return
+
             total_tokens = standard_logging_object.get("total_tokens", 0)
-            model = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+            model = standard_logging_object.get("hidden_params", {}).get(
+                "litellm_model_name"
+            )
 
             verbose_router_logger.debug(
                 f"[TPM TRACKING] model_id={model_id}, total_tokens={total_tokens}, model={model}"
@@ -261,7 +303,9 @@ class ModelRateLimitingCheck(CustomLogger):
             current_minute = dt.strftime("%H-%M")
             tpm_key = f"{model_id}:{model}:tpm:{current_minute}"
 
-            verbose_router_logger.debug(f"[TPM TRACKING] Incrementing {tpm_key} by {total_tokens}")
+            verbose_router_logger.debug(
+                f"[TPM TRACKING] Incrementing {tpm_key} by {total_tokens}"
+            )
 
             await self.dual_cache.async_increment_cache(
                 key=tpm_key,
@@ -270,7 +314,25 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_success_event: {str(e)}")
+            verbose_router_logger.debug(
+                f"Error in ModelRateLimitingCheck.async_log_success_event: {str(e)}"
+            )
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        from litellm.litellm_core_utils.core_helpers import (
+            _get_parent_otel_span_from_kwargs,
+        )
+
+        try:
+            await async_io_token_refund_failure(
+                self.dual_cache,
+                kwargs,
+                parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
+            )
+        except Exception as e:
+            verbose_router_logger.debug(
+                f"Error in ModelRateLimitingCheck.async_log_failure_event: {str(e)}"
+            )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """
@@ -278,7 +340,9 @@ class ModelRateLimitingCheck(CustomLogger):
         Always tracks tokens - the pre-call check handles enforcement.
         """
         try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+                "standard_logging_object"
+            )
             if standard_logging_object is None:
                 return
 
@@ -287,7 +351,9 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             total_tokens = standard_logging_object.get("total_tokens", 0)
-            model = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+            model = standard_logging_object.get("hidden_params", {}).get(
+                "litellm_model_name"
+            )
 
             if not model or not total_tokens:
                 return
@@ -303,4 +369,6 @@ class ModelRateLimitingCheck(CustomLogger):
             )
 
         except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {str(e)}")
+            verbose_router_logger.debug(
+                f"Error in ModelRateLimitingCheck.log_success_event: {str(e)}"
+            )
