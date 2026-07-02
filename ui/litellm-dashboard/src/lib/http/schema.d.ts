@@ -6514,6 +6514,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
@@ -6913,6 +6914,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this key exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
@@ -8968,6 +8970,7 @@ export interface paths {
          *
          *     - organization_alias: *str* - The name of the organization.
          *     - models: *List* - The models the organization has access to.
+         *     - logging_exporters: *Optional[List[str]]* - Names of admin-owned logging destinations (credential names) this organization exports its traces to.
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
@@ -13566,6 +13569,7 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -13743,6 +13747,7 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
+         *     - logging_exporters: Optional[List[str]] - Names of admin-owned logging destinations (credential names) this team exports its traces to.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -27943,8 +27948,6 @@ export interface components {
             guardrails?: string[] | null;
             /** Key Alias */
             key_alias?: string | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32152,8 +32155,6 @@ export interface components {
             guardrails?: string[] | null;
             /** Key Alias */
             key_alias?: string | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32252,8 +32253,6 @@ export interface components {
             guardrails?: string[] | null;
             /** Key Alias */
             key_alias?: string | null;
-            /** Logging Exporters */
-            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
