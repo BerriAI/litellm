@@ -130,9 +130,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         raw_max = optional_params.get("max_results")
         if isinstance(raw_max, (int, float, str)):
             try:
-                self._caller_max_results = max(
-                    1, min(int(raw_max), _TINYFISH_RESULT_CAP)
-                )
+                self._caller_max_results = max(1, min(int(raw_max), _TINYFISH_RESULT_CAP))
             except (ValueError, TypeError, OverflowError):
                 # OverflowError covers int(float('inf')) and similar non-finite floats.
                 verbose_logger.warning(
@@ -203,9 +201,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             )
 
         try:
-            raw_json: object = (
-                raw_response.json()
-            )  # any-ok: httpx Response.json() -> Any
+            raw_json: object = raw_response.json()  # any-ok: httpx Response.json() -> Any
         except json.JSONDecodeError:
             raise self._wrap_error(
                 error_message=f"Expected JSON response, got: {raw_response.text[:200]}",
@@ -219,9 +215,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             parsed = SearchResponse.model_validate(raw_json)
         except ValidationError as e:
             raise self._wrap_error(
-                error_message=(
-                    f"Response shape does not match LiteLLM's SearchResponse schema: {e}"
-                ),
+                error_message=(f"Response shape does not match LiteLLM's SearchResponse schema: {e}"),
                 status_code=raw_response.status_code,
                 headers=dict(raw_response.headers),
             )
