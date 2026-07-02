@@ -1106,17 +1106,27 @@ class AmazonConverseConfig(BaseConfig):
         if cache_control is None:
             return None
 
-        cache_point = CachePointBlock(type="default")
-        if isinstance(cache_control, dict) and "ttl" in cache_control:
-            ttl = cache_control["ttl"]
-            if ttl in ["5m", "1h"] and model is not None:
-                if is_claude_4_5_on_bedrock(model):
-                    cache_point["ttl"] = ttl
+        cache_point = self._build_cache_point_block(cache_control, model)
 
         if block_type == "system":
             return SystemContentBlock(cachePoint=cache_point)
         else:
             return ContentBlock(cachePoint=cache_point)
+
+    @staticmethod
+    def _build_cache_point_block(control: Optional[dict], model: Optional[str] = None) -> CachePointBlock:
+        """Build a Bedrock ``cachePoint`` block from an OpenAI-style ``cache_control``/``control`` dict.
+
+        ``type`` is always ``"default"`` (the only value Bedrock's Converse API
+        accepts). ``ttl`` is only honored for models that support extended TTL
+        caching (Claude 4.5 family on Bedrock).
+        """
+        cache_point = CachePointBlock(type="default")
+        if isinstance(control, dict) and "ttl" in control:
+            ttl = control["ttl"]
+            if ttl in ["5m", "1h"] and model is not None and is_claude_4_5_on_bedrock(model):
+                cache_point["ttl"] = ttl
+        return cache_point
 
     def _transform_system_message(
         self, messages: List[AllMessageValues], model: Optional[str] = None
@@ -1526,7 +1536,8 @@ class AmazonConverseConfig(BaseConfig):
         if cache_injection_points and len(bedrock_tools) > 0:
             for point in cache_injection_points:
                 if point.get("location") == "tool_config":
-                    bedrock_tools.append({"cachePoint": {"type": "default"}})
+                    cache_point = self._build_cache_point_block(point.get("control"), model)
+                    bedrock_tools.append(ToolBlock(cachePoint=cache_point))
                     break
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None

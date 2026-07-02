@@ -4554,6 +4554,85 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     assert all("cachePoint" not in tool for tool in tools)
 
 
+def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
+    """
+    Regression test: cache_control_injection_points with location=tool_config
+    must honor the requested `control.ttl`, mirroring the message/system
+    cache_control behavior, instead of always emitting a bare
+    {"type": "default"} cachePoint with no ttl.
+    """
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    }
+    result = config._transform_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tools = result["toolConfig"]["tools"]
+    assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+
+
+def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():
+    """
+    Models that don't support extended TTL caching (only Claude 4.5+ on
+    Bedrock does) must fall back to the default cachePoint with no ttl,
+    even if the caller requested one, matching message/system behavior.
+    """
+    config = AmazonConverseConfig()
+    messages = [
+        {"role": "user", "content": "What is the weather?"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
+        "cache_control_injection_points": [
+            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+        ],
+    }
+    result = config._transform_request(
+        model="anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+    )
+    tools = result["toolConfig"]["tools"]
+    assert tools[-1] == {"cachePoint": {"type": "default"}}
+
+
 def test_translate_response_format_json_schema_still_injects_tool():
     """
     response_format with an explicit json_schema should still use the
