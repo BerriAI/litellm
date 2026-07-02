@@ -440,6 +440,27 @@ class TestModelRateLimitingCheckIOTokens:
         assert len(warnings) == 2
 
     @pytest.mark.asyncio
+    async def test_missing_deployment_id_skips_io_reservation(self):
+        dual_cache = DualCache()
+        deployment = {
+            "litellm_params": {"model": "openai/gpt-4o-mini", "itpm": 100},
+            "model_info": {},  # no id -> cannot build a per-deployment cache key
+            "model_name": "opus",
+        }
+        request_kwargs = {
+            "messages": [{"role": "user", "content": "hello world"}],
+            "max_tokens": 5,
+            "metadata": {},
+        }
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+
+        result = await async_io_token_pre_call_check(dual_cache, deployment)
+
+        assert result is deployment
+        # No reservation is stashed, so nothing lands in a shared None:None bucket.
+        assert ITPM_RESERVED_KEY not in request_kwargs["metadata"]
+
+    @pytest.mark.asyncio
     async def test_reconcile_uses_reservation_minute_key(self):
         dual_cache = DualCache()
         # Reservation was made on a fixed minute key; a call that finishes in a

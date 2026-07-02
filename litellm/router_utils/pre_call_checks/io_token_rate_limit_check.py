@@ -84,9 +84,13 @@ def deployment_has_io_token_limits(deployment: Dict) -> bool:
     return itpm is not None or otpm is not None
 
 
-def _get_cache_keys(deployment: Dict, current_minute: str) -> Tuple[str, str]:
+def _get_cache_keys(deployment: Dict, current_minute: str) -> Optional[Tuple[str, str]]:
     model_id = deployment.get("model_info", {}).get("id")
     deployment_name = deployment.get("litellm_params", {}).get("model")
+    # Without both a deployment id and model name the key would collapse to a
+    # shared "None:None" bucket across misconfigured deployments, so bail out.
+    if model_id is None or deployment_name is None:
+        return None
     itpm_key = RouterCacheEnum.ITPM.value.format(id=model_id, model=deployment_name, current_minute=current_minute)
     otpm_key = RouterCacheEnum.OTPM.value.format(id=model_id, model=deployment_name, current_minute=current_minute)
     return itpm_key, otpm_key
@@ -272,7 +276,10 @@ async def async_io_token_pre_call_check(
 
     dt = get_utc_datetime()
     current_minute = dt.strftime("%H-%M")
-    itpm_key, otpm_key = _get_cache_keys(deployment, current_minute)
+    cache_keys = _get_cache_keys(deployment, current_minute)
+    if cache_keys is None:
+        return deployment
+    itpm_key, otpm_key = cache_keys
 
     itpm_reserved = 0
     otpm_reserved = 0
