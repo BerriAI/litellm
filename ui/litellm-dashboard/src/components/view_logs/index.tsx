@@ -12,7 +12,7 @@ import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
-import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
+import { useLogFilterLogic, defaultFilters, FILTER_KEYS, type LogFilterState } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
@@ -27,7 +27,6 @@ interface SpendLogsTableProps {
 }
 
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
-  const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
 
@@ -132,15 +131,12 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     [sortBy, sortOrder, handleSortChange],
   );
 
+  const requestIdSearchTerm = filters[FILTER_KEYS.REQUEST_ID];
+
   const filteredData = useMemo(() => {
     const searchedLogs = filteredLogs.data.filter((log) => {
-      const matchesSearch =
-        !searchTerm ||
-        log.request_id.includes(searchTerm) ||
-        log.model.includes(searchTerm) ||
-        (log.user && log.user.includes(searchTerm));
+      const matchesSearch = !requestIdSearchTerm || log.request_id.includes(requestIdSearchTerm);
 
-      // No need for additional filtering since we're now handling this in the API call
       return matchesSearch;
     });
 
@@ -200,7 +196,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
         })
     );
-  }, [filteredLogs.data, searchTerm]);
+  }, [filteredLogs.data, requestIdSearchTerm]);
 
   // Keep the Fetch button busy until the table has actually committed the new
   // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
@@ -264,8 +260,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                 />
                 <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
                   <LogsTableToolbar
-                    searchTerm={searchTerm}
-                    onSearchChange={setSearchTerm}
+                    searchTerm={requestIdSearchTerm}
+                    onSearchChange={(value) => handleFilterChange({ [FILTER_KEYS.REQUEST_ID]: value })}
                     startTime={startTime}
                     onStartTimeChange={setStartTime}
                     endTime={endTime}

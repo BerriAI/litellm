@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import moment from "moment";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { uiSpendLogsCall } from "../networking";
 import { useLogFilterLogic } from "./log_filter_logic";
 
 const mockHandleFilterResetFromHook = vi.fn();
+const mockHandleFilterChangeFromHook = vi.fn();
 vi.mock("./log_filter_logic", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./log_filter_logic")>();
   return {
@@ -16,7 +17,7 @@ vi.mock("./log_filter_logic", async (importOriginal) => {
       logsQuery: { isLoading: false, isFetching: false, refetch: vi.fn() },
       filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
       allTeams: [],
-      handleFilterChange: vi.fn(),
+      handleFilterChange: mockHandleFilterChangeFromHook,
       handleFilterReset: mockHandleFilterResetFromHook,
     })),
   };
@@ -56,6 +57,16 @@ describe("SpendLogsTable", () => {
     vi.clearAllMocks();
     // Clear sessionStorage to avoid isLiveTail state from previous tests
     sessionStorage.clear();
+  });
+
+  it("should route the Request ID search box through handleFilterChange", async () => {
+    renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+    fireEvent.change(screen.getByPlaceholderText("Search by Request ID"), { target: { value: "req-123" } });
+
+    await waitFor(() => {
+      expect(mockHandleFilterChangeFromHook).toHaveBeenCalledWith({ "Request ID": "req-123" });
+    });
   });
 
   it("should call handleFilterResetFromHook when Reset Filters is clicked", async () => {
