@@ -487,6 +487,38 @@ async def test_streaming_isolates_buffers_per_choice():
 
 
 @pytest.mark.asyncio
+async def test_streaming_restores_reasoning_content():
+    # a reasoning model echoes a placeholder in its streamed reasoning trace; it
+    # must be de-anonymized like content.
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    def _chunk(reasoning, finish=None):
+        return types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    index=0,
+                    delta=types.SimpleNamespace(
+                        content=None, tool_calls=None, function_call=None, reasoning_content=reasoning
+                    ),
+                    finish_reason=finish,
+                )
+            ]
+        )
+
+    async def _source():
+        yield _chunk("the user is <PERSON_1>")
+        yield _chunk(None, finish="stop")
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    trace = "".join(
+        getattr(choice.delta, "reasoning_content", None) or "" for chunk in chunks for choice in chunk.choices
+    )
+    assert "Marie Dupont" in trace
+    assert "<PERSON_1>" not in trace
+
+
+@pytest.mark.asyncio
 async def test_streaming_restores_tool_and_function_call_arguments():
     # Streamed tool-call and legacy function_call argument fragments must be
     # de-anonymized too, with a placeholder split across chunks reassembled per
@@ -620,6 +652,42 @@ async def test_pre_call_unhandled_input_shape_is_passthrough():
     data = {"input": {"unexpected": "shape"}}
     out = await gr.async_pre_call_hook(None, None, data, "aresponses")
     assert "privaite_map" not in out.get("metadata", {})
+
+
+@pytest.mark.asyncio
+async def test_pre_call_scans_mixed_responses_input_list():
+    # an agentic turn: a role message + a function_call_output + a bare string.
+    # the old homogeneity check wrapped the whole list as one content and left
+    # the non-message items raw; every item must be scanned.
+    gr = _make_guardrail()
+    data = {
+        "input": [
+            {"role": "user", "content": "I am Marie Dupont"},
+            {"type": "function_call_output", "call_id": "c1", "output": "reach marie@acme.com"},
+            "also Marie Dupont",
+        ]
+    }
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+    serialized = str(out["input"])
+
+    assert "Marie Dupont" not in serialized
+    assert "marie@acme.com" not in serialized
+    assert out["input"][1]["type"] == "function_call_output"  # structure kept
+    assert out["input"][1]["call_id"] == "c1"
+    assert out["metadata"]["privaite_map"]
+
+
+@pytest.mark.asyncio
+async def test_pre_call_block_gate_fires_on_mixed_responses_input():
+    # a blocked type inside a function_call_output must reject the request; the
+    # gate is only reachable because the item is scanned in the first place.
+    from fastapi import HTTPException
+
+    gr = _make_guardrail(block_entities=["EMAIL_ADDRESS"])
+    data = {"input": [{"type": "function_call_output", "output": "reach marie@acme.com"}]}
+    with pytest.raises(HTTPException) as ei:
+        await gr.async_pre_call_hook(None, None, data, "aresponses")
+    assert ei.value.status_code == 400
 
 
 @pytest.mark.asyncio
