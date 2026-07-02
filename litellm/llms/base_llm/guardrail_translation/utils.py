@@ -1,9 +1,67 @@
 from __future__ import annotations
 
+import json
 from typing import Any, List, Optional
 
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.llms.openai import AllMessageValues
+
+
+def _anthropic_stream_chunk_events(item: Any) -> list[dict]:
+    if isinstance(item, dict):
+        return [item]
+    if isinstance(item, bytes):
+        chunk = item.decode("utf-8", errors="replace")
+    elif isinstance(item, str):
+        chunk = item
+    else:
+        return []
+
+    events: list[dict] = []
+    for block in chunk.split("\n\n"):
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("data:"):
+                continue
+            payload = stripped[len("data:") :].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                events.append(parsed)
+    return events
+
+
+def _usage_from_anthropic_stream_chunks(original_response: list[Any]) -> Optional[AnthropicUsage]:
+    input_tokens = 0
+    output_tokens = 0
+    found_usage = False
+
+    for item in original_response:
+        for event in _anthropic_stream_chunk_events(item):
+            event_type = event.get("type")
+            if event_type == "message_start":
+                message = event.get("message") or {}
+                usage_obj = message.get("usage") or {}
+            elif event_type == "message_delta":
+                usage_obj = event.get("usage") or {}
+            else:
+                usage_obj = {}
+            if not isinstance(usage_obj, dict):
+                continue
+            if usage_obj.get("input_tokens") is not None:
+                input_tokens = int(usage_obj.get("input_tokens") or 0)
+                found_usage = True
+            if usage_obj.get("output_tokens") is not None:
+                output_tokens = int(usage_obj.get("output_tokens") or 0)
+                found_usage = True
+
+    if not found_usage:
+        return None
+    return AnthropicUsage(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 def blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
@@ -17,7 +75,11 @@ def blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
     so usage is zero.
     """
     usage_obj: Any = None
-    if isinstance(original_response, dict):
+    if isinstance(original_response, list):
+        stream_usage = _usage_from_anthropic_stream_chunks(original_response)
+        if stream_usage is not None:
+            return stream_usage
+    elif isinstance(original_response, dict):
         usage_obj = original_response.get("usage")
     elif original_response is not None:
         usage_obj = getattr(original_response, "usage", None)

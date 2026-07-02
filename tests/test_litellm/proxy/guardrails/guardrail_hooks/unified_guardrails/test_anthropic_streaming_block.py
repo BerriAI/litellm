@@ -217,6 +217,61 @@ async def test_end_of_stream_only_block_does_not_append_after_message_stop():
     assert message_delta_usages[-1] == 5
 
 
+def test_blocked_stream_reports_usage_from_original_chunks():
+    from litellm.integrations.custom_guardrail import ModifyResponseException
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import (
+        AnthropicMessagesHandler,
+    )
+    from litellm.llms.base_llm.guardrail_translation.utils import (
+        blocked_response_usage,
+    )
+
+    original_chunks: List[Any] = [
+        _sse_event(
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_orig",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-3-5-sonnet",
+                    "content": [],
+                    "stop_reason": None,
+                    "usage": {"input_tokens": 12, "output_tokens": 0},
+                },
+            },
+        ),
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 5}},
+    ]
+    seen_chunks = [
+        _sse_event(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        )
+    ]
+    exc = ModifyResponseException(
+        message=BLOCK_MESSAGE,
+        model="claude-3-5-sonnet",
+        request_data={},
+        guardrail_name="g",
+        original_response=original_chunks,
+    )
+
+    usage = blocked_response_usage(original_chunks)
+    raw = b"".join(
+        AnthropicMessagesHandler().build_block_sse_chunks(exc, stream_started=True, responses_so_far=seen_chunks)
+    ).decode()
+    message_delta_usages = [
+        payload.get("usage", {}).get("output_tokens")
+        for payload in _parse_sse_payloads(raw)
+        if payload.get("type") == "message_delta"
+    ]
+
+    assert usage == {"input_tokens": 12, "output_tokens": 5}
+    assert message_delta_usages[-1] == 5
+
+
 class TestContentBlockState:
     """`_content_block_state` must reflect the true open/last block index across
     the two chunk formats the stream can carry (multi-event bytes, parsed dict),
