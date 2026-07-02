@@ -1754,20 +1754,6 @@ async def ui_view_spend_logs(
 
     is_v2 = "/spend/logs/v2" in get_request_route(request)
 
-    # request_id is the @id primary key, so it identifies a single row and needs
-    # no time window. The internal UI always sends a 24h window, which is why a
-    # log id copied from an older page could not be found; drop the window for an
-    # id lookup on the UI route so it resolves across all time (LIT-3981).
-    apply_date_window = is_v2 or request_id is None
-
-    if apply_date_window and (start_date is None or end_date is None):
-        raise ProxyException(
-            message="Start date and end date are required",
-            type="bad_request",
-            param="None",
-            code=status.HTTP_400_BAD_REQUEST,
-        )
-
     # Validate sort_by and sort_order
     valid_sort_fields = {
         "spend",
@@ -1794,23 +1780,42 @@ async def ui_view_spend_logs(
         )
 
     try:
-        formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
+        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
+        is_request_id_lookup = request_id is not None and not is_v2
 
-        def parse_date(date_str: str) -> datetime:
-            date_str = date_str.strip()
-            for fmt in formats:
-                try:
-                    return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
-                except ValueError:
-                    continue
-            expected = "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'" if is_v2 else "'YYYY-MM-DD HH:MM:SS'"
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid date format: {date_str}. Expected: {expected}",
-            )
+        if is_request_id_lookup:
+            # request_id is the @id primary key: it identifies a single row, so a
+            # time window is meaningless. The dashboard always sends a default 24h
+            # window, which hid ids copied from an older page (LIT-3981). Drop the
+            # window for the id lookup so it resolves across all time; every other
+            # query, including the public v2 route, still requires one (below).
+            start_date_obj: datetime | None = None
+            end_date_obj: datetime | None = None
+        else:
+            if start_date is None or end_date is None:
+                raise ProxyException(
+                    message="Start date and end date are required",
+                    type="bad_request",
+                    param="None",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
+            formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
-        start_date_obj = parse_date(start_date) if apply_date_window else None
-        end_date_obj = parse_date(end_date) if apply_date_window else None
+            def parse_date(date_str: str) -> datetime:
+                date_str = date_str.strip()
+                for fmt in formats:
+                    try:
+                        return datetime.strptime(date_str, fmt).replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+                expected = "'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'" if is_v2 else "'YYYY-MM-DD HH:MM:SS'"
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid date format: {date_str}. Expected: {expected}",
+                )
+
+            start_date_obj = parse_date(start_date)
+            end_date_obj = parse_date(end_date)
 
         # Build where conditions
         where_conditions: dict[str, Any] = {}
@@ -1887,18 +1892,19 @@ async def ui_view_spend_logs(
                 where_conditions["spend"]["gte"] = min_spend
             if max_spend is not None:
                 where_conditions["spend"]["lte"] = max_spend
-        is_admin_view = _is_admin_view_safe(user_api_key_dict=user_api_key_dict)
-        # The UI request_id lookup drops the date window above, so a non-admin could
-        # otherwise reach any single row by id; require they own it, mirroring the
-        # detail endpoint. Scoped to the UI route so the public v2 contract is unchanged.
-        if request_id is not None and not is_admin_view and not is_v2:
+        # A request_id lookup drops the date window, so a non-admin could otherwise
+        # reach any single row by id; require they own it, mirroring the detail
+        # endpoint. That ownership check fully authorizes the one row, so the
+        # general scoping below is skipped for id lookups. Scoped to the UI route
+        # so the public v2 contract is unchanged.
+        if request_id is not None and not is_v2 and not is_admin_view:
             await _assert_user_can_view_request_id(
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
                 request_id=request_id,
             )
         permitted_team_ids: List[str] | None = None
-        if not is_admin_view:
+        if not is_request_id_lookup and not is_admin_view:
             if team_id is not None:
                 can_view_team = await _can_team_member_view_log(
                     prisma_client=prisma_client,

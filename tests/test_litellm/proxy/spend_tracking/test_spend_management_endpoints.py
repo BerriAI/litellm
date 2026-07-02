@@ -1641,6 +1641,78 @@ async def test_ui_view_spend_logs_request_id_blocks_non_owner(client, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_ui_view_spend_logs_request_id_owner_scoped_by_id_only(
+    client, monkeypatch
+):
+    """A non-admin owner looking up their own request_id resolves across all time.
+    The ownership check authorizes the single row, so the query drops both the date
+    window and the general user/team scoping and filters by the primary key alone;
+    without that skip an internal user would have a `user`/`OR` clause added."""
+    today = datetime.datetime.now(timezone.utc)
+    mock_spend_logs = [
+        {
+            "id": "log_old",
+            "request_id": "req-old",
+            "api_key": "sk-test-key",
+            "user": "user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": (today - datetime.timedelta(days=90)).isoformat(),
+            "model": "gpt-4",
+        },
+    ]
+
+    captured: dict = {}
+
+    def filter_fn(where):
+        captured["where"] = where
+        rows = _filter_logs_by_date_range(mock_spend_logs, where)
+        if where.get("request_id"):
+            rows = [r for r in rows if r["request_id"] == where["request_id"]]
+        return rows
+
+    mock_prisma = make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn)
+
+    class _OwnedRow:
+        user = "user_1"
+        team_id = "team1"
+
+    async def _find_unique(where, include=None):
+        return _OwnedRow()
+
+    mock_prisma.db.find_unique = _find_unique
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+    # A 5-day window that EXCLUDES the 90-day-old log, as the dashboard sends.
+    start_date = (today - datetime.timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
+    end_date = today.strftime("%Y-%m-%d %H:%M:%S")
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1"
+    )
+    try:
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "request_id": "req-old",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert data["data"][0]["request_id"] == "req-old"
+        assert "startTime" not in captured["where"]
+        assert captured["where"]["request_id"] == "req-old"
+        assert "user" not in captured["where"]
+        assert "OR" not in captured["where"]
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_unauthorized(client):
     # Test without authorization header
     response = client.get("/spend/logs/ui")
