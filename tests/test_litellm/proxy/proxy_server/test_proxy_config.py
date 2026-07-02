@@ -784,6 +784,70 @@ def test_ProxyConfig__load_alerting_settings_invalid_alerting_raises():
         pc._load_alerting_settings({"alerting": 12345})
 
 
+def test_ProxyConfig__load_alerting_settings_does_not_log_general_settings_dict(monkeypatch):
+    """Regression for LIT-4152.
+
+    ``_load_alerting_settings`` used to log ``general_settings`` verbatim in a
+    line labelled ``_alerting_callbacks:``, leaking ``master_key``,
+    ``database_url``, and any other secret sitting in ``general_settings`` in
+    cleartext at DEBUG. The fix logs only the alerting callback list.
+
+    The regression check runs with the last-line-of-defense regex scrubber
+    (``SecretRedactionFilter``) DISABLED, since defense in depth is the point.
+    The caller must not construct the leaky string, so consumers of the log
+    stream that bypass the module filter (versions before it existed,
+    ``LITELLM_DISABLE_REDACT_SECRETS=true`` operators, downstream handlers
+    that snapshot the record pre-filter) still do not see the secret. Uses a
+    dedicated handler rather than caplog because caplog is unreliable under
+    pytest-xdist.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    master_key_secret = "sk-lit4152-regression-master-key-abcdef1234567890"
+    db_url_secret = "postgresql://leak_user:leak_password_9090@leak-host.internal:5432/leak_db"
+    settings = {
+        "alerting": ["slack"],
+        "alerting_threshold": 300,
+        "master_key": master_key_secret,
+        "database_url": db_url_secret,
+    }
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        try:
+            ProxyConfig()._load_alerting_settings(settings)
+        except Exception:
+            pass  # downstream init may fail without full env; the debug log fires first
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    assert master_key_secret not in rendered, f"master_key leaked in logs: {rendered!r}"
+    assert db_url_secret not in rendered, f"database_url leaked in logs: {rendered!r}"
+    assert "leak_password_9090" not in rendered
+    assert any("['slack']" in r.getMessage() for r in handler.records), (
+        f"expected the alerting callback list to appear in a debug record; got {[r.getMessage() for r in handler.records]!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.initialize_secret_manager
 # ---------------------------------------------------------------------------
