@@ -3,7 +3,17 @@ import { Modal, Form, Input, Select } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
-import { validatePluginName, isValidSemanticVersion, isValidEmail, isValidUrl, parseKeywords } from "./helpers";
+import {
+  validatePluginName,
+  isValidSemanticVersion,
+  isValidEmail,
+  isValidUrl,
+  parseKeywords,
+  parseSkillSource,
+  isValidSubPath,
+  SkillSourcePreview,
+} from "./helpers";
+import { PluginAuthor, PluginSource, SkillRegisterRequest } from "./types";
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -14,6 +24,46 @@ interface AddPluginFormProps {
   accessToken: string | null;
   onSuccess: () => void;
 }
+
+interface AddPluginFormValues {
+  name: string;
+  skillUrl?: string;
+  subPath?: string;
+  version?: string;
+  description?: string;
+  authorName?: string;
+  authorEmail?: string;
+  homepage?: string;
+  category?: string;
+  keywords?: string;
+  domain?: string;
+  namespace?: string;
+}
+
+const buildAuthor = (values: AddPluginFormValues): PluginAuthor | undefined => {
+  const name = values.authorName?.trim();
+  const email = values.authorEmail?.trim();
+  if (!name) {
+    return undefined;
+  }
+  return email ? { name, email } : { name };
+};
+
+const buildRegisterRequest = (values: AddPluginFormValues, source: PluginSource): SkillRegisterRequest => {
+  const author = buildAuthor(values);
+  return {
+    name: values.name.trim(),
+    source,
+    ...(values.version ? { version: values.version.trim() } : {}),
+    ...(values.description ? { description: values.description.trim() } : {}),
+    ...(author ? { author } : {}),
+    ...(values.homepage ? { homepage: values.homepage.trim() } : {}),
+    ...(values.category ? { category: values.category } : {}),
+    ...(values.keywords ? { keywords: parseKeywords(values.keywords) } : {}),
+    ...(values.domain ? { domain: values.domain.trim() } : {}),
+    ...(values.namespace ? { namespace: values.namespace.trim() } : {}),
+  };
+};
 
 const PREDEFINED_CATEGORIES = [
   "Development",
@@ -26,106 +76,41 @@ const PREDEFINED_CATEGORIES = [
   "Documentation",
 ];
 
-interface ParsedSource {
-  source: "github" | "url" | "git-subdir";
-  repo?: string;
-  url?: string;
-  path?: string;
-}
-
-interface ParsePreview {
-  parsed: ParsedSource;
-  label: string;
-  suggestedName: string;
-}
-
-function parseGitHubUrl(raw: string): ParsePreview | null {
-  // Strip protocol and trailing slashes/spaces
-  let s = raw
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/+$/, "");
-
-  if (!s.startsWith("github.com/")) return null;
-
-  // Remove "github.com/"
-  const rest = s.slice("github.com/".length);
-  const parts = rest.split("/");
-
-  if (parts.length < 2) return null;
-
-  const org = parts[0];
-  const repo = parts[1];
-  const repoBase = repo.replace(/\.git$/, "");
-
-  // github.com/org/repo  (exactly 2 parts, or ends with .git)
-  if (parts.length === 2 || (parts.length === 2 && repoBase)) {
-    return {
-      parsed: { source: "github", repo: `${org}/${repoBase}` },
-      label: `GitHub repo — ${org}/${repoBase}`,
-      suggestedName: repoBase,
-    };
-  }
-
-  // github.com/org/repo/tree/branch/folder or /blob/branch/folder/FILE.md
-  if (parts.length >= 5 && (parts[2] === "tree" || parts[2] === "blob")) {
-    // parts[3] = branch, parts[4..] = path segments
-    const pathParts = parts.slice(4);
-    // If last segment looks like a file (has extension), drop it
-    const lastPart = pathParts[pathParts.length - 1];
-    if (lastPart && lastPart.includes(".")) {
-      pathParts.pop();
-    }
-    if (pathParts.length === 0) {
-      // Path resolved to repo root — treat as plain github source
-      return {
-        parsed: { source: "github", repo: `${org}/${repoBase}` },
-        label: `GitHub repo — ${org}/${repoBase}`,
-        suggestedName: repoBase,
-      };
-    }
-    const subPath = pathParts.join("/");
-    const suggestedName = pathParts[pathParts.length - 1];
-    return {
-      parsed: {
-        source: "git-subdir",
-        url: `https://github.com/${org}/${repoBase}`,
-        path: subPath,
-      },
-      label: `GitHub subdir — ${org}/${repoBase} @ ${subPath}`,
-      suggestedName,
-    };
-  }
-
-  return null;
-}
-
 const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [urlPreview, setUrlPreview] = useState<ParsePreview | null>(null);
+  const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(null);
+  const [urlEncodesSubdir, setUrlEncodesSubdir] = useState(false);
 
-  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    const preview = parseGitHubUrl(val);
+  const recomputePreview = (skillUrl: string, subPath: string) => {
+    const encodesSubdir = parseSkillSource(skillUrl)?.parsed.source === "git-subdir";
+    setUrlEncodesSubdir(encodesSubdir);
+    if (encodesSubdir && form.getFieldValue("subPath")) {
+      form.setFieldsValue({ subPath: "" });
+    }
+    const preview = parseSkillSource(skillUrl, encodesSubdir ? undefined : subPath);
     setUrlPreview(preview);
-    if (preview) {
-      // Auto-fill name only if it's currently empty
-      const currentName = form.getFieldValue("name");
-      if (!currentName) {
-        form.setFieldsValue({ name: preview.suggestedName });
-      }
+    if (preview && !form.getFieldValue("name")) {
+      form.setFieldsValue({ name: preview.suggestedName });
     }
   };
 
-  const handleSubmit = async (values: any) => {
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    recomputePreview(e.target.value, form.getFieldValue("subPath") ?? "");
+  };
+
+  const handleSubPathChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    recomputePreview(form.getFieldValue("skillUrl") ?? "", e.target.value);
+  };
+
+  const handleSubmit = async (values: AddPluginFormValues) => {
     if (!accessToken) {
       MessageManager.error("No access token available");
       return;
     }
 
     if (!urlPreview) {
-      MessageManager.error("Please enter a valid GitHub URL");
+      MessageManager.error("Please enter a valid repository URL");
       return;
     }
 
@@ -151,33 +136,17 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
 
     setIsSubmitting(true);
     try {
-      const pluginData: any = {
-        name: values.name.trim(),
-        source: urlPreview.parsed,
-      };
-
-      if (values.version) pluginData.version = values.version.trim();
-      if (values.description) pluginData.description = values.description.trim();
-      if (values.authorName || values.authorEmail) {
-        pluginData.author = {};
-        if (values.authorName) pluginData.author.name = values.authorName.trim();
-        if (values.authorEmail) pluginData.author.email = values.authorEmail.trim();
-      }
-      if (values.homepage) pluginData.homepage = values.homepage.trim();
-      if (values.category) pluginData.category = values.category;
-      if (values.keywords) pluginData.keywords = parseKeywords(values.keywords);
-      if (values.domain) pluginData.domain = values.domain.trim();
-      if (values.namespace) pluginData.namespace = values.namespace.trim();
-
-      await registerClaudeCodePlugin(accessToken, pluginData);
+      await registerClaudeCodePlugin(accessToken, buildRegisterRequest(values, urlPreview.parsed));
       MessageManager.success("Skill registered successfully");
       form.resetFields();
       setUrlPreview(null);
+      setUrlEncodesSubdir(false);
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error registering skill:", error);
-      MessageManager.error("Failed to register skill");
+      const reason = error instanceof Error && error.message ? error.message : "Failed to register skill";
+      MessageManager.error(`Failed to register skill: ${reason}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -186,6 +155,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   const handleCancel = () => {
     form.resetFields();
     setUrlPreview(null);
+    setUrlEncodesSubdir(false);
     onClose();
   };
 
@@ -194,15 +164,42 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
       <Form form={form} layout="vertical" onFinish={handleSubmit} className="mt-4">
         {/* Smart URL Input */}
         <Form.Item
-          label="GitHub URL"
+          label="Repository URL"
           name="skillUrl"
-          rules={[{ required: true, message: "Please enter a GitHub URL" }]}
-          tooltip="Paste a GitHub URL — repo, folder, or file link. E.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill"
+          rules={[{ required: true, message: "Please enter a repository URL" }]}
+          tooltip="Paste an HTTPS git repository URL from GitHub, GitLab, Bitbucket, or a self-hosted host. E.g. github.com/org/repo, gitlab.com/org/repo, or github.com/org/repo/tree/main/my-skill"
         >
           <Input
-            placeholder="https://github.com/org/repo/tree/main/my-skill"
+            placeholder="https://github.com/org/repo or https://gitlab.com/org/repo"
             className="rounded-lg"
             onChange={handleUrlChange}
+          />
+        </Form.Item>
+
+        {/* Optional subfolder for monorepos */}
+        <Form.Item
+          label="Subfolder path (Optional)"
+          name="subPath"
+          rules={[
+            {
+              validator: (_, value) =>
+                !value || isValidSubPath(value)
+                  ? Promise.resolve()
+                  : Promise.reject(
+                      new Error(
+                        "Subfolder must be a relative path like plugins/my-skill (letters, numbers, dots, hyphens, underscores)",
+                      ),
+                    ),
+            },
+          ]}
+          tooltip="Path within the repository where the skill lives (e.g., plugins/my-skill). Leave empty if the skill is at the repo root."
+          extra={urlEncodesSubdir ? "The URL already points to a subfolder, so this field is disabled" : undefined}
+        >
+          <Input
+            placeholder="plugins/my-skill"
+            className="rounded-lg"
+            onChange={handleSubPathChange}
+            disabled={urlEncodesSubdir}
           />
         </Form.Item>
 

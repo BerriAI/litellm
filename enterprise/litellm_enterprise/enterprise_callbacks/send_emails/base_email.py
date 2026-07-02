@@ -239,6 +239,7 @@ class BaseEmailLogger(CustomLogger):
             max_budget_info=max_budget_info,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
+            email_footer=email_params.signature,
         )
         await self.send_email(
             from_email=self.DEFAULT_LITELLM_EMAIL,
@@ -311,6 +312,7 @@ class BaseEmailLogger(CustomLogger):
             max_budget_info=max_budget_info,
             base_url=email_params.base_url,
             email_support_contact=email_params.support_contact,
+            email_footer=email_params.signature,
         )
 
         # Send email to all recipients
@@ -379,6 +381,7 @@ class BaseEmailLogger(CustomLogger):
                 alert_threshold=alert_threshold_str,
                 base_url=email_params.base_url,
                 email_support_contact=email_params.support_contact,
+                email_footer=email_params.signature,
             )
             await self.send_email(
                 from_email=self.DEFAULT_LITELLM_EMAIL,
@@ -403,6 +406,7 @@ class BaseEmailLogger(CustomLogger):
                 alert_threshold=alert_threshold_str,
                 base_url=email_params.base_url,
                 email_support_contact=email_params.support_contact,
+                email_footer=email_params.signature,
             )
             await self.send_email(
                 from_email=self.DEFAULT_LITELLM_EMAIL,

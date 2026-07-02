@@ -754,6 +754,7 @@ class MCPServerManager:
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
                 registration_url=resolved_registration_url,
+                token_endpoint_auth_method=server_config.get("token_endpoint_auth_method", None),
                 # TODO: utility fn the default values
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=auth_type,
@@ -1127,6 +1128,9 @@ class MCPServerManager:
             authorization_url=mcp_server.authorization_url or getattr(mcp_oauth_metadata, "authorization_url", None),
             token_url=mcp_server.token_url or getattr(mcp_oauth_metadata, "token_url", None),
             registration_url=mcp_server.registration_url or getattr(mcp_oauth_metadata, "registration_url", None),
+            token_endpoint_auth_method=(
+                credentials_dict.get("token_endpoint_auth_method") if credentials_dict else None
+            ),
             command=getattr(mcp_server, "command", None),
             args=getattr(mcp_server, "args", None) or [],
             env=env_dict,
@@ -1242,6 +1246,67 @@ class MCPServerManager:
         """Return server IDs that bypass per-key restrictions."""
         return [server.server_id for server in self.get_registry().values() if server.allow_all_keys is True]
 
+    @staticmethod
+    def get_byom_submitted_servers_cache_key(user_id: str) -> str:
+        return f"byom_submitted_servers:{user_id}"
+
+    async def invalidate_byom_submitted_servers_cache(self, user_id: str | None) -> None:
+        if not user_id:
+            return
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            await user_api_key_cache.async_delete_cache(key=self.get_byom_submitted_servers_cache_key(user_id))
+        except Exception as e:  # noqa: BLE001
+            verbose_logger.warning(f"Failed to invalidate BYOM submitted MCP server cache: {str(e)}")
+
+    async def _get_active_submitted_mcp_server_ids_for_user(
+        self, user_api_key_auth: UserAPIKeyAuth | None
+    ) -> list[str]:
+        submitter_user_id = getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+        if not submitter_user_id:
+            return []
+
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                get_active_submitted_mcp_server_ids_for_user,
+            )
+            from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        except Exception as e:  # noqa: BLE001
+            verbose_logger.warning(f"Failed to load BYOM submitted MCP server cache dependencies: {str(e)}")
+            return []
+
+        byom_cache_key = self.get_byom_submitted_servers_cache_key(submitter_user_id)
+        submitted_server_ids: list[str] | None = None
+        try:
+            cached_submitted_server_ids = await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            if cached_submitted_server_ids is not None:
+                submitted_server_ids = cast(list[str], cached_submitted_server_ids)
+        except Exception as e:  # noqa: BLE001
+            verbose_logger.warning(f"Failed to read BYOM submitted MCP server cache: {str(e)}")
+
+        if submitted_server_ids is None:
+            if prisma_client is None:
+                submitted_server_ids = []
+            else:
+                try:
+                    submitted_server_ids = await get_active_submitted_mcp_server_ids_for_user(
+                        prisma_client, submitter_user_id
+                    )
+                except Exception as e:  # noqa: BLE001
+                    verbose_logger.warning(f"Failed to read BYOM submitted MCP servers from database: {str(e)}")
+                    submitted_server_ids = []
+            try:
+                await user_api_key_cache.async_set_cache(
+                    key=byom_cache_key,
+                    value=submitted_server_ids,
+                    ttl=60,
+                )
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.warning(f"Failed to write BYOM submitted MCP server cache: {str(e)}")
+
+        return [server_id for server_id in submitted_server_ids if self.get_mcp_server_by_id(server_id) is not None]
+
     async def get_allowed_mcp_servers(self, user_api_key_auth: Optional[UserAPIKeyAuth] = None) -> List[str]:
         """
         Get the allowed MCP Servers for the user.
@@ -1255,25 +1320,30 @@ class MCPServerManager:
 
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
 
+        # The key explicitly opted out of every MCP server. Return zero before
+        # layering on allow_all_keys or submitted servers so the opt-out is absolute.
+        key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
+        if key_object_permission is not None and (
+            SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
+        ):
+            return []
+
+        # Check if object_permission.mcp_servers is explicitly set (not None, empty list is valid)
+        has_explicit_object_permission = key_object_permission is not None and (
+            key_object_permission.mcp_servers is not None
+        )
+        if has_explicit_object_permission:
+            verbose_logger.debug(f"Object permission mcp_servers explicitly set: {key_object_permission.mcp_servers}")
+
+        # BYOM creator visibility never widens a key that was explicitly scoped:
+        # only keys without their own mcp_servers list get submitted servers unioned in.
+        submitted_server_ids = (
+            []
+            if has_explicit_object_permission
+            else await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+        )
+
         try:
-            # The key explicitly opted out of every MCP server. Return zero before
-            # layering on allow_all_keys servers so the opt-out is absolute.
-            key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
-            if key_object_permission is not None and (
-                SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
-            ):
-                return []
-
-            # Check if object_permission.mcp_servers is explicitly set
-            has_explicit_object_permission = False
-            if user_api_key_auth and user_api_key_auth.object_permission:
-                # Check if mcp_servers is explicitly set (not None, empty list is valid)
-                if user_api_key_auth.object_permission.mcp_servers is not None:
-                    has_explicit_object_permission = True
-                    verbose_logger.debug(
-                        f"Object permission mcp_servers explicitly set: {user_api_key_auth.object_permission.mcp_servers}"
-                    )
-
             # If admin but NO explicit object permission, get all servers
             if user_api_key_auth and _user_has_admin_view(user_api_key_auth) and not has_explicit_object_permission:
                 verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
@@ -1295,6 +1365,7 @@ class MCPServerManager:
             in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
+                combined_servers.update(submitted_server_ids)
 
             # For anonymous callers (no user_id, no role), also surface any
             # servers the operator has opted into upstream-delegated auth.
@@ -1327,9 +1398,9 @@ class MCPServerManager:
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
-                "grants may be dropped. Falling back to global servers only."
+                "grants may be dropped. Falling back to global and submitted servers."
             )
-            return allow_all_server_ids
+            return list(dict.fromkeys(allow_all_server_ids + submitted_server_ids))
 
     async def resolve_toolset_tool_permissions(
         self,

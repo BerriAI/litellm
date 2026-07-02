@@ -2,7 +2,8 @@ import asyncio
 import html as _html
 import json
 import time
-from typing import Any, Dict, Optional, Tuple
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -13,6 +14,10 @@ from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
+)
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    TokenEndpointAuthConfigError,
+    build_token_endpoint_client_auth,
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
@@ -28,6 +33,9 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
 # Keeps us from hammering the upstream IdP on each discovery request.
@@ -228,28 +236,87 @@ def _validate_token_response(
             )
 
 
-async def _extract_user_id_from_request(request: Request) -> Optional[str]:
-    """Best-effort extraction of LiteLLM user_id from the request's Authorization header.
+def _litellm_key_from_request(request: Request) -> Optional[str]:
+    """Return the LiteLLM API key presented on the request, or ``None``.
 
-    Called at the OAuth token endpoint so that per-user tokens can be stored
-    server-side.  Uses a read-only cache lookup to avoid re-running the full
-    auth pipeline (which has side effects such as rate-limit increments and
-    spend logging).  Returns ``None`` if no cached credential is found.
+    Accepts the key from ``x-litellm-api-key`` (what MCP clients such as Claude Desktop/Code
+    send) as well as ``Authorization``; either may carry a bare token or ``Bearer <token>``.
+    ``x-litellm-api-key`` wins when both are present, since ``Authorization`` may instead carry
+    an OAuth/upstream bearer.
     """
-    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
-    if not auth_header:
+    for header_value in (
+        request.headers.get("x-litellm-api-key"),
+        request.headers.get("Authorization") or request.headers.get("authorization"),
+    ):
+        if not header_value:
+            continue
+        value = header_value.strip()
+        if value.lower().startswith("bearer "):
+            value = value[7:].strip()
+        if value:
+            return value
+    return None
+
+
+def _active_key_user_id(key_obj: "UserAPIKeyAuth") -> Optional[str]:
+    """The key's ``user_id``, or ``None`` if the key is blocked or expired.
+
+    The OAuth token endpoint is unauthenticated, so the presented key is validated here before its
+    identity is trusted to key a stored credential; a revoked or expired key must not be able to
+    write or overwrite the per-user OAuth token. ``get_key_object`` resolves a row without these
+    checks (the main ``user_api_key_auth`` pipeline enforces them downstream, which this endpoint
+    bypasses), so they are applied here. Deleted keys are already rejected upstream, where
+    ``get_key_object`` raises on a row that no longer exists.
+    """
+    if key_obj.blocked is True:
         return None
-    lower = auth_header.lower()
-    if not lower.startswith("bearer "):
+    expires = key_obj.expires
+    if expires is not None:
+        expiry = expires if isinstance(expires, datetime) else datetime.fromisoformat(expires)
+        if expiry.tzinfo is None or expiry.tzinfo.utcoffset(expiry) is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if expiry < datetime.now(timezone.utc):
+            return None
+    return key_obj.user_id
+
+
+async def _extract_user_id_from_request(request: Request) -> Optional[str]:
+    """Resolve the LiteLLM ``user_id`` at the OAuth token endpoint so a per-user token is stored
+    under the same identity the egress later reads it by (``user_api_key_auth.user_id``).
+
+    Resolves authoritatively via ``get_key_object`` (cache first, then DB) instead of a raw cache
+    peek. On a multi-replica gateway the token-exchange request can land on a worker whose in-memory
+    cache never saw the key, and a cross-replica Redis hit deserializes to a plain ``dict`` rather
+    than a ``UserAPIKeyAuth``; the previous code read only ``Authorization`` and did
+    ``getattr(cached, "user_id")`` with no ``model_type`` rehydration and no DB fallback, so it
+    silently returned ``None`` and the token was never persisted, which makes the egress 401 on every
+    reconnect. The resolved key is validated (``_active_key_user_id``) before its identity is trusted,
+    so a blocked or expired key cannot write. Returns ``None`` when no key is present, the key cannot
+    be resolved, or it is blocked/expired.
+    """
+    token = _litellm_key_from_request(request)
+    if not token:
         return None
-    token = auth_header[7:].strip()
     try:
         from litellm.proxy._types import hash_token  # noqa: PLC0415
-        from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+        from litellm.proxy.auth.auth_checks import get_key_object  # noqa: PLC0415
+        from litellm.proxy.proxy_server import (  # noqa: PLC0415
+            prisma_client,
+            user_api_key_cache,
+        )
 
-        cached = await user_api_key_cache.async_get_cache(hash_token(token))
-        return getattr(cached, "user_id", None)
-    except Exception:
+        key_obj = await get_key_object(
+            hashed_token=hash_token(token),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        return _active_key_user_id(key_obj)
+    except Exception as exc:
+        verbose_logger.debug(
+            "_extract_user_id_from_request: could not resolve a LiteLLM user_id for the presented "
+            "key (%s); per-user token will not be stored server-side.",
+            type(exc).__name__,
+        )
         return None
 
 
@@ -398,6 +465,14 @@ async def exchange_token_with_server(
 
     resolved_client_id = mcp_server.client_id if mcp_server.client_id else client_id
     resolved_client_secret = mcp_server.client_secret if mcp_server.client_secret else client_secret
+    try:
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=mcp_server.token_endpoint_auth_method,
+            client_id=resolved_client_id,
+            client_secret=resolved_client_secret,
+        )
+    except TokenEndpointAuthConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if grant_type == "refresh_token":
         if not refresh_token:
@@ -408,10 +483,8 @@ async def exchange_token_with_server(
         token_data: dict = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
-            "client_id": resolved_client_id,
+            **client_auth.body,
         }
-        if resolved_client_secret is not None:
-            token_data["client_secret"] = resolved_client_secret
         if scope:
             token_data["scope"] = scope
     else:
@@ -423,19 +496,17 @@ async def exchange_token_with_server(
         proxy_base_url = get_request_base_url(request)
         token_data = {
             "grant_type": "authorization_code",
-            "client_id": resolved_client_id,
             "code": code,
             "redirect_uri": f"{proxy_base_url}/callback",
+            **client_auth.body,
         }
-        if resolved_client_secret is not None:
-            token_data["client_secret"] = resolved_client_secret
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     response = await async_client.post(
         mcp_server.token_url,
-        headers={"Accept": "application/json"},
+        headers={"Accept": "application/json", **client_auth.headers},
         data=token_data,
     )
     if response is None:
@@ -477,11 +548,12 @@ async def exchange_token_with_server(
                     exc,
                 )
         else:
-            verbose_logger.debug(
-                "exchange_token_with_server: no LiteLLM user_id found in request; "
-                "per-user token for server=%s will not be stored server-side. "
-                "The client should call POST /mcp/server/{id}/oauth-user-credential "
-                "to store it manually.",
+            verbose_logger.warning(
+                "exchange_token_with_server: could not resolve a LiteLLM user_id for the request, "
+                "so the per-user token for server=%s was NOT stored. The authorization_code egress "
+                "requires the stored token, so the client will be challenged with 401 on reconnect. "
+                "Ensure the request carries a valid LiteLLM key (x-litellm-api-key or Authorization), "
+                "or store it via POST /mcp/server/{id}/oauth-user-credential.",
                 mcp_server.server_id,
             )
 
