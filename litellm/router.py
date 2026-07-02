@@ -9061,24 +9061,35 @@ class Router:
                 # vendor-derived semantics — for both the HTTP response sent
                 # to the client and the prometheus gauges that read these
                 # headers downstream (LIT-2719).
-                in_flight_tokens = 0
-                in_flight_input = 0
-                in_flight_output = 0
-                usage = getattr(response, "usage", None)
-                if usage is not None:
-                    in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
-                    in_flight_input = getattr(usage, "prompt_tokens", 0) or 0
-                    in_flight_output = getattr(usage, "completion_tokens", 0) or 0
-                    details = getattr(usage, "prompt_tokens_details", None)
-                    if details is not None:
-                        cached = getattr(details, "cached_tokens", 0) or 0
-                        in_flight_input = max(0, in_flight_input - cached)
-                in_flight_delta = {
-                    "x-ratelimit-remaining-tokens": in_flight_tokens,
-                    "x-ratelimit-remaining-requests": 1,
-                    "x-ratelimit-remaining-input-tokens": in_flight_input,
-                    "x-ratelimit-remaining-output-tokens": in_flight_output,
-                }
+                #
+                # ITPM/OTPM groups are the exception: their counters are
+                # incremented at reservation time (pre-call), so the remaining
+                # values already reflect this request. Replaying the delta there
+                # would double-count and understate the remaining quota.
+                model_group_info = self._cached_get_model_group_info(model_group)
+                is_io_token_group = model_group_info is not None and (
+                    model_group_info.itpm is not None or model_group_info.otpm is not None
+                )
+                in_flight_delta: Dict[str, int] = {}
+                if not is_io_token_group:
+                    in_flight_tokens = 0
+                    in_flight_input = 0
+                    in_flight_output = 0
+                    usage = getattr(response, "usage", None)
+                    if usage is not None:
+                        in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
+                        in_flight_input = getattr(usage, "prompt_tokens", 0) or 0
+                        in_flight_output = getattr(usage, "completion_tokens", 0) or 0
+                        details = getattr(usage, "prompt_tokens_details", None)
+                        if details is not None:
+                            cached = getattr(details, "cached_tokens", 0) or 0
+                            in_flight_input = max(0, in_flight_input - cached)
+                    in_flight_delta = {
+                        "x-ratelimit-remaining-tokens": in_flight_tokens,
+                        "x-ratelimit-remaining-requests": 1,
+                        "x-ratelimit-remaining-input-tokens": in_flight_input,
+                        "x-ratelimit-remaining-output-tokens": in_flight_output,
+                    }
 
                 for header, value in remaining_usage.items():
                     if value is not None:

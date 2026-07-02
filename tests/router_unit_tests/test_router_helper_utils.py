@@ -960,6 +960,51 @@ async def test_set_response_headers_input_output_token_in_flight_delta(model_lis
 
 
 @pytest.mark.asyncio
+async def test_set_response_headers_skips_in_flight_delta_for_io_token_group(model_list):
+    """
+    ITPM/OTPM counters are incremented at reservation time (pre-call), so the
+    remaining values returned already reflect this request. set_response_headers
+    must not replay the in-flight delta for these groups, otherwise the
+    remaining input/output token headers are double-counted and understated.
+    """
+    from unittest.mock import Mock
+
+    from pydantic import BaseModel
+
+    from litellm.types.router import ModelGroupInfo
+
+    class _Usage(BaseModel):
+        total_tokens: int = 30
+        prompt_tokens: int = 20
+        completion_tokens: int = 10
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-input-tokens": 1000,
+            "x-ratelimit-remaining-output-tokens": 500,
+        }
+    )
+    router._cached_get_model_group_info = Mock(
+        return_value=ModelGroupInfo(
+            model_group="gpt-3.5-turbo", providers=["openai"], itpm=2000, otpm=1000
+        )
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-input-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-output-tokens"] == 500
+
+
+@pytest.mark.asyncio
 async def test_set_response_headers_handles_missing_usage(model_list):
     """
     Streaming chunks and some response shapes may lack a `usage` attribute or
