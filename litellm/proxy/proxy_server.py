@@ -11173,12 +11173,40 @@ async def audio_speech(
             custom_headers.update(callback_headers)
 
         requested_format: Final = data.get("response_format")
+        requested_format_str: Final = requested_format if isinstance(requested_format, str) else None
+        extra_response_format_media_types: Final = MappingProxyType(
+            {
+                "pcm16": "audio/wav",
+                "linear16": "audio/wav",
+                "alaw": "audio/x-alaw-basic",
+                "mulaw": "audio/basic",
+            }
+        )
+        extra_media_type: Final = (
+            extra_response_format_media_types.get(requested_format_str.lower())
+            if requested_format_str is not None
+            else None
+        )
         upstream_content_type: Final = (
             response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
         )
-        media_type: Final = resolve_speech_media_type(
+        resolved_media_type: Final = resolve_speech_media_type(
             upstream_content_type=upstream_content_type,
-            response_format=requested_format if isinstance(requested_format, str) else None,
+            response_format=requested_format_str,
+        )
+        request_model: Final = data.get("model", "")
+        media_type: Final = (
+            extra_media_type
+            if extra_media_type is not None
+            else (
+                "audio/wav"
+                if (
+                    requested_format_str is None
+                    and isinstance(request_model, str)
+                    and litellm.utils.is_gemini_tts_model(request_model)
+                )
+                else resolved_media_type
+            )
         )
 
         return StreamingResponse(
@@ -11195,8 +11223,15 @@ async def audio_speech(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.audio_speech(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, (ProxyException, HTTPException)):
+        if isinstance(e, ProxyException):
             raise e
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=str(e.detail),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
         raise ProxyException(
             message=getattr(e, "message", f"{e}"),
             type=getattr(e, "type", "None"),

@@ -145,8 +145,9 @@ class SpeechToCompletionBridgeTransformationHandler:
         return wav_header + pcm_data
 
     def _is_gemini_tts_model(self, model: str) -> bool:
-        """Check if the model is a Gemini TTS model that returns PCM16 data."""
-        return "gemini" in model.lower() and ("tts" in model.lower() or "preview-tts" in model.lower())
+        from litellm.utils import is_gemini_tts_model
+
+        return is_gemini_tts_model(model)
 
     def _gemini_tts_response_body(self, decoded_audio: bytes, response_format: str | None) -> tuple[bytes, str]:
         if response_format == GEMINI_TTS_RAW_RESPONSE_FORMAT:

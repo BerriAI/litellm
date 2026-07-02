@@ -693,6 +693,21 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
     return model is not None and "gemini" in model.lower()
 
 
+def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> bool:
+    try:
+        model_info: Final = get_model_info(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception:
+        return False
+
+    return model_info.get("mode") == "audio_speech" and model_info.get("litellm_provider") in {
+        "gemini",
+        "vertex_ai-language-models",
+    }
+
+
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
     """
     Remove thought signature from a tool call ID.

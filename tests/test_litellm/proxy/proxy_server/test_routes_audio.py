@@ -85,7 +85,7 @@ def patched_speech_error(monkeypatch):
 def patched_speech_provider_rejection(monkeypatch, patched_speech_error):
     import litellm
 
-    async def _raise(*args, **kwargs):
+    async def _raise_rejection(*args, **kwargs):
         raise litellm.BadRequestError(
             message=(
                 "Gemini TTS only produces raw PCM16 audio, so response_format='mp3' is not supported."
@@ -94,6 +94,38 @@ def patched_speech_provider_rejection(monkeypatch, patched_speech_error):
             model="gemini-3.1-flash-tts-preview",
             llm_provider="gemini",
         )
+
+    monkeypatch.setattr(proxy_server, "route_request", _raise_rejection)
+    yield
+
+
+@pytest.fixture
+def patched_speech_provider_error(monkeypatch):
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    class _ProviderBadRequestError(Exception):
+        status_code = 400
+        message = "Unsupported audio encoding."
+        type = "invalid_request_error"
+        param = None
+
+    async def _raise(*args, **kwargs):
+        raise _ProviderBadRequestError("Unsupported audio encoding.")
 
     monkeypatch.setattr(proxy_server, "route_request", _raise)
     yield
@@ -119,9 +151,7 @@ def patched_transcription(monkeypatch):
         return data
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
-    monkeypatch.setattr(
-        proxy_server, "check_file_size_under_limit", lambda **kwargs: True
-    )
+    monkeypatch.setattr(proxy_server, "check_file_size_under_limit", lambda **kwargs: True)
 
     async def _form_data(request):
         from starlette.datastructures import FormData, UploadFile
@@ -202,6 +232,20 @@ def test_audio_speech_content_type_matches_audio_format(
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_pcm16_uses_wav_media_type(client, auth_as, patched_speech, path):
+    payload = {
+        "model": "gemini-3.1-flash-tts-preview",
+        "input": "Hi",
+        "voice": "Umbriel",
+        "response_format": "pcm16",
+    }
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "") == "audio/wav"
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
 def test_audio_speech_error(client, auth_as, patched_speech_error, path):
     """Pins ``POST /v1/audio/speech`` and ``POST /audio/speech`` (error)."""
     payload = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
@@ -221,6 +265,20 @@ def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_pr
     assert "response_format='mp3'" in error["message"]
     assert "pcm" in error["message"]
     assert "wav" in error["message"]
+
+
+@pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
+def test_audio_speech_provider_error_preserves_status_and_message(
+    client,
+    auth_as,
+    patched_speech_provider_error,
+    path,
+):
+    payload = {"model": "tts-1", "input": "Hi", "voice": "alloy"}
+    with auth_as():
+        response = client.post(path, json=payload)
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "Unsupported audio encoding."
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])

@@ -16,6 +16,16 @@ class VertexTextToSpeechInput(TypedDict, total=False):
 
     text: str | None
     ssml: str | None
+    prompt: str | None
+
+
+class VertexTextToSpeechSpeakerVoiceConfig(TypedDict):
+    speakerAlias: str
+    speakerId: str
+
+
+class VertexTextToSpeechMultiSpeakerVoiceConfig(TypedDict):
+    speakerVoiceConfigs: list[VertexTextToSpeechSpeakerVoiceConfig]
 
 
 class VertexTextToSpeechVoice(TypedDict, total=False):
@@ -29,6 +39,8 @@ class VertexTextToSpeechVoice(TypedDict, total=False):
 
     languageCode: str
     name: str
+    modelName: str
+    multiSpeakerVoiceConfig: VertexTextToSpeechMultiSpeakerVoiceConfig
 
 
 class VertexTextToSpeechAudioConfig(TypedDict, total=False):
@@ -42,6 +54,7 @@ class VertexTextToSpeechAudioConfig(TypedDict, total=False):
 
     audioEncoding: str
     speakingRate: str
+    sampleRateHertz: int
 
 
 class VertexTextToSpeechRequest(TypedDict, total=False):
