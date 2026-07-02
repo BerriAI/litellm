@@ -2379,15 +2379,12 @@ def _supports_factory(
         # azure/gpt-5.1_2025-11-13_global) that is not a registry key,
         # try the configured base_model as a fallback.
         if base_model is not None and base_model != model:
-            try:
-                _m, _p, _, _ = litellm.get_llm_provider(
-                    model=base_model, custom_llm_provider=custom_llm_provider
-                )
-                _info = _get_model_info_helper(model=_m, custom_llm_provider=_p)
-                if _info.get(key, False) is True:
-                    return True
-            except Exception:
-                pass
+            _m, _p, _, _ = litellm.get_llm_provider(
+                model=base_model, custom_llm_provider=custom_llm_provider
+            )
+            _info = _get_model_info_helper(model=_m, custom_llm_provider=_p)
+            if _info.get(key, False) is True:
+                return True
 
         return False
     except Exception as e:
