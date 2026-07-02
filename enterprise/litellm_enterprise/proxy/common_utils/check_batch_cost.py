@@ -174,9 +174,8 @@ class CheckBatchCost:
         bare_model_name = VertexAIBatchTransformation.get_bare_model_name_from_gcs_file(
             input_file_id
         )
-        model_group = self.llm_router.resolve_model_name_from_model_id(bare_model_name)
-        deployment_id = (
-            self._get_vertex_ai_deployment_id(model_group) if model_group else None
+        deployment_id = self._get_vertex_ai_deployment_id_for_bare_model(
+            bare_model_name
         )
         if deployment_id is None:
             verbose_proxy_logger.info(
@@ -187,6 +186,55 @@ class CheckBatchCost:
             return None
 
         return deployment_id, job.unified_object_id
+
+    def _get_vertex_ai_deployment_id_for_bare_model(
+        self, bare_model_name: str
+    ) -> Optional[str]:
+        model_group = self.llm_router.resolve_model_name_from_model_id(bare_model_name)
+        deployment_id = (
+            self._get_vertex_ai_deployment_id(model_group) if model_group else None
+        )
+        if deployment_id is not None:
+            return deployment_id
+
+        return self._get_vertex_ai_deployment_id_from_matching_deployments(
+            bare_model_name
+        )
+
+    def _get_vertex_ai_deployment_id_from_matching_deployments(
+        self, bare_model_name: str
+    ) -> Optional[str]:
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        for deployment in self.llm_router.get_model_list(model_name=None) or []:
+            litellm_params = deployment.get("litellm_params") or {}
+            actual_model = litellm_params.get("model")
+            if not isinstance(actual_model, str):
+                continue
+            if not self._is_bare_model_match(actual_model, bare_model_name):
+                continue
+            try:
+                _, llm_provider, _, _ = get_llm_provider(
+                    model=actual_model,
+                    custom_llm_provider=litellm_params.get("custom_llm_provider"),
+                )
+            except Exception:
+                continue
+            if llm_provider != "vertex_ai":
+                continue
+            model_info = deployment.get("model_info") or {}
+            deployment_id = model_info.get("id")
+            if isinstance(deployment_id, str):
+                return deployment_id
+        return None
+
+    @staticmethod
+    def _is_bare_model_match(actual_model: str, bare_model_name: str) -> bool:
+        return (
+            actual_model == bare_model_name
+            or actual_model.endswith(f"/{bare_model_name}")
+            or actual_model.endswith(f":{bare_model_name}")
+        )
 
     def _get_vertex_ai_deployment_id(self, model_group: str) -> Optional[str]:
         """

@@ -690,6 +690,40 @@ class TestUnmanagedVertexRouting:
             "unmanaged_no_matching_deployment"
         )
 
+    def test_flag_on_uses_later_vertex_deployment_with_matching_suffix(self):
+        router = MagicMock()
+        router.resolve_model_name_from_model_id.return_value = "azure-gemini"
+        router.get_model_ids.return_value = ["deploy-azure"]
+        non_vertex_deployment = MagicMock()
+        non_vertex_deployment.litellm_params.custom_llm_provider = "azure"
+        non_vertex_deployment.litellm_params.model = "azure/gemini-2.5-flash"
+        router.get_deployment = MagicMock(return_value=non_vertex_deployment)
+        router.get_model_list.return_value = [
+            {
+                "model_name": "azure-gemini",
+                "litellm_params": {
+                    "model": "azure/gemini-2.5-flash",
+                    "custom_llm_provider": "azure",
+                },
+                "model_info": {"id": "deploy-azure"},
+            },
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "custom_llm_provider": "vertex_ai",
+                },
+                "model_info": {"id": "deploy-vertex"},
+            },
+        ]
+        instance = self._instance(track_unmanaged=True, router=router)
+
+        with patch(_IS_B64, return_value=False):
+            result = instance._resolve_job_routing(self._job(), MagicMock())
+
+        assert result == ("deploy-vertex", "8823717160934178816")
+        router.get_model_ids.assert_called_once_with(model_name="azure-gemini")
+
     def test_flag_on_no_matching_deployment_records_metric(self):
         """Flag on but no vertex_ai deployment for the model: skip with a distinct metric."""
         router = MagicMock()
