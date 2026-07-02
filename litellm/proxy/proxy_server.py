@@ -102,6 +102,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
+    is_sensitive_callback_key,
     normalize_callback_names,
     process_callback,
 )
@@ -7626,6 +7627,7 @@ class ProxyStartupEvent:
                     proxy_logging_obj=proxy_logging_obj,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
+                    track_unmanaged_vertex_batch_cost=general_settings.get("track_unmanaged_vertex_batch_cost", False),
                 )
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
@@ -14310,6 +14312,50 @@ async def create_config_audit_log(
     )
 
 
+_EXTRA_SECRET_CALLBACK_ENV_VARS = frozenset(
+    {
+        "GALILEO_USERNAME",
+        "GENERIC_LOGGER_HEADERS",
+        "OTEL_HEADERS",
+        "SLACK_WEBHOOK_URL",
+        "SMTP_USERNAME",
+    }
+)
+
+
+def _redact_callback_env_vars(env_vars: dict[str, Optional[str]]) -> dict[str, Optional[str]]:
+    """Return a copy of ``env_vars`` with values for keys classified as
+    sensitive by ``is_sensitive_callback_key`` replaced with ``"REDACTED"``.
+    ``None`` values pass through unchanged.
+    """
+    return {
+        key: (
+            "REDACTED"
+            if value is not None and is_sensitive_callback_key(key, extra=_EXTRA_SECRET_CALLBACK_ENV_VARS)
+            else value
+        )
+        for key, value in env_vars.items()
+    }
+
+
+def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
+    if is_full_admin:
+        return entries
+    return [{**entry, "variables": _redact_callback_env_vars(entry.get("variables") or {})} for entry in entries]
+
+
+def _apply_alerting_env_role_gate(env_vars: dict, is_full_admin: bool) -> dict:
+    if is_full_admin:
+        return mask_sensitive_keys(env_vars, _ALERTING_SENSITIVE_VARS)
+    return _redact_callback_env_vars(env_vars)
+
+
+def _apply_webhook_role_gate(webhook_map, is_full_admin: bool):
+    if is_full_admin or not isinstance(webhook_map, dict):
+        return webhook_map
+    return {alert_type: "REDACTED" for alert_type in webhook_map}
+
+
 @router.get(
     "/config/field/info",
     tags=["config.yaml"],
@@ -14720,7 +14766,9 @@ async def delete_callback(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_config():
+async def get_config(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     For Admin UI - allows admin to view config via UI
     # return the callbacks and the env variables for the callback
@@ -14734,6 +14782,8 @@ async def get_config():
         _litellm_settings = config_data.get("litellm_settings", {})
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
+
+        is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
@@ -14776,6 +14826,8 @@ async def get_config():
         for _callback in _success_and_failure_callbacks:
             _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
 
+        _data_to_return = _apply_callback_role_gate(_data_to_return, is_full_admin)
+
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
         alerting_data = []
@@ -14787,11 +14839,13 @@ async def get_config():
                 _var: (value if (value := environment_variables.get(_var)) is not None else os.getenv(_var))
                 for _var in _slack_vars
             }
-            _slack_env_vars = mask_sensitive_keys(_slack_env_vars, _ALERTING_SENSITIVE_VARS)
+            _slack_env_vars = _apply_alerting_env_role_gate(_slack_env_vars, is_full_admin)
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
-            _alerts_to_webhook = proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+            _alerts_to_webhook = _apply_webhook_role_gate(
+                proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url, is_full_admin
+            )
             alerting_data.append(
                 {
                     "name": "slack",
@@ -14811,8 +14865,9 @@ async def get_config():
             "EMAIL_LOGO_URL",
             "EMAIL_SUPPORT_CONTACT",
         ]
-        _email_env_vars = {_var: environment_variables.get(_var) for _var in _email_vars}
-        _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
+        _email_env_vars = _apply_alerting_env_role_gate(
+            {_var: environment_variables.get(_var) for _var in _email_vars}, is_full_admin
+        )
 
         alerting_data.append(
             {
@@ -15566,9 +15621,10 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(batches_router)
+app.include_router(openai_files_router)
 app.include_router(llm_passthrough_router)
 app.include_router(pass_through_router)
-app.include_router(batches_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
@@ -15583,7 +15639,6 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
-app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)

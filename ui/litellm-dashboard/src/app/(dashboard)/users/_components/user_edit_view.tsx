@@ -2,10 +2,10 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, SelectItem, TextInput, Textarea } from "@tremor/react";
 import { Checkbox, Form, Select, Tooltip } from "antd";
 import React, { useState } from "react";
-import { all_admin_roles } from "../utils/roles";
-import BudgetDurationDropdown from "./common_components/budget_duration_dropdown";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import NumericalInput from "./shared/numerical_input";
+import { all_admin_roles } from "@/utils/roles";
+import BudgetDurationDropdown from "@/components/common_components/budget_duration_dropdown";
+import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
+import NumericalInput from "@/components/shared/numerical_input";
 
 interface UserEditViewProps {
   userData: any;

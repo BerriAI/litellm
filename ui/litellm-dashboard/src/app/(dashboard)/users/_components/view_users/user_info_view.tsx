@@ -31,16 +31,16 @@ import {
   teamMemberAddCall,
   teamMemberDeleteCall,
   Member,
-} from "../networking";
+} from "@/components/networking";
 import { Button as AntdButton, Modal, Select as AntdSelect, Form, Tooltip } from "antd";
-import { rolesWithWriteAccess } from "../../utils/roles";
+import { rolesWithWriteAccess } from "@/utils/roles";
 import { UserEditView } from "../user_edit_view";
-import OnboardingModal, { InvitationLink } from "../onboarding_link";
+import OnboardingModal, { InvitationLink } from "@/components/onboarding_link";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CopyIcon, CheckIcon } from "lucide-react";
-import NotificationsManager from "../molecules/notifications_manager";
-import { getBudgetDurationLabel } from "../common_components/budget_duration_dropdown";
-import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import NotificationsManager from "@/components/molecules/notifications_manager";
+import { getBudgetDurationLabel } from "@/components/common_components/budget_duration_dropdown";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 
 interface UserInfoViewProps {
   userId: string;
