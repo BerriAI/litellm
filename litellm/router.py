@@ -8964,31 +8964,30 @@ class Router:
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
         model_group_info = self._cached_get_model_group_info(model_group)
 
+        returned_dict: Dict[str, int] = {}
+
+        # ITPM/OTPM groups emit input/output token headers, but they may also set
+        # tpm/rpm, so build both sets rather than returning early - clients and
+        # prometheus gauges that read the standard headers still get data.
         if model_group_info is not None and (model_group_info.itpm is not None or model_group_info.otpm is not None):
             current_itpm, current_otpm = await self.get_model_group_io_token_usage(model_group)
-            return build_io_token_rate_limit_headers(
-                itpm_limit=model_group_info.itpm,
-                otpm_limit=model_group_info.otpm,
-                current_itpm=current_itpm,
-                current_otpm=current_otpm,
+            returned_dict.update(
+                build_io_token_rate_limit_headers(
+                    itpm_limit=model_group_info.itpm,
+                    otpm_limit=model_group_info.otpm,
+                    current_itpm=current_itpm,
+                    current_otpm=current_otpm,
+                )
             )
 
-        if model_group_info is not None and model_group_info.tpm is not None:
-            tpm_limit = model_group_info.tpm
-        else:
-            tpm_limit = None
-
-        if model_group_info is not None and model_group_info.rpm is not None:
-            rpm_limit = model_group_info.rpm
-        else:
-            rpm_limit = None
+        tpm_limit = model_group_info.tpm if model_group_info is not None else None
+        rpm_limit = model_group_info.rpm if model_group_info is not None else None
 
         if tpm_limit is None and rpm_limit is None:
-            return {}
+            return returned_dict
 
         current_tpm, current_rpm = await self.get_model_group_usage(model_group)
 
-        returned_dict = {}
         if tpm_limit is not None:
             returned_dict["x-ratelimit-remaining-tokens"] = tpm_limit - (current_tpm or 0)
             returned_dict["x-ratelimit-limit-tokens"] = tpm_limit
@@ -9063,34 +9062,18 @@ class Router:
                 # to the client and the prometheus gauges that read these
                 # headers downstream (LIT-2719).
                 #
-                # ITPM/OTPM groups are the exception: their counters are
-                # incremented at reservation time (pre-call), so the remaining
-                # values already reflect this request. Replaying the delta there
-                # would double-count and understate the remaining quota.
-                model_group_info = self._cached_get_model_group_info(model_group)
-                is_io_token_group = model_group_info is not None and (
-                    model_group_info.itpm is not None or model_group_info.otpm is not None
-                )
-                in_flight_delta: Dict[str, int] = {}
-                if not is_io_token_group:
-                    in_flight_tokens = 0
-                    in_flight_input = 0
-                    in_flight_output = 0
-                    usage = getattr(response, "usage", None)
-                    if usage is not None:
-                        in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
-                        in_flight_input = getattr(usage, "prompt_tokens", 0) or 0
-                        in_flight_output = getattr(usage, "completion_tokens", 0) or 0
-                        details = getattr(usage, "prompt_tokens_details", None)
-                        if details is not None:
-                            cached = getattr(details, "cached_tokens", 0) or 0
-                            in_flight_input = max(0, in_flight_input - cached)
-                    in_flight_delta = {
-                        "x-ratelimit-remaining-tokens": in_flight_tokens,
-                        "x-ratelimit-remaining-requests": 1,
-                        "x-ratelimit-remaining-input-tokens": in_flight_input,
-                        "x-ratelimit-remaining-output-tokens": in_flight_output,
-                    }
+                # Only the TPM/RPM counters are post-incremented; the ITPM/OTPM
+                # counters are incremented at reservation time (pre-call), so the
+                # input/output token headers already reflect this request and
+                # must not be adjusted.
+                in_flight_tokens = 0
+                usage = getattr(response, "usage", None)
+                if usage is not None:
+                    in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
+                in_flight_delta = {
+                    "x-ratelimit-remaining-tokens": in_flight_tokens,
+                    "x-ratelimit-remaining-requests": 1,
+                }
 
                 for header, value in remaining_usage.items():
                     if value is not None:

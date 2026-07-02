@@ -973,12 +973,12 @@ async def test_set_response_headers_subtracts_in_flight_delta(model_list):
 
 
 @pytest.mark.asyncio
-async def test_set_response_headers_input_output_token_in_flight_delta(model_list):
+async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_list):
     """
-    The in-flight replay for `x-ratelimit-remaining-input-tokens` must subtract
-    input (prompt) tokens only, and `-output-tokens` must subtract completion
-    tokens only. Subtracting total tokens from the input header would understate
-    remaining input quota by the number of completion tokens on every response.
+    The in-flight replay applies only to the post-incremented TPM/RPM counters
+    (`x-ratelimit-remaining-tokens` / `-requests`). The ITPM/OTPM counters are
+    incremented at reservation time (pre-call), so the input/output token
+    headers already reflect this request and must pass through untouched.
     """
     from pydantic import BaseModel
 
@@ -994,6 +994,8 @@ async def test_set_response_headers_input_output_token_in_flight_delta(model_lis
     router = Router(model_list=model_list)
     router.get_remaining_model_group_usage = AsyncMock(
         return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
             "x-ratelimit-remaining-input-tokens": 1000,
             "x-ratelimit-remaining-output-tokens": 500,
         }
@@ -1004,53 +1006,45 @@ async def test_set_response_headers_input_output_token_in_flight_delta(model_lis
     await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
 
     headers = resp._hidden_params["additional_headers"]
-    assert headers["x-ratelimit-remaining-input-tokens"] == 980
-    assert headers["x-ratelimit-remaining-output-tokens"] == 490
+    # TPM/RPM headers replay the in-flight increment...
+    assert headers["x-ratelimit-remaining-tokens"] == 970
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # ...but the reservation-based input/output headers pass through unchanged.
+    assert headers["x-ratelimit-remaining-input-tokens"] == 1000
+    assert headers["x-ratelimit-remaining-output-tokens"] == 500
 
 
 @pytest.mark.asyncio
-async def test_set_response_headers_skips_in_flight_delta_for_io_token_group(model_list):
+async def test_get_remaining_model_group_usage_merges_io_and_tpm_headers(model_list):
     """
-    ITPM/OTPM counters are incremented at reservation time (pre-call), so the
-    remaining values returned already reflect this request. set_response_headers
-    must not replay the in-flight delta for these groups, otherwise the
-    remaining input/output token headers are double-counted and understated.
+    A model group with both itpm/otpm and tpm/rpm limits must expose the
+    standard remaining-tokens/requests headers alongside the input/output token
+    headers, so clients and prometheus gauges relying on either still get data.
     """
     from unittest.mock import Mock
 
-    from pydantic import BaseModel
-
     from litellm.types.router import ModelGroupInfo
 
-    class _Usage(BaseModel):
-        total_tokens: int = 30
-        prompt_tokens: int = 20
-        completion_tokens: int = 10
-
-    class _Resp(BaseModel):
-        usage: _Usage = _Usage()
-        _hidden_params: dict = {}
-
     router = Router(model_list=model_list)
-    router.get_remaining_model_group_usage = AsyncMock(
-        return_value={
-            "x-ratelimit-remaining-input-tokens": 1000,
-            "x-ratelimit-remaining-output-tokens": 500,
-        }
-    )
     router._cached_get_model_group_info = Mock(
         return_value=ModelGroupInfo(
-            model_group="gpt-3.5-turbo", providers=["openai"], itpm=2000, otpm=1000
+            model_group="gpt-3.5-turbo",
+            providers=["openai"],
+            itpm=2000,
+            otpm=1000,
+            tpm=5000,
+            rpm=50,
         )
     )
+    router.get_model_group_io_token_usage = AsyncMock(return_value=(100, 40))
+    router.get_model_group_usage = AsyncMock(return_value=(500, 5))
 
-    resp = _Resp()
-    resp._hidden_params = {}
-    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+    headers = await router.get_remaining_model_group_usage("gpt-3.5-turbo")
 
-    headers = resp._hidden_params["additional_headers"]
-    assert headers["x-ratelimit-remaining-input-tokens"] == 1000
-    assert headers["x-ratelimit-remaining-output-tokens"] == 500
+    assert headers["x-ratelimit-remaining-input-tokens"] == 1900
+    assert headers["x-ratelimit-remaining-output-tokens"] == 960
+    assert headers["x-ratelimit-remaining-tokens"] == 4500
+    assert headers["x-ratelimit-remaining-requests"] == 45
 
 
 @pytest.mark.asyncio
