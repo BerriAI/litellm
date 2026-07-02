@@ -242,6 +242,30 @@ class TestModelRateLimitingCheckIOTokens:
         assert await dual_cache.async_get_cache(key=itpm_key) == 7
 
     @pytest.mark.asyncio
+    async def test_reconcile_runs_via_success_event_without_model_id(self):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        itpm_key = "global_router:io-noid:bedrock_mantle/test:itpm:12-34"
+        await dual_cache.async_increment_cache(key=itpm_key, value=10, ttl=60)
+
+        # standard_logging_object has no model_id (only the TPM path needs it);
+        # IO reconciliation must still run off the stashed cache key.
+        kwargs = {
+            "standard_logging_object": {
+                "hidden_params": {"litellm_model_name": "bedrock_mantle/test"},
+                "metadata": {},
+            },
+            "metadata": {ITPM_RESERVED_KEY: 10, ITPM_CACHE_KEY: itpm_key},
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3),
+        )
+        await check.async_log_success_event(kwargs, response, None, None)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 3
+
+    @pytest.mark.asyncio
     async def test_reconcile_uses_reservation_minute_key(self):
         dual_cache = DualCache()
         # Reservation was made on a fixed minute key; a call that finishes in a

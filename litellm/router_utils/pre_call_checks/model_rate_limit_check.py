@@ -267,22 +267,28 @@ class ModelRateLimitingCheck(CustomLogger):
 
         try:
             standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
-            if standard_logging_object is None:
-                return
 
-            model_id = standard_logging_object.get("model_id")
-            if model_id is None:
-                return
-
-            metadata = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
+            # IO token reconciliation works purely from the cache keys stashed in
+            # kwargs/metadata, so it must run before the model_id guard below
+            # (which only the TPM-tracking path needs). Otherwise a request whose
+            # standard_logging_object lacks model_id would never return its
+            # reservation, leaving the counter elevated until the TTL expires.
+            slo_metadata = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
             kwargs_metadata = kwargs.get("metadata") or {}
-            if ITPM_RESERVED_KEY in metadata or ITPM_RESERVED_KEY in kwargs_metadata:
+            if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
                 await async_io_token_reconcile_success(
                     self.dual_cache,
                     kwargs,
                     response_obj,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
+                return
+
+            if standard_logging_object is None:
+                return
+
+            model_id = standard_logging_object.get("model_id")
+            if model_id is None:
                 return
 
             total_tokens = standard_logging_object.get("total_tokens", 0)
