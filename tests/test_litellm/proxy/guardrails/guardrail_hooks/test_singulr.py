@@ -328,6 +328,32 @@ class TestSingulrBuildPayload:
     def test_empty_request_returns_empty_payload(self, singulr_guardrail):
         assert singulr_guardrail._build_payload({}, "request") == {}
 
+    def test_invalid_message_shape_block_on_error_true_raises(self):
+        """Regression: a message that fails AllMessageValues validation (e.g.
+        an unrecognized role) must raise GuardrailRaisedException instead of
+        letting pydantic.ValidationError escape unhandled."""
+        guardrail = SingulrGuardrail(
+            singulr_api_key="test_key",
+            guardrail_name="test-singulr",
+            block_on_error=True,
+        )
+        request_data = {
+            "messages": [{"role": "not_a_real_role", "content": "hi"}],
+        }
+        with pytest.raises(GuardrailRaisedException):
+            guardrail._build_payload(request_data, "request")
+
+    def test_invalid_message_shape_block_on_error_false_returns_empty_payload(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_key="test_key",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        request_data = {
+            "messages": [{"role": "not_a_real_role", "content": "hi"}],
+        }
+        assert guardrail._build_payload(request_data, "request") == {}
+
 
 # ---------------------------------------------------------------------------
 # Tool definition scanning
@@ -640,6 +666,51 @@ class TestSingulrTransportError:
                     request_data=mock_request_data,
                     input_type="request",
                 )
+
+
+# ---------------------------------------------------------------------------
+# Invalid message shape (ValidationError) handling
+# ---------------------------------------------------------------------------
+
+
+class TestSingulrInvalidMessageShape:
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_block_on_error_true_raises_guardrail_exception(self):
+        """Regression: apply_guardrail must not let pydantic.ValidationError
+        propagate unhandled when request_data contains a message shape that
+        fails AllMessageValues validation."""
+        guardrail = SingulrGuardrail(
+            singulr_api_key="test_key",
+            guardrail_name="test-singulr",
+            block_on_error=True,
+        )
+        request_data = {
+            "messages": [{"role": "not_a_real_role", "content": "hi"}],
+        }
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["hi"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_block_on_error_false_returns_inputs_unchanged(self):
+        guardrail = SingulrGuardrail(
+            singulr_api_key="test_key",
+            guardrail_name="test-singulr",
+            block_on_error=False,
+        )
+        request_data = {
+            "messages": [{"role": "not_a_real_role", "content": "hi"}],
+        }
+        inputs = {"texts": ["hi"]}
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+        assert result is inputs
 
 
 # ---------------------------------------------------------------------------
