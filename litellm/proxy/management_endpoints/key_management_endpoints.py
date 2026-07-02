@@ -563,18 +563,18 @@ def _check_allowed_routes_caller_permission(
 
 
 def _check_permissions_caller_permission(
-    permissions: Optional[dict],
+    data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
-    Only proxy admins may set the `permissions` dict on a key.
+    Require PROXY_ADMIN when `permissions` is present in the request body.
 
-    The field grants ambient capabilities (e.g. `get_spend_routes` exposes
-    `/global/spend/*`), so it must follow the same admin gate as
-    `allowed_routes`. Without this gate a non-admin can self-grant capabilities
-    they do not hold, including read access to global spend.
+    Presence is detected via `data.model_fields_set` so a caller that
+    omits the field (default flows through) is distinct from one that
+    sends any explicit value.
     """
-    if not permissions:
+    permissions_in_request = "permissions" in data.model_fields_set
+    if not permissions_in_request and not data.permissions:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -840,7 +840,7 @@ async def _common_key_generation_helper(
         team_table=team_table,
     )
     _check_permissions_caller_permission(
-        permissions=data.permissions,
+        data=data,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -964,6 +964,23 @@ async def _common_key_generation_helper(
         team_obj=team_table,
         is_proxy_admin=_is_proxy_admin_caller,
     )
+
+    # Merge default_key_generate_params.object_permission in *after* the team-scope
+    # checks above, so an admin-configured default (e.g. vector_stores, search_tools)
+    # is never mistaken for a caller-requested permission and rejected by those
+    # non-admin/no-team checks. Only fields the caller left unset are filled in.
+    _default_object_permission = (
+        litellm.default_key_generate_params.get("object_permission")
+        if litellm.default_key_generate_params is not None
+        else None
+    )
+    if isinstance(_default_object_permission, dict):
+        _caller_object_permission = data_json.get("object_permission")
+        if _caller_object_permission is None:
+            data_json["object_permission"] = dict(_default_object_permission)
+        elif isinstance(_caller_object_permission, dict):
+            for _op_field, _op_default_value in _default_object_permission.items():
+                _caller_object_permission.setdefault(_op_field, _op_default_value)
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -2216,6 +2233,10 @@ async def _validate_update_key_data(
         user_api_key_dict=user_api_key_dict,
     )
     _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
@@ -4532,6 +4553,10 @@ async def regenerate_key_fn(
                 user_api_key_dict=user_api_key_dict,
             )
             _check_passthrough_routes_caller_permission(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
             )

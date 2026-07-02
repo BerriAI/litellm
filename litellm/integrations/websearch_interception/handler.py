@@ -31,6 +31,7 @@ from litellm.types.integrations.websearch_interception import (
     WebSearchInterceptionConfig,
 )
 from litellm.types.integrations.custom_logger import (
+    CHAT_COMPLETION_AGENTIC_SURFACE,
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
 )
@@ -119,21 +120,26 @@ class WebSearchInterceptionLogger(CustomLogger):
         if self.enabled_providers is not None and provider_str not in self.enabled_providers:
             return None
 
-        # Only short-circuit for providers without native Anthropic Messages
-        # support.  Providers that have a BaseAnthropicMessagesConfig (bedrock,
-        # vertex_ai, azure_ai, anthropic) already use the agentic loop, which
-        # includes a follow-up LLM call to synthesize the answer from search
-        # results.  Short-circuiting those would skip that synthesis step and
-        # return raw search text — a regression for existing users.
+        # Only short-circuit for providers whose Anthropic Messages agentic loop
+        # does not run web_search itself. Providers that have a
+        # BaseAnthropicMessagesConfig which handles web search natively (bedrock,
+        # vertex_ai, azure_ai, anthropic) already perform the search plus a
+        # follow-up LLM synthesis step; short-circuiting those would skip that
+        # synthesis and return raw search text — a regression for existing users.
+        #
+        # github_copilot has a BaseAnthropicMessagesConfig (added for thinking
+        # passthrough) but does not handle web_search natively, so its config
+        # returns handles_web_search_natively() == False and we still short-circuit
+        # web-search-only requests against it.
         try:
             provider_enum = LlmProviders(provider_str)
             anthropic_config = ProviderConfigManager.get_provider_anthropic_messages_config(
                 model=model, provider=provider_enum
             )
-            if anthropic_config is not None:
+            if anthropic_config is not None and anthropic_config.handles_web_search_natively():
                 verbose_logger.debug(
                     f"WebSearchInterception: Skipping short-circuit for {provider_str} "
-                    "(provider has native Anthropic Messages support, using agentic loop)"
+                    "(provider handles web search natively via the agentic loop)"
                 )
                 return None
         except (ValueError, Exception):
@@ -440,12 +446,16 @@ class WebSearchInterceptionLogger(CustomLogger):
         custom_llm_provider: str,
         kwargs: Dict,
     ) -> Tuple[bool, Dict]:
-        """
-        Check if WebSearch tool interception is needed for Anthropic Messages API.
-
-        This is the legacy method for Anthropic-style responses.
-        For chat completions, use async_should_run_chat_completion_agentic_loop instead.
-        """
+        if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
+            return await self.async_should_run_chat_completion_agentic_loop(
+                response=response,
+                model=model,
+                messages=messages,
+                tools=tools,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+                kwargs=kwargs,
+            )
 
         verbose_logger.debug(f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}")
         verbose_logger.debug(f"WebSearchInterception: Response type: {type(response)}")
@@ -629,6 +639,18 @@ class WebSearchInterceptionLogger(CustomLogger):
         stream: bool,
         kwargs: Dict,
     ) -> AgenticLoopPlan:
+        if kwargs.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE:
+            return await self.async_build_chat_completion_agentic_loop_plan(
+                tools=tools,
+                model=model,
+                messages=messages,
+                response=response,
+                optional_params=anthropic_messages_optional_request_params,
+                logging_obj=logging_obj,
+                stream=stream,
+                kwargs=kwargs,
+            )
+
         tool_calls = tools["tool_calls"]
         thinking_blocks = tools.get("thinking_blocks", [])
         request_patch, structured_results = await self._build_anthropic_request_patch(
@@ -1088,6 +1110,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             raise ValueError("WebSearchInterception: missing follow-up messages")
         params = dict(optional_params)
         params.update(request_patch.optional_params)
+        params.pop("tool_choice", None)
         return await litellm.acompletion(
             model=request_patch.model or model,
             messages=request_patch.messages,
@@ -1203,6 +1226,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             if k
             not in {
                 "tools",
+                "tool_choice",
                 "extra_body",
                 "model_alias_map",
                 "stream_response",

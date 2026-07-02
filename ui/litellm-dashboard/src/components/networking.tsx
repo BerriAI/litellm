@@ -25,11 +25,12 @@ import MessageManager from "@/components/molecules/message_manager";
 import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
-import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
+import type { SkillRegisterRequest } from "./claude_code_plugins/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
+import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import { serverRootPath, setServerRootPath } from "@/lib/serverRootPath";
@@ -942,6 +943,22 @@ export const teamDeleteCall = async (accessToken: string, teamID: string) => {
     throw error;
   }
 };
+
+export interface UserInfo {
+  user_id: string;
+  user_email: string;
+  user_alias: string | null;
+  user_role: string;
+  spend: number;
+  max_budget: number | null;
+  models: string[];
+  key_count: number;
+  created_at: string;
+  updated_at: string;
+  sso_user_id: string | null;
+  budget_duration: string | null;
+  metadata?: Record<string, unknown> | null;
+}
 
 export type UserListResponse = {
   page: number;
@@ -2780,8 +2797,8 @@ export const modelPatchUpdateCall = async (
   modelId: string,
 ) => {
   try {
-    console.log("Form Values in modelUpateCall:", formValues); // Log the form values before making the API call
-
+    // Intentionally not logging the payload: it can contain freshly-entered
+    // provider secrets (api_key, vertex_credentials, AWS creds).
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model/${modelId}/update` : `/model/${modelId}/update`;
     const response = await fetch(url, {
       method: "PATCH",
@@ -2801,7 +2818,6 @@ export const modelPatchUpdateCall = async (
       throw new Error("Network response was not ok");
     }
     const data = await response.json();
-    console.log("Update model Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -5923,7 +5939,6 @@ export const resetEmailEventSettings = async (accessToken: string) => {
   }
 };
 
-export { type UserInfo } from "./view_users/types"; // Re-export UserInfo
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
 export const deleteAgentCall = async (accessToken: string, agentId: string) => {
@@ -6782,17 +6797,25 @@ export const testMCPToolsListRequest = async (
     const data = await response.json();
 
     if (!response.ok || data.error) {
+      if (response.status === 403) {
+        return {
+          tools: [],
+          error: true,
+          status: 403,
+          message: MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE,
+        };
+      }
       // Return the error response instead of throwing an error
       // This allows the caller to handle the error format properly
       if (data.error) {
-        return data; // Return the full error response
-      } else {
-        return {
-          tools: [],
-          error: "request_failed",
-          message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
-        };
+        return { ...data, status: response.status };
       }
+      return {
+        tools: [],
+        error: "request_failed",
+        status: response.status,
+        message: data.message || `MCP tools list failed: ${response.status} ${response.statusText}`,
+      };
     }
 
     return data;
@@ -7402,19 +7425,7 @@ export const getClaudeCodePluginDetails = async (accessToken: string, pluginName
  * @param accessToken - Admin access token
  * @param pluginData - Plugin registration data
  */
-export const registerClaudeCodePlugin = async (
-  accessToken: string,
-  pluginData: {
-    name: string;
-    source: { source: string; repo?: string; url?: string };
-    version?: string;
-    description?: string;
-    author?: { name: string; email?: string };
-    homepage?: string;
-    keywords?: string[];
-    category?: string;
-  },
-) => {
+export const registerClaudeCodePlugin = async (accessToken: string, pluginData: SkillRegisterRequest) => {
   try {
     const proxyBaseUrl = getProxyBaseUrl();
     const url = proxyBaseUrl ? `${proxyBaseUrl}/claude-code/plugins` : `/claude-code/plugins`;
@@ -7429,8 +7440,13 @@ export const registerClaudeCodePlugin = async (
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      const errorBody = await response.text();
+      let errorMessage: string;
+      try {
+        errorMessage = deriveErrorMessage(JSON.parse(errorBody));
+      } catch {
+        errorMessage = errorBody || `Request failed with status ${response.status}`;
+      }
       handleError(errorMessage);
       throw new Error(errorMessage);
     }

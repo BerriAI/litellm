@@ -256,6 +256,55 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
 
 
 @pytest.mark.asyncio
+async def test_handle_completed_batch_computes_real_cost_from_output_file(
+    sample_file_content_dict,
+):
+    """Integration: a completed batch's cost and usage are computed from its output
+    file via the real cost-calc chain (only the file download is stubbed). This is
+    the function the retrieve handler invokes on completion; a dropped output line, a
+    wrong token sum, or mispriced model fails this test.
+    """
+    from litellm.batches.batch_utils import _handle_completed_batch
+    from litellm.types.utils import LiteLLMBatch
+
+    batch = LiteLLMBatch(
+        id="batch-real-cost-123",
+        object="batch",
+        endpoint="/v1/chat/completions",
+        input_file_id="file-input-123",
+        completion_window="24h",
+        status="completed",
+        output_file_id="file-output-123",
+        created_at=1234567890,
+    )
+
+    with patch(
+        "litellm.batches.batch_utils._get_batch_output_file_content_as_dictionary",
+        new=AsyncMock(return_value=sample_file_content_dict),
+    ):
+        cost, usage, models = await _handle_completed_batch(
+            batch=batch, custom_llm_provider="openai"
+        )
+
+    pricing = litellm.model_cost["gpt-4o-mini-2024-07-18"]
+    expected_cost = (
+        42 * pricing["input_cost_per_token_batches"]
+        + 20 * pricing["output_cost_per_token_batches"]
+    )
+
+    assert cost == pytest.approx(expected_cost)
+    assert cost > 0
+    assert (
+        cost
+        < 42 * pricing["input_cost_per_token"] + 20 * pricing["output_cost_per_token"]
+    )
+    assert usage.prompt_tokens == 42
+    assert usage.completion_tokens == 20
+    assert usage.total_tokens == 62
+    assert models == ["gpt-4o-mini-2024-07-18", "gpt-4o-mini-2024-07-18"]
+
+
+@pytest.mark.asyncio
 async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
     """
     Test that explicit cost data is used when provided, skipping computation.

@@ -175,16 +175,9 @@ class DBSpendUpdateWriter:
             if team_id is not None and team_id != "":
                 payload["team_id"] = team_id
 
-            # One deepcopy shared by all 6 daily spend helpers (was 5, fixes agent bug)
-            payload_copy = copy.deepcopy(payload)
-
-            # Deepcopy request_tags for _update_tag_db
-            request_tags = copy.deepcopy(payload.get("request_tags"))
-
-            # Keep _insert_spend_log_to_db awaited inline (not a task, preserve current behavior)
             if disable_spend_logs is False:
                 await self._insert_spend_log_to_db(
-                    payload=copy.deepcopy(payload),
+                    payload=payload,
                     prisma_client=prisma_client,
                 )
             else:
@@ -204,8 +197,7 @@ class DBSpendUpdateWriter:
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     litellm_proxy_budget_name=litellm_proxy_budget_name,
-                    payload_copy=payload_copy,
-                    request_tags=request_tags,
+                    payload=payload,
                 )
             )
 
@@ -336,14 +328,18 @@ class DBSpendUpdateWriter:
         prisma_client: Optional[PrismaClient],
         user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
-        payload_copy: SpendLogsPayload,
-        request_tags: Optional[Any],
+        payload: SpendLogsPayload,
     ):
         """
         Runs all 11 spend-update helpers sequentially inside a single asyncio task.
 
         Each helper is wrapped in try/except so one failure doesn't prevent the others.
+
+        The deepcopy runs here, off the awaited request path, so the daily spend
+        helpers get a payload isolated from the spend-log queue entry and the caller.
         """
+        payload_copy = copy.deepcopy(payload)
+        request_tags = payload_copy.get("request_tags")
         try:
             await self._update_user_db(
                 response_cost=response_cost,

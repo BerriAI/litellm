@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
@@ -47,7 +47,7 @@ class VertexAIBatchTransformation:
     ) -> LiteLLMBatch:
         return LiteLLMBatch(
             id=cls._get_batch_id_from_vertex_ai_batch_response(response),
-            completion_window="24hrs",
+            completion_window="24h",
             created_at=_convert_vertex_datetime_to_openai_datetime(vertex_datetime=response.get("createTime", "")),
             endpoint="",
             input_file_id=cls._get_input_file_id_from_vertex_ai_batch_response(response),
@@ -207,3 +207,19 @@ class VertexAIBatchTransformation:
         parts = model_path.split("/")
         model = f"publishers/{'/'.join(parts[:3])}"
         return model
+
+    @classmethod
+    def is_unmanaged_gcs_batch_input_file_id(cls, input_file_id: Optional[str]) -> bool:
+        """
+        Returns True if `input_file_id` is a raw gs:// Vertex batch input file (i.e. not a
+        LiteLLM-managed unified file id) with a `publishers/` model path that
+        `_get_model_from_gcs_file` can parse.
+        """
+        return input_file_id is not None and input_file_id.startswith("gs://") and "publishers/" in input_file_id
+
+    @classmethod
+    def get_bare_model_name_from_gcs_file(cls, gcs_file_uri: str) -> str:
+        """
+        Extracts the bare model name (e.g. "gemini-1.5-flash-001") from a gcs file uri.
+        """
+        return cls._get_model_from_gcs_file(gcs_file_uri).rsplit("/", 1)[-1]

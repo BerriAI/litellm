@@ -54,76 +54,112 @@ def test_paths_outside_repo_are_skipped():
     assert gate.count_basedpyright(payload) == {}
 
 
+def test_symlinked_root_keeps_diagnostics_in_tree(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    payload = json.dumps(
+        {
+            "generalDiagnostics": [
+                _bpr(link / "litellm" / "x.py", "error", "reportArgumentType")
+            ]
+        }
+    )
+    assert gate.count_basedpyright(payload, root=link) == {"reportArgumentType": 1}
+
+
 def test_at_or_under_ceiling_passes():
-    budget = {"no-any-return": {"baseline": 5, "slack": 0}}
+    budget = {"no-any-return": {"limit": 5}}
     assert gate.evaluate({"no-any-return": 5}, {}, budget) == []
 
 
 def test_one_more_error_than_ceiling_fails():
-    budget = {"no-any-return": {"baseline": 5, "slack": 0}}
+    budget = {"no-any-return": {"limit": 5}}
     assert gate.evaluate({"no-any-return": 6}, {}, budget) == [
         gate.Breach("no-any-return", 6, 5, 6)
     ]
 
 
-def test_slack_absorbs_small_increase_then_fails_past_it():
-    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+def test_limit_absorbs_increase_up_to_it_then_fails_past_it():
+    budget = {"arg-type": {"limit": 10}}
     assert gate.evaluate({"arg-type": 10}, {}, budget) == []
     assert gate.evaluate({"arg-type": 11}, {}, budget) == [
         gate.Breach("arg-type", 11, 10, 11)
     ]
 
 
-def test_unbudgeted_new_code_uses_default_slack():
-    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK}, {}, {}) == []
-    assert gate.evaluate({"brand-new": gate.DEFAULT_SLACK + 1}, {}, {}) == [
+def test_unbudgeted_new_code_uses_default_limit():
+    assert gate.evaluate({"brand-new": gate.DEFAULT_LIMIT}, {}, {}) == []
+    assert gate.evaluate({"brand-new": gate.DEFAULT_LIMIT + 1}, {}, {}) == [
         gate.Breach(
             "brand-new",
-            gate.DEFAULT_SLACK + 1,
-            gate.DEFAULT_SLACK,
-            gate.DEFAULT_SLACK + 1,
+            gate.DEFAULT_LIMIT + 1,
+            gate.DEFAULT_LIMIT,
+            gate.DEFAULT_LIMIT + 1,
         )
     ]
 
 
 def test_drift_already_over_cap_in_base_is_not_blamed_on_a_flat_change():
-    # The bystander case: a rule sits over its ceiling because two earlier PRs
+    # The bystander case: a rule sits over its limit because two earlier PRs
     # summed past it. A PR that branches off that base and adds nothing must pass
-    # -- total > cap but total == base, so the `> base` guard spares it.
-    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    # -- total > limit but total == base, so the `> base` guard spares it.
+    budget = {"arg-type": {"limit": 10}}
     assert gate.evaluate({"arg-type": 12}, {"arg-type": 12}, budget) == []
 
 
 def test_change_that_grows_an_over_cap_rule_is_blamed_for_only_what_it_added():
-    # Over cap AND above base: blamed, and `added` is the delta vs base, not the
+    # Over limit AND above base: blamed, and `added` is the delta vs base, not the
     # whole overage, so the message points at this change's contribution.
-    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    budget = {"arg-type": {"limit": 10}}
     assert gate.evaluate({"arg-type": 14}, {"arg-type": 12}, budget) == [
         gate.Breach("arg-type", 14, 10, 2)
     ]
 
 
 def test_reducing_an_over_cap_rule_below_base_passes():
-    budget = {"arg-type": {"baseline": 5, "slack": 5}}
+    budget = {"arg-type": {"limit": 10}}
     assert gate.evaluate({"arg-type": 11}, {"arg-type": 12}, budget) == []
 
 
 def test_no_output_against_a_nonempty_budget_is_a_vacuous_run():
     # A crashed type checker emits nothing; the gate must not certify it as clean.
-    budget = {"no-untyped-def": {"baseline": 4888, "slack": 10}}
+    budget = {"no-untyped-def": {"limit": 4898}}
     assert gate.is_vacuous_run({}, budget) is True
 
 
 def test_genuine_zero_and_empty_budget_are_not_vacuous():
     assert gate.is_vacuous_run({}, {}) is False
+    assert gate.is_vacuous_run({}, {"no-untyped-def": {"limit": 0}}) is False
     assert (
-        gate.is_vacuous_run({}, {"no-untyped-def": {"baseline": 0, "slack": 3}})
-        is False
+        gate.is_vacuous_run({"arg-type": 1}, {"arg-type": {"limit": 10}}) is False
     )
-    assert (
-        gate.is_vacuous_run({"arg-type": 1}, {"arg-type": {"baseline": 9, "slack": 1}})
-        is False
-    )
+
+
+def test_update_ratchets_a_limit_down_by_what_the_branch_fixed():
+    # A rule that dropped from 40 (branch point) to 30 (current) fixed 10, so its
+    # limit of 100 falls to 90 -- the granted headroom (60) is preserved, not the
+    # raw count.
+    budget = {"reportAny": {"limit": 100}}
+    assert gate.ratcheted_budget(budget, {"reportAny": 30}, {"reportAny": 40}) == {
+        "reportAny": {"limit": 90}
+    }
+
+
+def test_update_never_raises_a_limit_when_a_rule_grows():
+    # Adding violations must not loosen the ceiling; the limit holds flat.
+    budget = {"reportAny": {"limit": 100}}
+    assert gate.ratcheted_budget(budget, {"reportAny": 55}, {"reportAny": 40}) == {
+        "reportAny": {"limit": 100}
+    }
+
+
+def test_update_clamps_a_limit_at_zero_never_negative():
+    budget = {"reportAny": {"limit": 5}}
+    assert gate.ratcheted_budget(budget, {"reportAny": 0}, {"reportAny": 40}) == {
+        "reportAny": {"limit": 0}
+    }
 
 
 def test_malformed_basedpyright_json_exits_loudly_not_as_zero_errors():
