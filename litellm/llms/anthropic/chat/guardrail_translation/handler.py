@@ -132,9 +132,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         def _sse(event_type: str, payload: dict) -> bytes:
             return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
-        output_tokens = blocked_response_usage(getattr(exc, "original_response", None))[
-            "output_tokens"
-        ]
+        output_tokens = blocked_response_usage(getattr(exc, "original_response", None))["output_tokens"]
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []

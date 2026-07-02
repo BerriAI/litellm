@@ -166,9 +166,7 @@ async def test_buffered_mode_disabled_for_content_rewriting_guardrail():
     the client would get the unredacted original instead of the moderated
     output. mask_response_content=True must force buffering off so the
     request falls back to the (correctly moderated) non-buffered path."""
-    guardrail = _PassingGuardrail(
-        guardrail_name="masker", event_hook="post_call", mask_response_content=True
-    )
+    guardrail = _PassingGuardrail(guardrail_name="masker", event_hook="post_call", mask_response_content=True)
     raw = await _run(guardrail)
     assert guardrail.streaming_buffer_until_moderated is True  # request asked for buffering
     assert ORIGINAL_MARKER in raw
