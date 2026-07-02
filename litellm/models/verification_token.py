@@ -52,7 +52,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     object_permission_id: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     access_group_ids: Optional[List[str]] = None
-    logging_exporters: Optional[List[str]] = None
+    logging_exporters: Optional[list[str]] = None
     rotation_count: Optional[int] = 0
     auto_rotate: Optional[bool] = False
     rotation_interval: Optional[str] = None

@@ -146,6 +146,7 @@ async def new_organization(
 
     - organization_alias: *str* - The name of the organization.
     - models: *List* - The models the organization has access to.
+    - logging_exporters: *Optional[List[str]]* - Names of admin-owned logging destinations (credential names) this organization exports its traces to.
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: *Optional[float]* - Max budget for org

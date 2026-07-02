@@ -394,7 +394,7 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             )
             exporter = _exporter_from_spec(spec)
             processor = _build_processor(exporter, use_simple=False)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             verbose_logger.debug(
                 "OTel V2 fan-out: failed to build processor for %s: %s",
                 destination.endpoint,
