@@ -88,7 +88,7 @@ install-hooks:
 
 # Formatting
 # Wrap width is ruff.toml's single source of truth (line-length = 120), shared by the
-# formatter, E501, and the import sorter so there's no 88-vs-120 split to reconcile.
+# formatter and the import sorter so there's no 88-vs-120 split to reconcile.
 format: install-dev
 	cd litellm && $(UV_RUN) ruff format --exclude '/enterprise/' . && cd ..
 
