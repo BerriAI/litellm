@@ -2564,7 +2564,16 @@ def handle_realtime_stream_cost_calculation(
         input_cost_per_token += _input_cost_per_token
         output_cost_per_token += _output_cost_per_token
         break  # exit if we find a valid model
-    total_cost = input_cost_per_token + output_cost_per_token
+    transcription_cost = (
+        handle_realtime_transcription_cost_calculation(
+            results=results,
+            custom_llm_provider=custom_llm_provider,
+            litellm_model_name=litellm_model_name,
+        )
+        if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
+        else 0.0
+    )
+    total_cost = input_cost_per_token + output_cost_per_token + transcription_cost
 
     _store_cost_breakdown_in_logging_obj(
         litellm_logging_obj=litellm_logging_obj,
@@ -2573,13 +2582,6 @@ def handle_realtime_stream_cost_calculation(
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
     )
-
-    if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results):
-        total_cost += handle_realtime_transcription_cost_calculation(
-            results=results,
-            custom_llm_provider=custom_llm_provider,
-            litellm_model_name=litellm_model_name,
-        )
 
     return total_cost
 
