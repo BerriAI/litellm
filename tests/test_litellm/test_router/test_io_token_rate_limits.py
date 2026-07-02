@@ -14,6 +14,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     OTPM_CACHE_KEY,
     OTPM_RESERVED_KEY,
+    async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
@@ -360,6 +361,42 @@ class TestModelRateLimitingCheckIOTokens:
 
         # The forged reservation was stripped, so the victim counter is untouched.
         assert await dual_cache.async_get_cache(key=victim_key) == 100
+
+    @pytest.mark.asyncio
+    async def test_otpm_reservation_error_rolls_back_itpm(self):
+        from litellm.utils import get_utc_datetime
+
+        class _OtpmFailCache(DualCache):
+            async def async_increment_cache(self, key, **kwargs):
+                if ":otpm:" in key:
+                    raise RuntimeError("transient cache error")
+                return await super().async_increment_cache(key=key, **kwargs)
+
+        dual_cache = _OtpmFailCache()
+        deployment = {
+            "litellm_params": {
+                "model": "bedrock_mantle/anthropic.claude-opus-4-7",
+                "itpm": 1000,
+                "otpm": 1000,
+            },
+            "model_info": {"id": "io-rollback-id"},
+            "model_name": "opus",
+        }
+        set_io_token_rate_limit_request_kwargs(
+            {
+                "messages": [{"role": "user", "content": "hello world"}],
+                "max_tokens": 5,
+                "metadata": {},
+            }
+        )
+
+        with pytest.raises(RuntimeError):
+            await async_io_token_pre_call_check(dual_cache, deployment)
+
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key = f"global_router:io-rollback-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
+        # A transient OTPM error must release the ITPM reservation, not leak it.
+        assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
 
     @pytest.mark.asyncio
     async def test_reconcile_uses_reservation_minute_key(self):

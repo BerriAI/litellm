@@ -298,7 +298,10 @@ async def async_io_token_pre_call_check(
                 parent_otel_span=parent_otel_span,
                 limit_label="OTPM",
             )
-        except litellm.RateLimitError:
+        except Exception:
+            # Any failure reserving OTPM (a 429 or a transient cache error) must
+            # release the ITPM reservation already made, or it stays inflated
+            # until the TTL expires.
             if itpm_reserved > 0:
                 await dual_cache.async_increment_cache(
                     key=itpm_key,

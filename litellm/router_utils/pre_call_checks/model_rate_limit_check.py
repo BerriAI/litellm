@@ -11,8 +11,7 @@ sets itpm/otpm, those take precedence and its tpm/rpm limits are not enforced.
 A warning is logged the first time such a conflicting deployment is seen.
 """
 
-from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set, Union
 
 import httpx
 
@@ -43,14 +42,6 @@ class RoutingArgs:
     ttl: int = 60  # 1min (RPM/TPM expire key)
 
 
-@lru_cache(maxsize=None)
-def _warn_io_token_supersedes_tpm_rpm(model_id: Optional[str]) -> None:
-    verbose_router_logger.warning(
-        f"Deployment '{model_id}' configures itpm/otpm alongside tpm/rpm; "
-        "itpm/otpm take precedence and the tpm/rpm limits on this deployment are not enforced"
-    )
-
-
 class ModelRateLimitingCheck(CustomLogger):
     """
     Pre-call check that enforces TPM/RPM or ITPM/OTPM limits on model deployments.
@@ -64,6 +55,22 @@ class ModelRateLimitingCheck(CustomLogger):
 
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
+        # model_ids already warned about conflicting itpm/otpm + tpm/rpm config,
+        # so the warning is logged once per deployment rather than per request.
+        self._io_token_conflict_warned_ids: Set[str] = set()
+
+    def _warn_io_token_supersedes_tpm_rpm_once(self, deployment: Dict) -> None:
+        tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
+        if tpm_limit is None and rpm_limit is None:
+            return
+        model_id = str(deployment.get("model_info", {}).get("id"))
+        if model_id in self._io_token_conflict_warned_ids:
+            return
+        self._io_token_conflict_warned_ids.add(model_id)
+        verbose_router_logger.warning(
+            f"Deployment '{model_id}' configures itpm/otpm alongside tpm/rpm; "
+            "itpm/otpm take precedence and the tpm/rpm limits on this deployment are not enforced"
+        )
 
     def _get_deployment_limits(self, deployment: Dict) -> tuple[Optional[int], Optional[int]]:
         """
@@ -182,9 +189,7 @@ class ModelRateLimitingCheck(CustomLogger):
         """
         try:
             if deployment_has_io_token_limits(deployment):
-                tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
-                if tpm_limit is not None or rpm_limit is not None:
-                    _warn_io_token_supersedes_tpm_rpm(deployment.get("model_info", {}).get("id"))
+                self._warn_io_token_supersedes_tpm_rpm_once(deployment)
                 return await async_io_token_pre_call_check(
                     self.dual_cache,
                     deployment,
