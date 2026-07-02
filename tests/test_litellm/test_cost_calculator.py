@@ -18,7 +18,7 @@ from litellm.cost_calculator import (
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
-from litellm.types.llms.openai import OpenAIRealtimeStreamList
+from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponsesAPIResponse
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
 
@@ -2086,14 +2086,27 @@ def test_completion_cost_extracts_service_tier_from_usage():
 
 
 def test_completion_cost_service_tier_priority():
-    """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
+    """Test that service_tier extraction follows priority: completion_response > usage > optional_params."""
     from litellm import completion_cost
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    # Test with gpt-5-nano which has flex pricing
-    model = "gpt-5-nano"
+    model = "test-openai-service-tier-priority-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "input_cost_per_token_priority": 0.01,
+                "output_cost_per_token_priority": 0.02,
+                "input_cost_per_token_flex": 0.0005,
+                "output_cost_per_token_flex": 0.001,
+                "litellm_provider": "openai",
+                "max_tokens": 8192,
+            }
+        }
+    )
 
     # Create usage object with service_tier="flex"
     usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
@@ -2106,19 +2119,12 @@ def test_completion_cost_service_tier_priority():
     )
     setattr(response, "service_tier", "priority")
 
-    # Test that optional_params takes priority over response and usage
-    cost_from_params = completion_cost(
+    # Test that response takes priority over request params and usage.
+    cost_from_response = completion_cost(
         completion_response=response,
         model=model,
         custom_llm_provider="openai",
         optional_params={"service_tier": "flex"},
-    )
-
-    # Test that response takes priority over usage when optional_params is not provided
-    completion_cost(
-        completion_response=response,
-        model=model,
-        custom_llm_provider="openai",
     )
 
     # Test that usage is used when neither optional_params nor response have service_tier
@@ -2135,14 +2141,83 @@ def test_completion_cost_service_tier_priority():
         custom_llm_provider="openai",
     )
 
-    # All should use flex pricing (from different sources)
-    assert cost_from_params > 0, "Cost from params should be greater than 0"
+    assert cost_from_response > 0, "Cost from response should be greater than 0"
     assert cost_from_usage > 0, "Cost from usage should be greater than 0"
+    assert cost_from_response > cost_from_usage, "Response priority tier should override request/usage flex tier"
 
-    # Costs should be similar (all using flex)
-    assert (
-        abs(cost_from_params - cost_from_usage) < 1e-6
-    ), "Costs from params and usage should be similar (both flex)"
+
+def test_completion_cost_openai_responses_uses_response_service_tier_default_over_request_priority():
+    """
+    OpenAI Responses reports the tier actually used on the response. If a
+    priority request is served as default, cost tracking must use standard
+    pricing instead of the request-level priority preference.
+    """
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model = "test-openai-responses-default-tier-cost-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "input_cost_per_token_priority": 0.002,
+                "output_cost_per_token_priority": 0.004,
+                "litellm_provider": "openai",
+                "max_tokens": 8192,
+                "mode": "responses",
+            }
+        }
+    )
+
+    usage = {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500}
+    response = ResponsesAPIResponse(
+        id="resp_default_tier",
+        created_at=0,
+        model=model,
+        object="response",
+        output=[],
+        usage=usage,
+        service_tier="default",
+    )
+
+    response_cost = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
+        service_tier="priority",
+    )
+    standard_cost = completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp_no_tier",
+            created_at=0,
+            model=model,
+            object="response",
+            output=[],
+            usage=usage,
+        ),
+        model=model,
+        custom_llm_provider="openai",
+    )
+    priority_cost = completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp_priority_tier",
+            created_at=0,
+            model=model,
+            object="response",
+            output=[],
+            usage=usage,
+            service_tier="priority",
+        ),
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert response_cost == pytest.approx(standard_cost)
+    assert priority_cost == pytest.approx(2 * standard_cost)
 
 
 def test_completion_cost_service_tier_for_bedrock():
