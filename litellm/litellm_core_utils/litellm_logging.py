@@ -4722,7 +4722,7 @@ class StandardLoggingPayloadSetup:
         api_base: Optional[str] = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
-            model=None,
+            model=base_model if custom_pricing else None,
             completion_response=init_response_obj,  # type: ignore
             base_model=base_model,
             custom_pricing=custom_pricing,
@@ -5268,6 +5268,11 @@ def get_standard_logging_object_payload(
 
         ## Get model cost information ##
         base_model = _get_base_model_from_metadata(model_call_details=kwargs)
+        # The router overrides completion_response.model to the model-group alias before
+        # this payload is built, so cost-map lookup via that alias always misses.
+        # Fall back to the actual deployment model set by the router in metadata.
+        if base_model is None:
+            base_model = metadata.get("deployment")
         custom_pricing = use_custom_pricing_for_model(litellm_params=litellm_params)
         raw_response_cost = kwargs.get("response_cost")
         response_cost: float = raw_response_cost or 0.0
@@ -5389,7 +5394,7 @@ def get_standard_logging_object_payload(
 
 def emit_standard_logging_payload(payload: StandardLoggingPayload):
     if os.getenv("LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD"):
-        print(json.dumps(payload, indent=4))  # noqa: T201
+        print(json.dumps(payload, indent=4), flush=True)  # noqa: T201
 
 
 def get_standard_logging_metadata(
