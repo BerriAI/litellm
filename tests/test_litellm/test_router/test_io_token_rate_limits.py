@@ -10,7 +10,9 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
+    async_io_token_reconcile_success,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
     set_io_token_rate_limit_request_kwargs,
@@ -190,13 +192,72 @@ class TestModelRateLimitingCheckIOTokens:
                 "hidden_params": {"litellm_model_name": "bedrock_mantle/test"},
                 "metadata": {},
             },
-            "metadata": {ITPM_RESERVED_KEY: 20},
+            "metadata": {ITPM_RESERVED_KEY: 20, ITPM_CACHE_KEY: itpm_key},
             "litellm_params": {"metadata": {"user_api_key_hash": "abc123"}},
         }
         await check.async_log_failure_event(kwargs, None, None, None)
 
         current = await dual_cache.async_get_cache(key=itpm_key)
         assert current == 0
+
+    @pytest.mark.asyncio
+    async def test_reconcile_tracks_actual_usage_when_estimate_zero(self):
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {
+                "model": "bedrock_mantle/anthropic.claude-opus-4-7",
+                "itpm": 100,
+            },
+            "model_info": {"id": "io-zero-est-id"},
+            "model_name": "opus",
+        }
+
+        # No messages/prompt -> pre-call estimate is 0, so nothing is reserved,
+        # but the actual billable input must still be tracked post-call.
+        request_kwargs = {"max_tokens": 5, "metadata": {}}
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        await check.async_pre_call_check(deployment)
+
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key = f"global_router:io-zero-est-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
+        assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
+
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "io-zero-est-id",
+                "hidden_params": {"litellm_model_name": "bedrock_mantle/anthropic.claude-opus-4-7"},
+                "metadata": dict(request_kwargs["metadata"]),
+            },
+            "metadata": request_kwargs["metadata"],
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=7, completion_tokens=0, total_tokens=7),
+        )
+        await check.async_log_success_event(kwargs, response, None, None)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 7
+
+    @pytest.mark.asyncio
+    async def test_reconcile_uses_reservation_minute_key(self):
+        dual_cache = DualCache()
+        # Reservation was made on a fixed minute key; a call that finishes in a
+        # later minute must reconcile against that same key, never a key built
+        # from the response-time minute.
+        itpm_key = "global_router:io-min-id:bedrock_mantle/test:itpm:99-99"
+        await dual_cache.async_increment_cache(key=itpm_key, value=10, ttl=60)
+
+        kwargs = {"metadata": {ITPM_RESERVED_KEY: 10, ITPM_CACHE_KEY: itpm_key}}
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=4, completion_tokens=0, total_tokens=4),
+        )
+        await async_io_token_reconcile_success(dual_cache, kwargs, response)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 4
 
     @pytest.mark.asyncio
     async def test_io_limits_supersede_tpm_rpm_with_warning(self, caplog):
@@ -251,13 +312,14 @@ class TestModelRateLimitingCheckIOTokens:
         itpm_key = f"global_router:io-refund-id:bedrock_mantle/test:itpm:{minute}"
         await dual_cache.async_increment_cache(key=itpm_key, value=20, ttl=60)
 
+        reservation = {ITPM_RESERVED_KEY: 20, ITPM_CACHE_KEY: itpm_key}
         kwargs = {
             "standard_logging_object": {
                 "model_id": "io-refund-id",
                 "hidden_params": {"litellm_model_name": "bedrock_mantle/test"},
-                "metadata": {ITPM_RESERVED_KEY: 20},
+                "metadata": dict(reservation),
             },
-            "metadata": {ITPM_RESERVED_KEY: 20},
+            "metadata": dict(reservation),
         }
         await check.async_log_failure_event(kwargs, None, None, None)
 

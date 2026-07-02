@@ -20,7 +20,6 @@ from litellm import token_counter
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.types.router import RouterCacheEnum, RouterErrors
-from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -39,6 +38,8 @@ _io_token_rate_limit_request_kwargs: contextvars.ContextVar[Optional[Dict[str, A
 
 ITPM_RESERVED_KEY = "_litellm_itpm_reserved"
 OTPM_RESERVED_KEY = "_litellm_otpm_reserved"
+ITPM_CACHE_KEY = "_litellm_itpm_cache_key"
+OTPM_CACHE_KEY = "_litellm_otpm_cache_key"
 
 
 def set_io_token_rate_limit_request_kwargs(kwargs: Optional[Dict[str, Any]]) -> None:
@@ -140,22 +141,37 @@ def _stash_reservation_in_metadata(
     *,
     itpm_reserved: int,
     otpm_reserved: int,
+    itpm_cache_key: Optional[str],
+    otpm_cache_key: Optional[str],
 ) -> None:
     if not request_kwargs:
         return
+    reservation = {
+        ITPM_RESERVED_KEY: itpm_reserved,
+        OTPM_RESERVED_KEY: otpm_reserved,
+        ITPM_CACHE_KEY: itpm_cache_key,
+        OTPM_CACHE_KEY: otpm_cache_key,
+    }
     for channel in ("metadata", "litellm_metadata"):
         existing = request_kwargs.get(channel)
         if isinstance(existing, dict):
-            existing[ITPM_RESERVED_KEY] = itpm_reserved
-            existing[OTPM_RESERVED_KEY] = otpm_reserved
+            existing.update(reservation)
         elif channel == "metadata":
-            request_kwargs[channel] = {
-                ITPM_RESERVED_KEY: itpm_reserved,
-                OTPM_RESERVED_KEY: otpm_reserved,
-            }
+            request_kwargs[channel] = dict(reservation)
 
 
-def _read_reservation_from_kwargs(kwargs: Any) -> Tuple[int, int]:
+def _extract_reservation(reservation: Dict[str, Any]) -> Tuple[int, int, Optional[str], Optional[str]]:
+    itpm_cache_key = reservation.get(ITPM_CACHE_KEY)
+    otpm_cache_key = reservation.get(OTPM_CACHE_KEY)
+    return (
+        int(reservation.get(ITPM_RESERVED_KEY, 0) or 0),
+        int(reservation.get(OTPM_RESERVED_KEY, 0) or 0),
+        itpm_cache_key if isinstance(itpm_cache_key, str) else None,
+        otpm_cache_key if isinstance(otpm_cache_key, str) else None,
+    )
+
+
+def _read_reservation_from_kwargs(kwargs: Any) -> Tuple[int, int, Optional[str], Optional[str]]:
     for channel in ("metadata", "litellm_metadata"):
         channel_dict = None
         if isinstance(kwargs, dict):
@@ -165,19 +181,13 @@ def _read_reservation_from_kwargs(kwargs: Any) -> Tuple[int, int]:
                 if isinstance(litellm_params, dict) and isinstance(litellm_params.get("metadata"), dict):
                     channel_dict = litellm_params.get("metadata")
         if isinstance(channel_dict, dict) and ITPM_RESERVED_KEY in channel_dict:
-            return (
-                int(channel_dict.get(ITPM_RESERVED_KEY, 0) or 0),
-                int(channel_dict.get(OTPM_RESERVED_KEY, 0) or 0),
-            )
+            return _extract_reservation(channel_dict)
     standard_logging_object = kwargs.get("standard_logging_object") if isinstance(kwargs, dict) else None
     if isinstance(standard_logging_object, dict):
         metadata = standard_logging_object.get("metadata") or {}
         if ITPM_RESERVED_KEY in metadata:
-            return (
-                int(metadata.get(ITPM_RESERVED_KEY, 0) or 0),
-                int(metadata.get(OTPM_RESERVED_KEY, 0) or 0),
-            )
-    return 0, 0
+            return _extract_reservation(metadata)
+    return 0, 0, None, None
 
 
 async def _increment_with_rollback(
@@ -280,6 +290,8 @@ async def async_io_token_pre_call_check(
         request_kwargs,
         itpm_reserved=itpm_reserved,
         otpm_reserved=otpm_reserved,
+        itpm_cache_key=itpm_key if itpm_limit is not None else None,
+        otpm_cache_key=otpm_key if otpm_limit is not None else None,
     )
     return deployment
 
@@ -291,27 +303,19 @@ async def async_io_token_reconcile_success(
     *,
     parent_otel_span: Optional[Span] = None,
 ) -> None:
-    standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
-    if standard_logging_object is None:
-        return
-    model_id = standard_logging_object.get("model_id")
-    if model_id is None:
-        return
-    model = (standard_logging_object.get("hidden_params") or {}).get("litellm_model_name")
-    if not model:
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(kwargs)
+    if itpm_key is None and otpm_key is None:
         return
 
-    itpm_reserved, otpm_reserved = _read_reservation_from_kwargs(kwargs)
     usage = getattr(response_obj, "usage", None)
     prompt_tokens, completion_tokens, cached_tokens = _get_usage_tokens(usage)
     billable_input = max(0, prompt_tokens - cached_tokens)
 
-    dt = get_utc_datetime()
-    current_minute = dt.strftime("%H-%M")
-    itpm_key = RouterCacheEnum.ITPM.value.format(id=model_id, model=model, current_minute=current_minute)
-    otpm_key = RouterCacheEnum.OTPM.value.format(id=model_id, model=model, current_minute=current_minute)
-
-    if itpm_reserved > 0:
+    # Reconcile against the exact key that held the reservation (which encodes
+    # the reservation's minute), not a key recomputed at response time. This
+    # tracks actual usage even when the pre-call estimate was 0, and avoids a
+    # minute-boundary mismatch for calls that span into the next minute.
+    if itpm_key is not None:
         itpm_delta = billable_input - itpm_reserved
         if itpm_delta != 0:
             await dual_cache.async_increment_cache(
@@ -321,7 +325,7 @@ async def async_io_token_reconcile_success(
                 parent_otel_span=parent_otel_span,
             )
 
-    if otpm_reserved > 0:
+    if otpm_key is not None:
         otpm_delta = completion_tokens - otpm_reserved
         if otpm_delta != 0:
             await dual_cache.async_increment_cache(
@@ -332,7 +336,7 @@ async def async_io_token_reconcile_success(
             )
 
     verbose_router_logger.debug(
-        f"[IO TOKEN LIMIT] model_id={model_id} reconciled "
+        f"[IO TOKEN LIMIT] reconciled "
         f"(itpm_reserved={itpm_reserved}, billable_input={billable_input}, "
         f"otpm_reserved={otpm_reserved}, output={completion_tokens})"
     )
@@ -344,26 +348,15 @@ async def async_io_token_refund_failure(
     *,
     parent_otel_span: Optional[Span] = None,
 ) -> None:
-    itpm_reserved, otpm_reserved = _read_reservation_from_kwargs(kwargs)
-    if itpm_reserved <= 0 and otpm_reserved <= 0:
-        return
-    standard_logging_object = kwargs.get("standard_logging_object") or {}
-    model_id = standard_logging_object.get("model_id")
-    model = (standard_logging_object.get("hidden_params") or {}).get("litellm_model_name")
-    if not model_id or not model:
-        return
-    dt = get_utc_datetime()
-    current_minute = dt.strftime("%H-%M")
-    itpm_key = RouterCacheEnum.ITPM.value.format(id=model_id, model=model, current_minute=current_minute)
-    otpm_key = RouterCacheEnum.OTPM.value.format(id=model_id, model=model, current_minute=current_minute)
-    if itpm_reserved > 0:
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(kwargs)
+    if itpm_key is not None and itpm_reserved > 0:
         await dual_cache.async_increment_cache(
             key=itpm_key,
             value=-itpm_reserved,
             ttl=RoutingArgsTTL,
             parent_otel_span=parent_otel_span,
         )
-    if otpm_reserved > 0:
+    if otpm_key is not None and otpm_reserved > 0:
         await dual_cache.async_increment_cache(
             key=otpm_key,
             value=-otpm_reserved,
