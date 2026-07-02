@@ -739,7 +739,9 @@ _CLAUDE_BEDROCK_PARALLEL_TOOL_USE_PATTERNS: tuple[str, ...] = (
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
     model_lower = model.lower()
-    return any(pattern in model_lower for pattern in _CLAUDE_BEDROCK_PARALLEL_TOOL_USE_PATTERNS)
+    return is_claude_4_5_on_bedrock(model) or any(
+        pattern in model_lower for pattern in _CLAUDE_BEDROCK_PARALLEL_TOOL_USE_PATTERNS
+    )
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:

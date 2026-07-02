@@ -611,6 +611,27 @@ def test_transform_request_helper_includes_anthropic_beta_and_tools():
     assert fields["tools"][0]["type"] == "computer_20250124"
 
 
+def test_parallel_tool_calls_config_kept_for_sonnet_5():
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model="anthropic.claude-sonnet-5",
+        non_default_params={"parallel_tool_calls": False},
+        optional_params={},
+        drop_params=False,
+    )
+
+    data = config._transform_request_helper(
+        model="anthropic.claude-sonnet-5",
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert data["additionalModelRequestFields"]["tool_choice"] == {
+        "disable_parallel_tool_use": True
+    }
+
+
 def test_transform_response_with_computer_use_tool():
     """Test response transformation with computer use tool call."""
     import httpx
