@@ -4798,3 +4798,91 @@ async def test_add_litellm_data_to_request_claude_code_drop_params(
     )
 
     assert updated.get("drop_params") == expected_drop_params
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_merges_metadata_tags_on_responses_route():
+    """Regression for #31584: user-supplied metadata.tags must be merged into
+    litellm_metadata.tags on /v1/responses so they reach SpendLogs.request_tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["cost-center-1", "team-alpha"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert "cost-center-1" in updated["litellm_metadata"]["tags"]
+    assert "team-alpha" in updated["litellm_metadata"]["tags"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_metadata_tags_with_header_tags_on_responses_route():
+    """On /v1/responses, tags from metadata.tags AND x-litellm-tags header
+    must both appear in litellm_metadata.tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url = MagicMock()
+    request_mock.url.path = "/v1/responses"
+    request_mock.url.__str__.return_value = "http://localhost/v1/responses"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "header-tag",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    request_mock.state = MagicMock()
+
+    data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "metadata": {"tags": ["body-tag"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    tags = updated["litellm_metadata"]["tags"]
+    assert "header-tag" in tags
+    assert "body-tag" in tags

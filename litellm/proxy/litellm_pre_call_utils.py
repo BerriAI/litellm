@@ -1649,6 +1649,16 @@ async def add_litellm_data_to_request(
             tags_to_add=tags,
         )
 
+    if _metadata_variable_name != "metadata":
+        _user_metadata = data.get("metadata")
+        if isinstance(_user_metadata, dict):
+            _user_tags = _user_metadata.get("tags")
+            if isinstance(_user_tags, list) and _user_tags:
+                data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+                    request_tags=data[_metadata_variable_name].get("tags"),
+                    tags_to_add=_user_tags,
+                )
+
     # Team Callbacks controls
     callback_settings_obj = _get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
