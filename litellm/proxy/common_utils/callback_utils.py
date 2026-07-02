@@ -611,10 +611,17 @@ def _transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]
     return out
 
 
-def _is_sensitive_callback_var(key: str) -> bool:
-    """Match codebase precedent: only credential-bearing fields get encrypted;
-    routing/identifier fields (host, base_url, project, region) stay plain."""
-    if key in _EXTRA_SENSITIVE_CALLBACK_KEYS:
+def is_sensitive_callback_key(
+    key: str,
+    extra: Optional[set[str]] = None,
+) -> bool:
+    """Return ``True`` if ``key`` is present in ``extra`` (checked as-is), or
+    if its lowercase form is in ``_EXTRA_SENSITIVE_CALLBACK_KEYS``, or if
+    ``_CALLBACK_VAR_MASKER.is_sensitive_key`` matches it.
+    """
+    if extra and key in extra:
+        return True
+    if key.lower() in _EXTRA_SENSITIVE_CALLBACK_KEYS:
         return True
     return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
 
@@ -622,7 +629,7 @@ def _is_sensitive_callback_var(key: str) -> bool:
 def _encrypt_if_plaintext(key: str, value: Any) -> Any:
     if not isinstance(value, str) or not value:
         return value
-    if not _is_sensitive_callback_var(key):
+    if not is_sensitive_callback_key(key):
         return value
     if value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
         # Already encrypted — round-tripping ciphertext (e.g. UI Edit Settings

@@ -107,7 +107,6 @@ vi.mock("@/utils/returnUrlUtils", async (importOriginal) => {
 vi.mock("@/components/navbar", () => ({ default: stub("navbar") }));
 vi.mock("@/components/user_dashboard", () => ({ default: stub("user-dashboard") }));
 vi.mock("@/components/templates/model_dashboard", () => ({ default: stub("model-dashboard") }));
-vi.mock("@/components/view_users", () => ({ default: stub("view-users") }));
 vi.mock("@/components/teams", () => ({ default: stub("teams") }));
 vi.mock("@/components/organizations", () => ({
   default: stub("organizations"),

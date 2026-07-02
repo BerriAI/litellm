@@ -4,9 +4,11 @@ from __future__ import annotations
 Common utilities used across bedrock chat/embedding/image generation
 """
 
+import contextlib
 import functools
 import json
 import os
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -700,6 +702,51 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     """
     model_info = litellm.model_cost.get(model) or litellm.model_cost.get(get_bedrock_base_model(model)) or {}
     return model_info.get("cache_creation_input_token_cost_above_1hr") is not None
+
+
+_BEDROCK_MODEL_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
+
+
+def bedrock_converse_supports_strict_tools(model: str) -> bool:
+    """
+    Whether ``toolSpec.strict`` can be forwarded to Bedrock Converse for ``model``.
+
+    Non-Anthropic Bedrock families (Nova, Llama, GPT-OSS) reject the field
+    outright. Anthropic models forward it unless their entry in
+    ``model_prices_and_context_window.json`` sets
+    ``bedrock_converse_supports_strict_tools: false`` — Bedrock routes those
+    (Opus 4.7/4.8, see #31582) through a stricter validator that rejects the
+    ``strict`` key on ``toolSpec`` even though Anthropic's native API accepts
+    it as a top-level tool field.
+    """
+    base = get_bedrock_base_model(model)
+    if not base.startswith("anthropic"):
+        return False
+    flag = _get_bedrock_converse_strict_tools_flag(base)
+    return flag if flag is not None else True
+
+
+def _get_bedrock_converse_strict_tools_flag(base_model: str) -> Optional[bool]:
+    candidates = dict.fromkeys((base_model, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base_model)))
+    for candidate in candidates:
+        with contextlib.suppress(Exception):
+            model_info = get_cached_model_info()(
+                model=candidate,
+                custom_llm_provider="bedrock",
+            )
+
+            flag = model_info.get("bedrock_converse_supports_strict_tools")
+            if isinstance(flag, bool):
+                return flag
+
+            model_cost_key = model_info.get("key")
+            if isinstance(model_cost_key, str):
+                local_flag = (
+                    _get_local_model_cost_map().get(model_cost_key, {}).get("bedrock_converse_supports_strict_tools")
+                )
+                if isinstance(local_flag, bool):
+                    return local_flag
+    return None
 
 
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
