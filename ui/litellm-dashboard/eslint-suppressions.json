@@ -834,11 +834,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/caching/components/cache_settings/CacheFieldRenderer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/caching/components/cache_settings/RedisTypeSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
