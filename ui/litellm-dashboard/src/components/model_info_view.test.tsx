@@ -607,6 +607,45 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
   });
 
+  it("does not re-send vector_store_ids when the user changes an unrelated field", async () => {
+    const modelWithVectorStores = {
+      ...defaultModelData,
+      litellm_params: {
+        model: "gpt-4",
+        api_base: "https://api.openai.com/v1",
+        custom_llm_provider: "openai",
+        vector_store_ids: ["vs_existing"],
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelWithVectorStores] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [modelWithVectorStores] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const tpmInput = await screen.findByPlaceholderText("Enter TPM");
+    await user.type(tpmInput, "100");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params).toHaveProperty("tpm");
+    expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
+  });
+
   it("should not include input_cost_per_token or output_cost_per_token in update payload when user does not touch cost fields", async () => {
     // Regression: editing a model without touching cost fields used to inject
     // input_cost_per_token: 0 and output_cost_per_token: 0 into litellm_params,

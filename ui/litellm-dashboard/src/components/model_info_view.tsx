@@ -477,13 +477,8 @@ export default function ModelInfoView({
       if (form.isFieldTouched("guardrails")) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
-      if (values.vector_store_ids?.length > 0) {
-        updatedLitellmParams.vector_store_ids = values.vector_store_ids;
-      } else if (values.vector_store_ids !== undefined) {
-        // User explicitly cleared previously-set vector stores — send [] to clear on backend
-        updatedLitellmParams.vector_store_ids = [];
-      } else {
-        delete updatedLitellmParams.vector_store_ids;
+      if (form.isFieldTouched("vector_store_ids")) {
+        updatedLitellmParams.vector_store_ids = values.vector_store_ids?.length > 0 ? values.vector_store_ids : [];
       }
 
       // Handle cache control settings
