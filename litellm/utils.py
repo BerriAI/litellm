@@ -6080,6 +6080,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("DASHSCOPE_API_KEY")
+        elif custom_llm_provider == "xiaomi_mimo":
+            if "XIAOMI_MIMO_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("XIAOMI_MIMO_API_KEY")
         elif custom_llm_provider == "modelscope":
             if "MODELSCOPE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -7655,6 +7660,7 @@ class ProviderConfigManager:
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
             LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.XIAOMI_MIMO: (lambda: litellm.XiaomiMiMoChatConfig(), False),
             LlmProviders.MODELSCOPE: (lambda: litellm.ModelScopeChatConfig(), False),
             LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
             LlmProviders.DOCKER_MODEL_RUNNER: (

@@ -37775,6 +37775,38 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "xiaomi_mimo/mimo-v2.5": {
+        "cache_read_input_token_cost": 2.8e-09,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "xiaomi_mimo",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://mimo.mi.com/docs/en-US/price/pay-as-you-go",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "xiaomi_mimo/mimo-v2.5-pro": {
+        "cache_read_input_token_cost": 3.6e-09,
+        "input_cost_per_token": 4.35e-07,
+        "litellm_provider": "xiaomi_mimo",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-07,
+        "source": "https://mimo.mi.com/docs/en-US/price/pay-as-you-go",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_web_search": true
+    },
     "zai.glm-4.7": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
