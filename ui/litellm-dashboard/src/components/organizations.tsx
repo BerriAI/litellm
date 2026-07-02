@@ -159,16 +159,11 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
         }
       }
 
-      if (Array.isArray(values.logging_exporters) && values.logging_exporters.length > 0) {
-        let existingMetadata: Record<string, unknown> = {};
-        if (typeof values.metadata === "string" && values.metadata.trim().length > 0) {
-          existingMetadata = JSON.parse(values.metadata);
-        } else if (values.metadata && typeof values.metadata === "object") {
-          existingMetadata = values.metadata;
-        }
-        values.metadata = { ...existingMetadata, logging_exporters: values.logging_exporters };
+      // logging_exporters is a top-level typed field on the org (its own column),
+      // not part of the free-form metadata blob; send it as-is when set.
+      if (!Array.isArray(values.logging_exporters) || values.logging_exporters.length === 0) {
+        delete values.logging_exporters;
       }
-      delete values.logging_exporters;
 
       await organizationCreateCall(accessToken, values);
       NotificationsManager.success("Organization created successfully");

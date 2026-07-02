@@ -16,6 +16,7 @@ import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
+import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import NotificationManager from "../molecules/notifications_manager";
@@ -278,7 +279,6 @@ export default function KeyInfoView({
             ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
               ? { logging: formValues.logging_settings }
               : {}),
-            ...(formValues.logging_exporters !== undefined ? { logging_exporters: formValues.logging_exporters } : {}),
             ...(formValues.disabled_callbacks?.length > 0
               ? {
                   litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
@@ -300,7 +300,6 @@ export default function KeyInfoView({
           ...(Array.isArray(formValues.logging_settings) && formValues.logging_settings.length > 0
             ? { logging: formValues.logging_settings }
             : {}),
-          ...(formValues.logging_exporters !== undefined ? { logging_exporters: formValues.logging_exporters } : {}),
           ...(formValues.disabled_callbacks?.length > 0
             ? {
                 litellm_disabled_callbacks: mapDisplayToInternalNames(formValues.disabled_callbacks),
@@ -643,11 +642,7 @@ export default function KeyInfoView({
 
               <LoggingSettingsView
                 loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
-                loggingExporters={
-                  Array.isArray(currentKeyData.metadata?.logging_exporters)
-                    ? currentKeyData.metadata.logging_exporters
-                    : []
-                }
+                loggingExporters={loggingExportersOf(currentKeyData)}
                 scopedExporters={scopedExportersForKey}
                 disabledCallbacks={
                   Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks)
@@ -897,11 +892,7 @@ export default function KeyInfoView({
 
                   <LoggingSettingsView
                     loggingConfigs={extractLoggingSettings(currentKeyData.metadata)}
-                    loggingExporters={
-                      Array.isArray(currentKeyData.metadata?.logging_exporters)
-                        ? currentKeyData.metadata.logging_exporters
-                        : []
-                    }
+                    loggingExporters={loggingExportersOf(currentKeyData)}
                     scopedExporters={scopedExportersForKey}
                     disabledCallbacks={
                       Array.isArray(currentKeyData.metadata?.litellm_disabled_callbacks)

@@ -2424,12 +2424,13 @@ export interface paths {
          * Get Credentials
          * @description [BETA] endpoint. This might change unexpectedly.
          *
-         *     Proxy admins see every credential (values masked). Team-admins and
-         *     org-admins see only logging-typed destinations so they can self-assign
-         *     them; provider credentials stay invisible to non-PROXY_ADMINs. Plain
-         *     internal users with no team-admin or org-admin status get 403 — they
-         *     have no use for the list and shouldn't see destination names, hosts,
-         *     or scope metadata (Veria F2).
+         *     Proxy admins see every credential (values masked). A non-proxy-admin sees
+         *     only the logging destinations actually visible to a scope they administer:
+         *     the same ``is_destination_visible`` predicate the assignment validator and
+         *     the request-time resolver use, so the list can never show a destination a
+         *     caller could neither assign nor route to. Provider credentials, and logging
+         *     destinations scoped to other tenants, stay invisible. A caller who
+         *     administers nothing gets 403 (Veria F2).
          */
         get: operations["get_credentials_credentials_get"];
         put?: never;
@@ -23530,6 +23531,8 @@ export interface components {
              * @default default
              */
             key_type: components["schemas"]["LiteLLMKeyType"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -23675,6 +23678,8 @@ export interface components {
             key_name?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -24523,6 +24528,8 @@ export interface components {
             /** Litellm Changed By */
             litellm_changed_by?: string | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -24670,6 +24677,8 @@ export interface components {
             } | null;
             /** Litellm Changed By */
             litellm_changed_by?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -25140,6 +25149,8 @@ export interface components {
             /** Created By */
             created_by: string;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /**
              * Members
              * @default []
@@ -25683,6 +25694,8 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -26039,6 +26052,8 @@ export interface components {
             litellm_budget_table?: {
                 [key: string]: unknown;
             } | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -27455,6 +27470,8 @@ export interface components {
             budget_duration?: string | null;
             /** Budget Id */
             budget_id?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -27504,6 +27521,8 @@ export interface components {
             /** Created By */
             created_by: string;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -27706,6 +27725,8 @@ export interface components {
             } | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Mcp Rpm Limit */
@@ -27827,6 +27848,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -27979,6 +28002,8 @@ export interface components {
             key_name?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: unknown | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -29594,6 +29619,8 @@ export interface components {
              * @default default
              */
             key_type: components["schemas"]["LiteLLMKeyType"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30636,6 +30663,8 @@ export interface components {
             /** Default Team Member Models */
             default_team_member_models?: string[] | null;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30751,6 +30780,8 @@ export interface components {
              */
             keys_count: number;
             litellm_model_table?: components["schemas"]["LiteLLM_ModelTable"] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31559,6 +31590,8 @@ export interface components {
             key: string;
             /** Key Alias */
             key_alias?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -31908,6 +31941,8 @@ export interface components {
             } | null;
             /** Guardrails */
             guardrails?: string[] | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Mcp Rpm Limit */
@@ -32014,6 +32049,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32112,6 +32149,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Key Alias */
             key_alias?: string | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -32385,6 +32424,8 @@ export interface components {
             litellm_budget_table?: {
                 [key: string]: unknown;
             } | null;
+            /** Logging Exporters */
+            logging_exporters?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -43825,13 +43866,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *         Every rate-limit condition surfaced by litellm — whether it originated from
-             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *         max-iterations, etc.) — is raised as an instance of this class.
+             *     Every rate-limit condition surfaced by litellm — whether it originated from
+             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *     max-iterations, etc.) — is raised as an instance of this class.
              *
-             *         The :attr:`category` attribute lets callers distinguish the source. See
-             *         :class:`RateLimitErrorCategory` for the available values.
+             *     The :attr:`category` attribute lets callers distinguish the source. See
+             *     :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {

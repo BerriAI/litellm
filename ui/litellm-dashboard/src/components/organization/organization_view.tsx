@@ -13,6 +13,7 @@ import MemberTable from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import LoggingExportersSelect from "../logging_credentials/LoggingExportersSelect";
+import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -155,10 +156,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           max_budget: values.max_budget,
           budget_duration: values.budget_duration,
         },
-        metadata: {
-          ...(values.metadata ? JSON.parse(values.metadata) : {}),
-          ...(values.logging_exporters !== undefined ? { logging_exporters: values.logging_exporters } : {}),
-        },
+        metadata: values.metadata ? JSON.parse(values.metadata) : {},
+        // logging_exporters is a top-level typed column on the org, not metadata.
+        ...(values.logging_exporters !== undefined ? { logging_exporters: values.logging_exporters } : {}),
       };
 
       // Handle object_permission updates
@@ -336,9 +336,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   <Text>Logging Exporters</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {(() => {
-                      const own = Array.isArray(orgData.metadata?.logging_exporters)
-                        ? (orgData.metadata.logging_exporters as string[])
-                        : [];
+                      const own = loggingExportersOf(orgData);
                       const ownSet = new Set(own);
                       const scopedOnly = scopedExportersForOrg.filter((n) => !ownSet.has(n));
                       const all = [
@@ -416,7 +414,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                       max_budget: orgData.litellm_budget_table.max_budget,
                       budget_duration: orgData.litellm_budget_table.budget_duration,
                       metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
-                      logging_exporters: orgData.metadata?.logging_exporters || [],
+                      logging_exporters: loggingExportersOf(orgData),
                       vector_stores: orgData.object_permission?.vector_stores || [],
                       mcp_servers_and_groups: {
                         servers: orgData.object_permission?.mcp_servers || [],
@@ -553,9 +551,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <div>
                       <Text className="font-medium">Logging Exporters</Text>
                       {(() => {
-                        const own = Array.isArray(orgData.metadata?.logging_exporters)
-                          ? (orgData.metadata.logging_exporters as string[])
-                          : [];
+                        const own = loggingExportersOf(orgData);
                         const ownSet = new Set(own);
                         const scopedOnly = scopedExportersForOrg.filter((n) => !ownSet.has(n));
                         const all = [

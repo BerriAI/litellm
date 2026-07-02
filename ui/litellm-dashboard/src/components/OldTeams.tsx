@@ -470,21 +470,12 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           formValues.metadata = JSON.stringify(metadata);
         }
 
-        // Merge admin-owned logging_exporters into metadata at create time so the
-        // user can assign destinations from the new-team form (instead of create-then-edit).
-        if (Array.isArray(formValues.logging_exporters) && formValues.logging_exporters.length > 0) {
-          let metadata: Record<string, unknown> = {};
-          if (typeof formValues.metadata === "string" && formValues.metadata.trim().length > 0) {
-            try {
-              metadata = JSON.parse(formValues.metadata);
-            } catch (e) {
-              console.warn("Invalid JSON in metadata field, starting with empty object");
-            }
-          }
-          metadata = { ...metadata, logging_exporters: formValues.logging_exporters };
-          formValues.metadata = JSON.stringify(metadata);
+        // logging_exporters is a top-level typed field on the team (its own column),
+        // not part of the free-form metadata blob; send it as-is when set so the user
+        // can assign destinations from the new-team form (instead of create-then-edit).
+        if (!Array.isArray(formValues.logging_exporters) || formValues.logging_exporters.length === 0) {
+          delete formValues.logging_exporters;
         }
-        delete formValues.logging_exporters;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {

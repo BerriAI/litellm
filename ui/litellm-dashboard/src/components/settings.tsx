@@ -46,6 +46,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import EditLoggingCredentialModal from "./logging_credentials/EditLoggingCredentialModal";
 import AccessControlFields from "./logging_credentials/AccessControlFields";
+import { loggingExportersOf } from "./logging_credentials/loggingExportersOf";
 import {
   backendLabel,
   createLoggingCredential,
@@ -295,15 +296,14 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     for (const teamId of access?.teams ?? []) teams.add(teamAlias(teamId));
     for (const orgId of access?.orgs ?? []) orgs.add(orgAlias(orgId));
     for (const team of teamsData ?? []) {
-      const teamMetadata = (team as { metadata?: Record<string, unknown> | null }).metadata;
-      const exporters = teamMetadata?.logging_exporters;
-      if (Array.isArray(exporters) && exporters.includes(destinationName)) {
+      const exporters = loggingExportersOf(team);
+      if (exporters.includes(destinationName)) {
         teams.add(team.team_alias || team.team_id);
       }
     }
     for (const org of orgsData ?? []) {
-      const exporters = (org.metadata as Record<string, unknown> | null | undefined)?.logging_exporters;
-      if (Array.isArray(exporters) && exporters.includes(destinationName)) {
+      const exporters = loggingExportersOf(org);
+      if (exporters.includes(destinationName)) {
         orgs.add(org.organization_alias || org.organization_id);
       }
     }
