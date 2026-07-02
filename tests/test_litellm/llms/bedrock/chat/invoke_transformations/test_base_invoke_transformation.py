@@ -121,6 +121,8 @@ def test_validate_environment_does_not_clobber_explicit_guardrail_headers():
         {"guardrailIdentifier": "gr-id", "trace": "verbose"},
         {"guardrailIdentifier": ["gr-id"]},
         "gr-id",
+        {},
+        {"trace": "enabled"},
     ],
 )
 def test_validate_environment_rejects_malformed_guardrail_config(bad_guardrail_config):

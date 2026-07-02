@@ -41,6 +41,10 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
 _GUARDRAIL_CONFIG_VALIDATOR: "TypeAdapter[GuardrailConfigBlock]" = TypeAdapter(GuardrailConfigBlock)
 
+_GUARDRAIL_CONFIG_EXPECTED_FORMAT = (
+    "{'guardrailIdentifier': str, 'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}"
+)
+
 
 def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str, str]":
     try:
@@ -48,11 +52,15 @@ def _bedrock_invoke_guardrail_headers(raw_guardrail_config: object) -> "dict[str
     except ValidationError as e:
         raise BedrockError(
             status_code=400,
-            message=(
-                "Invalid guardrailConfig={}. Expected format: {{'guardrailIdentifier': str, "
-                "'guardrailVersion': str, 'trace': 'enabled'|'disabled'|'enabled_full'}}. Error: {}".format(
-                    raw_guardrail_config, e
-                )
+            message="Invalid guardrailConfig={}. Expected format: {}. Error: {}".format(
+                raw_guardrail_config, _GUARDRAIL_CONFIG_EXPECTED_FORMAT, e
+            ),
+        )
+    if "guardrailIdentifier" not in guardrail_config:
+        raise BedrockError(
+            status_code=400,
+            message="guardrailConfig={} is missing 'guardrailIdentifier'. Expected format: {}".format(
+                raw_guardrail_config, _GUARDRAIL_CONFIG_EXPECTED_FORMAT
             ),
         )
     trace = guardrail_config.get("trace")
