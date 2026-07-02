@@ -19,6 +19,7 @@ from litellm.proxy.common_request_processing import (
     create_response,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
@@ -56,6 +57,33 @@ def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
     usage = getattr(response, "usage", None)
     if isinstance(usage, dict) and "total_tokens" in usage:
         usage.pop("total_tokens", None)
+
+
+def _blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
+    """
+    Token usage for a synthetic guardrail-blocked response.
+
+    A post-call block replaces the LLM's response with the violation message,
+    but the upstream call already consumed tokens -- report that real usage
+    (carried on ``ModifyResponseException.original_response``) rather than
+    discarding it. Pre-call blocks never invoked the LLM (no original_response),
+    so usage is zero.
+    """
+    usage_obj: Any = None
+    if isinstance(original_response, dict):
+        usage_obj = original_response.get("usage")
+    elif original_response is not None:
+        usage_obj = getattr(original_response, "usage", None)
+
+    def _tokens(key: str) -> int:
+        if isinstance(usage_obj, dict):
+            return int(usage_obj.get(key, 0) or 0)
+        return int(getattr(usage_obj, key, 0) or 0)
+
+    return AnthropicUsage(
+        input_tokens=_tokens("input_tokens"),
+        output_tokens=_tokens("output_tokens"),
+    )
 
 
 @router.post(
@@ -134,6 +162,10 @@ async def anthropic_response(
 
         from litellm.types.utils import AnthropicMessagesResponse
 
+        # Report the blocked LLM response's real token usage (carried on the
+        # exception) instead of discarding it; zero for pre-call blocks.
+        _usage = _blocked_response_usage(e.original_response)
+
         _anthropic_response = AnthropicMessagesResponse(
             id=f"msg_{str(uuid.uuid4())}",
             type="message",
@@ -141,7 +173,7 @@ async def anthropic_response(
             content=[{"type": "text", "text": e.message}],
             model=e.model,
             stop_reason="end_turn",
-            usage={"input_tokens": 0, "output_tokens": 0},
+            usage=_usage,
         )
 
         if data.get("stream", None) is not None and data["stream"] is True:
