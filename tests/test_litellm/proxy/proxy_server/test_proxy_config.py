@@ -1639,9 +1639,16 @@ async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_
     from litellm._logging import verbose_proxy_logger
 
     monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    def _fake_decrypt_value_helper(value, key, **_kwargs):
+        return value
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.decrypt_value_helper", _fake_decrypt_value_helper)
 
     master_key_secret = "sk-lit4152-db-path-master-key-abcdef1234567890"
     db_url_secret = "postgresql://leak_user:leak_password_9090@leak-host.internal:5432/leak_db"
+    env_db_url_secret = "postgresql://env_leak_user:env_leak_password_9090@env-leak-host.internal:5432/env_leak_db"
     nested_webhook_secret = "https://hooks.slack.com/services/T0/B0/db-path-webhook-secret"
 
     responses = {
@@ -1655,15 +1662,16 @@ async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_
         ),
         "router_settings": None,
         "litellm_settings": None,
-        "environment_variables": None,
+        "environment_variables": SimpleNamespace(
+            param_name="environment_variables",
+            param_value={"DATABASE_URL": env_db_url_secret},
+        ),
     }
 
     async def _fake_get_config_param(prisma_client, key):
         return responses[key]
 
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.get_config_param", _fake_get_config_param
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", _fake_get_config_param)
 
     class LogRecordHandler(logging.Handler):
         def __init__(self) -> None:
@@ -1692,12 +1700,15 @@ async def test_ProxyConfig__update_config_from_db_does_not_log_general_settings_
     for secret in (
         master_key_secret,
         db_url_secret,
+        env_db_url_secret,
         nested_webhook_secret,
         "leak_password_9090",
+        "env_leak_password_9090",
     ):
         assert secret not in rendered, f"leak: {secret} in {rendered!r}"
     assert merged["general_settings"]["master_key"] == master_key_secret
     assert merged["general_settings"]["database_url"] == db_url_secret
+    assert merged["environment_variables"]["DATABASE_URL"] == env_db_url_secret
 
 
 @pytest.mark.asyncio
