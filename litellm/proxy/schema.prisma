@@ -338,6 +338,7 @@ model LiteLLM_MCPServerTable {
   byok_api_key_help_url String?
   source_url            String?
   timeout               Float?
+  max_concurrent_requests Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
