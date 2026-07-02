@@ -91,8 +91,7 @@ class XiaomiMiMoChatConfig(OpenAIGPTConfig):
             return optional_params
         if thinking is not None:
             verbose_logger.warning(
-                "xiaomi_mimo: ignoring `thinking` of type %s; expected a dict like "
-                '{"type": "enabled"|"disabled"}',
+                'xiaomi_mimo: ignoring `thinking` of type %s; expected a dict like {"type": "enabled"|"disabled"}',
                 type(thinking).__name__,
             )
         if reasoning_effort is None:
