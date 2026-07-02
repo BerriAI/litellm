@@ -155,8 +155,27 @@ class GDCGeminiConfig(OpenAILikeChatConfig):
 
         return token
 
-    def _load_creds_from_key(self, api_key: str) -> tuple[Any, bool]:
+    def _allow_local_file_access(self) -> bool:
+        """Whether a caller-supplied service account file path in api_key may be opened.
+
+        Gated strictly on the ``GDC_ALLOW_LOCAL_FILE_ACCESS`` environment variable.
+        """
+        return self._read_env_bool(None, "GDC_ALLOW_LOCAL_FILE_ACCESS", default=False)
+
+    def _load_creds_from_key(self, api_key: str, model: str | None = None) -> tuple[Any, bool]:
+        """Helper to safely parse service account JSON files or strings to reduce complexity."""
         import google.auth
+
+        # Security hardening: Prevent local file inclusion (LFI) via api_key by default.
+        # Only allow opening local file paths if explicitly enabled via GDC_ALLOW_LOCAL_FILE_ACCESS env var.
+        allow_local_file = self._allow_local_file_access()
+
+        # Limit length to avoid OSError for 'File name too long'
+        if allow_local_file and len(api_key) < 2000 and os.path.exists(api_key):
+            with open(api_key, "r") as f:
+                json_obj = json.load(f)
+            creds, _ = google.auth.load_credentials_from_dict(json_obj)
+            return creds, True
 
         try:
             json_obj = json.loads(api_key)
