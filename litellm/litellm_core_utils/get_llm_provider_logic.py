@@ -446,6 +446,8 @@ def get_llm_provider(
         # bytez models
         elif model.startswith("bytez/"):
             custom_llm_provider = "bytez"
+        elif model.startswith("gdc/"):
+            custom_llm_provider = "gdc"
         elif model.startswith("lemonade/"):
             custom_llm_provider = "lemonade"
         elif model.startswith("heroku/"):

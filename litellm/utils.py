@@ -3497,6 +3497,17 @@ def filter_out_litellm_params(kwargs: dict) -> dict:
     return {key: value for key, value in kwargs.items() if key not in all_litellm_params}
 
 
+def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
+    if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
+        return True
+    try:
+        provider = LlmProviders(custom_llm_provider)
+    except ValueError:
+        return False
+    provider_config = ProviderConfigManager.get_provider_chat_config(model="", provider=provider)
+    return bool(getattr(provider_config, "supports_vertex_params", False))
+
+
 class PreProcessNonDefaultParams:
     @staticmethod
     def base_pre_process_non_default_params(
@@ -3518,11 +3529,7 @@ class PreProcessNonDefaultParams:
                 continue
             elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
                 continue
-            elif (
-                k.startswith("vertex_")
-                and custom_llm_provider != "vertex_ai"
-                and custom_llm_provider != "vertex_ai_beta"
-            ):  # allow dynamically setting vertex ai init logic
+            elif k.startswith("vertex_") and not _provider_supports_vertex_params(custom_llm_provider):
                 continue
             passed_params[k] = v
 
@@ -7672,6 +7679,10 @@ class ProviderConfigManager:
             ),
             LlmProviders.LANGFLOW: (
                 lambda: ProviderConfigManager._get_langflow_config(),
+                False,
+            ),
+            LlmProviders.GDC: (
+                lambda: litellm.GDCGeminiConfig(),
                 False,
             ),
         }

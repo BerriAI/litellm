@@ -460,6 +460,7 @@ LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
     "bytez",
+    "gdc",
     "xai",
     "custom_openai",
     "text-completion-openai",

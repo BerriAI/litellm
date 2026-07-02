@@ -1345,6 +1345,48 @@ def test_pre_process_non_default_params(model, custom_llm_provider):
     }
 
 
+@pytest.mark.parametrize(
+    "custom_llm_provider, expected",
+    [
+        ("vertex_ai", True),
+        ("vertex_ai_beta", True),
+        ("gdc", True),
+        ("openai", False),
+        ("bedrock", False),
+        ("not_a_real_provider", False),
+    ],
+)
+def test_provider_supports_vertex_params(custom_llm_provider, expected):
+    from litellm.utils import _provider_supports_vertex_params
+
+    assert _provider_supports_vertex_params(custom_llm_provider) is expected
+
+
+@pytest.mark.parametrize(
+    "model, custom_llm_provider, should_keep",
+    [
+        ("gemini-2.5-pro", "vertex_ai", True),
+        ("gemini-2.5-pro", "vertex_ai_beta", True),
+        ("gdc/gemini-2.5-flash", "gdc", True),
+        ("gpt-4o", "openai", False),
+    ],
+)
+def test_vertex_params_not_stripped_for_vertex_family(
+    model, custom_llm_provider, should_keep
+):
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project="my-project",
+        vertex_location="us-central1",
+    )
+    assert ("vertex_project" in optional_params) is should_keep
+    assert ("vertex_location" in optional_params) is should_keep
+    if should_keep:
+        assert optional_params["vertex_project"] == "my-project"
+        assert optional_params["vertex_location"] == "us-central1"
+
+
 from litellm.utils import supports_function_calling
 
 
