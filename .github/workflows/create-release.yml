@@ -131,6 +131,14 @@ jobs:
                 });
               } catch (error) {
                 if (error.status !== 422) throw error;
+                const existing = await github.rest.git.getRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `tags/${tag}`,
+                });
+                if (existing.data.object.sha !== commitHash) {
+                  throw new Error(`Tag ${tag} already exists at ${existing.data.object.sha}, expected ${commitHash}`);
+                }
               }
 
               const response = await github.rest.repos.createRelease({
