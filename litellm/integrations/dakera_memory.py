@@ -5,17 +5,28 @@ Hooks into litellm's pre/post call lifecycle:
   system message before the LLM sees the prompt
 - async_log_success_event: persists the completed exchange to Dakera after success
 
-Self-host Dakera:
-    docker run -p 3300:3300 -e DAKERA_API_KEY=demo ghcr.io/dakera-ai/dakera:latest
+Dakera is a self-hosted, decay-weighted vector memory server. Recall and storage
+go through the official ``dakera`` Python SDK, so this logger always speaks the
+same verified API as the rest of the Dakera ecosystem.
 
-Usage:
+Install the SDK (optional dependency, only needed when this callback is used)::
+
+    pip install dakera
+
+Self-host Dakera with the public docker-compose (server + object store)::
+
+    git clone https://github.com/dakera-ai/dakera-deploy && cd dakera-deploy
+    docker compose up -d          # serves the API on http://localhost:3000
+
+Usage::
+
     import litellm
     from litellm.integrations.dakera_memory import DakeraMemoryLogger
 
     litellm.callbacks = [
         DakeraMemoryLogger(
-            base_url="http://localhost:3300",
-            api_key="dk_your_key",
+            base_url="http://localhost:3000",
+            api_key="dk-your-key",
             top_k=5,
         )
     ]
@@ -34,10 +45,8 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
-)
+
+_DEFAULT_BASE_URL = "http://localhost:3000"
 
 
 def _extract_text(content: Any) -> str:
@@ -54,11 +63,12 @@ class DakeraMemoryLogger(CustomLogger):
 
     Dakera is a decay-weighted vector memory server you run on your own
     infrastructure. This logger gives every litellm call persistent cross-session
-    memory without any cloud dependency.
+    memory without any cloud dependency, using the official ``dakera`` SDK.
 
     Args:
-        base_url: Dakera server URL. Defaults to ``DAKERA_API_URL`` env var.
-        api_key: Dakera API key. Defaults to ``DAKERA_API_KEY`` env var.
+        base_url: Dakera server URL. Defaults to the ``DAKERA_API_URL`` env var,
+            then ``http://localhost:3000``.
+        api_key: Dakera API key. Defaults to the ``DAKERA_API_KEY`` env var.
         top_k: Number of memories to recall per LLM call.
         session_id_key: Key in litellm call metadata used to group memories
             by session. Defaults to ``"session_id"``.
@@ -78,17 +88,27 @@ class DakeraMemoryLogger(CustomLogger):
         session_id_key: str = "session_id",
     ) -> None:
         super().__init__()
-        self.base_url = (base_url or os.getenv("DAKERA_API_URL", "http://localhost:3300")).rstrip("/")
-        self.api_key = api_key or os.getenv("DAKERA_API_KEY", "")
+        self.base_url = (base_url or os.getenv("DAKERA_API_URL") or _DEFAULT_BASE_URL).rstrip("/")
+        self.api_key = api_key or os.getenv("DAKERA_API_KEY") or None
         self.top_k = top_k
         self.session_id_key = session_id_key
-        self._http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self._client: Any = None
 
-    def _headers(self) -> Dict[str, str]:
-        h: Dict[str, str] = {"Content-Type": "application/json"}
-        if self.api_key:
-            h["Authorization"] = f"Bearer {self.api_key}"
-        return h
+    def _get_client(self) -> Any:
+        """Lazily construct and cache the async Dakera SDK client.
+
+        Raises a clear, actionable error if the optional ``dakera`` package is
+        not installed, rather than failing silently at call time.
+        """
+        if self._client is None:
+            try:
+                from dakera import AsyncDakeraClient
+            except ImportError as exc:
+                raise ImportError(
+                    "DakeraMemoryLogger requires the 'dakera' package. Install it with: pip install dakera"
+                ) from exc
+            self._client = AsyncDakeraClient(base_url=self.base_url, api_key=self.api_key)
+        return self._client
 
     def _session_id(
         self,
@@ -129,8 +149,6 @@ class DakeraMemoryLogger(CustomLogger):
             if not messages:
                 return data
 
-            # Use the last user message as the semantic recall query.
-            # _extract_text handles multimodal content (list of parts) gracefully.
             raw_content = next(
                 (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"),
                 None,
@@ -143,26 +161,14 @@ class DakeraMemoryLogger(CustomLogger):
 
             session_id = self._session_id(data.get("metadata"), user_api_key_dict)
 
-            resp = await self._http_handler.post(
-                url=f"{self.base_url}/v1/memories/search",
-                headers=self._headers(),
-                json={
-                    "query": last_user,
-                    "session_id": session_id,
-                    "top_k": self.top_k,
-                },
-                timeout=5.0,
+            resp = await self._get_client().recall(
+                agent_id=session_id,
+                query=last_user,
+                top_k=self.top_k,
             )
 
-            if resp.status_code != 200:
-                return data
-
-            results = resp.json().get("results", [])
-            if not results:
-                return data
-
-            # Build memory context and inject before the first non-system message
-            memory_lines = "\n".join(f"- {r.get('content', '')}" for r in results if r.get("content"))
+            memories = getattr(resp, "memories", None) or []
+            memory_lines = "\n".join(f"- {m.content}" for m in memories if getattr(m, "content", None))
             if not memory_lines:
                 return data
 
@@ -176,7 +182,7 @@ class DakeraMemoryLogger(CustomLogger):
             non_system = [m for m in messages if m.get("role") != "system"]
             data["messages"] = existing_system + [memory_msg] + non_system
 
-            verbose_logger.debug(f"DakeraMemoryLogger: injected {len(results)} memories for session={session_id}")
+            verbose_logger.debug(f"DakeraMemoryLogger: injected {len(memories)} memories for session={session_id}")
         except Exception as exc:  # noqa: BLE001
             verbose_logger.warning(f"DakeraMemoryLogger.async_pre_call_hook failed: {exc}")
 
@@ -218,18 +224,14 @@ class DakeraMemoryLogger(CustomLogger):
             if assistant_content:
                 content += f"\nAssistant: {assistant_content}"
 
-            await self._http_handler.post(
-                url=f"{self.base_url}/v1/memories",
-                headers=self._headers(),
-                json={
-                    "content": content,
-                    "session_id": session_id,
-                    "metadata": {
-                        "model": kwargs.get("model", ""),
-                        "call_type": kwargs.get("call_type", ""),
-                    },
+            await self._get_client().store_memory(
+                agent_id=session_id,
+                content=content,
+                session_id=session_id,
+                metadata={
+                    "model": kwargs.get("model", ""),
+                    "call_type": kwargs.get("call_type", ""),
                 },
-                timeout=5.0,
             )
             verbose_logger.debug(f"DakeraMemoryLogger: stored exchange for session={session_id}")
         except Exception as exc:  # noqa: BLE001
