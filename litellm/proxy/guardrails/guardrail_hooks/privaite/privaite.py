@@ -154,12 +154,15 @@ class PrivaiteGuardrail(CustomGuardrail):
                 await engine.initialize()
             except OSError:
                 # spaCy models not present yet: download them once, then retry.
+                # The download is synchronous pip machinery pulling hundreds of
+                # MB; run it off the event loop so it does not stall every other
+                # request in this proxy worker.
                 from spacy.cli import download
 
                 for lang in languages:
                     model = _LANG_MODELS.get(lang)
                     if model:
-                        download(model)
+                        await asyncio.to_thread(download, model)
                 engine = PIIEngine(config)
                 await engine.initialize()
 
@@ -167,9 +170,10 @@ class PrivaiteGuardrail(CustomGuardrail):
             self._engine_key = key
             return engine
 
-    @staticmethod
-    def _is_role_message_list(value: list) -> bool:
-        return all(isinstance(item, dict) and "role" in item for item in value)
+    # Text-bearing fields on non-message Responses input items: a tool output, a
+    # streamed/echoed tool call, and a bare input_text/output_text content part.
+    # Scanned individually so a mixed input list is not left raw.
+    _ITEM_TEXT_FIELDS = ("output", "arguments", "text")
 
     def _overwrite_snapshot_input(self, data: dict, new_input: Any) -> None:
         # A plain `data["input"] = ...` rebind leaks for string input: the proxy
@@ -182,49 +186,76 @@ class PrivaiteGuardrail(CustomGuardrail):
         if isinstance(body, dict) and "input" in body:
             body["input"] = new_input
 
-    def _input_as_messages(self, input_value: Any) -> tuple:
-        """Represent the Responses API `input` as message dicts for the engine.
-        Returns (kind, [messages]) where kind drives write-back."""
-        if isinstance(input_value, str) and input_value:
-            return "str", [{"role": "user", "content": input_value}]
-        if isinstance(input_value, list) and input_value:
-            if self._is_role_message_list(input_value):
-                return "role_list", list(input_value)
-            return "content_list", [{"role": "user", "content": input_value}]
-        return "none", []
-
-    def _write_back_input(self, data: dict, kind: str, input_value: Any, anonymized: list) -> None:
-        if kind == "str":
-            new_text = anonymized[0].get("content", input_value)
-            data["input"] = new_text
-            self._overwrite_snapshot_input(data, new_text)
-        elif kind == "role_list":
-            input_value[:] = anonymized
-        elif kind == "content_list":
-            new_content = anonymized[0].get("content")
-            if isinstance(new_content, list):
-                input_value[:] = new_content
+    def _responses_item_repr(self, item: Any) -> tuple:
+        """Map ONE Responses `input` list item to (engine_message, field) so it
+        can be scanned. field=None means the item IS a message (replace it whole
+        with the anonymized copy); a field name means write the scrubbed content
+        back into item[field]; "__str__" means the item is a bare string. Returns
+        (None, None) for a shape with no scannable text."""
+        if isinstance(item, str):
+            return ({"role": "user", "content": item}, "__str__") if item else (None, None)
+        if isinstance(item, dict):
+            if "role" in item:
+                # A message item; the engine scans its content natively.
+                return item, None
+            for field in self._ITEM_TEXT_FIELDS:
+                if isinstance(item.get(field), str) and item[field]:
+                    return {"role": "user", "content": item[field]}, field
+            if isinstance(item.get("content"), (str, list)) and item["content"]:
+                return {"role": "user", "content": item["content"]}, "content"
+        return None, None
 
     async def _anonymize_request(self, data: dict, engine: Any) -> Any:
         """Anonymize chat `messages` AND Responses `input` in place using the
-        engine (span-precise), sharing ONE mapping so neither is left untouched
-        when a crafted request carries both. Returns the mapping, or None if
-        there was nothing to anonymize."""
+        engine (span-precise), sharing ONE mapping. Every Responses input item is
+        scanned item by item (message, tool output, tool call, bare string), so a
+        mixed input list no longer slips past detection and the block gate.
+        Returns the mapping, or None if there was nothing to anonymize."""
         messages = data.get("messages")
         msg_list = messages if isinstance(messages, list) else []
-        input_kind, input_msgs = self._input_as_messages(data.get("input"))
+        batch: list = list(msg_list)
 
-        if not msg_list and not input_msgs:
+        input_value = data.get("input")
+        targets: list = []  # (index_or_"str", field) describing each write-back
+        if isinstance(input_value, str) and input_value:
+            batch.append({"role": "user", "content": input_value})
+            targets.append(("str", None))
+        elif isinstance(input_value, list):
+            for idx, item in enumerate(input_value):
+                rep, field = self._responses_item_repr(item)
+                if rep is None:
+                    continue  # no scannable text on this item shape
+                batch.append(rep)
+                targets.append((idx, field))
+
+        if not batch:
             return None
 
-        batch = list(msg_list) + input_msgs
         anonymized, mapping = await engine.process_request(batch)
 
         n = len(msg_list)
         if msg_list:
             # msg_list is data["messages"] (same object) -> mutate it in place.
             msg_list[:] = anonymized[:n]
-        self._write_back_input(data, input_kind, data.get("input"), anonymized[n:])
+
+        for (target, field), anon in zip(targets, anonymized[n:]):
+            if target == "str":
+                new_text = anon.get("content", input_value)
+                data["input"] = new_text
+                self._overwrite_snapshot_input(data, new_text)
+                continue
+            # every non-"str" target came from the isinstance(input_value, list)
+            # branch above, so input_value is a list here.
+            if not isinstance(input_value, list):
+                continue
+            if field is None:
+                input_value[target] = anon
+            elif field == "__str__":
+                input_value[target] = anon.get("content", input_value[target])
+            else:
+                new_item = dict(input_value[target])
+                new_item[field] = anon.get("content", new_item[field])
+                input_value[target] = new_item
         return mapping
 
     async def async_pre_call_hook(self, user_api_key_dict: Any, cache: Any, data: dict, call_type: str) -> dict:
@@ -259,11 +290,15 @@ class PrivaiteGuardrail(CustomGuardrail):
         return data
 
     async def _restore_message(self, message: Any, engine: Any, mapping: Any) -> None:
-        """Restore originals in one response message: content, tool-call args and
-        the legacy function_call args."""
+        """Restore originals in one response message: content, the reasoning
+        trace, tool-call args and the legacy function_call args."""
         content = getattr(message, "content", None)
         if isinstance(content, str) and content:
             message.content = await engine.process_response(content, mapping)
+        for field in ("reasoning_content", "reasoning"):
+            value = getattr(message, field, None)
+            if isinstance(value, str) and value:
+                setattr(message, field, await engine.process_response(value, mapping))
         for tool_call in getattr(message, "tool_calls", None) or []:
             fn = getattr(tool_call, "function", None)
             if fn is None:
@@ -314,12 +349,17 @@ class PrivaiteGuardrail(CustomGuardrail):
         return response
 
     def _restore_delta(self, delta: Any, index: int, finished: bool, restore) -> None:
-        """Restore one streamed delta in place: text content, streamed tool-call
-        argument fragments (per tool_call index) and the legacy function_call."""
+        """Restore one streamed delta in place: text content, the reasoning
+        trace, streamed tool-call argument fragments (per tool_call index) and
+        the legacy function_call."""
         content = getattr(delta, "content", None) or ""
         restored = restore(("content", index), content, finished)
         if content or finished:
             delta.content = restored
+        for field in ("reasoning_content", "reasoning"):
+            value = getattr(delta, field, None)
+            if isinstance(value, str) and (value or finished):
+                setattr(delta, field, restore((field, index), value, finished))
         for tool_call in getattr(delta, "tool_calls", None) or []:
             fn = getattr(tool_call, "function", None)
             if fn is None:
@@ -327,12 +367,14 @@ class PrivaiteGuardrail(CustomGuardrail):
             args = getattr(fn, "arguments", None)
             if args:
                 tc_index = getattr(tool_call, "index", 0) or 0
-                fn.arguments = restore(("tool", index, tc_index), args, False)
+                # Pass `finished` so a fragment on the same chunk as finish_reason
+                # flushes its held-back tail instead of dropping it.
+                fn.arguments = restore(("tool", index, tc_index), args, finished)
         function_call = getattr(delta, "function_call", None)
         if function_call is not None:
             fc_args = getattr(function_call, "arguments", None)
             if fc_args:
-                function_call.arguments = restore(("fc", index), fc_args, False)
+                function_call.arguments = restore(("fc", index), fc_args, finished)
 
     async def async_post_call_streaming_iterator_hook(
         self, user_api_key_dict: Any, response: Any, request_data: dict
