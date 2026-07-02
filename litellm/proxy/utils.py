@@ -4719,6 +4719,11 @@ class PrismaClient:
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
+                if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
+                    await self.attempt_db_reconnect(
+                        reason="db_health_watchdog_writer_unavailable",
+                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:

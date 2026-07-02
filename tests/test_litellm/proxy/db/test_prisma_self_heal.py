@@ -513,3 +513,66 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     # The flag must STILL be True so the next attempt re-enters the heavy
     # branch instead of silently demoting to the lightweight path.
     assert client._engine_confirmed_dead is True
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_should_reconnect_degraded_writer(
+    mock_proxy_logging,
+):
+    """LIT-3792: when the proxy booted during a primary outage (reads served
+    by the replica, writer never connected), a healthy reader probe must not
+    mask the degraded writer — the watchdog drives the writer reconnect."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    writer = MagicMock()
+    reader = MagicMock()
+    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    routing._writer_unavailable = True
+    client.db = routing
+    client.attempt_db_reconnect = AsyncMock(return_value=True)
+    client._db_health_watchdog_interval_seconds = 1
+    client._db_watchdog_reconnect_timeout_seconds = 7.0
+    client._db_health_watchdog_probe_timeout_seconds = 0.2
+
+    with patch(
+        "litellm.proxy.utils.asyncio.sleep",
+        AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+    ):
+        await client._db_health_watchdog_loop()
+
+    client.attempt_db_reconnect.assert_awaited_once_with(
+        reason="db_health_watchdog_writer_unavailable",
+        timeout_seconds=7.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_db_health_watchdog_should_not_reconnect_healthy_writer(
+    mock_proxy_logging,
+):
+    """A healthy probe with no degraded writer must not trigger reconnects."""
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    writer = MagicMock()
+    reader = MagicMock()
+    reader.query_raw = AsyncMock(return_value=[{"result": 1}])
+    routing = RoutingPrismaWrapper(writer=writer, reader=reader)
+    client.db = routing
+    client.attempt_db_reconnect = AsyncMock(return_value=True)
+    client._db_health_watchdog_interval_seconds = 1
+    client._db_health_watchdog_probe_timeout_seconds = 0.2
+
+    with patch(
+        "litellm.proxy.utils.asyncio.sleep",
+        AsyncMock(side_effect=[None, asyncio.CancelledError()]),
+    ):
+        await client._db_health_watchdog_loop()
+
+    client.attempt_db_reconnect.assert_not_awaited()
