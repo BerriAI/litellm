@@ -344,7 +344,7 @@ def io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _reservation_value(max_tokens, otpm_limit)
+        otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
         try:
             _sync_increment_with_rollback(
                 dual_cache,
@@ -407,7 +407,7 @@ async def async_io_token_pre_call_check(
         )
 
     if otpm_limit is not None:
-        otpm_reserved = _reservation_value(max_tokens, otpm_limit)
+        otpm_reserved = 0 if max_tokens == 0 else _reservation_value(max_tokens, otpm_limit)
         try:
             await _increment_with_rollback(
                 dual_cache,

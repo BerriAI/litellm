@@ -271,6 +271,41 @@ class TestModelRateLimitingCheckIOTokens:
         with pytest.raises(litellm.RateLimitError):
             await check.async_pre_call_check(deployment)
 
+    @pytest.mark.asyncio
+    async def test_explicit_zero_max_tokens_does_not_reserve_otpm(self):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {
+                "model": "bedrock_mantle/anthropic.claude-opus-4-7",
+                "otpm": 5,
+            },
+            "model_info": {"id": "io-zero-output-id"},
+            "model_name": "opus",
+        }
+        zero_output_kwargs = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 0,
+            "metadata": {},
+        }
+        set_io_token_rate_limit_request_kwargs(zero_output_kwargs)
+        await check.async_pre_call_check(deployment)
+
+        zero_output_otpm_key = zero_output_kwargs["metadata"][OTPM_CACHE_KEY]
+        assert zero_output_kwargs["metadata"][OTPM_RESERVED_KEY] == 0
+        assert (await dual_cache.async_get_cache(key=zero_output_otpm_key) or 0) == 0
+
+        normal_output_kwargs = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 5,
+            "metadata": {},
+        }
+        set_io_token_rate_limit_request_kwargs(normal_output_kwargs)
+        await check.async_pre_call_check(deployment)
+
+        normal_output_otpm_key = normal_output_kwargs["metadata"][OTPM_CACHE_KEY]
+        assert await dual_cache.async_get_cache(key=normal_output_otpm_key) == 5
+
     def test_sync_io_pre_call_reserves_and_reconciles(self):
         from litellm.utils import get_utc_datetime
 
