@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
-    VertexAIJsonlFilesTransformation,
     _get_litellm_batch_custom_id_from_labels,
+    _openai_batch_jsonl_entry_to_vertex_wrapped_request,
     _sanitize_gcp_label_value,
 )
 from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
@@ -33,7 +33,7 @@ class TestParseGcsUri:
     def test_should_parse_standard_gs_uri(self, config):
         file_id = "gs://my-bucket/litellm-vertex-files/path/to/object.jsonl"
         bucket, encoded = config._parse_gcs_uri(
-            file_id, litellm_params={"bucket_name": "my-bucket"}
+            file_id, litellm_params={"gcs_bucket_name": "my-bucket"}
         )
         assert bucket == "my-bucket"
         assert encoded == urllib.parse.quote(
@@ -43,7 +43,7 @@ class TestParseGcsUri:
     def test_should_parse_uri_with_nested_publisher_path(self, config):
         uri = "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123"
         bucket, encoded = config._parse_gcs_uri(
-            uri, litellm_params={"bucket_name": "litellm-local"}
+            uri, litellm_params={"gcs_bucket_name": "litellm-local"}
         )
         assert bucket == "litellm-local"
         expected_path = (
@@ -56,7 +56,7 @@ class TestParseGcsUri:
             "gs://my-bucket/litellm-vertex-files/some/path", safe=""
         )
         bucket, encoded = config._parse_gcs_uri(
-            encoded_uri, litellm_params={"bucket_name": "my-bucket"}
+            encoded_uri, litellm_params={"gcs_bucket_name": "my-bucket"}
         )
         assert bucket == "my-bucket"
         assert encoded == urllib.parse.quote("litellm-vertex-files/some/path", safe="")
@@ -64,21 +64,21 @@ class TestParseGcsUri:
     def test_should_reject_bucket_only(self, config):
         with pytest.raises(ValueError, match="object name"):
             config._parse_gcs_uri(
-                "gs://my-bucket", litellm_params={"bucket_name": "my-bucket"}
+                "gs://my-bucket", litellm_params={"gcs_bucket_name": "my-bucket"}
             )
 
     def test_should_reject_no_gs_prefix(self, config):
         with pytest.raises(ValueError, match="gs://"):
             config._parse_gcs_uri(
                 "my-bucket/litellm-vertex-files/object.txt",
-                litellm_params={"bucket_name": "my-bucket"},
+                litellm_params={"gcs_bucket_name": "my-bucket"},
             )
 
     def test_should_reject_unmanaged_object_path(self, config):
         with pytest.raises(ValueError, match="LiteLLM-managed"):
             config._parse_gcs_uri(
                 "gs://my-bucket/private/object.txt",
-                litellm_params={"bucket_name": "my-bucket"},
+                litellm_params={"gcs_bucket_name": "my-bucket"},
             )
 
     def test_should_reject_request_supplied_legacy_flag(self, config):
@@ -86,7 +86,7 @@ class TestParseGcsUri:
             config._parse_gcs_uri(
                 "gs://my-bucket/private/object.txt",
                 litellm_params={
-                    "bucket_name": "my-bucket",
+                    "gcs_bucket_name": "my-bucket",
                     "allow_legacy_cloud_file_ids": True,
                 },
             )
@@ -96,7 +96,7 @@ class TestParseGcsUri:
         bucket, encoded = config._parse_gcs_uri(
             "gs://my-bucket/private/object.txt",
             litellm_params={
-                "bucket_name": "my-bucket",
+                "gcs_bucket_name": "my-bucket",
                 "_litellm_internal_model_credentials": trusted_credentials,
             },
         )
@@ -109,7 +109,7 @@ class TestParseGcsUri:
             config._parse_gcs_uri(
                 "gs://my-bucket/private/object.txt",
                 litellm_params={
-                    "bucket_name": "my-bucket",
+                    "gcs_bucket_name": "my-bucket",
                     "_litellm_internal_model_credentials": {
                         "allow_legacy_cloud_file_ids": True
                     },
@@ -121,7 +121,7 @@ class TestParseGcsUri:
         bucket, encoded = config._parse_gcs_uri(
             "gs://my-bucket/team-a/private/object.txt",
             litellm_params={
-                "bucket_name": "my-bucket/team-a",
+                "gcs_bucket_name": "my-bucket/team-a",
                 "_litellm_internal_model_credentials": trusted_credentials,
             },
         )
@@ -135,7 +135,7 @@ class TestParseGcsUri:
             config._parse_gcs_uri(
                 "gs://my-bucket/team-b/private/object.txt",
                 litellm_params={
-                    "bucket_name": "my-bucket/team-a",
+                    "gcs_bucket_name": "my-bucket/team-a",
                     "_litellm_internal_model_credentials": trusted_credentials,
                 },
             )
@@ -144,7 +144,7 @@ class TestParseGcsUri:
         with pytest.raises(ValueError, match="configured storage bucket"):
             config._parse_gcs_uri(
                 "gs://other-bucket/litellm-vertex-files/object.txt",
-                litellm_params={"bucket_name": "my-bucket"},
+                litellm_params={"gcs_bucket_name": "my-bucket"},
             )
 
 
@@ -156,7 +156,7 @@ class TestCreateFileUrl:
             model="",
             optional_params={},
             litellm_params={
-                "bucket_name": "safe-bucket",
+                "gcs_bucket_name": "safe-bucket",
                 "litellm_metadata": {"gcs_bucket_name": "attacker-bucket"},
             },
             data={
@@ -182,7 +182,7 @@ class TestTransformRetrieveFile:
         url, params = config.transform_retrieve_file_request(
             file_id=file_id,
             optional_params={},
-            litellm_params={"bucket_name": "my-bucket"},
+            litellm_params={"gcs_bucket_name": "my-bucket"},
         )
         expected_encoded = urllib.parse.quote(
             "litellm-vertex-files/path/to/file.jsonl", safe=""
@@ -243,7 +243,7 @@ class TestTransformFileContent:
         url, params = config.transform_file_content_request(
             file_content_request={"file_id": file_id},
             optional_params={},
-            litellm_params={"bucket_name": "my-bucket"},
+            litellm_params={"gcs_bucket_name": "my-bucket"},
         )
         encoded = urllib.parse.quote("litellm-vertex-files/path/to/file.jsonl", safe="")
         assert (
@@ -378,7 +378,7 @@ class TestTransformDeleteFile:
         url, params = config.transform_delete_file_request(
             file_id=file_id,
             optional_params={},
-            litellm_params={"bucket_name": "my-bucket"},
+            litellm_params={"gcs_bucket_name": "my-bucket"},
         )
         encoded = urllib.parse.quote("litellm-vertex-files/path/to/file.jsonl", safe="")
         assert (
@@ -854,6 +854,106 @@ class TestVertexBatchOutputTransformation:
         )
         assert transformed_content == invalid_content
 
+    def test_binary_content_passthrough(self, config):
+        """A binary file (PDF/video) whose first bytes are not valid UTF-8 must be
+        returned unchanged. The row-by-row transform only engages for a JSONL
+        batch output and must never line-parse or corrupt binary content."""
+        binary = b"%PDF-1.4\n%\xc4\xe5\xf2\xe5\xeb\xa7\n" + b"\x00\x01\x02\xff\xfe" * 64
+        assert config._try_transform_vertex_batch_output_to_openai(binary) == binary
+
+    def test_streaming_transform_peaks_below_list_pipeline(self, config):
+        """The output transform must stream row-by-row, not build a list of every
+        parsed row and a second list of transformed rows. This guards against a
+        regression to the list pipeline, which peaks at several full copies and
+        OOMs on large result files. The relative comparison cancels shared noise
+        (per-row transform cost, GC timing) and only the list overhead differs.
+        """
+        import gc
+        import tracemalloc
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+
+        def vertex_row(index: int) -> dict:
+            return {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:16.826+00:00",
+                "request": {
+                    "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                    "labels": {"litellm_custom_id": f"r-{index}"},
+                },
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [{"text": "hello " * 20}],
+                                "role": "model",
+                            },
+                            "finishReason": "STOP",
+                        }
+                    ],
+                    "modelVersion": "gemini-2.0-flash-001",
+                    "usageMetadata": {
+                        "promptTokenCount": 10,
+                        "candidatesTokenCount": 20,
+                        "totalTokenCount": 30,
+                    },
+                },
+            }
+
+        content = ("\n".join(json.dumps(vertex_row(i)) for i in range(4000))).encode(
+            "utf-8"
+        )
+
+        def list_pipeline() -> bytes:
+            gemini_config = VertexGeminiConfig()
+            logging_obj = Logging(
+                model="",
+                messages=[],
+                stream=False,
+                call_type="batch_transform",
+                start_time=0.1,
+                litellm_call_id="",
+                function_id="",
+            )
+            logging_obj.optional_params = {}
+            mock_response = httpx.Response(
+                status_code=200,
+                headers={"content-type": "application/json"},
+                request=httpx.Request("POST", "https://example.com"),
+            )
+            rows = content.decode("utf-8").strip().split("\n")
+            transformed = [
+                json.dumps(
+                    config._transform_single_vertex_batch_output_to_openai(
+                        json.loads(row), gemini_config, logging_obj, mock_response
+                    )
+                )
+                for row in rows
+            ]
+            return "\n".join(transformed).encode("utf-8")
+
+        def peak_of(fn) -> int:
+            gc.collect()
+            tracemalloc.start()
+            try:
+                fn()
+                return tracemalloc.get_traced_memory()[1]
+            finally:
+                tracemalloc.stop()
+
+        streaming_peak = peak_of(
+            lambda: config._try_transform_vertex_batch_output_to_openai(content)
+        )
+        list_peak = peak_of(list_pipeline)
+
+        assert streaming_peak < list_peak * 0.75, (
+            f"streaming peak {streaming_peak} is not a clear win over the list "
+            f"pipeline {list_peak} (ratio {streaming_peak / list_peak:.2f})"
+        )
+
 
 class TestTryTransformDoesNotMutateCallerLoggingObj:
     """Regression tests: _try_transform_vertex_batch_output_to_openai must not mutate
@@ -953,12 +1053,23 @@ class TestTryTransformDoesNotMutateCallerLoggingObj:
         assert transformed["response"]["status_code"] == 200
 
 
+def _wrap_entries(openai_jsonl_content):
+    """Vertex-wrapped requests for a list of OpenAI batch entries, built via the
+    live single-entry transform that the streaming upload path uses."""
+    cfg = VertexAIFilesConfig()
+    return [
+        _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+            entry, cfg._map_openai_to_vertex_params
+        )
+        for entry in openai_jsonl_content
+    ]
+
+
 class TestVertexBatchCustomIdLabels:
     """Test custom_id handling in batch transformations"""
 
     def test_custom_id_added_to_labels_in_vertex_request(self):
         """Test that custom_id from OpenAI format is added as a label in Vertex AI format"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         openai_jsonl_content = [
             {
@@ -973,11 +1084,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
 
         assert len(vertex_jsonl_content) == 1
         vertex_request = vertex_jsonl_content[0]
@@ -992,7 +1099,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_long_custom_id_round_trips_across_raw_label_chunks(self):
         """Test that long custom_ids are not truncated in raw labels."""
-        transformation = VertexAIJsonlFilesTransformation()
         custom_id_a = "shared-prefix-that-is-longer-than-thirty-six-bytes-A"
         custom_id_b = "shared-prefix-that-is-longer-than-thirty-six-bytes-B"
 
@@ -1009,11 +1115,7 @@ class TestVertexBatchCustomIdLabels:
             for custom_id in (custom_id_a, custom_id_b)
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
         labels_a = vertex_jsonl_content[0]["request"]["labels"]
         labels_b = vertex_jsonl_content[1]["request"]["labels"]
 
@@ -1028,7 +1130,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_multiple_requests_each_get_their_own_label(self):
         """Test that multiple requests each get their own custom_id label"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         openai_jsonl_content = [
             {
@@ -1043,11 +1144,7 @@ class TestVertexBatchCustomIdLabels:
             for i in range(3)
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
 
         assert len(vertex_jsonl_content) == 3
 
@@ -1063,7 +1160,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_request_without_custom_id_has_no_label(self):
         """Test that requests without custom_id don't get a label"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         openai_jsonl_content = [
             {
@@ -1076,11 +1172,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_jsonl_content = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
-        )
+        vertex_jsonl_content = _wrap_entries(openai_jsonl_content)
 
         # Should not have labels if no custom_id was provided
         assert "labels" not in vertex_jsonl_content[0]["request"]
@@ -1090,7 +1182,6 @@ class TestVertexBatchCustomIdLabels:
         Test the full round trip: OpenAI format -> Vertex AI format -> Vertex AI output -> OpenAI output
         Verify that custom_id is preserved through the entire flow.
         """
-        transformation = VertexAIJsonlFilesTransformation()
         config = VertexAIFilesConfig()
 
         # Step 1: Transform OpenAI input to Vertex AI format (mixed case exercises raw label)
@@ -1106,11 +1197,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_input = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_input
-            )
-        )
+        vertex_input = _wrap_entries(openai_input)
 
         # Verify both labels are GCP-safe and encoded raw preserves round-trip.
         assert (
@@ -1154,7 +1241,6 @@ class TestVertexBatchCustomIdLabels:
 
     def test_custom_id_label_sanitization(self):
         """Test that custom_id values are sanitized to meet GCP label constraints"""
-        transformation = VertexAIJsonlFilesTransformation()
 
         # Test sanitization function
         assert _sanitize_gcp_label_value("MyRequest-1") == "myrequest-1"
@@ -1179,11 +1265,7 @@ class TestVertexBatchCustomIdLabels:
             }
         ]
 
-        vertex_input = (
-            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_input
-            )
-        )
+        vertex_input = _wrap_entries(openai_input)
 
         # Verify both labels are safe for GCP labels.
         assert (
@@ -1192,3 +1274,47 @@ class TestVertexBatchCustomIdLabels:
         raw_label = vertex_input[0]["request"]["labels"]["litellm_custom_id_raw"]
         assert raw_label != "MyRequest-1"
         assert _sanitize_gcp_label_value(raw_label) == raw_label
+
+
+class TestConfiguredBucketNameResolution:
+    def test_should_resolve_new_gcs_bucket_name_key(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        assert (
+            config._get_configured_bucket_name({"gcs_bucket_name": "my-new-bucket"})
+            == "my-new-bucket"
+        )
+
+    def test_should_resolve_legacy_bucket_name_key(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        assert (
+            config._get_configured_bucket_name({"bucket_name": "my-legacy-bucket"})
+            == "my-legacy-bucket"
+        )
+
+    def test_should_prefer_new_key_over_legacy(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        assert (
+            config._get_configured_bucket_name(
+                {"gcs_bucket_name": "new", "bucket_name": "legacy"}
+            )
+            == "new"
+        )
+
+    def test_should_fall_back_to_env(self, config, monkeypatch):
+        monkeypatch.setenv("GCS_BUCKET_NAME", "env-bucket")
+        assert config._get_configured_bucket_name({}) == "env-bucket"
+
+    def test_should_raise_when_no_bucket_anywhere(self, config, monkeypatch):
+        monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+        with pytest.raises(ValueError, match="GCS bucket_name is required"):
+            config._get_configured_bucket_name({})
+
+    def test_legacy_kwarg_survives_get_litellm_params(self):
+        from litellm.litellm_core_utils.get_litellm_params import (
+            OPTIONAL_KWARGS_KEYS,
+            get_litellm_params,
+        )
+
+        assert "bucket_name" in OPTIONAL_KWARGS_KEYS
+        params = get_litellm_params(bucket_name="my-legacy-bucket")
+        assert params.get("bucket_name") == "my-legacy-bucket"
