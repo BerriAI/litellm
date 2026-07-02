@@ -1203,7 +1203,9 @@ def _expected_content_md5(payload: dict) -> str:
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     json_string = safe_dumps(payload)
-    return base64.b64encode(hashlib.md5(json_string.encode("utf-8")).digest()).decode()
+    return base64.b64encode(
+        hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
+    ).decode()
 
 
 @pytest.mark.asyncio
