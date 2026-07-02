@@ -1,3 +1,3 @@
-bucket         = "data-prod-ai-llm-gateway-terraform"
+bucket         = "data-prod-ai-llm-gateway-terraform-751812493785-eu-central-1-an"
 key            = "litellm/prod/terraform.tfstate"
 region         = "eu-central-1"
