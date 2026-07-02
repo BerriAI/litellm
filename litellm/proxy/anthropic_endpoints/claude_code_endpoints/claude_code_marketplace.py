@@ -25,10 +25,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
 try:
-    from prisma.errors import UniqueViolationError
+    from prisma.errors import PrismaError, UniqueViolationError
 except ImportError:
 
-    class UniqueViolationError(Exception):  # type: ignore[no-redef]
+    class PrismaError(Exception):  # type: ignore[no-redef]
+        """Sentinel used when prisma is not installed; never raised in that case."""
+
+    class UniqueViolationError(PrismaError):  # type: ignore[no-redef]
         """Sentinel used when prisma is not installed; never raised in that case."""
 
 
@@ -489,44 +492,54 @@ async def update_plugin(
           }'
         ```
     """
-    prisma_client = await _get_prisma_client()
+    try:
+        prisma_client = await _get_prisma_client()
 
-    _validate_plugin_source(request.source)
+        _validate_plugin_source(request.source)
 
-    existing = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
-    if not existing:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Plugin '{plugin_name}' not found"},
+        existing = await ClaudeCodePluginRepository(prisma_client).table.find_unique(where={"name": plugin_name})
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"Plugin '{plugin_name}' not found"},
+            )
+
+        manifest = _build_plugin_manifest(plugin_name, request)
+
+        plugin = await ClaudeCodePluginRepository(prisma_client).table.update(
+            where={"name": plugin_name},
+            data={
+                "version": request.version,
+                "description": request.description,
+                "manifest_json": json.dumps(manifest),
+                "files_json": "{}",
+                "updated_at": datetime.now(timezone.utc),
+            },
         )
 
-    manifest = _build_plugin_manifest(plugin_name, request)
+        verbose_proxy_logger.info(f"Plugin {plugin_name} updated successfully")
 
-    plugin = await ClaudeCodePluginRepository(prisma_client).table.update(
-        where={"name": plugin_name},
-        data={
-            "version": request.version,
-            "description": request.description,
-            "manifest_json": json.dumps(manifest),
-            "files_json": "{}",
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+        return {
+            "status": "success",
+            "action": "updated",
+            "plugin": {
+                "id": plugin.id,
+                "name": plugin.name,
+                "version": plugin.version,
+                "description": plugin.description,
+                "source": request.source,
+                "enabled": plugin.enabled,
+            },
+        }
 
-    verbose_proxy_logger.info(f"Plugin {plugin_name} updated successfully")
-
-    return {
-        "status": "success",
-        "action": "updated",
-        "plugin": {
-            "id": plugin.id,
-            "name": plugin.name,
-            "version": plugin.version,
-            "description": plugin.description,
-            "source": request.source,
-            "enabled": plugin.enabled,
-        },
-    }
+    except HTTPException:
+        raise
+    except PrismaError as e:
+        verbose_proxy_logger.exception(f"Error updating plugin: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Update failed: {str(e)}"},
+        )
 
 
 @router.post(

@@ -189,6 +189,32 @@ async def test_register_plugin_create_race_maps_unique_violation_to_409():
 
 
 @pytest.mark.asyncio
+async def test_update_plugin_db_error_maps_to_structured_500():
+    """A data-layer failure during the update (e.g. a dropped DB connection) is caught and
+    returned as a structured 500, not swallowed silently or leaked as an unhandled error."""
+    from prisma.errors import PrismaError
+
+    name = "my-monorepo-plugin"
+    await register_plugin(
+        request=RegisterPluginRequest(name=name, source=_GIT_SUBDIR_SOURCE, version="1.0.0"),
+        user_api_key_dict=_USER,
+    )
+
+    table = litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable
+    table.update = AsyncMock(side_effect=PrismaError("connection lost"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_plugin(
+            plugin_name=name,
+            request=UpdatePluginRequest(source={"source": "github", "repo": "org/replacement"}),
+            user_api_key_dict=_USER,
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "connection lost" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
 async def test_register_plugin_git_subdir_missing_url():
     """git-subdir without url field raises HTTP 400."""
     request = RegisterPluginRequest(
