@@ -3836,7 +3836,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
 
     # Mock prisma client
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(
         return_value=mock_db_config
     )
 
@@ -3847,8 +3847,8 @@ async def test_add_router_settings_from_db_config_merge_logic():
         prisma_client=mock_prisma_client,
     )
 
-    # Verify find_first was called with correct parameters
-    mock_prisma_client.db.litellm_config.find_first.assert_called_once_with(
+    # Verify find_unique was called with correct parameters
+    mock_prisma_client.db.litellm_config.find_unique.assert_called_once_with(
         where={"param_name": "router_settings"}
     )
 
@@ -3913,7 +3913,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
 
     # Test Case 3: DB returns None (no router_settings in DB)
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     config_data = {"router_settings": {"routing_strategy": "usage-based"}}
 
@@ -3930,7 +3930,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
     # Test Case 4: Config has no router_settings
     mock_db_config = MagicMock()
     mock_db_config.param_value = {"db_setting": "db_value"}
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(
         return_value=mock_db_config
     )
 
@@ -3945,7 +3945,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
     mock_router.reset_mock()
 
     # Test Case 5: Both config and DB router_settings are None/empty
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
 
     await proxy_config._add_router_settings_from_db_config(
         config_data={}, llm_router=mock_router, prisma_client=mock_prisma_client
@@ -3957,7 +3957,7 @@ async def test_add_router_settings_from_db_config_edge_cases():
     # Test Case 6: DB config exists but param_value is not a dict
     mock_db_config_invalid = MagicMock()
     mock_db_config_invalid.param_value = "not_a_dict"
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(
         return_value=mock_db_config_invalid
     )
 
@@ -4011,7 +4011,7 @@ async def test_add_router_settings_shallow_merge_behavior():
     }
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+    mock_prisma_client.db.litellm_config.find_unique = AsyncMock(
         return_value=mock_db_config
     )
 

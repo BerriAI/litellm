@@ -220,6 +220,9 @@ class _FakeConfigTable:
     async def find_first(self, where):
         return self.rows.get(where["param_name"])
 
+    async def find_unique(self, where):
+        return self.rows.get(where["param_name"])
+
     async def upsert(self, where, data):
         name = where["param_name"]
         raw = (data["update"] if name in self.rows else data["create"])["param_value"]

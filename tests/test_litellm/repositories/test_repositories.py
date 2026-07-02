@@ -1388,6 +1388,17 @@ class TestConfigRepository:
         assert param.param_value["master_key"] == "test"
 
     @pytest.mark.asyncio
+    async def test_get_param_non_json_string(self, repo):
+        """Non-JSON string values in the DB should not crash get_param."""
+        repo._prisma_client.db.litellm_config._records["router_settings"] = {
+            "param_name": "router_settings",
+            "param_value": "not_valid_json",
+        }
+        param = await repo.get_param("router_settings")
+        assert param is not None
+        assert param.param_value == "not_valid_json"
+
+    @pytest.mark.asyncio
     async def test_set_param(self, repo):
         param = await repo.set_param("test_param", {"key": "value"})
         assert param.param_name == "test_param"

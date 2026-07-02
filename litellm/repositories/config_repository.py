@@ -54,7 +54,13 @@ class ConfigRepository:
             return None
         param_value = record.param_value
         if isinstance(param_value, str):
-            param_value = json.loads(param_value)
+            try:
+                param_value = json.loads(param_value)
+            except (json.JSONDecodeError, ValueError):
+                verbose_proxy_logger.warning(
+                    "config_repository.get_param: param_name=%s has non-JSON string value, returning as-is",
+                    param_name,
+                )
         return ConfigParam(param_name=param_name, param_value=param_value)
 
     async def set_param(self, param_name: str, param_value: Any) -> ConfigParam:
