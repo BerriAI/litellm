@@ -63,10 +63,13 @@ class ModelRateLimitingCheck(CustomLogger):
         tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
         if tpm_limit is None and rpm_limit is None:
             return
-        model_id = str(deployment.get("model_info", {}).get("id"))
-        if model_id in self._io_token_conflict_warned_ids:
-            return
-        self._io_token_conflict_warned_ids.add(model_id)
+        model_id = deployment.get("model_info", {}).get("id")
+        # Dedup per deployment id; if there is no id (degenerate config) don't
+        # collapse every such deployment onto one key - warn each time instead.
+        if model_id is not None:
+            if model_id in self._io_token_conflict_warned_ids:
+                return
+            self._io_token_conflict_warned_ids.add(str(model_id))
         verbose_router_logger.warning(
             f"Deployment '{model_id}' configures itpm/otpm alongside tpm/rpm; "
             "itpm/otpm take precedence and the tpm/rpm limits on this deployment are not enforced"

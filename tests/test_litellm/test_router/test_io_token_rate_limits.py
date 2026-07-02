@@ -399,6 +399,47 @@ class TestModelRateLimitingCheckIOTokens:
         assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
 
     @pytest.mark.asyncio
+    async def test_reconcile_clears_stash_even_when_increment_errors(self):
+        class _ItpmFailCache(DualCache):
+            async def async_increment_cache(self, key, **kwargs):
+                if ":itpm:" in key:
+                    raise RuntimeError("transient cache error")
+                return await super().async_increment_cache(key=key, **kwargs)
+
+        dual_cache = _ItpmFailCache()
+        metadata = {ITPM_RESERVED_KEY: 5, ITPM_CACHE_KEY: "global_router:x:model:itpm:00-00"}
+        kwargs = {"metadata": metadata}
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3),
+        )
+
+        with pytest.raises(RuntimeError):
+            await async_io_token_reconcile_success(dual_cache, kwargs, response)
+
+        # The stash is cleared even though reconciliation raised, so a duplicate
+        # success event can't re-process it.
+        assert ITPM_RESERVED_KEY not in metadata
+        assert ITPM_CACHE_KEY not in metadata
+
+    @pytest.mark.asyncio
+    async def test_io_conflict_warning_not_collapsed_for_missing_model_id(self, caplog):
+        import logging
+
+        check = ModelRateLimitingCheck(dual_cache=DualCache())
+        deployment = {
+            "litellm_params": {"model": "openai/gpt-4o-mini", "itpm": 100, "tpm": 1000},
+            "model_info": {},
+        }
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            check._warn_io_token_supersedes_tpm_rpm_once(deployment)
+            check._warn_io_token_supersedes_tpm_rpm_once(deployment)
+
+        warnings = [r for r in caplog.records if "take precedence" in r.message]
+        # id-less deployments are not collapsed onto a single dedup key.
+        assert len(warnings) == 2
+
+    @pytest.mark.asyncio
     async def test_reconcile_uses_reservation_minute_key(self):
         dual_cache = DualCache()
         # Reservation was made on a fixed minute key; a call that finishes in a

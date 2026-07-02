@@ -340,28 +340,31 @@ async def async_io_token_reconcile_success(
     # Reconcile against the exact key that held the reservation (which encodes
     # the reservation's minute), not a key recomputed at response time. This
     # tracks actual usage even when the pre-call estimate was 0, and avoids a
-    # minute-boundary mismatch for calls that span into the next minute.
-    if itpm_key is not None:
-        itpm_delta = billable_input - itpm_reserved
-        if itpm_delta != 0:
-            await dual_cache.async_increment_cache(
-                key=itpm_key,
-                value=itpm_delta,
-                ttl=RoutingArgsTTL,
-                parent_otel_span=parent_otel_span,
-            )
+    # minute-boundary mismatch for calls that span into the next minute. Always
+    # clear the stash afterwards (even if an increment throws) so a retry or a
+    # duplicate success event can't re-process it.
+    try:
+        if itpm_key is not None:
+            itpm_delta = billable_input - itpm_reserved
+            if itpm_delta != 0:
+                await dual_cache.async_increment_cache(
+                    key=itpm_key,
+                    value=itpm_delta,
+                    ttl=RoutingArgsTTL,
+                    parent_otel_span=parent_otel_span,
+                )
 
-    if otpm_key is not None:
-        otpm_delta = completion_tokens - otpm_reserved
-        if otpm_delta != 0:
-            await dual_cache.async_increment_cache(
-                key=otpm_key,
-                value=otpm_delta,
-                ttl=RoutingArgsTTL,
-                parent_otel_span=parent_otel_span,
-            )
-
-    _clear_reservation_from_kwargs(kwargs)
+        if otpm_key is not None:
+            otpm_delta = completion_tokens - otpm_reserved
+            if otpm_delta != 0:
+                await dual_cache.async_increment_cache(
+                    key=otpm_key,
+                    value=otpm_delta,
+                    ttl=RoutingArgsTTL,
+                    parent_otel_span=parent_otel_span,
+                )
+    finally:
+        _clear_reservation_from_kwargs(kwargs)
 
     verbose_router_logger.debug(
         f"[IO TOKEN LIMIT] reconciled "
