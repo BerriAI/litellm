@@ -190,6 +190,9 @@ class BedrockRealtime(BaseAWSLLM):
             try:
                 for close_message in transformation_config.session_close_messages():
                     await send_to_bedrock(close_message)
+            except Exception:
+                pass
+            try:
                 await bedrock_stream.input_stream.close()
             except Exception:
                 pass

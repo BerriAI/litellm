@@ -34,9 +34,14 @@ class FakeInputStream:
         self.closed = True
 
 
+class SendFailingInputStream(FakeInputStream):
+    async def send(self, event):
+        raise RuntimeError("bedrock send failed")
+
+
 class FakeBedrockStream:
-    def __init__(self):
-        self.input_stream = FakeInputStream()
+    def __init__(self, input_stream=None):
+        self.input_stream = input_stream if input_stream is not None else FakeInputStream()
 
 
 class DisconnectingClientWS:
@@ -109,6 +114,19 @@ class TestBedrockRealtimeHandler:
         )
 
         assert stream.input_stream.sent == []
+        assert stream.input_stream.closed
+
+    @pytest.mark.asyncio
+    async def test_input_stream_closed_even_when_close_flush_fails(self, stub_aws_models):
+        handler = BedrockRealtime()
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream(input_stream=SendFailingInputStream())
+        client_ws = DisconnectingClientWS(
+            [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
+        )
+
+        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio
