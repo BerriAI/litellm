@@ -4722,7 +4722,7 @@ class StandardLoggingPayloadSetup:
         api_base: Optional[str] = None,
     ) -> StandardLoggingModelInformation:
         model_cost_name = _select_model_name_for_cost_calc(
-            model=base_model,
+            model=base_model if custom_pricing else None,
             completion_response=init_response_obj,  # type: ignore
             base_model=base_model,
             custom_pricing=custom_pricing,
