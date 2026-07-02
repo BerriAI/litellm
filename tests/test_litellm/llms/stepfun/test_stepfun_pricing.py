@@ -18,11 +18,6 @@ def test_stepfun_models_in_model_cost():
         "stepfun/step-3.7-flash",
         "stepfun/step-3.5-flash",
         "stepfun/step-3.5-flash-2603",
-        "stepfun/stepaudio-2.5-tts",
-        "stepfun/step-tts-2",
-        "stepfun/stepaudio-2.5-asr",
-        "stepfun/stepaudio-2.5-tts-voice-clone",
-        "stepfun/step-tts-2-voice-clone",
     ]
 
     for model in stepfun_models:

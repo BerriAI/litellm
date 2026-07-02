@@ -31797,51 +31797,6 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "stepfun/step-tts-2": {
-        "input_cost_per_character": 4e-05,
-        "litellm_provider": "stepfun",
-        "mode": "audio_speech",
-        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
-        "supported_endpoints": [
-            "/v1/audio/speech"
-        ]
-    },
-    "stepfun/step-tts-2-voice-clone": {
-        "input_cost_per_request": 1.5,
-        "litellm_provider": "stepfun",
-        "mode": "audio_speech",
-        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
-        "supported_endpoints": [
-            "/v1/audio/voices"
-        ]
-    },
-    "stepfun/stepaudio-2.5-asr": {
-        "input_cost_per_second": 6.111111111111111e-06,
-        "litellm_provider": "stepfun",
-        "mode": "audio_transcription",
-        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
-        "supported_endpoints": [
-            "/v1/audio/asr/sse"
-        ]
-    },
-    "stepfun/stepaudio-2.5-tts": {
-        "input_cost_per_character": 8.5e-05,
-        "litellm_provider": "stepfun",
-        "mode": "audio_speech",
-        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
-        "supported_endpoints": [
-            "/v1/audio/speech"
-        ]
-    },
-    "stepfun/stepaudio-2.5-tts-voice-clone": {
-        "input_cost_per_request": 1.5,
-        "litellm_provider": "stepfun",
-        "mode": "audio_speech",
-        "source": "https://platform.stepfun.ai/docs/en/guides/pricing/details.md",
-        "supported_endpoints": [
-            "/v1/audio/voices"
-        ]
-    },
     "stability/sd3": {
         "litellm_provider": "stability",
         "mode": "image_generation",
