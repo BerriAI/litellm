@@ -720,12 +720,12 @@ async def _apply_admin_logging_exporters(
     user_api_key_dict: UserAPIKeyAuth,
     cached_destinations: "list | None" = None,
 ) -> None:
-    """Stamp the resolved fan-out destinations onto ``data`` and activate their
-    backends.
+    """Anchor the resolved fan-out destinations on the request context and activate
+    their backends.
 
-    The destinations live under ``data["litellm_metadata"]`` (in
-    ``all_litellm_params``, so scrubbed from the provider request body), not a
-    top-level key, so an unknown field cannot leak to the provider. Default-deny
+    The destinations are set on a server-only ContextVar (never on ``data``), so
+    they are neither request-shaped nor reachable by the provider body; the OTEL v2
+    router and the fan-out processor both read them from that ContextVar. Default-deny
     means an identity with no assignment gets no per-tenant destination here.
 
     ``cached_destinations`` -- when ``user_api_key_auth`` already resolved the
@@ -745,11 +745,6 @@ async def _apply_admin_logging_exporters(
     if not destinations:
         return
     _set_request_otel_destinations(destinations)
-    proxy_metadata = data.get("litellm_metadata")
-    if not isinstance(proxy_metadata, dict):
-        proxy_metadata = {}
-    proxy_metadata["otel_destinations"] = destinations
-    data["litellm_metadata"] = proxy_metadata
     # Register on both success and failure: an admin-owned destination must
     # capture a failed upstream call (its error gen-AI span) as well as a
     # successful one, otherwise a 401/timeout lands a trace with no LLM-call span.

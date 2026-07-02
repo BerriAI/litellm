@@ -1,6 +1,6 @@
-from typing import Dict, Optional, cast
+from typing import Dict, Optional
 
-from litellm.types.utils import OtelDestinationParams, StandardCallbackDynamicParams
+from litellm.types.utils import StandardCallbackDynamicParams
 
 
 def _is_env_reference(value: object) -> bool:
@@ -101,20 +101,4 @@ def initialize_standard_callback_dynamic_params(
                     _param_value = metadata.get(param)
                     validate_no_callback_env_reference(param, _param_value, source="metadata")
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
-
-        # Admin-owned OTEL v2 destinations, resolved server-side by the proxy from the
-        # exporters assigned to the request's identity chain. The proxy stamps them
-        # onto ``data["litellm_metadata"]["otel_destinations"]`` -- ``litellm_metadata``
-        # is in ``all_litellm_params``, so it is scrubbed from the body before it reaches
-        # the provider. ``otel_destinations`` is intentionally NOT a top-level key so an
-        # unknown field cannot leak to provider APIs. Read from ``litellm_metadata`` only,
-        # never from request ``metadata``, and never via ``_supported_callback_params``,
-        # so a request body cannot set or select a trace destination.
-        proxy_metadata = kwargs.get("litellm_metadata") or {}
-        otel_destinations = proxy_metadata.get("otel_destinations") if isinstance(proxy_metadata, dict) else None
-        if isinstance(otel_destinations, list):
-            standard_callback_dynamic_params["otel_destinations"] = cast(
-                "list[OtelDestinationParams]", otel_destinations
-            )
-
     return standard_callback_dynamic_params

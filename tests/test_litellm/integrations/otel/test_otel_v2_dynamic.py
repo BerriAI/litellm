@@ -20,7 +20,22 @@ from opentelemetry.trace import NoOpTracer
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.destination import OtelDestination
 from litellm.integrations.otel.model.metadata import LLMCallEvent
+from litellm.integrations.otel.plumbing.context import (
+    _request_destinations,
+    set_request_destinations,
+)
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache
+
+
+@pytest.fixture(autouse=True)
+def _reset_request_destinations():
+    """The v2 router reads destinations from a server-only ContextVar. Reset it around
+    each test so a prior test's anchored destinations never leak into the next."""
+    token = _request_destinations.set(())
+    try:
+        yield
+    finally:
+        _request_destinations.reset(token)
 
 
 def _cache(callback_name, exporters=None):
@@ -37,13 +52,12 @@ def _dest(endpoint, auth="Basic AAAA", backend="langfuse_otel"):
 
 
 def _event(destinations):
-    return LLMCallEvent.from_dict(
-        {
-            "standard_callback_dynamic_params": {"otel_destinations": destinations},
-            "call_type": "acompletion",
-            "model": "gpt-4o",
-        }
+    """Anchor destinations on the server-only ContextVar (the sole source the v2 router
+    reads) and build the call event from it, as the proxy does at request time."""
+    set_request_destinations(
+        tuple(d if isinstance(d, OtelDestination) else OtelDestination.model_validate(d) for d in destinations)
     )
+    return LLMCallEvent.from_dict({"call_type": "acompletion", "model": "gpt-4o"})
 
 
 # --- routing only happens for admin destinations --------------------------- #

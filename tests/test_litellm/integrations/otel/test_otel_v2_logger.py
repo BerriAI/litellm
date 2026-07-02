@@ -27,15 +27,36 @@ from litellm.integrations.otel import (  # noqa: E402
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
-from litellm.integrations.otel.plumbing.context import (
+from litellm.integrations.otel.plumbing.context import (  # noqa: E402
+    _request_destinations,
+    set_request_destinations,
     set_request_root_span,
-)  # noqa: E402
+)
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.spans import (  # noqa: E402
     LITELLM_PROXY_REQUEST_SPAN_NAME,
     SpanRole,
 )
 from litellm.integrations.otel.model.utils import to_ns, to_seconds  # noqa: E402
+
+
+def _anchor(dests):
+    """Anchor admin destinations on the server-only ContextVar the v2 router reads
+    (the proxy sets this at auth time; there is no request-carried carrier)."""
+    from litellm.integrations.otel.model.destination import OtelDestination
+
+    set_request_destinations(
+        tuple(d if isinstance(d, OtelDestination) else OtelDestination.model_validate(d) for d in dests)
+    )
+
+
+@pytest.fixture(autouse=True)
+def _reset_request_destinations():
+    token = _request_destinations.set(())
+    try:
+        yield
+    finally:
+        _request_destinations.reset(token)
 
 # --------------------------------------------------------------------------- #
 #  Fixtures
@@ -565,15 +586,13 @@ def test_lazy_activation_emits_llm_span_when_destination_resolves(monkeypatch):
 
     monkeypatch.setattr(logger._tenant_tracers, "tracers_for", _fake_tracers_for)
     kwargs = _kwargs()
-    kwargs["standard_callback_dynamic_params"] = {
-        "otel_destinations": [
+    _anchor([
             {
                 "callback_name": "in_memory",
                 "endpoint": "https://otlp.example.com/v1",
                 "headers": {"api_key": "k"},
             }
-        ]
-    }
+        ])
     assert "call_1" not in logger._open_llm_calls  # no carrier opened
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
     server.end()
@@ -600,15 +619,13 @@ def test_second_close_after_opened_call_does_not_emit_duplicate(monkeypatch):
     )
     set_request_root_span(server)
     kwargs = _kwargs()
-    kwargs["standard_callback_dynamic_params"] = {
-        "otel_destinations": [
+    _anchor([
             {
                 "callback_name": "in_memory",
                 "endpoint": "https://otlp.example.com/v1",
                 "headers": {"api_key": "k"},
             }
-        ]
-    }
+        ])
 
     logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
@@ -641,18 +658,16 @@ def test_close_without_carrier_drops_when_payload_missing(monkeypatch):
     never emitted for a request the gate refused."""
     logger, exporter = _logger()
     monkeypatch.setattr(logger, "callback_name", "in_memory")
-    kwargs = {
-        "litellm_params": {"metadata": {}},
-        "standard_callback_dynamic_params": {
-            "otel_destinations": [
-                {
-                    "callback_name": "in_memory",
-                    "endpoint": "https://otlp.example.com/v1",
-                    "headers": {},
-                }
-            ]
-        },
-    }
+    kwargs = {"litellm_params": {"metadata": {}}}
+    _anchor(
+        [
+            {
+                "callback_name": "in_memory",
+                "endpoint": "https://otlp.example.com/v1",
+                "headers": {},
+            }
+        ]
+    )
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
     assert exporter.get_finished_spans() == ()
 
@@ -675,15 +690,13 @@ def test_close_dedupes_duplicate_callbacks(monkeypatch):
         logger._tenant_tracers, "tracers_for", lambda default, dests: (default,)
     )
     kwargs = _kwargs()
-    kwargs["standard_callback_dynamic_params"] = {
-        "otel_destinations": [
+    _anchor([
             {
                 "callback_name": "in_memory",
                 "endpoint": "https://otlp.example.com/v1",
                 "headers": {},
             }
-        ]
-    }
+        ])
     logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
     # Second callback for the same call_id: payload + destinations still on
@@ -1764,11 +1777,9 @@ def test_genai_span_emitted_to_every_group_live(monkeypatch):
     )
     set_request_root_span(server)
     kwargs = _kwargs()
-    kwargs["standard_callback_dynamic_params"] = {
-        "otel_destinations": [
+    _anchor([
             {"callback_name": "in_memory", "endpoint": "https://x/v1", "headers": {}}
-        ]
-    }
+        ])
     _emit_llm(logger, kwargs, ambient=server)
     server.end()
     assert [s.name for s in exporter_a.get_finished_spans()].count("chat gpt-4o") == 1
@@ -1792,11 +1803,9 @@ def test_genai_span_emitted_to_every_group_deferred(monkeypatch):
     )
     set_request_root_span(server)
     kwargs = _kwargs()
-    kwargs["standard_callback_dynamic_params"] = {
-        "otel_destinations": [
+    _anchor([
             {"callback_name": "in_memory", "endpoint": "https://x/v1", "headers": {}}
-        ]
-    }
+        ])
     # no pre_call -> no carrier -> deferred close path
     assert "call_1" not in logger._open_llm_calls
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
@@ -1832,9 +1841,7 @@ def test_generic_destination_emits_genai_span(monkeypatch):
     )
     set_request_root_span(server)
     kwargs = _kwargs()
-    kwargs["standard_callback_dynamic_params"] = {
-        "otel_destinations": [_generic_dest()]
-    }
+    _anchor([_generic_dest()])
     _emit_llm(logger, kwargs, ambient=server)
     server.end()
     assert "chat gpt-4o" in [s.name for s in exporter.get_finished_spans()]
@@ -1864,9 +1871,7 @@ def test_generic_destination_emits_error_span_on_failure(monkeypatch):
         },
     )
     kwargs = _kwargs(payload=payload)
-    kwargs["standard_callback_dynamic_params"] = {
-        "otel_destinations": [_generic_dest()]
-    }
+    _anchor([_generic_dest()])
     _emit_llm(logger, kwargs, ambient=server, fail=True)
     server.end()
     spans = {s.name: s for s in exporter.get_finished_spans()}

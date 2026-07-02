@@ -4970,22 +4970,17 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(
     try:
         await _apply_admin_logging_exporters(data, _auth())
 
-        # destinations live under litellm_metadata so the body does not leak an
-        # unknown top-level key to the provider; the top-level key stays absent
+        # Destinations are anchored on the server-only ContextVar, never written into
+        # request data: neither a top-level key nor litellm_metadata carries them, so
+        # nothing destination-shaped can reach the provider body (Y6).
         assert "otel_destinations" not in data
-        destinations = data["litellm_metadata"]["otel_destinations"]
-        assert destinations[0]["callback_name"] == "langfuse_otel"
-        assert (
-            destinations[0]["endpoint"] == "https://cloud.langfuse.com/api/public/otel"
-        )
-        # the backend is activated for the request
-        assert "langfuse_otel" in data["success_callback"]
+        assert "otel_destinations" not in (data.get("litellm_metadata") or {})
         context_destinations = request_destinations()
         assert len(context_destinations) == 1
-        assert (
-            context_destinations[0].endpoint
-            == "https://cloud.langfuse.com/api/public/otel"
-        )
+        assert context_destinations[0].callback_name == "langfuse_otel"
+        assert context_destinations[0].endpoint == "https://cloud.langfuse.com/api/public/otel"
+        # the backend is activated for the request
+        assert "langfuse_otel" in data["success_callback"]
     finally:
         _request_destinations.reset(token)
 

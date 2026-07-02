@@ -36,11 +36,12 @@ def test_resolves_plain_values_from_metadata():
     assert params.get("langfuse_host") == "https://test.langfuse.com"
 
 
-def test_otel_destinations_read_from_litellm_metadata_only():
-    """The admin-resolved OTEL destinations are carried server-side under
-    ``litellm_metadata`` (a known internal key, scrubbed from the provider body) --
-    NOT as a top-level kwarg, since an unknown top-level key would leak to providers.
-    They must surface on the dynamic params so the v2 logger can fan out to them."""
+def test_otel_destinations_not_carried_on_dynamic_params():
+    """OTEL destination routing no longer travels through dynamic params or request
+    data at all (Y6): the admin-resolved destinations are anchored on a server-only
+    ContextVar and the v2 router reads them from there. Even a value under the internal
+    ``litellm_metadata`` key is NOT surfaced on the dynamic params, so the
+    request-carried carrier stays removed. Re-introducing the carrier fails this."""
     destinations = [
         {
             "callback_name": "langfuse_otel",
@@ -53,7 +54,7 @@ def test_otel_destinations_read_from_litellm_metadata_only():
         {"litellm_metadata": {"otel_destinations": destinations}}
     )
 
-    assert params.get("otel_destinations") == destinations
+    assert params.get("otel_destinations") is None
 
 
 def test_otel_destinations_top_level_kwarg_is_ignored():
