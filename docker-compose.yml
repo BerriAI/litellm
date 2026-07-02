@@ -57,7 +57,7 @@ services:
     image: prom/prometheus
     volumes:
       - prometheus_data:/prometheus
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
     command:

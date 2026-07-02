@@ -71,7 +71,7 @@ class LicenseChecker:
         self.authorized_packages = self._parse_authorized_packages()
 
         # Initialize cache
-        self.cache_file = Path("license_cache.json")
+        self.cache_file = Path(__file__).parent / "license_cache.json"
         self.license_cache: Dict[str, str] = {}
         if self.cache_file.exists():
             with open(self.cache_file) as f:
