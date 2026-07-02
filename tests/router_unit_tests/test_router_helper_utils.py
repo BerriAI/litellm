@@ -524,6 +524,55 @@ async def test_deployment_callback_on_success(sync_mode):
 
 
 @pytest.mark.asyncio
+async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
+    """
+    An IO-limited deployment (itpm/otpm, no tpm/rpm) must still record TPM usage
+    in the router's routing counter so TPM-aware routing strategies see its real
+    load in mixed model groups; its itpm/otpm enforcement runs separately.
+    """
+    import time
+
+    model_list = [
+        {
+            "model_name": "opus",
+            "litellm_params": {
+                "model": "openai/gpt-4o-mini",
+                "api_key": "sk-fake",
+                "itpm": 1000,
+            },
+            "model_info": {"id": "io-100"},
+        }
+    ]
+    router = Router(model_list=model_list)
+
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 100
+    standard_logging_payload["model_id"] = "io-100"
+    kwargs = {
+        "litellm_params": {
+            "metadata": {
+                "deployment": "openai/gpt-4o-mini",
+                "model_group": "opus",
+            },
+            "model_info": {"id": "io-100"},
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+    response = litellm.ModelResponse(model="openai/gpt-4o-mini", usage={"total_tokens": 100})
+
+    tpm_key = await router.deployment_callback_on_success(
+        kwargs=kwargs,
+        completion_response=response,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+
+    # The IO deployment is no longer skipped: its TPM routing counter is tracked.
+    assert tpm_key is not None
+    assert await router.cache.async_get_cache(key=tpm_key) == 100
+
+
+@pytest.mark.asyncio
 async def test_deployment_callback_on_failure(model_list):
     """Test if the '_deployment_callback_on_failure' function is working correctly"""
     import time

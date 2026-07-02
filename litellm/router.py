@@ -6730,10 +6730,12 @@ class Router:
                 )
 
                 deployment_dict = deployment_info if isinstance(deployment_info, dict) else deployment_info.model_dump()
-                if deployment_has_io_token_limits(deployment_dict):
-                    return
+                has_io_token_limits = deployment_has_io_token_limits(deployment_dict)
 
-                ## if all are none, return - no need to track current tpm/rpm usage for models with no tpm/rpm set
+                ## Nothing to track only when neither tpm/rpm nor itpm/otpm limits are
+                ## set. IO deployments still record TPM/RPM usage here so TPM-aware
+                ## routing strategies see their real load in mixed model groups; their
+                ## itpm/otpm enforcement runs separately in ModelRateLimitingCheck.
                 if (
                     tpm is None
                     and rpm is None
@@ -6741,6 +6743,7 @@ class Router:
                     and rpm_litellm_params is None
                     and tpm_model_info is None
                     and rpm_model_info is None
+                    and not has_io_token_limits
                 ):
                     return
 
