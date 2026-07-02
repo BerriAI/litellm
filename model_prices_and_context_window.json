@@ -18428,6 +18428,31 @@
         "tpm": 4000000,
         "rpm": 10
     },
+    "gemini/gemini-3.1-flash-tts-preview": {
+        "health_check_voice": "Kore",
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 2e-05,
+        "output_cost_per_token": 2e-05,
+        "source": "https://cloud.google.com/text-to-speech/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_prompt_caching": false
+    },
     "gemini/gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
         "cache_read_input_token_cost_above_200k_tokens": 2.5e-07,
@@ -35838,6 +35863,31 @@
         },
         "web_search_billing_unit": "per_query"
     },
+    "vertex_ai/gemini-3.1-flash-tts-preview": {
+        "health_check_voice": "Kore",
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 2e-05,
+        "output_cost_per_token": 2e-05,
+        "source": "https://cloud.google.com/text-to-speech/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_prompt_caching": false
+    },
     "vertex_ai/gemini-3.1-flash-lite": {
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -42679,6 +42729,31 @@
         "supported_endpoints": [
             "/v1/audio/speech"
         ]
+    },
+    "gemini-3.1-flash-tts-preview": {
+        "health_check_voice": "Kore",
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "audio_speech",
+        "output_cost_per_audio_token": 2e-05,
+        "output_cost_per_token": 2e-05,
+        "source": "https://cloud.google.com/text-to-speech/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "audio"
+        ],
+        "supports_audio_input": false,
+        "supports_audio_output": true,
+        "supports_function_calling": false,
+        "supports_prompt_caching": false
     },
     "gemini-flash-latest": {
         "cache_read_input_token_cost": 3e-08,

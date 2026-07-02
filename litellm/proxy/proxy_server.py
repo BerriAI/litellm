@@ -9060,10 +9060,21 @@ async def audio_speech(
         if callback_headers:
             custom_headers.update(callback_headers)
 
-        # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
-        request_model = data.get("model", "")
-        if request_model:
+        response_format = data.get("response_format")
+        if isinstance(response_format, str):
+            response_format_media_types = {
+                "mp3": "audio/mpeg",
+                "opus": "audio/ogg",
+                "ogg_opus": "audio/ogg",
+                "wav": "audio/wav",
+                "pcm": "audio/wav",
+                "pcm16": "audio/wav",
+                "linear16": "audio/wav",
+            }
+            media_type = response_format_media_types.get(response_format.lower(), media_type)
+        else:
+            request_model = data.get("model", "")
             request_model_lower = request_model.lower()
             if "gemini" in request_model_lower and (
                 "tts" in request_model_lower or "preview-tts" in request_model_lower
@@ -9084,7 +9095,22 @@ async def audio_speech(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.audio_speech(): Exception occured - {}".format(str(e)))
         verbose_proxy_logger.debug(traceback.format_exc())
-        raise e
+        if isinstance(e, ProxyException):
+            raise e
+        if isinstance(e, HTTPException):
+            raise ProxyException(
+                message=getattr(e, "message", str(e)),
+                type=getattr(e, "type", "None"),
+                param=getattr(e, "param", "None"),
+                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+            )
+        error_msg = f"{str(e)}"
+        raise ProxyException(
+            message=getattr(e, "message", error_msg),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", 500),
+        )
 
 
 @router.post(

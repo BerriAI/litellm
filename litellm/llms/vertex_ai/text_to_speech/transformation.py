@@ -68,6 +68,15 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         "wav": "LINEAR16",
         "pcm": "LINEAR16",
     }
+    GEMINI_FORMAT_MAPPINGS = {
+        **FORMAT_MAPPINGS,
+        "alaw": "ALAW",
+        "mulaw": "MULAW",
+        "ogg_opus": "OGG_OPUS",
+        "pcm": "LINEAR16",
+        "pcm16": "LINEAR16",
+        "linear16": "LINEAR16",
+    }
 
     def __init__(self) -> None:
         BaseTextToSpeechConfig.__init__(self)
@@ -76,6 +85,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _map_voice_to_vertex_format(
         self,
         voice: Optional[Union[str, Dict]],
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[Dict]]:
         """
         Map voice to Vertex AI format.
@@ -92,6 +102,9 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         """
         if voice is None:
             return None, None
+
+        if model is not None and self._is_gemini_tts_model(model):
+            return self._map_gemini_tts_voice_to_vertex_format(model=model, voice=voice)
 
         if isinstance(voice, dict):
             # Already in Vertex AI format
@@ -120,6 +133,129 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         }
 
         return voice_str, voice_dict
+
+    @staticmethod
+    def _is_gemini_tts_model(model: str) -> bool:
+        model_lower = model.lower()
+        return "gemini" in model_lower and "tts" in model_lower
+
+    @staticmethod
+    def _get_str_value(source: dict, *keys: str) -> Optional[str]:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str):
+                return value
+        return None
+
+    @staticmethod
+    def _get_dict_value(source: dict, *keys: str) -> Optional[dict]:
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, dict):
+                return value
+        return None
+
+    def _extract_gemini_tts_speaker_configs(self, voice: dict) -> list:
+        speech_config = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
+        multi_speaker_config = self._get_dict_value(
+            speech_config,
+            "multiSpeakerVoiceConfig",
+            "multi_speaker_voice_config",
+        )
+        if multi_speaker_config is None:
+            return []
+        raw_speaker_configs = multi_speaker_config.get(
+            "speakerVoiceConfigs",
+            multi_speaker_config.get("speaker_voice_configs", []),
+        )
+        if not isinstance(raw_speaker_configs, list):
+            return []
+        speaker_configs = []
+        for raw_config in raw_speaker_configs:
+            if not isinstance(raw_config, dict):
+                continue
+            speaker_alias = self._get_str_value(
+                raw_config,
+                "speakerAlias",
+                "speaker_alias",
+                "speaker",
+            )
+            speaker_id = self._get_str_value(raw_config, "speakerId", "speaker_id")
+            if speaker_id is None:
+                voice_config = self._get_dict_value(raw_config, "voiceConfig", "voice_config")
+                if voice_config is not None:
+                    prebuilt_voice_config = self._get_dict_value(
+                        voice_config,
+                        "prebuiltVoiceConfig",
+                        "prebuilt_voice_config",
+                    )
+                    if prebuilt_voice_config is not None:
+                        speaker_id = self._get_str_value(
+                            prebuilt_voice_config,
+                            "voiceName",
+                            "voice_name",
+                        )
+            if speaker_alias is not None and speaker_id is not None:
+                speaker_configs.append(
+                    {
+                        "speakerAlias": speaker_alias,
+                        "speakerId": speaker_id,
+                    }
+                )
+        return speaker_configs
+
+    def _extract_gemini_tts_voice_name(self, voice: dict) -> Optional[str]:
+        voice_name = self._get_str_value(voice, "name", "voiceName", "voice_name")
+        if voice_name is not None:
+            return voice_name
+        speech_config = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
+        voice_config = self._get_dict_value(speech_config, "voiceConfig", "voice_config")
+        if voice_config is None:
+            return None
+        prebuilt_voice_config = self._get_dict_value(
+            voice_config,
+            "prebuiltVoiceConfig",
+            "prebuilt_voice_config",
+        )
+        if prebuilt_voice_config is None:
+            return None
+        return self._get_str_value(prebuilt_voice_config, "voiceName", "voice_name")
+
+    def _map_gemini_tts_voice_to_vertex_format(
+        self,
+        model: str,
+        voice: Union[str, dict],
+    ) -> Tuple[Optional[str], dict]:
+        if isinstance(voice, str):
+            return voice, {
+                "languageCode": self.DEFAULT_LANGUAGE_CODE,
+                "modelName": model,
+                "name": voice,
+            }
+
+        language_code = self._get_str_value(voice, "languageCode", "language_code") or self.DEFAULT_LANGUAGE_CODE
+        model_name = self._get_str_value(voice, "modelName", "model_name") or model
+        speaker_configs = self._extract_gemini_tts_speaker_configs(voice)
+        if speaker_configs:
+            return None, {
+                "languageCode": language_code,
+                "modelName": model_name,
+                "multiSpeakerVoiceConfig": {
+                    "speakerVoiceConfigs": speaker_configs,
+                },
+            }
+        voice_name = self._extract_gemini_tts_voice_name(voice)
+        if voice_name is not None:
+            return None, {
+                "languageCode": language_code,
+                "modelName": model_name,
+                "name": voice_name,
+            }
+        return None, {
+            **voice,
+            "languageCode": language_code,
+            "modelName": model_name,
+        }
 
     def dispatch_text_to_speech(
         self,
@@ -227,15 +363,19 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         ##########################################################
         # Map voice using helper
         ##########################################################
-        mapped_voice_str, voice_dict = self._map_voice_to_vertex_format(voice)
+        mapped_voice_str, voice_dict = self._map_voice_to_vertex_format(
+            voice=voice,
+            model=model,
+        )
         if voice_dict is not None:
             mapped_params["vertex_voice_dict"] = voice_dict
 
         # Map response format
         if "response_format" in optional_params:
             format_name = optional_params["response_format"]
-            if format_name in self.FORMAT_MAPPINGS:
-                mapped_params["audioEncoding"] = self.FORMAT_MAPPINGS[format_name]
+            format_mappings = self.GEMINI_FORMAT_MAPPINGS if self._is_gemini_tts_model(model) else self.FORMAT_MAPPINGS
+            if format_name in format_mappings:
+                mapped_params["audioEncoding"] = format_mappings[format_name]
             else:
                 # Try to use it directly as Google Cloud format
                 mapped_params["audioEncoding"] = format_name

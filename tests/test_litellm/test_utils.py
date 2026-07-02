@@ -771,6 +771,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "ocr_cost_per_page": {"type": "number"},
                 "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
+                "health_check_voice": {"type": "string"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
                 "max_input_tokens": {"type": "number"},
