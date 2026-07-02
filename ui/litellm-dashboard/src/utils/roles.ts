@@ -37,6 +37,22 @@ export const isUserTeamAdminForSingleTeam = (teamMemberWithRoles: Member[] | nul
   return teamMemberWithRoles.some((member) => member.user_id === userID && member.role === "admin");
 };
 
+export const KEY_UPDATE_PERMISSION = "/key/update";
+
+export const canTeamMemberUpdateKey = (team: Team | null | undefined, userID: string): boolean => {
+  if (team == null) {
+    return false;
+  }
+  const member = team.members_with_roles?.find((m) => m.user_id === userID);
+  if (member == null) {
+    return false;
+  }
+  if (member.role === "admin") {
+    return true;
+  }
+  return (team.team_member_permissions ?? []).includes(KEY_UPDATE_PERMISSION);
+};
+
 export const formatUserRole = (userRole: string): string => {
   if (!userRole) {
     return "Undefined Role";

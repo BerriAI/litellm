@@ -16,9 +16,10 @@ export const BUDGET_WINDOW_OPTIONS = [
 interface BudgetWindowsEditorProps {
   value: BudgetWindowEntry[];
   onChange: (v: BudgetWindowEntry[]) => void;
+  disabled?: boolean;
 }
 
-export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProps) {
+export function BudgetWindowsEditor({ value, onChange, disabled = false }: BudgetWindowsEditorProps) {
   const addWindow = () => {
     onChange([...value, { budget_duration: "24h", max_budget: null }]);
   };
@@ -43,6 +44,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 value={window.budget_duration}
                 onChange={(v) => updateWindow(idx, "budget_duration", v)}
                 style={{ width: 130 }}
+                disabled={disabled}
                 options={BUDGET_WINDOW_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
               />
               <InputNumber
@@ -54,8 +56,16 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
                 placeholder="Max spend ($)"
                 style={{ width: 160 }}
                 prefix="$"
+                disabled={disabled}
               />
-              <Button type="text" danger size="small" onClick={() => removeWindow(idx)} style={{ padding: "0 4px" }}>
+              <Button
+                type="text"
+                danger
+                size="small"
+                disabled={disabled}
+                onClick={() => removeWindow(idx)}
+                style={{ padding: "0 4px" }}
+              >
                 ✕
               </Button>
             </div>
@@ -65,6 +75,7 @@ export function BudgetWindowsEditor({ value, onChange }: BudgetWindowsEditorProp
       })}
       <Button
         size="small"
+        disabled={disabled}
         onClick={(e) => {
           e.preventDefault();
           addWindow();

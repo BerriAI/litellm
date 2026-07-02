@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  canTeamMemberUpdateKey,
   isAdminRole,
   isProxyAdminRole,
   isUserTeamAdminForAnyTeam,
@@ -7,7 +8,24 @@ import {
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "./roles";
-import { Team } from "@/components/networking";
+import { Member, Team } from "@/components/networking";
+
+const makeTeam = (overrides: Partial<Team>): Team => ({
+  team_id: "team-1",
+  team_alias: "Test Team",
+  models: [],
+  max_budget: null,
+  budget_duration: null,
+  tpm_limit: null,
+  rpm_limit: null,
+  organization_id: "org-1",
+  created_at: "2024-01-01",
+  keys: [],
+  members_with_roles: [],
+  ...overrides,
+});
+
+const member = (user_id: string, role: string): Member => ({ user_id, user_email: `${user_id}@test.com`, role });
 
 describe("roles", () => {
   describe("isAdminRole", () => {
@@ -149,6 +167,53 @@ describe("roles", () => {
 
     it("should return false when teams is empty array", () => {
       expect(isUserTeamAdminForAnyTeam([], "user-1")).toBe(false);
+    });
+  });
+
+  describe("canTeamMemberUpdateKey", () => {
+    it("returns true for a non-admin member when the team grants /key/update", () => {
+      const team = makeTeam({
+        members_with_roles: [member("user-1", "user")],
+        team_member_permissions: ["/key/info", "/key/update"],
+      });
+      expect(canTeamMemberUpdateKey(team, "user-1")).toBe(true);
+    });
+
+    it("returns false for a non-admin member when /key/update is not granted", () => {
+      const team = makeTeam({
+        members_with_roles: [member("user-1", "user")],
+        team_member_permissions: ["/key/info", "/key/health"],
+      });
+      expect(canTeamMemberUpdateKey(team, "user-1")).toBe(false);
+    });
+
+    it("returns false for a non-admin member when no permissions are set", () => {
+      const team = makeTeam({
+        members_with_roles: [member("user-1", "user")],
+        team_member_permissions: undefined,
+      });
+      expect(canTeamMemberUpdateKey(team, "user-1")).toBe(false);
+    });
+
+    it("returns true for a team admin regardless of the permission list", () => {
+      const team = makeTeam({
+        members_with_roles: [member("user-1", "admin")],
+        team_member_permissions: [],
+      });
+      expect(canTeamMemberUpdateKey(team, "user-1")).toBe(true);
+    });
+
+    it("returns false when the user is not a member of the team", () => {
+      const team = makeTeam({
+        members_with_roles: [member("user-2", "admin")],
+        team_member_permissions: ["/key/update"],
+      });
+      expect(canTeamMemberUpdateKey(team, "user-1")).toBe(false);
+    });
+
+    it("returns false when the team is null or undefined", () => {
+      expect(canTeamMemberUpdateKey(null, "user-1")).toBe(false);
+      expect(canTeamMemberUpdateKey(undefined, "user-1")).toBe(false);
     });
   });
 
