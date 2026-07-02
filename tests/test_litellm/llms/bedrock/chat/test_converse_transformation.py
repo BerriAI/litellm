@@ -4190,8 +4190,9 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
 
 
 def test_parallel_tool_calls_newer_model_without_ttl_pricing_adds_disable_flag():
+    """A model with supports_parallel_tool_use_config but no 1h-TTL pricing entry must still get the flag."""
     config = AmazonConverseConfig()
-    model = "anthropic.claude-opus-4-7-unlisted-v1:0"
+    model = "jp.anthropic.claude-opus-4-7"
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
 
     optional_params = config.map_openai_params(
