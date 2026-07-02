@@ -5691,7 +5691,7 @@ class ProxyConfig:
             verbose_proxy_logger.debug(
                 "param_name=%s, param_value=%s",
                 param_name,
-                _redact_secret_values_in_obj(param_value) if isinstance(param_value, (dict, list)) else param_value,
+                _redact_config_param_value_for_logging(param_name, param_value),
             )
 
             if param_name is not None and param_value is not None:
@@ -14291,6 +14291,14 @@ def _redact_secret_values_in_obj(value: JsonValue, depth: int = 0) -> JsonValue:
     if isinstance(value, list):
         return [_redact_secret_values_in_obj(item, depth + 1) for item in value]
     return value
+
+
+def _redact_config_param_value_for_logging(param_name: Optional[str], param_value: JsonValue) -> JsonValue:
+    if param_name == "environment_variables" and isinstance(param_value, dict):
+        return {key: "REDACTED" for key in param_value}
+    if isinstance(param_value, (dict, list)):
+        return _redact_secret_values_in_obj(param_value)
+    return param_value
 
 
 def _redact_general_setting_value(field_name: str, value: JsonValue, is_full_admin: bool) -> JsonValue:
