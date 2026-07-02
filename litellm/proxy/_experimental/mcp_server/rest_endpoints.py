@@ -891,8 +891,7 @@ if MCP_AVAILABLE:
                 litellm_logging_obj=data.get("litellm_logging_obj"),
                 requested_server_id=canonical_server_id,
             )
-            if logging_obj is not None:
-                await _fire_mcp_success_logging(logging_obj, result, _tool_start_time, datetime.now())
+            await _fire_mcp_success_logging(logging_obj, result, _tool_start_time, datetime.now())
             return result
         except MCPMissingUserEnvVarsError as e:
             verbose_logger.info(

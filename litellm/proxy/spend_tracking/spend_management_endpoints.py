@@ -3446,6 +3446,8 @@ async def _build_ui_spend_logs_response(
 
     mcp_spend_map: dict[str, dict[str, Union[int, float]]] = {}
     if enrich_session_counts and session_ids:
+        from prisma.errors import PrismaError
+
         try:
             # Collect api_keys already present in the authorized page rows so the
             # aggregate is scoped to the same ownership as the main query — prevents
@@ -3479,7 +3481,7 @@ async def _build_ui_spend_logs_response(
                 for row in rows
                 if row.get("session_id")
             }
-        except Exception:
+        except PrismaError:
             verbose_proxy_logger.debug(
                 "Failed to enrich MCP session spend aggregates for spend logs UI",
                 exc_info=True,
