@@ -198,6 +198,28 @@ async def test_fail_closed_raises_without_pii_or_cause_chain(monkeypatch):
     assert EMAIL not in str(exc.value)
 
 
+@pytest.mark.asyncio
+async def test_redact_logging_metadata_survives_on_returned_data():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True)
+    data = await guardrail.async_pre_call_hook(
+        user_api_key_dict=None,
+        cache=None,
+        data=_chat_data(f"email {EMAIL}"),
+        call_type="completion",
+    )
+    assert "metadata" in data
+
+
+@pytest.mark.asyncio
+async def test_post_call_block_raises_on_response_pii():
+    guardrail = DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="block")
+    response = _model_response(f"the customer is reachable at {EMAIL}")
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.async_post_call_success_hook(data={}, user_api_key_dict=None, response=response)
+    assert exc.value.status_code == 400
+    assert EMAIL not in str(exc.value.detail)
+
+
 def test_invalid_config_rejected():
     with pytest.raises(ValueError):
         DataFogGuardrail(guardrail_name="datafog-pii", default_on=True, datafog_action="explode")

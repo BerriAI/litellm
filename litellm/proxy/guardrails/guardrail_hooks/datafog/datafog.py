@@ -190,9 +190,10 @@ class DataFogGuardrail(CustomGuardrail):
         if not total_counts:
             return data
 
-        self._record_guardrail_logging(data, total_counts)
         if self.action == "block":
+            self._record_guardrail_logging(data, total_counts)
             self._raise_block(total_counts)
+        self._record_guardrail_logging(new_data, total_counts)
         return new_data
 
     async def async_moderation_hook(
@@ -227,17 +228,18 @@ class DataFogGuardrail(CustomGuardrail):
         user_api_key_dict: "UserAPIKeyAuth",
         response: Any,
     ) -> Any:
-        """Redact PII from model responses.
+        """Redact PII from model responses, or block when action is block.
 
-        Mutates ``response`` in place — deliberate: post_call guardrails
-        share the response object, and an unredacted copy escaping through
-        another callback would defeat the purpose.
+        Redaction mutates ``response`` in place, deliberately: post_call
+        guardrails share the response object, and an unredacted copy
+        escaping through another callback would defeat the purpose.
         """
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return response
         choices = getattr(response, "choices", None)
         if not choices:
             return response
+        response_counts: dict[str, int] = {}
         try:
             skipped_parts = 0
             for choice in choices:
@@ -245,7 +247,10 @@ class DataFogGuardrail(CustomGuardrail):
                 if message is not None and isinstance(message.content, str):
                     redacted, counts = _redact_text(message.content, self.entity_types, self.locales)
                     if counts:
-                        message.content = redacted
+                        for etype, n in counts.items():
+                            response_counts[etype] = response_counts.get(etype, 0) + n
+                        if self.action != "block":
+                            message.content = redacted
                 elif message is not None and message.content is not None:
                     skipped_parts += 1
             if skipped_parts:
@@ -255,6 +260,11 @@ class DataFogGuardrail(CustomGuardrail):
                 )
         except Exception as exc:  # noqa: BLE001
             self._handle_engine_error(exc)
+            return response
+        if response_counts:
+            self._record_guardrail_logging(data, response_counts)
+            if self.action == "block":
+                self._raise_block(response_counts)
         return response
 
     @staticmethod
