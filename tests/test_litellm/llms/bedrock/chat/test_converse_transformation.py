@@ -632,6 +632,33 @@ def test_parallel_tool_calls_config_kept_for_sonnet_5():
     }
 
 
+def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model = "anthropic.claude-fable-5"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"cache_creation_input_token_cost_above_1hr": 2e-05},
+    )
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        model=model,
+        non_default_params={"parallel_tool_calls": False},
+        optional_params={},
+        drop_params=False,
+    )
+
+    data = config._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params=optional_params,
+        messages=None,
+    )
+
+    assert "tool_choice" not in data.get("additionalModelRequestFields", {})
+
+
 def test_transform_response_with_computer_use_tool():
     """Test response transformation with computer use tool call."""
     import httpx
