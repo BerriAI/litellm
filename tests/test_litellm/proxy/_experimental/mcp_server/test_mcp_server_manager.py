@@ -3199,6 +3199,100 @@ class TestMCPServerManager:
         mock_inner.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_keeps_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                assert key == "byom_submitted_servers:user-123"
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["submitted-server"]
+        mock_inner.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_fallback_keeps_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                assert key == "byom_submitted_servers:user-123"
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("permission resolver failed"),
+            ),
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert set(result) == {"global-server", "submitted-server"}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
         """Anonymous delegated auth listing should only include oauth2 servers."""
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
