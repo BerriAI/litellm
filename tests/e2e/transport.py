@@ -13,7 +13,14 @@ from typing import Protocol
 from pydantic import BaseModel
 
 import e2e_http
-from e2e_http import URL, AuthHeaders, ProbeResult, Result, StreamingResponse
+from e2e_http import (
+    URL,
+    AuthHeaders,
+    FileUploadForm,
+    ProbeResult,
+    Result,
+    StreamingResponse,
+)
 
 
 class Transport(Protocol):
@@ -49,6 +56,20 @@ class Transport(Protocol):
     ) -> Result[R]: ...
 
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult: ...
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: FileUploadForm,
+        filename: str,
+        content: bytes,
+        params: BaseModel | None = None,
+        response_type: type[R],
+    ) -> Result[R]: ...
+
+    def download(self, path: str, *, headers: BaseModel) -> StreamingResponse: ...
 
     def bearer(self, key: str) -> AuthHeaders: ...
 
@@ -141,6 +162,33 @@ class HttpTransport:
             headers=self.master,
             params=params,
             timeout=self.request_timeout,
+        )
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: FileUploadForm,
+        filename: str,
+        content: bytes,
+        params: BaseModel | None = None,
+        response_type: type[R],
+    ) -> Result[R]:
+        return e2e_http.upload(
+            self._url(path),
+            headers=headers,
+            form=form,
+            filename=filename,
+            content=content,
+            params=params,
+            response_type=response_type,
+            timeout=self.request_timeout,
+        )
+
+    def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
+        return e2e_http.download(
+            self._url(path), headers=headers, timeout=self.request_timeout
         )
 
 
@@ -242,3 +290,27 @@ class SplitTransport:
 
     def probe(self, path: str, *, params: BaseModel) -> ProbeResult:
         return self._route(path).probe(path, params=params)
+
+    def upload[R: BaseModel](
+        self,
+        path: str,
+        *,
+        headers: BaseModel,
+        form: FileUploadForm,
+        filename: str,
+        content: bytes,
+        params: BaseModel | None = None,
+        response_type: type[R],
+    ) -> Result[R]:
+        return self._route(path).upload(
+            path,
+            headers=headers,
+            form=form,
+            filename=filename,
+            content=content,
+            params=params,
+            response_type=response_type,
+        )
+
+    def download(self, path: str, *, headers: BaseModel) -> StreamingResponse:
+        return self._route(path).download(path, headers=headers)
