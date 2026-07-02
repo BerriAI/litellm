@@ -549,7 +549,7 @@ def _add_custom_logger_callback_to_specific_event(callback: str, logging_event: 
 
 
 def _custom_logger_class_exists_in_success_callbacks(
-    callback_class: "CustomLogger",
+    callback_class: CustomLogger,
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.success_callback or litellm._async_success_callback
@@ -564,7 +564,7 @@ def _custom_logger_class_exists_in_success_callbacks(
 
 
 def _custom_logger_class_exists_in_failure_callbacks(
-    callback_class: "CustomLogger",
+    callback_class: CustomLogger,
 ) -> bool:
     """
     Returns True if an instance of the custom logger exists in litellm.failure_callback or litellm._async_failure_callback
@@ -624,7 +624,7 @@ def load_credentials_from_list(kwargs: dict):
 
 
 def get_dynamic_callbacks(
-    dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]],
+    dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]],
 ) -> List:
     returned_callbacks = litellm.callbacks.copy()
     if dynamic_callbacks:
@@ -752,7 +752,7 @@ def function_setup(
         coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -836,10 +836,10 @@ def function_setup(
             for index in reversed(removed_async_items):
                 litellm.failure_callback.pop(index)
         ### DYNAMIC CALLBACKS ###
-        dynamic_success_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = None
-        dynamic_async_success_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = None
-        dynamic_failure_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = None
-        dynamic_async_failure_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = None
+        dynamic_success_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = None
+        dynamic_async_success_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = None
+        dynamic_failure_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = None
+        dynamic_async_failure_callbacks: Optional[List[Union[str, Callable, CustomLogger]]] = None
         if kwargs.get("success_callback", None) is not None and isinstance(kwargs["success_callback"], list):
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
@@ -7368,8 +7368,8 @@ def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]
 
 
 def validate_and_fix_thinking_param(
-    thinking: Optional["AnthropicThinkingParam"],
-) -> Optional["AnthropicThinkingParam"]:
+    thinking: Optional[AnthropicThinkingParam],
+) -> Optional[AnthropicThinkingParam]:
     """
     Normalizes camelCase keys in the thinking param to snake_case.
     Handles clients that send budgetTokens instead of budget_tokens.
@@ -8193,7 +8193,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_skills_api_config(
         provider: LlmProviders,
-    ) -> Optional["BaseSkillsAPIConfig"]:
+    ) -> Optional[BaseSkillsAPIConfig]:
         """
         Get provider-specific Skills API configuration
 
@@ -8210,7 +8210,7 @@ class ProviderConfigManager:
     @staticmethod
     def get_provider_evals_api_config(
         provider: LlmProviders,
-    ) -> Optional["BaseEvalsAPIConfig"]:
+    ) -> Optional[BaseEvalsAPIConfig]:
         """
         Get provider-specific Evals API configuration
 
@@ -8645,7 +8645,7 @@ class ProviderConfigManager:
     def get_provider_realtime_http_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional["BaseRealtimeHTTPConfig"]:
+    ) -> Optional[BaseRealtimeHTTPConfig]:
         """
         Return the HTTP transformation config for realtime HTTP endpoints
         (POST /realtime/client_secrets and POST /realtime/calls).
@@ -8736,7 +8736,7 @@ class ProviderConfigManager:
     def get_provider_ocr_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional["BaseOCRConfig"]:
+    ) -> Optional[BaseOCRConfig]:
         """
         Get OCR configuration for a given provider.
         """
@@ -8776,8 +8776,8 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_search_config(
-        provider: "SearchProviders",
-    ) -> Optional["BaseSearchConfig"]:
+        provider: SearchProviders,
+    ) -> Optional[BaseSearchConfig]:
         """
         Get Search configuration for a given provider.
         """
@@ -8849,7 +8849,7 @@ class ProviderConfigManager:
     def get_provider_text_to_speech_config(
         model: str,
         provider: LlmProviders,
-    ) -> Optional["BaseTextToSpeechConfig"]:
+    ) -> Optional[BaseTextToSpeechConfig]:
         """
         Get text-to-speech configuration for a given provider.
         """
