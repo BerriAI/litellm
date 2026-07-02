@@ -1198,7 +1198,7 @@ class TestCallToolRestAPI:
             fake_execute_mcp_tool,
             raising=False,
         )
-        fire_logging = AsyncMock()
+        fire_logging = AsyncMock(side_effect=RuntimeError("logging failed"))
         monkeypatch.setattr(
             rest_endpoints,
             "_fire_mcp_success_logging",

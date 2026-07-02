@@ -371,6 +371,7 @@ async def acompletion_with_mcp(
                             # If we have tool results, prepare follow-up call
                             if self.tool_results and self.complete_response:
                                 await self._prepare_follow_up_call()
+                            await self._drain_inner_stream()
                             return final_chunk
 
                 # Phase 2: Yield follow-up stream chunks if available

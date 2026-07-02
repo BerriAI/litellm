@@ -1231,3 +1231,116 @@ async def test_acompletion_with_mcp_streaming_drain_error_does_not_drop_final_ch
     ]
     assert len(final_chunks) == 1, f"Final chunk must survive a drain error. Got chunks: {all_chunks}"
     assert all_chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_streaming_drains_inner_stream_after_exhaustion(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+    from litellm.utils import CustomStreamWrapper
+
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+
+    def create_chunk(content):
+        return ModelResponseStream(
+            id="test-stream",
+            model="test-model",
+            created=1234567890,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content=content, role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+    chunks = [create_chunk("Hello"), create_chunk(" world")]
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    class ExhaustingStreamingResponse(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="test-model",
+                logging_obj=logging_obj,
+            )
+            self.chunks = chunks
+            self._index = 0
+            self.drained_after_exhaustion = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index < len(self.chunks):
+                chunk = self.chunks[self._index]
+                self._index += 1
+                return chunk
+            if self._index == len(self.chunks):
+                self._index += 1
+                raise StopAsyncIteration
+            self.drained_after_exhaustion = True
+            raise StopAsyncIteration
+
+    initial_stream = ExhaustingStreamingResponse()
+    mock_acompletion = AsyncMock(return_value=initial_stream)
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda tools: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda tools: (tools, [])),
+    )
+
+    async def mock_process(**_):
+        return (tools, {"local_search": "local"})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: openai_tools),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_extract_tool_calls_from_chat_response",
+        staticmethod(lambda **_: []),
+    )
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils,
+        "extract_mcp_headers_from_request",
+        staticmethod(lambda **_: (None, None, None, None)),
+    )
+
+    with patch("litellm.acompletion", mock_acompletion):
+        result = await acompletion_with_mcp(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=True,
+        )
+
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
+    assert len(all_chunks) == 3
+    assert initial_stream.drained_after_exhaustion is True

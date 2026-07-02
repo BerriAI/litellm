@@ -410,6 +410,19 @@ def test_get_parent_request_tags_from_metadata():
     assert tags == ["team-a", "prod"]
 
 
+def test_get_parent_request_tags_from_nested_litellm_params():
+    tags = LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(
+        {
+            "metadata": {"tags": ["top-level"]},
+            "litellm_params": {
+                "metadata": {"tags": ["nested"]},
+                "proxy_server_request": {"headers": {"user-agent": "client/1.0"}},
+            },
+        }
+    )
+    assert tags == ["nested", "User-Agent: client", "User-Agent: client/1.0"]
+
+
 @pytest.mark.asyncio
 async def test_get_mcp_tools_from_manager_forwards_request_tags(monkeypatch):
     mock_get_tools = AsyncMock(return_value=[])

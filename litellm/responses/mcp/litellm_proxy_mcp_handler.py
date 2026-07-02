@@ -61,15 +61,16 @@ class LiteLLM_Proxy_MCP_Handler:
     """
 
     @staticmethod
-    def _get_parent_request_tags(kwargs: Optional[dict]) -> list[str]:
+    def _get_parent_request_tags(kwargs: Optional[dict[str, Any]]) -> list[str]:
         """Tags from the parent LLM request, using the same extraction logic as standard logging (incl. User-Agent)."""
         if not kwargs:
             return []
         from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
-        proxy_server_request = kwargs.get("proxy_server_request") or {}
+        litellm_params = kwargs.get("litellm_params") or kwargs
+        proxy_server_request = litellm_params.get("proxy_server_request") or kwargs.get("proxy_server_request") or {}
         return StandardLoggingPayloadSetup._get_request_tags(
-            litellm_params=kwargs,
+            litellm_params=litellm_params,
             proxy_server_request=proxy_server_request,
         )
 
