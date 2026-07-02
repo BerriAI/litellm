@@ -593,6 +593,21 @@ class PrometheusLogger(CustomLogger):
                 labelnames=[],
             )
 
+            ########################################
+            # MCP Tool Call Metrics
+            ########################################
+            self.litellm_mcp_tool_calls_total = self._counter_factory(
+                name="litellm_mcp_tool_calls_total",
+                documentation="Total MCP tool calls, segmented by tool and server name",
+                labelnames=self.get_labels_for_metric("litellm_mcp_tool_calls_total"),
+            )
+
+            self.litellm_mcp_tool_call_spend_metric = self._counter_factory(
+                name="litellm_mcp_tool_call_spend_metric",
+                documentation="Total spend on MCP tool calls, segmented by tool and server name",
+                labelnames=self.get_labels_for_metric("litellm_mcp_tool_call_spend_metric"),
+            )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -1300,6 +1315,13 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
 
+        # MCP tool call metrics
+        self._increment_mcp_tool_call_metrics(
+            standard_logging_payload=standard_logging_payload,
+            enum_values=enum_values,
+            response_cost=response_cost,
+        )
+
         # increment litellm_proxy_total_requests_metric for all successful requests
         # (both streaming and non-streaming) in this single location to prevent
         # double-counting that occurs when async_post_call_success_hook also increments
@@ -1520,6 +1542,49 @@ class PrometheusLogger(CustomLogger):
                     label_context=label_context,
                     amount=float(provider_cache_creation_tokens),
                 )
+
+    def _increment_mcp_tool_call_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        response_cost: float,
+    ) -> None:
+        metadata = standard_logging_payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        mcp_meta = metadata.get("mcp_tool_call_metadata")
+        if not isinstance(mcp_meta, dict):
+            return
+
+        mcp_enum_values = UserAPIKeyLabelValues(
+            mcp_tool_name=mcp_meta.get("name"),
+            mcp_server_name=mcp_meta.get("mcp_server_name"),
+            hashed_api_key=enum_values.hashed_api_key,
+            api_key_alias=enum_values.api_key_alias,
+            team=enum_values.team,
+            team_alias=enum_values.team_alias,
+            user=enum_values.user,
+            end_user=enum_values.end_user,
+        )
+        mcp_label_context = PrometheusLabelFactoryContext(mcp_enum_values)
+
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_mcp_tool_calls_total,
+            "litellm_mcp_tool_calls_total",
+            mcp_enum_values,
+            label_context=mcp_label_context,
+        )
+
+        if response_cost > 0:
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_mcp_tool_call_spend_metric,
+                "litellm_mcp_tool_call_spend_metric",
+                mcp_enum_values,
+                label_context=mcp_label_context,
+                amount=response_cost,
+            )
 
     async def _increment_remaining_budget_metrics(
         self,
@@ -3804,6 +3869,10 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
 ) -> Dict[str, Any]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
+
+    Includes top-level scalar fields from the standard logging metadata (e.g.
+    user_api_key_project_alias, user_api_key_team_alias) so they are accessible
+    via custom_prometheus_metadata_labels configuration.
     """
     if not isinstance(standard_logging_payload, dict):
         return {}
@@ -3817,6 +3886,7 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
     spend_logs_metadata = standard_logging_metadata.get("spend_logs_metadata")
 
     return {
+        **{k: v for k, v in standard_logging_metadata.items() if not isinstance(v, dict)},
         **(requester_metadata if isinstance(requester_metadata, dict) else {}),
         **(user_api_key_auth_metadata if isinstance(user_api_key_auth_metadata, dict) else {}),
         **(spend_logs_metadata if isinstance(spend_logs_metadata, dict) else {}),
