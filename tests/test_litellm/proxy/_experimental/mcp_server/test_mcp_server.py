@@ -6545,3 +6545,39 @@ async def test_get_allowed_mcp_servers_includes_active_servers_submitted_by_user
 
     assert "submitted-1" in submitter_allowed
     assert "submitted-1" not in other_allowed
+
+
+@pytest.mark.asyncio
+async def test_get_active_submitted_mcp_server_ids_for_user_queries_active_rows():
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_active_submitted_mcp_server_ids_for_user,
+    )
+    from litellm.proxy._types import MCPApprovalStatus
+
+    row = MagicMock()
+    row.server_id = "submitted-1"
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+
+    result = await get_active_submitted_mcp_server_ids_for_user(prisma_client, "submitter-user")
+
+    assert result == ["submitted-1"]
+    prisma_client.db.litellm_mcpservertable.find_many.assert_awaited_once_with(
+        where={
+            "submitted_by": "submitter-user",
+            "approval_status": MCPApprovalStatus.active,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_db():
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_active_submitted_mcp_server_ids_for_user,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock()
+
+    assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
+    prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()

@@ -1319,25 +1319,31 @@ class MCPServerManager:
         from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
-        submitted_server_ids = await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+
+        # The key explicitly opted out of every MCP server. Return zero before
+        # layering on allow_all_keys or submitted servers so the opt-out is absolute.
+        key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
+        if key_object_permission is not None and (
+            SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
+        ):
+            return []
+
+        # Check if object_permission.mcp_servers is explicitly set (not None, empty list is valid)
+        has_explicit_object_permission = key_object_permission is not None and (
+            key_object_permission.mcp_servers is not None
+        )
+        if has_explicit_object_permission:
+            verbose_logger.debug(f"Object permission mcp_servers explicitly set: {key_object_permission.mcp_servers}")
+
+        # BYOM creator visibility never widens a key that was explicitly scoped:
+        # only keys without their own mcp_servers list get submitted servers unioned in.
+        submitted_server_ids = (
+            []
+            if has_explicit_object_permission
+            else await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+        )
 
         try:
-            key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
-            if key_object_permission is not None and (
-                SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
-            ):
-                return submitted_server_ids
-
-            # Check if object_permission.mcp_servers is explicitly set
-            has_explicit_object_permission = False
-            if user_api_key_auth and user_api_key_auth.object_permission:
-                # Check if mcp_servers is explicitly set (not None, empty list is valid)
-                if user_api_key_auth.object_permission.mcp_servers is not None:
-                    has_explicit_object_permission = True
-                    verbose_logger.debug(
-                        f"Object permission mcp_servers explicitly set: {user_api_key_auth.object_permission.mcp_servers}"
-                    )
-
             # If admin but NO explicit object permission, get all servers
             if user_api_key_auth and _user_has_admin_view(user_api_key_auth) and not has_explicit_object_permission:
                 verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
@@ -1359,6 +1365,7 @@ class MCPServerManager:
             in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
+                combined_servers.update(submitted_server_ids)
 
             # For anonymous callers (no user_id, no role), also surface any
             # servers the operator has opted into upstream-delegated auth.
@@ -1384,8 +1391,6 @@ class MCPServerManager:
                     and not server.has_client_credentials
                 ]
                 combined_servers.update(delegate_server_ids)
-
-            combined_servers.update(submitted_server_ids)
 
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
