@@ -346,7 +346,7 @@ def build_tracer_provider(
     provider.add_span_processor(baggage_processor)
 
     if attach_tenant_fan_out or tenant_fan_out_owner is not None:
-        from litellm.integrations.otel.plumbing.fan_out import (
+        from litellm.integrations.otel.plumbing.routing import (
             TenantFanOutSpanProcessor,
         )
 

@@ -51,13 +51,12 @@ if TYPE_CHECKING:
 
 
 def _otel_destinations(dynamic_params: Any) -> tuple[OtelDestination, ...]:
-    """The admin-resolved OTLP destinations carried on ``standard_callback_dynamic_params``.
+    """The admin-resolved OTLP destinations for this call, parsed off
+    ``standard_callback_dynamic_params``.
 
-    Server-set only (the proxy resolves the exporters assigned to the request's
-    identity chain and strips any client value), so this is the sole source the v2
-    router trusts -- request-supplied vendor credentials are never read here. A
-    request fans out to every destination here; each logger keeps only the ones
-    tagged with its own backend.
+    The proxy resolves the destinations assigned to the request's identity chain and
+    places them here server-side. A request fans out to every destination; each
+    logger keeps only the ones tagged with its own backend.
     """
     if not isinstance(dynamic_params, Mapping):
         return ()

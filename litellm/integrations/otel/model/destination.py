@@ -1,11 +1,10 @@
-"""The resolved, admin-owned OTLP destination.
+"""The resolved OTLP destination a request's traces export to.
 
-A trace destination is admin-owned infrastructure config, never request data.
-The proxy resolves a key/team's bound named credential into this typed,
-backend-agnostic target (an endpoint plus auth headers) server-side, and the v2
-logger exports through it. Every OTEL backend -- Langfuse, Arize, Weave, a
-self-hosted collector -- reduces to this shape; the per-backend field mapping
-lives in ``litellm.integrations.otel.destinations``.
+A destination is a backend-agnostic target: an endpoint plus the auth headers the
+exporter sends. The proxy builds it from the named logging credential bound to the
+request's identity chain, and the v2 logger exports through it. Every OTEL backend
+-- Langfuse, Arize, Weave, a self-hosted collector -- reduces to this shape; the
+per-backend field mapping lives in ``litellm.integrations.otel.presets.destinations``.
 """
 
 from pydantic import BaseModel, ConfigDict, Field

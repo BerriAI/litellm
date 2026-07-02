@@ -33,7 +33,7 @@ from litellm.integrations.otel.plumbing.context import (  # noqa: E402
     set_request_destinations,
     _request_destinations,
 )
-from litellm.integrations.otel.plumbing.fan_out import (  # noqa: E402
+from litellm.integrations.otel.plumbing.routing import (  # noqa: E402
     TenantFanOutSpanProcessor,
     _processor_key,
 )
