@@ -104,6 +104,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
+        from litellm.llms.base_llm.guardrail_translation.utils import (
+            blocked_response_usage,
+        )
         from litellm.types.utils import AnthropicMessagesResponse
 
         block_response = AnthropicMessagesResponse(
@@ -113,7 +116,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             content=[{"type": "text", "text": exc.message}],
             model=exc.model,
             stop_reason="end_turn",
-            usage={"input_tokens": 0, "output_tokens": 0},
+            usage=blocked_response_usage(getattr(exc, "original_response", None)),
         )
         return list(FakeAnthropicMessagesStreamIterator(response=block_response))
 
@@ -122,9 +125,16 @@ class AnthropicMessagesHandler(BaseTranslation):
         append the block message as a new text block, then end the message --
         without a second message_start."""
 
+        from litellm.llms.base_llm.guardrail_translation.utils import (
+            blocked_response_usage,
+        )
+
         def _sse(event_type: str, payload: dict) -> bytes:
             return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
+        output_tokens = blocked_response_usage(getattr(exc, "original_response", None))[
+            "output_tokens"
+        ]
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []
@@ -153,7 +163,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 {
                     "type": "message_delta",
                     "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                    "usage": {"output_tokens": 0},
+                    "usage": {"output_tokens": output_tokens},
                 },
             ),
             _sse("message_stop", {"type": "message_stop"}),
