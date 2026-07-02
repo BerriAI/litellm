@@ -5983,7 +5983,7 @@ async def _get_entity_access_group_models(
     prisma_client: Optional["PrismaClient"],
     user_api_key_cache: Optional["UserApiKeyCache"],
     proxy_logging_obj: Optional["ProxyLogging"],
-) -> List[str]:
+) -> list[str]:
     """
     Resolve entity Access Groups (`access_group_ids` on the key and on its
     team) into model names for model discovery (/v1/models,
@@ -5996,7 +5996,7 @@ async def _get_entity_access_group_models(
         get_team_object,
     )
 
-    group_ids: List[str] = list(user_api_key_dict.access_group_ids or [])
+    group_ids: list[str] = list(user_api_key_dict.access_group_ids or [])
 
     effective_team_id = team_id or user_api_key_dict.team_id
     if effective_team_id and prisma_client is not None and user_api_key_cache is not None:
@@ -6025,7 +6025,7 @@ async def _get_entity_access_group_models(
     )
 
 
-def _strip_authorization_sentinels(models: List[str]) -> List[str]:
+def _strip_authorization_sentinels(models: list[str]) -> list[str]:
     """
     Remove authorization sentinel values (no-default-models,
     all-team-models, all-proxy-models) from a model list.
