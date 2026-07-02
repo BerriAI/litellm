@@ -7,7 +7,7 @@ The bedrock-mantle endpoint uses the Anthropic Messages API format but is served
 at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
@@ -47,6 +47,31 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
             api_base=api_base,
             aws_bedrock_runtime_endpoint=optional_params.get("aws_bedrock_runtime_endpoint"),
             region=region,
+        )
+
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """Sign request with bedrock-mantle service name instead of bedrock."""
+        return self._sign_request(
+            service_name="bedrock-mantle",
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
         )
 
     def validate_environment(

@@ -84,7 +84,7 @@ class BedrockMantleAuthMixin:
             headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
             return self._aws_signer._sign_request(
-                service_name="bedrock",
+                service_name="bedrock-mantle",
                 headers=headers,
                 optional_params=optional_params,
                 request_data=request_data,
