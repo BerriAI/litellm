@@ -338,7 +338,7 @@ class CheckBatchCost:
 
                 # Pass deployment model_info so custom batch pricing
                 # (input_cost_per_token_batches etc.) is used for cost calc
-                deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
+                deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else None
                 batch_cost, batch_usage, batch_models = (
                     await calculate_batch_cost_and_usage(
                         file_content_dictionary=file_content_as_dict,

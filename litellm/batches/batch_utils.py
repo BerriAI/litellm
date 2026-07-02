@@ -25,6 +25,17 @@ async def calculate_batch_cost_and_usage(
             deployment-specific pricing (e.g. input_cost_per_token_batches)
             is used instead of the global cost map.
     """
+    # Translate Anthropic JSONL format to OpenAI format so the shared
+    # cost/usage helpers work uniformly across providers.
+    # Anthropic uses {result: {type, message: {usage: {input_tokens, output_tokens}}}}
+    # but helpers expect {response: {status_code, body: {usage: {prompt_tokens, ...}}}}
+    # Ref: https://github.com/BerriAI/litellm/issues/27944
+    if custom_llm_provider == "anthropic":
+        file_content_dictionary = [
+            _translate_anthropic_batch_item_to_openai(item)
+            for item in file_content_dictionary
+        ]
+
     batch_cost = _batch_cost_calculator(
         custom_llm_provider=custom_llm_provider,
         file_content_dictionary=file_content_dictionary,
@@ -513,6 +524,51 @@ def _get_response_from_batch_job_output_file(batch_job_output_file: dict) -> Any
     _response: dict = batch_job_output_file.get("response", None) or {}
     _response_body = _response.get("body", None) or {}
     return _response_body
+
+
+def _translate_anthropic_batch_item_to_openai(item: dict) -> dict:
+    """
+    Translate a single Anthropic batch result JSONL item to OpenAI format
+    so the shared cost/usage helpers can process it uniformly.
+
+    Anthropic format:
+        {"custom_id": "x", "result": {"type": "succeeded",
+         "message": {"model": "claude-...",
+                       "usage": {"input_tokens": N, "output_tokens": M}}}}
+
+    OpenAI format expected by _get_response_from_batch_job_output_file:
+        {"custom_id": "x", "response": {"status_code": 200,
+         "body": {"model": "claude-...",
+                    "usage": {"prompt_tokens": N, "completion_tokens": M,
+                                "total_tokens": N+M}}}}
+
+    Ref: https://github.com/BerriAI/litellm/issues/27944
+    """
+    result = item.get("result", {})
+    if result.get("type") != "succeeded":
+        # failed/errored items return as-is so _batch_response_was_successful
+        # correctly treats them as non-200
+        return item
+
+    message = result.get("message", {})
+    anthropic_usage = message.get("usage", {})
+    prompt_tokens = anthropic_usage.get("input_tokens", 0)
+    completion_tokens = anthropic_usage.get("output_tokens", 0)
+
+    return {
+        "custom_id": item.get("custom_id"),
+        "response": {
+            "status_code": 200,
+            "body": {
+                "model": message.get("model", ""),
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                },
+            },
+        },
+    }
 
 
 def _batch_response_was_successful(batch_job_output_file: dict) -> bool:
