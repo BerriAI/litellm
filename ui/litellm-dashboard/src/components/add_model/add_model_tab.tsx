@@ -7,12 +7,14 @@ import type { Team } from "../key_team_helpers/key_list";
 import { type CredentialItem } from "../networking";
 import { Providers } from "../provider_info_helpers";
 import AddAutoRouterTab from "./add_auto_router_tab";
+import AddAdeptRouterTab from "./add_adept_router_tab";
 import AddModelForm from "./AddModelForm";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 
 interface AddModelTabProps {
   form: FormInstance; // For the Add Model tab
   handleOk: (values?: any) => Promise<void>;
+  onModelAdded?: () => void;
   selectedProvider: Providers;
   setSelectedProvider: (provider: Providers) => void;
   providerModels: string[];
@@ -30,6 +32,7 @@ interface AddModelTabProps {
 const AddModelTab: React.FC<AddModelTabProps> = ({
   form,
   handleOk,
+  onModelAdded,
   selectedProvider,
   setSelectedProvider,
   providerModels,
@@ -45,6 +48,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
 }) => {
   // Create separate form instance for auto router
   const [autoRouterForm] = Form.useForm();
+  const [adeptRouterForm] = Form.useForm();
 
   const handleAutoRouterOk = () => {
     autoRouterForm
@@ -63,6 +67,7 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
         <TabList className="mb-4">
           <Tab>Add Model</Tab>
           <Tab>Add Auto Router</Tab>
+          <Tab>Add ADEPT Router</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -85,6 +90,14 @@ const AddModelTab: React.FC<AddModelTabProps> = ({
             <AddAutoRouterTab
               form={autoRouterForm}
               handleOk={handleAutoRouterOk}
+              accessToken={accessToken}
+              userRole={userRole}
+            />
+          </TabPanel>
+          <TabPanel>
+            <AddAdeptRouterTab
+              form={adeptRouterForm}
+              onSuccess={onModelAdded}
               accessToken={accessToken}
               userRole={userRole}
             />

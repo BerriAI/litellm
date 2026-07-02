@@ -270,6 +270,18 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     quality_router_config: Optional[Dict] = None
     quality_router_default_model: Optional[str] = None
 
+    # adept-router params
+    adept_router_default_model: Optional[str] = None
+    adept_router_tag_prefix: Optional[str] = None
+    adept_router_seed_config: Optional[List[Dict]] = None
+    adept_router_conversations_threshold: Optional[int] = None
+    adept_router_trainer_url: Optional[str] = None
+    adept_router_pg_host: Optional[str] = None
+    adept_router_pg_port: Optional[int] = None
+    adept_router_pg_database: Optional[str] = None
+    adept_router_pg_user: Optional[str] = None
+    adept_router_pg_password: Optional[str] = None
+
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
     s3_encryption_key_id: Optional[str] = None

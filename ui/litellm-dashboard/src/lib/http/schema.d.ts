@@ -25282,6 +25282,28 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Adept Router Conversations Threshold */
+            adept_router_conversations_threshold?: number | null;
+            /** Adept Router Default Model */
+            adept_router_default_model?: string | null;
+            /** Adept Router Pg Database */
+            adept_router_pg_database?: string | null;
+            /** Adept Router Pg Host */
+            adept_router_pg_host?: string | null;
+            /** Adept Router Pg Password */
+            adept_router_pg_password?: string | null;
+            /** Adept Router Pg Port */
+            adept_router_pg_port?: number | null;
+            /** Adept Router Pg User */
+            adept_router_pg_user?: string | null;
+            /** Adept Router Seed Config */
+            adept_router_seed_config?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Adept Router Tag Prefix */
+            adept_router_tag_prefix?: string | null;
+            /** Adept Router Trainer Url */
+            adept_router_trainer_url?: string | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
@@ -33030,6 +33052,28 @@ export interface components {
             } | null;
             /** Adaptive Router Default Model */
             adaptive_router_default_model?: string | null;
+            /** Adept Router Conversations Threshold */
+            adept_router_conversations_threshold?: number | null;
+            /** Adept Router Default Model */
+            adept_router_default_model?: string | null;
+            /** Adept Router Pg Database */
+            adept_router_pg_database?: string | null;
+            /** Adept Router Pg Host */
+            adept_router_pg_host?: string | null;
+            /** Adept Router Pg Password */
+            adept_router_pg_password?: string | null;
+            /** Adept Router Pg Port */
+            adept_router_pg_port?: number | null;
+            /** Adept Router Pg User */
+            adept_router_pg_user?: string | null;
+            /** Adept Router Seed Config */
+            adept_router_seed_config?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Adept Router Tag Prefix */
+            adept_router_tag_prefix?: string | null;
+            /** Adept Router Trainer Url */
+            adept_router_trainer_url?: string | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
             /** Api Base */
