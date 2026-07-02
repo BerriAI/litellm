@@ -7627,6 +7627,7 @@ class ProxyStartupEvent:
                     proxy_logging_obj=proxy_logging_obj,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
+                    track_unmanaged_vertex_batch_cost=general_settings.get("track_unmanaged_vertex_batch_cost", False),
                 )
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
@@ -15620,9 +15621,10 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(batches_router)
+app.include_router(openai_files_router)
 app.include_router(llm_passthrough_router)
 app.include_router(pass_through_router)
-app.include_router(batches_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
@@ -15637,7 +15639,6 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
-app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)

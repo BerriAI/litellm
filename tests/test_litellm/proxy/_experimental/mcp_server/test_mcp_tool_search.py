@@ -432,6 +432,11 @@ class TestCallToolRestApiVirtualTools:
                 new_callable=AsyncMock,
                 return_value=fake_result,
             ) as mock_execute,
+            patch(
+                "litellm.proxy._experimental.mcp_server.rest_endpoints._fire_mcp_success_logging",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("logging failed"),
+            ) as mock_fire_logging,
         ):
             result = await self._get_call_fn()(
                 request=request,
@@ -439,6 +444,7 @@ class TestCallToolRestApiVirtualTools:
             )
 
         mock_execute.assert_awaited_once()
+        mock_fire_logging.assert_awaited_once()
         assert mock_execute.await_args.kwargs["name"] == "github-create_issue"
 
         assert result.isError is False

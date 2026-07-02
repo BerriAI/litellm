@@ -208,6 +208,57 @@ model_list:
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: us-central1
 
+  # batch models exercised by tests/e2e/batches/
+  - model_name: openai-batch
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: batch
+
+  - model_name: azure-batch
+    litellm_params:
+      model: azure/gpt-4.1-mini-batch
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2024-07-01-preview"
+    model_info:
+      mode: batch
+
+  - model_name: vertex-batch
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+      bucket_name: os.environ/GCS_BUCKET_NAME
+    model_info:
+      mode: batch
+
+  - model_name: bedrock-batch
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      s3_bucket_name: os.environ/AWS_BATCH_S3_BUCKET
+      s3_region_name: us-west-2
+      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_batch_role_arn: os.environ/AWS_BATCH_ROLE_ARN
+    model_info:
+      mode: batch
+
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+  - custom_llm_provider: azure
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2024-07-01-preview"
+  - custom_llm_provider: vertex_ai
+    vertex_project: os.environ/VERTEXAI_PROJECT
+    vertex_location: us-central1
+    vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+    bucket_name: os.environ/GCS_BUCKET_NAME
+
 
 mcp_servers:
   deepwiki_mcp:
@@ -234,4 +285,3 @@ guardrails:
         CREDIT_CARD: BLOCK
         US_SSN: BLOCK
         PHONE_NUMBER: BLOCK
-
