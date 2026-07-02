@@ -50,11 +50,12 @@ proxy_config = {
     },
   ]
   general_settings = {
-    master_key         = "os.environ/LITELLM_MASTER_KEY"
-    database_url       = "os.environ/DATABASE_URL"
-    alerting           = ["email", "slack_budget_alerts", "slack"]
-    alert_types        = ["budget_alerts", "spend_reports"]
-    alerting_threshold = 300
+    master_key           = "os.environ/LITELLM_MASTER_KEY"
+    database_url         = "os.environ/DATABASE_URL"
+    alerting             = ["email", "slack_budget_alerts", "slack"]
+    alert_types          = ["budget_alerts", "spend_reports"]
+    alerting_threshold   = 300
+    supported_db_objects = ["mcp"]
     alerting_args = {
       daily_report_frequency       = 43200 # 12 hours in seconds
       report_check_interval        = 3600  # 1 hour in seconds
@@ -77,28 +78,38 @@ proxy_config = {
       similarity_threshold = 0.3
     }
     redact_messages_in_exceptions = true
+  },
+  mcp_servers = {
+    data_reply_sharepoint_server = {
+      url           = ""
+      transport     = "http"
+      auth_type     = "oauth2"
+      client_id     = "os.environ/SHAREPOINT_OAUTH_CREDENTIALS_CLIENT_ID"
+      client_secret = "os.environ/SHAREPOINT_OAUTH_CREDENTIALS_CLIENT_SECRET"
+    }
   }
 }
 
 # ---------- Extra env / secrets ----------
-gateway_extra_env = {
-}
+gateway_extra_env = {}
 
 backend_extra_env = {
   SMTP_HOST         = "email-smtp.eu-central-1.amazonaws.com"
   SMTP_TLS          = "True"
   SMTP_PORT         = "587"
-  SMTP_SENDER_EMAIL = "fa.siciliano@reply.de"
-  PROXY_BASE_URL    = "http://datareply-litellm-dev-1078589364.eu-central-1.elb.amazonaws.com"
+  SMTP_SENDER_EMAIL = "data.awsacccounts.management@reply.de"
+  PROXY_BASE_URL    = "https://litellm.datareply.de"
+  STORE_MODEL_IN_DB = true
+  DISABLE_ADMIN_UI  = true
 }
 
 backend_extra_secrets = {
-  "SMTP_USERNAME" = "arn:aws:secretsmanager:eu-central-1:863518425664:secret:datareply-litellm-dev-smtp-username-0kYsv6"
-  "SMTP_PASSWORD" = "arn:aws:secretsmanager:eu-central-1:863518425664:secret:datareply-litellm-dev-smtp-password-6Qz5LJ"
+  SMTP_USERNAME = "arn:aws:secretsmanager:eu-central-1:751812493785:secret:data-reply/litellm/smtp/username-gg6WZa"
+  SMTP_PASSWORD = "arn:aws:secretsmanager:eu-central-1:751812493785:secret:data-reply/litellm/smtp/password-QplKSB"
 }
 
 gateway_extra_secrets = {
-  SLACK_WEBHOOK_URL = "arn:aws:secretsmanager:eu-central-1:863518425664:secret:datareply-litellm-dev-slack-alert-webhook-BBpPFN"
-  OPENAI_API_KEY    = "arn:aws:secretsmanager:eu-central-1:863518425664:secret:openai-api-key-6JziaK"
+  SLACK_WEBHOOK_URL = "arn:aws:secretsmanager:eu-central-1:751812493785:secret:data-reply/litellm/slack/webhook/reports-ELuU2k"
+  OPENAI_API_KEY    = "arn:aws:secretsmanager:eu-central-1:751812493785:secret:data-reply/litellm/openai/api-key-tYAO39"
 }
 
