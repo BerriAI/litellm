@@ -31,7 +31,7 @@ const MOCK_USER_DATA_NO_TEAMS = {
   teams: [],
 };
 
-vi.mock("../networking", () => {
+vi.mock("@/components/networking", () => {
   return {
     userGetInfoV2: (...args: any[]) => mockUserGetInfoV2(...args),
     userDeleteCall: vi.fn(),

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ViewUserDashboard from "./view_users";
 
 // Mock the networking module
-vi.mock("./networking", () => ({
+vi.mock("@/components/networking", () => ({
   userListCall: vi.fn().mockResolvedValue({
     users: [
       {
@@ -45,7 +45,7 @@ vi.mock("./networking", () => ({
 }));
 
 // Mock NotificationsManager
-vi.mock("./molecules/notifications_manager", () => ({
+vi.mock("@/components/molecules/notifications_manager", () => ({
   default: {
     success: vi.fn(),
     fromBackend: vi.fn(),

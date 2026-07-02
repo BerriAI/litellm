@@ -1,8 +1,8 @@
 import React, { useState } from "react";
 import { Modal, Typography, Divider, Table, Select, InputNumber, Card, Space, Checkbox } from "antd";
-import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "./networking";
+import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "@/components/networking";
 import { UserEditView } from "./user_edit_view";
-import NotificationsManager from "./molecules/notifications_manager";
+import NotificationsManager from "@/components/molecules/notifications_manager";
 import MessageManager from "@/components/molecules/message_manager";
 
 const { Text, Title } = Typography;

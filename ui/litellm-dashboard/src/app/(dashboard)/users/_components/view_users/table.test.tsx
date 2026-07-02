@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { columns } from "./columns";
 import { UserDataTable } from "./table";
-import { UserInfo } from "./types";
+import { UserInfo } from "@/components/networking";
 
 const defaultFilters = {
   email: "",

@@ -1,7 +1,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Grid, Icon } from "@tremor/react";
 import { Tooltip, Checkbox, Tag } from "antd";
-import { UserInfo } from "./types";
+import { UserInfo } from "@/components/networking";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
 import { CopyOutlined } from "@ant-design/icons";
 import { formatNumberWithCommas, copyToClipboard } from "@/utils/dataUtils";

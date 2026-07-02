@@ -3,7 +3,7 @@ import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell, Select, SelectItem } from "@tremor/react";
 import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
 import { Skeleton } from "antd";
-import { UserInfo } from "./types";
+import { UserInfo } from "@/components/networking";
 import UserInfoView from "./user_info_view";
 import { columns as createColumns } from "./columns";
 import { FilterInput } from "@/components/common_components/Filters/FilterInput";
