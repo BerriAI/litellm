@@ -436,10 +436,37 @@ class GeminiVideoConfig(BaseVideoConfig):
         else:
             video_id = operation_name
 
+        error_data = operation_response.error
+        if is_done and error_data is None:
+            generate_video_response = (
+                operation_response.response.generateVideoResponse
+                if operation_response.response
+                else None
+            )
+            if generate_video_response is not None:
+                if (
+                    not generate_video_response.generatedSamples
+                    and (generate_video_response.raiMediaFilteredCount or 0) > 0
+                ):
+                    reasons = generate_video_response.raiMediaFilteredReasons or []
+                    error_data = {
+                        "code": "rai_media_filtered",
+                        "message": "Video generation failed: all samples were filtered by Responsible AI policies. "
+                        + " ".join(reasons),
+                    }
+
+        if error_data:
+            status = "failed"
+        elif is_done:
+            status = "completed"
+        else:
+            status = "processing"
+
         video_obj = VideoObject(
             id=video_id,
             object="video",
-            status="processing" if not is_done else "completed",
+            status=status,
+            error=error_data,
         )
         return video_obj
 
@@ -477,9 +504,13 @@ class GeminiVideoConfig(BaseVideoConfig):
         if not operation_response.response:
             raise ValueError("No response data in completed operation")
 
-        generated_samples = (
-            operation_response.response.generateVideoResponse.generatedSamples
-        )
+        generate_video_response = operation_response.response.generateVideoResponse
+        generated_samples = generate_video_response.generatedSamples
+        if not generated_samples:
+            reasons = generate_video_response.raiMediaFilteredReasons or []
+            raise ValueError(
+                "No generated samples in completed operation. " + " ".join(reasons)
+            )
         download_url = generated_samples[0].video.uri
 
         params: Dict[str, Any] = {}

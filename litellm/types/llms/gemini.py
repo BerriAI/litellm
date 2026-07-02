@@ -317,8 +317,14 @@ class GeminiGeneratedVideoSample(BaseModel):
 class GeminiGenerateVideoResponse(BaseModel):
     """Generate video response containing the samples"""
 
-    generatedSamples: List[GeminiGeneratedVideoSample]
-    """List of generated video samples"""
+    generatedSamples: Optional[List[GeminiGeneratedVideoSample]] = None
+    """List of generated video samples; absent when all samples were RAI filtered"""
+
+    raiMediaFilteredCount: Optional[int] = None
+    """Number of videos filtered out by Responsible AI policies"""
+
+    raiMediaFilteredReasons: Optional[List[str]] = None
+    """Reasons why videos were filtered by Responsible AI policies"""
 
 
 class GeminiOperationResponse(BaseModel):

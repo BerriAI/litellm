@@ -558,6 +558,38 @@ class TestGeminiVideoConfig:
         assert isinstance(result, VideoObject)
         assert result.status == "completed"
 
+    def test_transform_video_status_retrieve_response_rai_filtered(self):
+        """Done operation with all samples RAI-filtered returns failed status, no exception."""
+        rai_reason = (
+            "Unable to show generated videos. All videos were filtered out because "
+            "they violated Google's Responsible AI practices. No media was flagged "
+            "for this attempt."
+        )
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.json.return_value = {
+            "name": "operations/generate_1234567890",
+            "done": True,
+            "metadata": {"createTime": "2024-11-04T10:00:00.123456Z"},
+            "response": {
+                "generateVideoResponse": {
+                    "raiMediaFilteredCount": 1,
+                    "raiMediaFilteredReasons": [rai_reason],
+                }
+            },
+        }
+
+        result = self.config.transform_video_status_retrieve_response(
+            raw_response=mock_response,
+            logging_obj=self.mock_logging_obj,
+            custom_llm_provider="gemini",
+        )
+
+        assert isinstance(result, VideoObject)
+        assert result.status == "failed"
+        assert result.error is not None
+        assert result.error["code"] == "rai_media_filtered"
+        assert rai_reason in result.error["message"]
+
     @patch("litellm.module_level_client")
     def test_transform_video_content_request(self, mock_client):
         """Test transformation of content download request."""
