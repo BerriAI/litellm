@@ -331,6 +331,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
+        _client_forwarded_authorization_headers,
         _should_strip_caller_authorization,
         _without_authorization,
         global_mcp_server_manager,
@@ -1561,6 +1562,13 @@ if MCP_AVAILABLE:
                     user_api_key_auth=user_api_key_auth,
                 ):
                     extra_headers = _without_authorization(extra_headers)
+        elif server.is_true_passthrough or server.is_oauth_delegate:
+            extra_headers = _client_forwarded_authorization_headers(
+                mcp_server=server,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
