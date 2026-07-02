@@ -59,6 +59,31 @@ const jsonListRule: CacheFieldRule = {
   },
 };
 
+const nonNegativeIntegerRule: CacheFieldRule = {
+  validator: (_rule, value) => {
+    if (value === undefined || value === null || String(value).trim() === "") {
+      return Promise.resolve();
+    }
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return Promise.reject(new Error("Must be a non-negative integer"));
+    }
+    return Promise.resolve();
+  },
+};
+
+const numberRule: CacheFieldRule = {
+  validator: (_rule, value) => {
+    if (value === undefined || value === null || String(value).trim() === "") {
+      return Promise.resolve();
+    }
+    if (Number.isNaN(Number(value))) {
+      return Promise.reject(new Error("Must be a number"));
+    }
+    return Promise.resolve();
+  },
+};
+
 export const CACHE_FIELDS: readonly CacheField[] = [
   {
     name: "url",
@@ -94,6 +119,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "connection",
     helpText: "Logical database index to isolate the cache (e.g. 1 for redis://host:6379/1)",
     redisType: null,
+    rules: [nonNegativeIntegerRule],
   },
   {
     name: "password",
@@ -153,6 +179,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     helpText: "Similarity threshold for semantic cache",
     redisType: "semantic",
     defaultValue: 0.8,
+    rules: [numberRule],
   },
   {
     name: "redis_semantic_cache_embedding_model",
@@ -203,6 +230,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "cacheManagement",
     helpText: "Time-to-live for cached items in seconds",
     redisType: null,
+    rules: [numberRule],
   },
   {
     name: "max_connections",
@@ -211,6 +239,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "cacheManagement",
     helpText: "Maximum number of connections in the connection pool",
     redisType: null,
+    rules: [nonNegativeIntegerRule],
   },
   {
     name: "gcp_service_account",

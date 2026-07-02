@@ -98,6 +98,18 @@ describe("CacheSettings", () => {
       expect(await screen.findByText(/Must be a valid JSON array/i)).toBeInTheDocument();
       expect(updateCacheSettingsCall).not.toHaveBeenCalled();
     });
+
+    it("should block save with an error when a non-numeric value is entered into a numeric field", async () => {
+      const user = userEvent.setup();
+      renderSettings();
+
+      const db = await screen.findByLabelText("Database Index");
+      await user.type(db, "redis://host:6379/1");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findByText(/Must be a non-negative integer/i)).toBeInTheDocument();
+      expect(updateCacheSettingsCall).not.toHaveBeenCalled();
+    });
   });
 
   describe("when saving a valid node configuration", () => {

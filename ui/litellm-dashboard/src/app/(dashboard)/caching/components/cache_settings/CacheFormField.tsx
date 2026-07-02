@@ -1,4 +1,4 @@
-import { Form, Input, InputNumber, Select, Switch } from "antd";
+import { Form, Input, Select, Switch } from "antd";
 import React from "react";
 import { CacheField } from "./cacheSettingsFields";
 
@@ -19,9 +19,8 @@ const renderControl = (field: CacheField, embeddingModels: EmbeddingModelOption[
     case "password":
       return <Input.Password placeholder={field.helpText} autoComplete="new-password" />;
     case "integer":
-      return <InputNumber precision={0} placeholder={field.helpText} style={{ width: "100%" }} />;
     case "float":
-      return <InputNumber step={0.01} placeholder={field.helpText} style={{ width: "100%" }} />;
+      return <Input inputMode="decimal" placeholder={field.helpText} />;
     case "list":
       return <Input.TextArea rows={4} placeholder={field.helpText} />;
     case "model-select":

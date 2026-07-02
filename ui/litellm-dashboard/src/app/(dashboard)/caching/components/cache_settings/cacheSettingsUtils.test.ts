@@ -20,12 +20,12 @@ describe("fieldsForSection", () => {
 });
 
 describe("buildInitialValues", () => {
-  it("should apply defaults when a value is absent and coerce booleans", () => {
+  it("should apply defaults as strings for text inputs and coerce booleans", () => {
     const values = buildInitialValues({});
     expect(values.port).toBe("6379");
-    expect(values.similarity_threshold).toBe(0.8);
+    expect(values.similarity_threshold).toBe("0.8");
     expect(values.ssl).toBe(false);
-    expect(values.db).toBeUndefined();
+    expect(values.db).toBe("");
   });
 
   it("should stringify list values so they render in a textarea", () => {
@@ -34,9 +34,9 @@ describe("buildInitialValues", () => {
     expect(values.redis_startup_nodes).toBe(JSON.stringify(nodes, null, 2));
   });
 
-  it("should coerce numeric fields from string current values", () => {
-    const values = buildInitialValues({ max_connections: "10" });
-    expect(values.max_connections).toBe(10);
+  it("should render numeric current values as strings for their text inputs", () => {
+    const values = buildInitialValues({ max_connections: 10 });
+    expect(values.max_connections).toBe("10");
   });
 });
 

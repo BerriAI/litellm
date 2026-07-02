@@ -25,14 +25,6 @@ const initialValueForField = (field: CacheField, raw: unknown): CacheFormValue =
     return typeof source === "string" ? source : JSON.stringify(source, null, 2);
   }
 
-  if (field.type === "integer" || field.type === "float") {
-    if (source === undefined || source === null || source === "") {
-      return undefined;
-    }
-    const parsed = Number(source);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  }
-
   if (source === undefined || source === null) {
     return "";
   }
