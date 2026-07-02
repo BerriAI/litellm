@@ -337,3 +337,30 @@ async def test_should_omit_policy_id_when_zero_or_negative():
         call_args = mock_send.call_args
         data = call_args[0][2]  # Third positional arg is data
         assert "policyId" not in data
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
+    new_callable=AsyncMock,
+)
+async def test_apply_guardrail_block_raises_400(mock_api_call):
+    """
+    When the guardrail returns BLOCK, apply_guardrail must raise HTTPException
+    with status_code=400 (not 500).
+    """
+    mock_api_call.return_value = {
+        "action": "BLOCK",
+        "zscaler_ai_guard_response": {
+            "transactionId": "tx-123",
+            "detectorResponses": {"detector1": {"action": "BLOCK"}},
+        },
+    }
+    guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1)
+    inputs = {"texts": ["inject malicious content"]}
+    request_data = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, request_data, "request")
+
+    assert exc_info.value.status_code == 400
+    assert "blocked" in exc_info.value.detail["error"].lower()
