@@ -12,6 +12,9 @@ from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     AnthropicContextManagementError,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_response_usage as _blocked_response_usage,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
@@ -19,7 +22,6 @@ from litellm.proxy.common_request_processing import (
     create_response,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
-from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
@@ -57,33 +59,6 @@ def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
     usage = getattr(response, "usage", None)
     if isinstance(usage, dict) and "total_tokens" in usage:
         usage.pop("total_tokens", None)
-
-
-def _blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
-    """
-    Token usage for a synthetic guardrail-blocked response.
-
-    A post-call block replaces the LLM's response with the violation message,
-    but the upstream call already consumed tokens -- report that real usage
-    (carried on ``ModifyResponseException.original_response``) rather than
-    discarding it. Pre-call blocks never invoked the LLM (no original_response),
-    so usage is zero.
-    """
-    usage_obj: Any = None
-    if isinstance(original_response, dict):
-        usage_obj = original_response.get("usage")
-    elif original_response is not None:
-        usage_obj = getattr(original_response, "usage", None)
-
-    def _tokens(key: str) -> int:
-        if isinstance(usage_obj, dict):
-            return int(usage_obj.get(key, 0) or 0)
-        return int(getattr(usage_obj, key, 0) or 0)
-
-    return AnthropicUsage(
-        input_tokens=_tokens("input_tokens"),
-        output_tokens=_tokens("output_tokens"),
-    )
 
 
 @router.post(

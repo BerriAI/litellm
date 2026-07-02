@@ -319,8 +319,9 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         guardrail_to_apply: CustomGuardrail = request_data.pop("guardrail_to_apply", None)
 
-        # Get streaming configuration, with precedence: guardrail attribute ->
-        # guardrail_config dict -> this callback's optional_params.
+        # Get streaming configuration. Resolution order (later wins): default
+        # < guardrail attribute < guardrail_config dict < this callback's
+        # optional_params.
         def _streaming_flag(name: str, default: Any) -> Any:
             value = default
             if guardrail_to_apply is not None:
@@ -336,10 +337,24 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Withhold every chunk until end-of-stream moderation passes, then
         # release the original chunks (clean) or only the block message
         # (blocked) -- moderating the whole response *before* any content
-        # reaches the client. Intended for allow/block guardrails: on release
-        # the original chunks are replayed as-is, so content-rewriting
-        # guardrails (e.g. PII masking) are not applied to a buffered stream.
+        # reaches the client. Only safe for allow/block guardrails: on
+        # release the original chunks are replayed as-is, so a
+        # content-rewriting guardrail (e.g. PII masking) would leak
+        # unredacted content. Guarded below via mask_response_content.
         buffer_until_moderated = _streaming_flag("streaming_buffer_until_moderated", False)
+
+        if (
+            buffer_until_moderated
+            and guardrail_to_apply is not None
+            and getattr(guardrail_to_apply, "mask_response_content", False)
+        ):
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: streaming_buffer_until_moderated is disabled for %s "
+                "because mask_response_content=True -- buffered replay would release "
+                "unredacted original chunks instead of the moderated output.",
+                guardrail_to_apply.guardrail_name,
+            )
+            buffer_until_moderated = False
 
         # Buffering can only moderate the assembled response, so it always
         # defers to end-of-stream.

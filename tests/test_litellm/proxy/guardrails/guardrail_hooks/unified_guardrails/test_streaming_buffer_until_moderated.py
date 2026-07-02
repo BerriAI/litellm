@@ -157,3 +157,19 @@ async def test_buffered_clean_releases_all_content():
         raw.rstrip().endswith('event: message_stop\ndata: {"type": "message_stop"}'.rstrip()) or "message_stop" in raw
     )
     assert BLOCK_MESSAGE not in raw
+
+
+@pytest.mark.asyncio
+async def test_buffered_mode_disabled_for_content_rewriting_guardrail():
+    """Buffered replay yields the withheld *original* chunks verbatim, which
+    is unsafe for a guardrail that rewrites response text (e.g. PII masking):
+    the client would get the unredacted original instead of the moderated
+    output. mask_response_content=True must force buffering off so the
+    request falls back to the (correctly moderated) non-buffered path."""
+    guardrail = _PassingGuardrail(
+        guardrail_name="masker", event_hook="post_call", mask_response_content=True
+    )
+    raw = await _run(guardrail)
+    assert guardrail.streaming_buffer_until_moderated is True  # request asked for buffering
+    assert ORIGINAL_MARKER in raw
+    assert BLOCK_MESSAGE not in raw
