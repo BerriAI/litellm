@@ -197,6 +197,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         from litellm.types.guardrails import GuardrailEventHooks
 
+        # Local import avoids a module-level cyclic import with
+        # litellm.integrations.custom_guardrail.
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
         guardrail_to_apply: CustomGuardrail = data.pop("guardrail_to_apply", None)
 
         if guardrail_to_apply is None:
@@ -238,13 +242,22 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
 
-        response = await endpoint_translation.process_output_response(
-            response=response,  # type: ignore
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=data.get("litellm_logging_obj"),
-            user_api_key_dict=user_api_key_dict,
-            request_data=data,
-        )
+        try:
+            response = await endpoint_translation.process_output_response(
+                response=response,  # type: ignore
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
+        except ModifyResponseException as e:
+            # The guardrail blocked the response. Attach the original LLM
+            # response so the endpoint handler can report its real token usage
+            # instead of discarding it (the block replaces the content, but the
+            # upstream call already consumed those tokens).
+            if e.original_response is None:
+                e.original_response = response
+            raise
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=guardrail_to_apply.guardrail_name)
 
