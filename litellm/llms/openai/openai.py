@@ -341,7 +341,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         super().__init__()
 
     @staticmethod
-    def _strip_internal_request_fields(data: dict) -> dict:
+    def _strip_internal_request_fields(data: Any) -> Any:
         """
         Keep LiteLLM bookkeeping fields off the upstream OpenAI payload.
 
@@ -349,14 +349,29 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         post-call reconciliation. They are not part of the OpenAI API schema
         and should never be forwarded upstream.
         """
-        if not isinstance(data, dict):
-            return data
+        if isinstance(data, dict):
+            sanitized = {}
+            for key, value in data.items():
+                if isinstance(key, str) and key.startswith("_litellm_"):
+                    continue
+                sanitized[key] = OpenAIChatCompletion._strip_internal_request_fields(
+                    value
+                )
+            return sanitized
 
-        sanitized = dict(data)
-        for key in list(sanitized):
-            if isinstance(key, str) and key.startswith("_litellm_"):
-                sanitized.pop(key, None)
-        return sanitized
+        if isinstance(data, list):
+            return [
+                OpenAIChatCompletion._strip_internal_request_fields(item)
+                for item in data
+            ]
+
+        if isinstance(data, tuple):
+            return tuple(
+                OpenAIChatCompletion._strip_internal_request_fields(item)
+                for item in data
+            )
+
+        return data
 
     def _set_dynamic_params_on_client(
         self,

@@ -146,6 +146,19 @@ class TestEmptyResponseHandling:
             "messages": [{"role": "user", "content": "test"}],
             "_litellm_rate_limit_descriptors": ["should-not-leave-litellm"],
             "_litellm_tpm_reserved_tokens": 42,
+            "extra_body": {
+                "_litellm_tpm_reserved_model": "gpt-4.1",
+                "metadata": {
+                    "_litellm_tpm_reserved_scopes": [["api_key", "hash"]],
+                    "trace_id": "trace-123",
+                },
+                "items": [
+                    {
+                        "_litellm_tpm_reservation_released": True,
+                        "keep": "value",
+                    }
+                ],
+            },
         }
 
         openai_chat.make_sync_openai_chat_completion_request(
@@ -158,8 +171,21 @@ class TestEmptyResponseHandling:
         _, kwargs = create_mock.call_args
         assert "_litellm_rate_limit_descriptors" not in kwargs
         assert "_litellm_tpm_reserved_tokens" not in kwargs
+        assert "_litellm_tpm_reserved_model" not in kwargs["extra_body"]
+        assert (
+            "_litellm_tpm_reserved_scopes"
+            not in kwargs["extra_body"]["metadata"]
+        )
+        assert (
+            "_litellm_tpm_reservation_released"
+            not in kwargs["extra_body"]["items"][0]
+        )
+        assert kwargs["extra_body"]["metadata"]["trace_id"] == "trace-123"
+        assert kwargs["extra_body"]["items"] == [{"keep": "value"}]
         assert kwargs["model"] == "gpt-4.1"
         assert kwargs["messages"] == [{"role": "user", "content": "test"}]
+        assert "_litellm_rate_limit_descriptors" in data
+        assert "_litellm_tpm_reserved_model" in data["extra_body"]
 
     @pytest.mark.asyncio
     async def test_async_request_drops_internal_litellm_fields(self):
@@ -181,6 +207,19 @@ class TestEmptyResponseHandling:
             "messages": [{"role": "user", "content": "test"}],
             "_litellm_rate_limit_descriptors": ["should-not-leave-litellm"],
             "_litellm_tpm_reserved_tokens": 42,
+            "extra_body": {
+                "_litellm_tpm_reserved_model": "gpt-4.1",
+                "metadata": {
+                    "_litellm_tpm_reserved_scopes": [["api_key", "hash"]],
+                    "trace_id": "trace-123",
+                },
+                "items": [
+                    {
+                        "_litellm_tpm_reservation_released": True,
+                        "keep": "value",
+                    }
+                ],
+            },
         }
 
         await openai_chat.make_openai_chat_completion_request(
@@ -193,5 +232,18 @@ class TestEmptyResponseHandling:
         _, kwargs = create_mock.call_args
         assert "_litellm_rate_limit_descriptors" not in kwargs
         assert "_litellm_tpm_reserved_tokens" not in kwargs
+        assert "_litellm_tpm_reserved_model" not in kwargs["extra_body"]
+        assert (
+            "_litellm_tpm_reserved_scopes"
+            not in kwargs["extra_body"]["metadata"]
+        )
+        assert (
+            "_litellm_tpm_reservation_released"
+            not in kwargs["extra_body"]["items"][0]
+        )
+        assert kwargs["extra_body"]["metadata"]["trace_id"] == "trace-123"
+        assert kwargs["extra_body"]["items"] == [{"keep": "value"}]
         assert kwargs["model"] == "gpt-4.1"
         assert kwargs["messages"] == [{"role": "user", "content": "test"}]
+        assert "_litellm_rate_limit_descriptors" in data
+        assert "_litellm_tpm_reserved_model" in data["extra_body"]
