@@ -5,6 +5,7 @@ This uses aws_sdk_bedrock_runtime for bidirectional streaming with Nova Sonic.
 """
 
 import asyncio
+import contextlib
 import json
 from typing import Any, Optional
 
@@ -187,15 +188,11 @@ class BedrockRealtime(BaseAWSLLM):
 
         except Exception as e:
             verbose_proxy_logger.debug(f"Client to Bedrock forwarding ended: {e}", exc_info=True)
-            try:
+            with contextlib.suppress(Exception):
                 for close_message in transformation_config.session_close_messages():
                     await send_to_bedrock(close_message)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 await bedrock_stream.input_stream.close()
-            except Exception:
-                pass
 
     async def _forward_bedrock_to_client(
         self,
