@@ -8,7 +8,6 @@ import asyncio
 import contextvars
 from functools import partial
 from typing import (
-    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Coroutine,
@@ -22,6 +21,8 @@ from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.passthrough.utils import CommonUtils
@@ -30,17 +31,13 @@ from litellm.utils import client
 base_llm_http_handler = BaseLLMHTTPHandler()
 from .utils import BasePassthroughUtils
 
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-
 
 class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
     def __init__(
         self,
         response: Coroutine[Any, Any, httpx.Response],
-        litellm_logging_obj: "LiteLLMLoggingObj",
-        provider_config: "BasePassthroughConfig",
+        litellm_logging_obj: LiteLLMLoggingObj,
+        provider_config: BasePassthroughConfig,
     ) -> None:
         self._initialized = False
         self._status_code: int = 0
@@ -119,7 +116,7 @@ class AsyncPassthroughStreamingResponse(AsyncGenerator[Any, Any]):
                 e,
             )
 
-    def __aiter__(self) -> "AsyncPassthroughStreamingResponse":
+    def __aiter__(self) -> AsyncPassthroughStreamingResponse:
         return self
 
     async def __anext__(self) -> bytes:
@@ -160,8 +157,8 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
     def __init__(
         self,
         response: httpx.Response,
-        litellm_logging_obj: "LiteLLMLoggingObj",
-        provider_config: "BasePassthroughConfig",
+        litellm_logging_obj: LiteLLMLoggingObj,
+        provider_config: BasePassthroughConfig,
     ) -> None:
         self._response = response
         self.headers = response.headers
@@ -192,7 +189,7 @@ class PassthroughStreamingResponse(Generator[Any, Any, Any]):
                 e,
             )
 
-    def __iter__(self) -> "PassthroughStreamingResponse":
+    def __iter__(self) -> PassthroughStreamingResponse:
         return self
 
     def __next__(self) -> bytes:
@@ -260,7 +257,7 @@ async def allm_passthrough_route(
         from litellm.utils import ProviderConfigManager
 
         provider_config = cast(
-            "BasePassthroughConfig" | None, kwargs.get("provider_config")
+            BasePassthroughConfig | None, kwargs.get("provider_config")
         ) or ProviderConfigManager.get_provider_passthrough_config(
             provider=LlmProviders(custom_llm_provider),
             model=model,
@@ -328,7 +325,7 @@ async def allm_passthrough_route(
         if resolved_custom_llm_provider:
             try:
                 provider_config = cast(
-                    "BasePassthroughConfig" | None, kwargs.get("provider_config")
+                    BasePassthroughConfig | None, kwargs.get("provider_config")
                 ) or ProviderConfigManager.get_provider_passthrough_config(
                     provider=LlmProviders(resolved_custom_llm_provider),
                     model=model,
@@ -387,7 +384,7 @@ def llm_passthrough_route(
 
     _is_async = allm_passthrough_route
 
-    litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
+    litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
 
     model, custom_llm_provider, api_key, api_base = get_llm_provider(
         model=model,
@@ -432,7 +429,7 @@ def llm_passthrough_route(
     )
 
     provider_config = cast(
-        "BasePassthroughConfig" | None, kwargs.get("provider_config")
+        BasePassthroughConfig | None, kwargs.get("provider_config")
     ) or ProviderConfigManager.get_provider_passthrough_config(
         provider=LlmProviders(custom_llm_provider),
         model=model,
@@ -550,8 +547,8 @@ async def _async_passthrough_request(
     client: HTTPHandler | AsyncHTTPHandler,
     request: httpx.Request,
     is_streaming_request: bool,
-    litellm_logging_obj: "LiteLLMLoggingObj",
-    provider_config: "BasePassthroughConfig",
+    litellm_logging_obj: LiteLLMLoggingObj,
+    provider_config: BasePassthroughConfig,
 ) -> httpx.Response | AsyncGenerator[Any, Any]:
     """
     Handle async passthrough requests.
