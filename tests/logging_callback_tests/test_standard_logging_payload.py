@@ -335,6 +335,17 @@ def test_get_model_cost_information():
     )
 
 
+def test_get_model_cost_information_custom_pricing_uses_base_model():
+    result = StandardLoggingPayloadSetup.get_model_cost_information(
+        base_model="bedrock/invoke/global.anthropic.claude-opus-4-6-v1",
+        custom_pricing=True,
+        custom_llm_provider="bedrock",
+        init_response_obj={"model": "invoke_test_claude"},
+    )
+    assert result["model_map_value"] is not None
+    assert result["model_map_key"] != "invoke_test_claude"
+
+
 def test_get_hidden_params():
     """Test get_hidden_params with different inputs"""
     # Test with None
