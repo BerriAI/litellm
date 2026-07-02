@@ -5560,7 +5560,7 @@ def _get_budget_window(
     today: date,
     budget_duration: Optional[str],
     budget_reset_at: Optional[datetime],
-) -> Tuple[date, int]:
+) -> tuple[date, int]:
     if budget_duration is None or budget_reset_at is None:
         return _get_month_end_date(today), max(today.day - 1, 1)
     try:
@@ -5594,7 +5594,7 @@ def _get_projected_spend_over_limit(
     soft_budget_limit: Optional[float],
     budget_duration: Optional[str] = None,
     budget_reset_at: Optional[datetime] = None,
-) -> Optional[Tuple[float, date]]:
+) -> Optional[tuple[float, date]]:
     if soft_budget_limit is None:
         return None
 
