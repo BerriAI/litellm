@@ -64,9 +64,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
             default_api_base=self.TINYFISH_API_BASE,
         )
         if not resolved_key:
-            raise ValueError(
-                "TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable."
-            )
+            raise ValueError("TINYFISH_API_KEY is not set. Set `TINYFISH_API_KEY` environment variable.")
         return {**headers, "X-API-Key": resolved_key, "Accept": "application/json"}
 
     def get_complete_url(
@@ -76,13 +74,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
         data: dict[str, object] | list[dict[str, object]] | None = None,
         **kwargs: object,
     ) -> str:
-        resolved_base = (
-            api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
-        )
+        resolved_base = api_base or get_secret_str("TINYFISH_API_BASE") or self.TINYFISH_API_BASE
         if isinstance(data, dict) and _TINYFISH_PARAMS_KEY in data:
-            validated_params = _UrlEncodableParams.validate_python(
-                data[_TINYFISH_PARAMS_KEY]
-            )
+            validated_params = _UrlEncodableParams.validate_python(data[_TINYFISH_PARAMS_KEY])
             return f"{resolved_base}?{urlencode(validated_params, doseq=True)}"
         return resolved_base
 
@@ -118,9 +112,7 @@ class TinyfishSearchConfig(BaseSearchConfig):
         resolved_query = " ".join(query) if isinstance(query, list) else query
 
         try:
-            domains = _StrList.validate_python(
-                optional_params.get("search_domain_filter")
-            )
+            domains = _StrList.validate_python(optional_params.get("search_domain_filter"))
         except (ValidationError, TypeError):
             domains = []
         if domains:
