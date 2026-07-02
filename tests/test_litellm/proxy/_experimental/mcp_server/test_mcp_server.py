@@ -6498,3 +6498,86 @@ class TestMCPMetaTraceCarrier:
         assert _mcp_meta_trace_carrier(SimpleNamespace(meta=None)) is None
         only_progress = RequestParams.Meta.model_validate({"progressToken": "p1"})
         assert _mcp_meta_trace_carrier(SimpleNamespace(meta=only_progress)) is None
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_includes_active_servers_submitted_by_user():
+    """BYOM submitters can see approved servers they submitted without allow_all_keys."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    submitted_server = _make_mcp_server_for_scope_filter("submitted-1", "user_mcp")
+    submitter = UserAPIKeyAuth(
+        user_id="submitter-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-submitter",
+    )
+    other_user = UserAPIKeyAuth(
+        user_id="other-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-other",
+    )
+
+    async def _submitted_ids(prisma_client, user_id):
+        return ["submitted-1"] if user_id == "submitter-user" else []
+
+    with (
+        patch.object(
+            global_mcp_server_manager,
+            "get_registry",
+            return_value={"submitted-1": submitted_server},
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp."
+            "MCPRequestHandler.get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy._experimental.mcp_server.db.get_active_submitted_mcp_server_ids_for_user",
+            side_effect=_submitted_ids,
+        ),
+    ):
+        submitter_allowed = await global_mcp_server_manager.get_allowed_mcp_servers(submitter)
+        other_allowed = await global_mcp_server_manager.get_allowed_mcp_servers(other_user)
+
+    assert "submitted-1" in submitter_allowed
+    assert "submitted-1" not in other_allowed
+
+
+@pytest.mark.asyncio
+async def test_get_active_submitted_mcp_server_ids_for_user_queries_active_rows():
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_active_submitted_mcp_server_ids_for_user,
+    )
+    from litellm.proxy._types import MCPApprovalStatus
+
+    row = MagicMock()
+    row.server_id = "submitted-1"
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+
+    result = await get_active_submitted_mcp_server_ids_for_user(prisma_client, "submitter-user")
+
+    assert result == ["submitted-1"]
+    prisma_client.db.litellm_mcpservertable.find_many.assert_awaited_once_with(
+        where={
+            "submitted_by": "submitter-user",
+            "approval_status": MCPApprovalStatus.active,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_active_submitted_mcp_server_ids_for_user_empty_user_id_skips_db():
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_active_submitted_mcp_server_ids_for_user,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock()
+
+    assert await get_active_submitted_mcp_server_ids_for_user(prisma_client, "") == []
+    prisma_client.db.litellm_mcpservertable.find_many.assert_not_awaited()
