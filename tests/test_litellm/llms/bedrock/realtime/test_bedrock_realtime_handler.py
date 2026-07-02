@@ -39,6 +39,14 @@ class SendFailingInputStream(FakeInputStream):
         raise RuntimeError("bedrock send failed")
 
 
+class FailOnPromptEndStream(FakeInputStream):
+    async def send(self, event):
+        payload = json.loads(event.value.bytes_.decode("utf-8"))
+        if "promptEnd" in payload.get("event", {}):
+            raise RuntimeError("bedrock rejected promptEnd")
+        self.sent.append(event)
+
+
 class FakeBedrockStream:
     def __init__(self, input_stream=None):
         self.input_stream = input_stream if input_stream is not None else FakeInputStream()
@@ -127,6 +135,22 @@ class TestBedrockRealtimeHandler:
 
         await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
 
+        assert stream.input_stream.closed
+
+    @pytest.mark.asyncio
+    async def test_close_flush_continues_after_partial_send_failure(self, stub_aws_models):
+        handler = BedrockRealtime()
+        config = BedrockRealtimeConfig()
+        stream = FakeBedrockStream(input_stream=FailOnPromptEndStream())
+        client_ws = DisconnectingClientWS(
+            [json.dumps({"type": "session.update", "session": {"instructions": "You are helpful."}})]
+        )
+
+        await handler._forward_client_to_bedrock(client_ws, stream, config, "amazon.nova-sonic-v1:0", {})
+
+        sent_events = [json.loads(chunk.value.bytes_.decode("utf-8")) for chunk in stream.input_stream.sent]
+        event_names = [next(iter(event["event"])) for event in sent_events]
+        assert "sessionEnd" in event_names
         assert stream.input_stream.closed
 
     @pytest.mark.asyncio

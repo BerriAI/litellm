@@ -188,8 +188,8 @@ class BedrockRealtime(BaseAWSLLM):
 
         except Exception as e:
             verbose_proxy_logger.debug(f"Client to Bedrock forwarding ended: {e}", exc_info=True)
-            with contextlib.suppress(Exception):
-                for close_message in transformation_config.session_close_messages():
+            for close_message in transformation_config.session_close_messages():
+                with contextlib.suppress(Exception):
                     await send_to_bedrock(close_message)
             with contextlib.suppress(Exception):
                 await bedrock_stream.input_stream.close()
