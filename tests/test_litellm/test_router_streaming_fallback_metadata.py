@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
+from litellm.proxy.proxy_server import _should_include_fallback_errors
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 
@@ -162,3 +163,25 @@ async def test_set_response_headers_adds_model_group_to_streaming_wrapper():
         "x-existing": "keep",
         "x-litellm-model-group": "fallback-model",
     }
+
+
+def test_should_include_fallback_errors_gated_by_operator_setting():
+    request_data: dict = {"include_fallback_errors": True}
+
+    import litellm.proxy.proxy_server as ps
+
+    original = ps.general_settings.copy() if isinstance(ps.general_settings, dict) else {}
+    try:
+        ps.general_settings = {}
+        assert _should_include_fallback_errors(request_data) is False
+
+        ps.general_settings = {"expose_fallback_errors_to_caller": False}
+        assert _should_include_fallback_errors(request_data) is False
+
+        ps.general_settings = {"expose_fallback_errors_to_caller": True}
+        assert _should_include_fallback_errors(request_data) is True
+
+        ps.general_settings = {"expose_fallback_errors_to_caller": True}
+        assert _should_include_fallback_errors({}) is False
+    finally:
+        ps.general_settings = original

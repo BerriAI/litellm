@@ -11,9 +11,7 @@ from litellm.types.router import GenericLiteLLMParams
 from .common_utils import BedrockClaudePlatformMixin, strip_claude_platform_route
 
 
-class BedrockClaudePlatformMessagesConfig(
-    BedrockClaudePlatformMixin, AnthropicMessagesConfig
-):
+class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicMessagesConfig):
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -38,9 +36,7 @@ class BedrockClaudePlatformMessagesConfig(
         resolved_api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
         headers = {
             **headers,
-            "anthropic-version": headers.get(
-                "anthropic-version", DEFAULT_ANTHROPIC_API_VERSION
-            ),
+            "anthropic-version": headers.get("anthropic-version", DEFAULT_ANTHROPIC_API_VERSION),
             "content-type": headers.get("content-type", "application/json"),
             "anthropic-workspace-id": workspace_id,
         }

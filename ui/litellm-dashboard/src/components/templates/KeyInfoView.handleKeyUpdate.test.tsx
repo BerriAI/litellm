@@ -267,6 +267,15 @@ vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   }),
 }));
 
+// useQueryClient also needs a provider; the delete-path invalidation is covered in key_info_view.test.tsx
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>();
+  return {
+    ...actual,
+    useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  };
+});
+
 // KeyEditView mock: triggers onSubmit with our injected form values
 vi.mock("./key_edit_view", async () => {
   const React = await import("react");

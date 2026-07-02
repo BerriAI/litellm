@@ -46,9 +46,7 @@ def assert_bfl_polling_url(polling_url: str) -> None:
             message="Rejected polling URL: scheme must be https",
         )
 
-    if host != _BFL_REGISTERED_DOMAIN and not host.endswith(
-        "." + _BFL_REGISTERED_DOMAIN
-    ):
+    if host != _BFL_REGISTERED_DOMAIN and not host.endswith("." + _BFL_REGISTERED_DOMAIN):
         raise BlackForestLabsError(
             status_code=502,
             message="Rejected polling URL: host is not within the bfl.ai domain",

@@ -505,6 +505,74 @@ def test_realtime_logging_object_allows_null_transcript_in_conversation_item_add
     assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
 
 
+def test_realtime_logging_object_does_not_validate_unknown_event_types():
+    """
+    A realtime session emits events outside the OpenAIRealtimeEvents union (e.g.
+    rate_limits.updated, response.function_call_arguments.delta). Building the
+    logging object must not revalidate every event against the union; doing so
+    produces thousands of Pydantic ValidationErrors per session, blocks the event
+    loop, and the raised error discards the session's usage. The events must
+    survive verbatim, the combined usage must be preserved, and serialization
+    must stay clean.
+    """
+    import warnings
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "event_id": "ev0", "session": {"id": "s"}},
+    ]
+    for i in range(50):
+        results += [
+            {
+                "type": "rate_limits.updated",
+                "event_id": f"rl{i}",
+                "rate_limits": [{"name": "requests", "limit": 1000, "remaining": 900}],
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "event_id": f"fc{i}",
+                "delta": "{}",
+            },
+            {
+                "type": "response.done",
+                "event_id": f"rd{i}",
+                "response": {
+                    "usage": {
+                        "input_tokens": 4,
+                        "output_tokens": 6,
+                        "total_tokens": 10,
+                    }
+                },
+            },
+        ]
+
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    # On unfixed code this raises pydantic ValidationError instead of returning.
+    logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=usage,
+        results=results,
+    )
+
+    assert logging_result.usage.total_tokens == 500
+    assert len(logging_result.results) == len(results)
+    unknown_types = {
+        r["type"]
+        for r in logging_result.results
+        if r["type"]
+        in ("rate_limits.updated", "response.function_call_arguments.delta")
+    }
+    assert unknown_types == {
+        "rate_limits.updated",
+        "response.function_call_arguments.delta",
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        dumped = logging_result.model_dump()
+    assert len(dumped["results"]) == len(results)
+
+
 def test_realtime_transcription_duration_cost(monkeypatch):
     """
     gpt-realtime-whisper transcription sessions are billed by input audio duration
@@ -3047,3 +3115,64 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     assert model_info["cache_read_input_token_cost"] == 2.5e-08
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def test_completion_cost_logs_reasoning_and_cache_breakdown():
+    """
+    completion_cost must surface explicit reasoning and cache-read costs into the
+    cost_breakdown stored on the logging object, so they end up in the spend logs
+    rather than being silently folded into the output/input totals.
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Choices, CompletionTokensDetailsWrapper, Message
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    logging_obj = Logging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="reasoning-cache-breakdown",
+        function_id="f",
+    )
+
+    response = ModelResponse(
+        id="x",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content="hi"),
+                finish_reason="length",
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=209,
+            completion_tokens=3996,
+            total_tokens=4205,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=3114, text_tokens=882
+            ),
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=100, text_tokens=109
+            ),
+        ),
+    )
+
+    litellm.completion_cost(
+        completion_response=response,
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)

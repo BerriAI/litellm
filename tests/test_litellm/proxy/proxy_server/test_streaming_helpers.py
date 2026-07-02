@@ -751,6 +751,7 @@ async def test_async_data_generator_switches_model_mid_stream_on_fallback(monkey
 @pytest.mark.asyncio
 async def test_async_data_generator_emits_fallback_error_metadata_event(monkeypatch):
     _patch_logging_flags(monkeypatch)
+    monkeypatch.setitem(ps.general_settings, "expose_fallback_errors_to_caller", True)
 
     fallback_errors = [
         {

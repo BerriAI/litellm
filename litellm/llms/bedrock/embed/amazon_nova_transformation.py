@@ -40,9 +40,7 @@ class AmazonNovaEmbeddingConfig:
             "dimensions",
         ]
 
-    def map_openai_params(
-        self, non_default_params: dict, optional_params: dict
-    ) -> dict:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         """Map OpenAI-style parameters to Nova parameters."""
         for k, v in non_default_params.items():
             if k == "dimensions":
@@ -70,9 +68,7 @@ class AmazonNovaEmbeddingConfig:
         # Split by comma to separate metadata from data
         # Format: data:image/jpeg;base64,<base64_data>
         if "," not in data_url:
-            raise ValueError(
-                f"Invalid data URL format (missing comma): {data_url[:50]}..."
-            )
+            raise ValueError(f"Invalid data URL format (missing comma): {data_url[:50]}...")
 
         metadata, base64_data = data_url.split(",", 1)
 
@@ -129,9 +125,7 @@ class AmazonNovaEmbeddingConfig:
         if "dimensions" in embedding_params:
             embedding_params["embeddingDimension"] = embedding_params.pop("dimensions")
         elif "embedding_dimension" in embedding_params:
-            embedding_params["embeddingDimension"] = embedding_params.pop(
-                "embedding_dimension"
-            )
+            embedding_params["embeddingDimension"] = embedding_params.pop("embedding_dimension")
 
         # Add required embeddingPurpose if not provided (required by Nova API)
         if "embeddingPurpose" not in embedding_params:
@@ -322,9 +316,7 @@ class AmazonNovaEmbeddingConfig:
 
         return EmbeddingResponse(data=embeddings, model=model, usage=usage)
 
-    def _transform_async_invoke_response(
-        self, response: dict, model: str
-    ) -> EmbeddingResponse:
+    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 
