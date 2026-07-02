@@ -58,6 +58,7 @@ export const useMcpOAuthFlow = ({
   const [error, setError] = useState<string | null>(null);
   const [tokenResponse, setTokenResponse] = useState<Record<string, any> | null>(null);
   const processingRef = useRef(false);
+  const resetVersionRef = useRef(0);
 
   const FLOW_STATE_KEY = "litellm-mcp-oauth-flow-state";
   const RESULT_KEY = "litellm-mcp-oauth-result";
@@ -287,6 +288,8 @@ export const useMcpOAuthFlow = ({
       }
     }
 
+    const resetVersion = resetVersionRef.current;
+
     try {
       if (!flowState || !flowState.state || !flowState.codeVerifier || !flowState.serverId) {
         throw new Error(
@@ -315,22 +318,31 @@ export const useMcpOAuthFlow = ({
         accessToken,
       });
 
+      if (resetVersion !== resetVersionRef.current) {
+        return;
+      }
+
       onTokenReceived(token, { clientId: flowState.clientId, clientSecret: flowState.clientSecret });
       setTokenResponse(token);
       setStatus("success");
       setError(null);
       NotificationsManager.success("OAuth token retrieved successfully");
     } catch (err) {
+      if (resetVersion !== resetVersionRef.current) {
+        return;
+      }
       const message = extractErrorMessage(err);
       setError(message);
       setStatus("error");
       NotificationsManager.error(message);
     } finally {
-      clearStoredFlow();
-      // Reset processing flag after a delay to allow UI updates
-      setTimeout(() => {
-        processingRef.current = false;
-      }, 1000);
+      if (resetVersion === resetVersionRef.current) {
+        clearStoredFlow();
+        // Reset processing flag after a delay to allow UI updates
+        setTimeout(() => {
+          processingRef.current = false;
+        }, 1000);
+      }
     }
   }, [onTokenReceived]);
 
@@ -339,6 +351,7 @@ export const useMcpOAuthFlow = ({
   }, [resumeOAuthFlow]);
 
   const reset = useCallback(() => {
+    resetVersionRef.current += 1;
     setStatus("idle");
     setError(null);
     setTokenResponse(null);

@@ -88,6 +88,34 @@ describe("useMcpOAuthFlow reset", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("ignores an in-flight exchange result after reset", async () => {
+    const token = { access_token: "stale-token" };
+    let resolveExchange: (value: typeof token) => void = () => undefined;
+    const exchangePromise = new Promise<typeof token>((resolve) => {
+      resolveExchange = resolve;
+    });
+    vi.mocked(networking.exchangeMcpOAuthToken).mockReturnValueOnce(exchangePromise);
+    seedCompletedRedirect();
+
+    const onTokenReceived = vi.fn();
+    const { result } = renderFlow(onTokenReceived);
+
+    await waitFor(() => expect(result.current.status).toBe("exchanging"));
+
+    act(() => {
+      result.current.reset();
+    });
+
+    await act(async () => {
+      resolveExchange(token);
+      await exchangePromise;
+    });
+
+    expect(onTokenReceived).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
+    expect(result.current.tokenResponse).toBeNull();
+  });
+
   it("clears the in-flight guard so a callback after a mid-exchange close is not swallowed", async () => {
     // First exchange hangs, mimicking the modal being closed while the token
     // endpoint is still in flight. processingRef is left true at that point.

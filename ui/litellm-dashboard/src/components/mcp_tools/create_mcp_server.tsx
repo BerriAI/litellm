@@ -114,6 +114,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const isM2MFlow = isOAuthAuthType && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
 
+  const getOAuthAuthorizationTarget = (values: Record<string, unknown>): string | undefined => {
+    const transport = values.transport || transportType;
+    const target = transport === TRANSPORT.OPENAPI ? values.spec_path : values.url;
+    return typeof target === "string" ? target : undefined;
+  };
+
   const persistCreateUiState = () => {
     if (typeof window === "undefined") {
       return;
@@ -194,7 +200,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         };
 
         form.setFieldsValue({ credentials });
-        setAuthorizedUrl(form.getFieldValue("url") || form.getFieldValue("spec_path"));
+        setAuthorizedUrl(getOAuthAuthorizationTarget(form.getFieldsValue(true)));
 
         NotificationsManager.success(
           "OAuth authorization successful! Please click 'Create MCP Server' to save the configuration.",
@@ -589,6 +595,31 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
   const isAdmin = isAdminRole(userRole);
 
+  const handleFormValuesChange = (changedValues: Record<string, unknown>, allValues: Record<string, unknown>) => {
+    const changedAuthorizationTarget = "url" in changedValues || "spec_path" in changedValues;
+    if (
+      changedAuthorizationTarget &&
+      authorizedUrl !== undefined &&
+      getOAuthAuthorizationTarget(allValues) !== authorizedUrl
+    ) {
+      const invalidated = {
+        credentials: undefined,
+        authorization_url: changedValues.authorization_url,
+        token_url: changedValues.token_url,
+        registration_url: changedValues.registration_url,
+      };
+      form.resetFields(["credentials", "authorization_url", "token_url", "registration_url"]);
+      form.setFieldsValue(invalidated);
+      setOauthAccessToken(null);
+      clearTools();
+      resetOAuthFlow();
+      setAuthorizedUrl(undefined);
+      setFormValues({ ...allValues, ...invalidated });
+      return;
+    }
+    setFormValues(allValues);
+  };
+
   // rendering
   return (
     <Modal
@@ -633,26 +664,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         <Form
           form={form}
           onFinish={handleCreate}
-          onValuesChange={(changedValues, allValues) => {
-            const serverUrlChanged = "url" in changedValues || "spec_path" in changedValues;
-            const nextServerUrl = (allValues.url as string | undefined) || (allValues.spec_path as string | undefined);
-            if (serverUrlChanged && authorizedUrl !== undefined && nextServerUrl !== authorizedUrl) {
-              const invalidated = {
-                credentials: undefined,
-                authorization_url: undefined,
-                token_url: undefined,
-                registration_url: undefined,
-              };
-              form.setFieldsValue(invalidated);
-              setOauthAccessToken(null);
-              clearTools();
-              resetOAuthFlow();
-              setAuthorizedUrl(undefined);
-              setFormValues({ ...allValues, ...invalidated });
-              return;
-            }
-            setFormValues(allValues);
-          }}
+          onValuesChange={handleFormValuesChange}
           layout="vertical"
           className="space-y-6"
         >
@@ -772,7 +784,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <OpenAPIFormSection
                 form={form}
                 accessToken={isModalVisible ? accessToken : null}
-                onValuesChange={(updates) => setFormValues((prev) => ({ ...prev, ...updates }))}
+                onValuesChange={(updates) =>
+                  handleFormValuesChange(updates, { ...form.getFieldsValue(true), ...updates })
+                }
                 onKeyToolsChange={setKeyTools}
                 onLogoUrlChange={setLogoUrl}
                 onOAuthDocsUrlChange={setOauthDocsUrl}
