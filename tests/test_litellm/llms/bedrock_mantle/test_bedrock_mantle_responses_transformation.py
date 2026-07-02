@@ -714,6 +714,20 @@ class TestMantleSupportsResponses:
                 {"bedrock_mantle/google.gemma-3-27b-it": {"mode": "chat"}},
                 False,
             ),
+            # grok-4.3 on mantle openai/v1 responses path
+            (
+                "xai.grok-4.3",
+                {
+                    "bedrock_mantle/xai.grok-4.3": {
+                        "mode": "chat",
+                        "supported_endpoints": [
+                            "/v1/chat/completions",
+                            "/v1/responses",
+                        ],
+                    }
+                },
+                True,
+            ),
             # absent from model_cost -> no signal -> not supported
             ("somelab.unmapped", {}, False),
             (None, {}, False),
@@ -757,6 +771,10 @@ class TestBedrockMantlePerModelResponsesURL:
     )
     def test_gemma_4_uses_openai_responses_path(self, local_cost_map, model):
         url = self._url_for(model)
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+    def test_grok_4_3_uses_openai_responses_path(self, local_cost_map):
+        url = self._url_for("xai.grok-4.3")
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 
 
@@ -1230,3 +1248,15 @@ class TestBedrockMantleResponsesPricing:
     def test_models_registered(self, local_cost_map):
         assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
         assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
+        assert "bedrock_mantle/xai.grok-4.3" in litellm.bedrock_mantle_models
+
+    def test_grok_4_3_pricing_and_capabilities(self, local_cost_map):
+        info = litellm.get_model_info("bedrock_mantle/xai.grok-4.3")
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == pytest.approx(1.25e-06)
+        assert info["output_cost_per_token"] == pytest.approx(2.5e-06)
+        assert info["max_input_tokens"] == 1000000
+        assert info["supports_none_reasoning_effort"] is True
+        from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment
+
+        assert mantle_base_segment("xai.grok-4.3", litellm.model_cost) == "openai/v1"
