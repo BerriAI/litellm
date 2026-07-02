@@ -1,4 +1,6 @@
+import asyncio
 import json
+from datetime import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -1226,6 +1228,22 @@ class TestCallToolRestAPI:
         assert captured["name"] == "demo-tool"
         assert captured["arguments"] == {"foo": "bar"}
         assert captured["allowed_mcp_servers"] == [stub_server]
+        fire_logging.assert_awaited_once()
+
+    async def test_success_logging_cancellation_propagates(self, monkeypatch):
+        fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_success_logging",
+            fire_logging,
+            raising=False,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await rest_endpoints._safe_fire_mcp_success_logging(
+                object(), {"result": "ok"}, datetime.now(), datetime.now()
+            )
+
         fire_logging.assert_awaited_once()
 
 

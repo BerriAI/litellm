@@ -98,6 +98,8 @@ if MCP_AVAILABLE:
             return_exceptions=True,
         )
         logging_error = logging_results[0]
+        if isinstance(logging_error, asyncio.CancelledError):
+            raise logging_error
         if isinstance(logging_error, BaseException):
             verbose_logger.warning("MCP tool success logging failed (continuing): %s", logging_error)
 
