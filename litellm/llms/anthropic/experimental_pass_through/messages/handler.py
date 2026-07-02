@@ -377,6 +377,30 @@ def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional
     return anthropic_metadata_obj.model_dump(exclude_none=True)
 
 
+def _drop_unsupported_anthropic_messages_params(
+    anthropic_messages_optional_request_params: dict,
+    model: str,
+    custom_llm_provider: Optional[str],
+    additional_drop_params: Optional[list] = None,
+) -> dict:
+    from litellm.utils import _should_drop_param
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    additional_drop_params = additional_drop_params or []
+    for k in list(anthropic_messages_optional_request_params.keys()):
+        if _should_drop_param(k, additional_drop_params):
+            anthropic_messages_optional_request_params.pop(k, None)
+
+    if not AnthropicConfig._model_supports_effort_param(model):
+        anthropic_messages_optional_request_params.pop("output_config", None)
+    if not AnthropicConfig._supports_model_capability(model, "supports_reasoning"):
+        anthropic_messages_optional_request_params.pop("thinking", None)
+    if "context_management" in anthropic_messages_optional_request_params:
+        if custom_llm_provider in ["vertex_ai", "bedrock"] and "haiku" in model.lower():
+            anthropic_messages_optional_request_params.pop("context_management", None)
+    return anthropic_messages_optional_request_params
+
+
 def anthropic_messages_handler(
     max_tokens: int,
     messages: List[Dict],
@@ -548,21 +572,12 @@ def anthropic_messages_handler(
     )
 
     if should_drop_params:
-        from litellm.utils import _should_drop_param
-        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-
-        additional_drop_params = kwargs.get("additional_drop_params") or []
-        for k in list(anthropic_messages_optional_request_params.keys()):
-            if _should_drop_param(k, additional_drop_params):
-                anthropic_messages_optional_request_params.pop(k, None)
-
-        if not AnthropicConfig._model_supports_effort_param(model):
-            anthropic_messages_optional_request_params.pop("output_config", None)
-        if not AnthropicConfig._supports_model_capability(model, "supports_reasoning"):
-            anthropic_messages_optional_request_params.pop("thinking", None)
-        if "context_management" in anthropic_messages_optional_request_params:
-            if custom_llm_provider in ["vertex_ai", "bedrock"] and "haiku" in model.lower():
-                anthropic_messages_optional_request_params.pop("context_management", None)
+        anthropic_messages_optional_request_params = _drop_unsupported_anthropic_messages_params(
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            additional_drop_params=kwargs.get("additional_drop_params"),
+        )
     if is_reasoning_auto_summary_enabled():
         thinking_param = anthropic_messages_optional_request_params.get("thinking")
         if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
