@@ -546,7 +546,7 @@ def _translate_anthropic_batch_item_to_openai(item: dict) -> dict:
     """
     result = item.get("result", {})
     if result.get("type") != "succeeded":
-        # failed/errored items — return as-is so _batch_response_was_successful
+        # failed/errored items return as-is so _batch_response_was_successful
         # correctly treats them as non-200
         return item
 

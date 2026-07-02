@@ -33,7 +33,7 @@ def test_translate_failed_item_passes_through():
         "result": {"type": "errored", "error": {"type": "server_error"}},
     }
     result = _translate_anthropic_batch_item_to_openai(item)
-    # failed items pass through unchanged — no response.status_code == 200
+    # failed items pass through unchanged; no response.status_code == 200
     assert result == item
 
 
