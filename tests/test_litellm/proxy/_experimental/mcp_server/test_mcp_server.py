@@ -4164,6 +4164,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
             _get_tools_from_mcp_servers,
         )
         from litellm.proxy._types import UserAPIKeyAuth
+        from mcp.types import Tool as MCPTool
     except ImportError:
         pytest.skip("MCP server not available")
 
@@ -4177,12 +4178,20 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
     server_a.auth_type = None
     server_a.extra_headers = None
 
-    tool_1 = MagicMock()
-    tool_1.name = "server_a-tool_1"
+    tool_1 = MCPTool(
+        name="server_a-tool_1",
+        description="test tool",
+        inputSchema={"type": "object"},
+    )
 
     dummy_logging_obj = MagicMock()
     dummy_logging_obj.model_call_details = {"metadata": {"spend_logs_metadata": {}}}
     dummy_logging_obj.async_success_handler = AsyncMock()
+    function_setup_kwargs = {}
+
+    def _capture_function_setup(*_args, **kwargs):
+        function_setup_kwargs.update(kwargs)
+        return dummy_logging_obj, None
 
     with (
         patch(
@@ -4206,7 +4215,7 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.function_setup",
-            return_value=(dummy_logging_obj, None),
+            side_effect=_capture_function_setup,
         ),
     ):
         mock_manager._get_tools_from_server = AsyncMock(return_value=[tool_1])
@@ -4218,13 +4227,15 @@ async def test_get_tools_from_mcp_servers_logs_list_tools_to_spendlogs_when_enab
             mcp_server_auth_headers=None,
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="mcp_protocol",
+            request_tags=["team-a"],
         )
 
     assert tools == [tool_1]
     dummy_logging_obj.async_success_handler.assert_awaited_once()
     assert dummy_logging_obj.async_success_handler.await_args.kwargs["result"] == [
-        tool_1
+        tool_1.model_dump(mode="json")
     ]
+    assert function_setup_kwargs["metadata"]["tags"] == ["team-a"]
 
     spend_meta = dummy_logging_obj.model_call_details["metadata"]["spend_logs_metadata"]
     assert spend_meta["tool_count_total"] == 1
