@@ -156,12 +156,19 @@ class BedrockRealtime(BaseAWSLLM):
         session_state: dict,
     ):
         """Forward messages from client WebSocket to Bedrock stream."""
-        try:
-            from aws_sdk_bedrock_runtime.models import (
-                BidirectionalInputPayloadPart,
-                InvokeModelWithBidirectionalStreamInputChunk,
-            )
+        from aws_sdk_bedrock_runtime.models import (
+            BidirectionalInputPayloadPart,
+            InvokeModelWithBidirectionalStreamInputChunk,
+        )
 
+        async def send_to_bedrock(bedrock_message: str) -> None:
+            event = InvokeModelWithBidirectionalStreamInputChunk(
+                value=BidirectionalInputPayloadPart(bytes_=bedrock_message.encode("utf-8"))
+            )
+            await bedrock_stream.input_stream.send(event)
+            verbose_proxy_logger.debug(f"Bedrock Realtime: Sent to Bedrock: {bedrock_message[:200]}")
+
+        try:
             while True:
                 # Receive message from client
                 message = await client_ws.receive_text()
@@ -176,16 +183,13 @@ class BedrockRealtime(BaseAWSLLM):
 
                 # Send transformed messages to Bedrock
                 for bedrock_message in transformed_messages:
-                    event = InvokeModelWithBidirectionalStreamInputChunk(
-                        value=BidirectionalInputPayloadPart(bytes_=bedrock_message.encode("utf-8"))
-                    )
-                    await bedrock_stream.input_stream.send(event)
-                    verbose_proxy_logger.debug(f"Bedrock Realtime: Sent to Bedrock: {bedrock_message[:200]}")
+                    await send_to_bedrock(bedrock_message)
 
         except Exception as e:
             verbose_proxy_logger.debug(f"Client to Bedrock forwarding ended: {e}", exc_info=True)
-            # Close the Bedrock stream input
             try:
+                for close_message in transformation_config.session_close_messages():
+                    await send_to_bedrock(close_message)
                 await bedrock_stream.input_stream.close()
             except Exception:
                 pass
@@ -205,6 +209,10 @@ class BedrockRealtime(BaseAWSLLM):
                 # Receive from Bedrock
                 output = await bedrock_stream.await_output()
                 result = await output[1].receive()
+
+                if result is None:
+                    verbose_proxy_logger.debug("Bedrock Realtime: Bedrock stream ended")
+                    break
 
                 if result.value and result.value.bytes_:
                     bedrock_response = result.value.bytes_.decode("utf-8")
@@ -252,6 +260,7 @@ class BedrockRealtime(BaseAWSLLM):
 
         except Exception as e:
             verbose_proxy_logger.debug(f"Bedrock to client forwarding ended: {e}", exc_info=True)
+        finally:
             # Close the client WebSocket
             try:
                 await client_ws.close()
