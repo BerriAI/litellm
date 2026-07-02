@@ -771,10 +771,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         {/* Auth format hint */}
                         {getFieldValue("auth_type") && getFieldValue("auth_type") !== "none" && (
                           <div className="mb-4 p-3 bg-blue-50 rounded-lg text-sm text-blue-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <InfoCircleOutlined className="mt-0.5 shrink-0" />
                             <span>
                               User keys will be sent as:{" "}
-                              <code className="font-mono bg-blue-100 px-1 rounded">
+                              <code className="font-mono bg-blue-100 px-1 rounded-sm">
                                 {getFieldValue("auth_type") === "bearer_token" && "Authorization: Bearer {key}"}
                                 {getFieldValue("auth_type") === "token" && "Authorization: token {key}"}
                                 {getFieldValue("auth_type") === "api_key" && "x-api-key: {key}"}
@@ -787,7 +787,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         )}
                         {!getFieldValue("auth_type") && (
                           <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
-                            <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
+                            <InfoCircleOutlined className="mt-0.5 shrink-0" />
                             <span>
                               Set the <strong>Authentication Type</strong> below to specify how user keys are sent
                               (e.g., Bearer Token, API Key header).

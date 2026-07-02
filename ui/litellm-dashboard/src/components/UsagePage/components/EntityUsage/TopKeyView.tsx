@@ -270,7 +270,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
               {/* Close button */}
               <button
                 onClick={handleClose}
-                className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-none"
+                className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-hidden"
                 aria-label="Close"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

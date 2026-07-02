@@ -133,9 +133,9 @@ export function GuardrailTestPanel({
             />
             <div className="flex justify-between items-center mt-1">
               <Text className="text-xs text-gray-500">
-                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Enter</kbd> to
+                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded-sm text-xs">Enter</kbd> to
                 submit •{" "}
-                <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Shift+Enter</kbd> for
+                <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded-sm text-xs">Shift+Enter</kbd> for
                 new line
               </Text>
               <Text className="text-xs text-gray-500">Characters: {inputText.length}</Text>
