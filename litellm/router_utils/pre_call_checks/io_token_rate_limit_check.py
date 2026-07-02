@@ -171,22 +171,28 @@ def _extract_reservation(reservation: Dict[str, Any]) -> Tuple[int, int, Optiona
     )
 
 
+def _reservation_channels(kwargs: Any) -> Tuple[Any, ...]:
+    """
+    Places a reservation may live, in priority order: the top-level metadata
+    channels win over litellm_params.metadata (so a top-level stash is never
+    shadowed), which win over the standard_logging_object copy.
+    """
+    if not isinstance(kwargs, dict):
+        return ()
+    channels = [kwargs.get("metadata"), kwargs.get("litellm_metadata")]
+    litellm_params = kwargs.get("litellm_params")
+    if isinstance(litellm_params, dict):
+        channels.append(litellm_params.get("metadata"))
+    standard_logging_object = kwargs.get("standard_logging_object")
+    if isinstance(standard_logging_object, dict):
+        channels.append(standard_logging_object.get("metadata"))
+    return tuple(channels)
+
+
 def _read_reservation_from_kwargs(kwargs: Any) -> Tuple[int, int, Optional[str], Optional[str]]:
-    for channel in ("metadata", "litellm_metadata"):
-        channel_dict = None
-        if isinstance(kwargs, dict):
-            channel_dict = kwargs.get(channel)
-            if not isinstance(channel_dict, dict):
-                litellm_params = kwargs.get("litellm_params")
-                if isinstance(litellm_params, dict) and isinstance(litellm_params.get("metadata"), dict):
-                    channel_dict = litellm_params.get("metadata")
+    for channel_dict in _reservation_channels(kwargs):
         if isinstance(channel_dict, dict) and ITPM_RESERVED_KEY in channel_dict:
             return _extract_reservation(channel_dict)
-    standard_logging_object = kwargs.get("standard_logging_object") if isinstance(kwargs, dict) else None
-    if isinstance(standard_logging_object, dict):
-        metadata = standard_logging_object.get("metadata") or {}
-        if ITPM_RESERVED_KEY in metadata:
-            return _extract_reservation(metadata)
     return 0, 0, None, None
 
 
@@ -195,16 +201,7 @@ def _clear_reservation_from_kwargs(kwargs: Any) -> None:
     Remove the stashed reservation so a retry on a different (e.g. non-IO)
     deployment does not re-process the already-reconciled/refunded reservation.
     """
-    if not isinstance(kwargs, dict):
-        return
-    candidates = [kwargs.get("metadata"), kwargs.get("litellm_metadata")]
-    litellm_params = kwargs.get("litellm_params")
-    if isinstance(litellm_params, dict):
-        candidates.append(litellm_params.get("metadata"))
-    standard_logging_object = kwargs.get("standard_logging_object")
-    if isinstance(standard_logging_object, dict):
-        candidates.append(standard_logging_object.get("metadata"))
-    for channel_dict in candidates:
+    for channel_dict in _reservation_channels(kwargs):
         if isinstance(channel_dict, dict):
             for key in (ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY):
                 channel_dict.pop(key, None)

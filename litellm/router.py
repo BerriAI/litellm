@@ -9046,8 +9046,6 @@ class Router:
             if (
                 "x-ratelimit-remaining-tokens" not in additional_headers
                 and "x-ratelimit-remaining-requests" not in additional_headers
-                and "x-ratelimit-remaining-input-tokens" not in additional_headers
-                and "x-ratelimit-remaining-output-tokens" not in additional_headers
                 and model_group is not None
             ):
                 remaining_usage = await self.get_remaining_model_group_usage(model_group)

@@ -1005,6 +1005,41 @@ async def test_set_response_headers_skips_in_flight_delta_for_io_token_group(mod
 
 
 @pytest.mark.asyncio
+async def test_set_response_headers_native_input_token_header_does_not_suppress_router_headers(model_list):
+    """
+    A provider that natively returns `x-ratelimit-remaining-input-tokens` must
+    not suppress the router's own remaining-tokens/requests headers for a
+    non-IO model group.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {"additional_headers": {"x-ratelimit-remaining-input-tokens": 5}}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 958
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    # the provider's native header is left untouched
+    assert headers["x-ratelimit-remaining-input-tokens"] == 5
+
+
+@pytest.mark.asyncio
 async def test_set_response_headers_handles_missing_usage(model_list):
     """
     Streaming chunks and some response shapes may lack a `usage` attribute or
