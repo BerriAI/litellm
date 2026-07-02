@@ -1,41 +1,79 @@
-"""Shared access predicate for admin-owned logging destinations.
+"""Shared visibility predicate for admin-owned logging destinations.
 
-``credential_info.access`` answers "who may see/assign this destination" — it is
-visibility, decoupled from enablement (which lives in ``metadata.logging_exporters``
-and the explicit ``auto_enable`` flag). The request-time resolver and the write-time
-validator gate on the SAME predicate so "visible" means the same thing on both sides:
-a team/org admin can only assign destinations they can see, and the resolver
-defensively re-checks visibility at request time.
+``credential_info.access`` answers "who may see and assign this destination". It
+is visibility, decoupled from enablement (a named assignment plus the explicit
+``auto_enable`` default-on flag). One predicate serves three callers so "visible"
+means the same thing everywhere: the ``GET /credentials`` list filter, the
+assignment validator, and the request-time resolver. When these disagree a
+non-admin can be shown, or route traffic to, a destination it should never see;
+keeping the check in one place is what prevents that.
+
+``access_grants`` is the primitive: does this ``access`` reach a caller whose
+admin scope is the given set of team ids and org ids. Single-identity callers
+(the resolver, the per-write assignment gate) pass a one-element scope built with
+``identity_scope``; the list endpoint, whose caller may administer several teams
+and orgs, passes the full scope.
 """
 
 from typing import Optional
 
-AUTO_ENABLE_KEY = "auto_enable"
+from pydantic import ValidationError
+
+from litellm.models.credentials import CredentialAccess, CredentialInfo
 
 
-def access_grants(access: object, team_id: Optional[str], org_id: Optional[str]) -> bool:
-    """Whether a destination's ``access`` makes it visible to this identity.
+def parse_credential_info(raw: object) -> Optional[CredentialInfo]:
+    """Parse stored ``credential_info`` into the typed model, or ``None`` when it is
+    absent or malformed.
 
-    ``global`` reaches everyone; otherwise the identity's team or org must be listed.
-    A missing or malformed ``access`` grants no one (fail closed): visibility must be
-    an explicit admin grant, never an accident of an absent field.
+    Callers fail closed on ``None``: a destination whose stored ``access`` cannot be
+    parsed (a legacy shape the strict read model rejects) is treated as invisible
+    rather than granted to everyone.
     """
-    if not isinstance(access, dict):
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return CredentialInfo.model_validate(raw)
+    except ValidationError:
+        return None
+
+
+def identity_scope(team_id: Optional[str], org_id: Optional[str]) -> tuple[frozenset[str], frozenset[str]]:
+    """A single request identity's admin scope as ``(team_ids, org_ids)`` for
+    ``access_grants`` / ``is_destination_visible``."""
+    return (
+        frozenset({team_id}) if team_id else frozenset(),
+        frozenset({org_id}) if org_id else frozenset(),
+    )
+
+
+def access_grants(
+    access: Optional[CredentialAccess],
+    team_ids: frozenset[str],
+    org_ids: frozenset[str],
+) -> bool:
+    """Whether ``access`` makes a destination visible to a caller admin-scoped to
+    ``team_ids`` / ``org_ids``.
+
+    ``global`` reaches everyone; otherwise one of the caller's admin teams or orgs
+    must be granted. A missing ``access`` grants no one (fail closed): visibility is
+    an explicit admin grant, never the accident of an absent field.
+    """
+    if access is None:
         return False
-    if access.get("global") is True:
+    if access.global_:
         return True
-    teams = access.get("teams")
-    if team_id is not None and isinstance(teams, (list, tuple)) and team_id in teams:
+    if not team_ids.isdisjoint(access.teams):
         return True
-    orgs = access.get("orgs")
-    return org_id is not None and isinstance(orgs, (list, tuple)) and org_id in orgs
+    return not org_ids.isdisjoint(access.orgs)
 
 
-def is_auto_enable(credential_info: object) -> bool:
-    """Whether a destination is an explicit global/default (auto-enabled everywhere).
-
-    This is the deliberate replacement for the old behavior where ``access.global``
-    implicitly auto-enabled a destination for every request. Enablement is now opt-in:
-    only ``auto_enable`` turns a destination on without being named.
+def is_destination_visible(
+    info: CredentialInfo,
+    team_ids: frozenset[str],
+    org_ids: frozenset[str],
+) -> bool:
+    """Whether a caller admin-scoped to ``team_ids`` / ``org_ids`` may see and assign
+    this destination: an auto-enabled default, or a grant that reaches their scope.
     """
-    return isinstance(credential_info, dict) and credential_info.get(AUTO_ENABLE_KEY) is True
+    return info.auto_enable or access_grants(info.access, team_ids, org_ids)

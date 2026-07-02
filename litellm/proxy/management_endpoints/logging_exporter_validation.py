@@ -18,8 +18,9 @@ from fastapi import HTTPException, status
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.logging_exporter_access import (
-    access_grants,
-    is_auto_enable,
+    identity_scope,
+    is_destination_visible,
+    parse_credential_info,
 )
 
 LOGGING_EXPORTERS_KEY = "logging_exporters"
@@ -98,12 +99,13 @@ def _reject_unassignable_destinations(
     fail closed on it.
     """
     by_name = _logging_credentials_by_name()
+    team_ids, org_ids = identity_scope(scope_team_id, scope_org_id)
     unassignable = [
         name
         for name in exporters
         if not (
-            is_auto_enable(by_name.get(name))
-            or access_grants((by_name.get(name) or {}).get("access"), scope_team_id, scope_org_id)
+            (info := parse_credential_info(by_name.get(name))) is not None
+            and is_destination_visible(info, team_ids, org_ids)
         )
     ]
     if unassignable:

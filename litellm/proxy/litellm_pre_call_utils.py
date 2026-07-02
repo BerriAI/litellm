@@ -619,22 +619,24 @@ async def _resolve_logging_exporters(
     from litellm.integrations.otel.presets.destinations import build_destination
     from litellm.proxy.management_endpoints.logging_exporter_access import (
         access_grants,
-        is_auto_enable,
+        identity_scope,
+        parse_credential_info,
     )
 
     team_id = user_api_key_dict.team_id
     org_id = await _effective_org_id(user_api_key_dict)
     names = await _union_logging_exporter_names(user_api_key_dict, org_id)
+    team_ids, org_ids = identity_scope(team_id, org_id)
 
     def _selected(credential: "CredentialItem") -> bool:
-        info = credential.credential_info or {}
-        if info.get("credential_type") != "logging":
+        info = parse_credential_info(credential.credential_info)
+        if info is None or info.credential_type != "logging":
             return False
-        if is_auto_enable(info):
+        if info.auto_enable:
             return True
         if credential.credential_name not in names:
             return False
-        return access_grants(info.get("access"), team_id, org_id)
+        return access_grants(info.access, team_ids, org_ids)
 
     def _build(
         credential: "CredentialItem",

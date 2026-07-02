@@ -2,6 +2,8 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+import asyncio
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -24,6 +26,10 @@ from litellm.proxy.credential_endpoints.access_decision import (
     Allow,
     Deny,
     decide_credential_patch,
+)
+from litellm.proxy.management_endpoints.logging_exporter_access import (
+    is_destination_visible,
+    parse_credential_info,
 )
 from litellm.proxy.management_endpoints.logging_exporter_validation import (
     is_admin_gated_credential_info,
@@ -57,26 +63,36 @@ def _summarize_validation_error(ve: ValidationError) -> str:
     return "; ".join(parts)
 
 
-async def _caller_grantable_team_ids(
+@dataclass(frozen=True, slots=True)
+class CallerAdminScope:
+    """The teams and orgs a caller administers, for destination visibility.
+
+    ``team_ids`` are the teams the caller admins directly (role=admin in
+    ``members_with_roles``) unioned with every team in an org the caller is
+    org-admin of, since an org admin manages their org's teams even ones they
+    aren't a direct member of. ``org_ids`` are the orgs the caller is org-admin
+    of. The list endpoint matches a destination's ``access.teams`` against
+    ``team_ids`` and ``access.orgs`` against ``org_ids``; the PATCH decider uses
+    ``team_ids`` alone, since a team admin may only grant team ids.
+    """
+
+    team_ids: frozenset[str]
+    org_ids: frozenset[str]
+
+
+async def _caller_admin_scope(
     user_api_key_dict: UserAPIKeyAuth, prisma_client: "Optional[PrismaClient]"
-) -> frozenset[str]:
-    """Team ids the caller may add to / remove from a destination's access.teams.
+) -> CallerAdminScope:
+    """The teams and orgs the caller administers.
 
-    Two paths to grantability:
-
-    1. Direct team-admin: caller is admin of the team (role=admin in
-       ``members_with_roles``).
-    2. Via org-admin: caller is ORG_ADMIN of the team's organization. Org
-       admins manage every team in their org, even teams they aren't a
-       direct member of.
-
-    Empty when the caller has no user_id, no DB connection, or admins
-    nothing. Uses cached ``get_user_object`` / ``get_team_object`` plus one
-    bounded query for org teams; the role match is done in Python because
-    ``members_with_roles`` is a JSON column.
+    Empty when the caller has no user_id, no DB connection, or admins nothing.
+    Uses cached ``get_user_object`` / ``get_team_object`` plus one bounded query
+    for org teams; the role match is done in Python because ``members_with_roles``
+    is a JSON column. Best-effort: a lookup miss returns the empty scope, which
+    denies visibility and reduces the PATCH decider to no-ops (the safe fallback).
     """
     if user_api_key_dict.user_id is None or prisma_client is None:
-        return frozenset()
+        return CallerAdminScope(frozenset(), frozenset())
     from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
@@ -90,44 +106,60 @@ async def _caller_grantable_team_ids(
             proxy_logging_obj=proxy_logging_obj,
         )
         if user_obj is None:
-            return frozenset()
+            return CallerAdminScope(frozenset(), frozenset())
 
-        # Direct team-admin grants: walk the caller's own team list.
-        team_admin_of: set[str] = set()
-        for team_id in [tid for tid in (getattr(user_obj, "teams", None) or []) if isinstance(tid, str)]:
-            team_obj = await get_team_object(
-                team_id=team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
+        # Direct team-admin grants: fetch the caller's teams concurrently, keep the
+        # ones where they hold the admin role.
+        own_team_ids = tuple(tid for tid in (getattr(user_obj, "teams", None) or []) if isinstance(tid, str))
+        team_objs = await asyncio.gather(
+            *(
+                get_team_object(
+                    team_id=tid,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+                for tid in own_team_ids
             )
+        )
+        team_admin_of = frozenset(
+            tid
+            for tid, team_obj in zip(own_team_ids, team_objs)
             if any(
                 member.user_id == user_api_key_dict.user_id and member.role == "admin"
                 for member in (team_obj.members_with_roles or [])
-            ):
-                team_admin_of.add(team_id)
+            )
+        )
 
-        # Org-admin grants: every team in any org the caller admins, even if
-        # the caller isn't a direct member of that team.
-        org_admin_of: list[str] = [
+        # Org-admin grants: every team in any org the caller admins, even if the
+        # caller isn't a direct member of that team.
+        org_admin_of = frozenset(
             m.organization_id
             for m in (user_obj.organization_memberships or [])
             if m.organization_id and m.user_role == LitellmUserRoles.ORG_ADMIN.value
-        ]
-        org_grantable: set[str] = set()
-        if org_admin_of:
-            org_teams = await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[union-attr]
-                where={"organization_id": {"in": org_admin_of}}
+        )
+        org_teams = (
+            await prisma_client.db.litellm_teamtable.find_many(  # type: ignore[union-attr]
+                where={"organization_id": {"in": list(org_admin_of)}}
             )
-            org_grantable = {t.team_id for t in org_teams if t.team_id}
+            if org_admin_of
+            else []
+        )
+        org_grantable = frozenset(t.team_id for t in org_teams if t.team_id)
 
-        return frozenset(team_admin_of | org_grantable)
+        return CallerAdminScope(team_admin_of | org_grantable, org_admin_of)
     except Exception:  # noqa: BLE001
-        # Best-effort lookup. A miss here means the PATCH decider will deny any
-        # patch other than a no-op, which is the safe fallback.
-        verbose_proxy_logger.exception("team-admin lookup failed")
-        return frozenset()
+        verbose_proxy_logger.exception("caller admin-scope lookup failed")
+        return CallerAdminScope(frozenset(), frozenset())
+
+
+async def _caller_grantable_team_ids(
+    user_api_key_dict: UserAPIKeyAuth, prisma_client: "Optional[PrismaClient]"
+) -> frozenset[str]:
+    """Team ids the caller may add to / remove from a destination's ``access.teams``
+    (the PATCH decider's grant scope)."""
+    return (await _caller_admin_scope(user_api_key_dict, prisma_client)).team_ids
 
 
 def _credential_in_memory(credential_name: str) -> Optional[CredentialItem]:
@@ -267,12 +299,13 @@ async def get_credentials(
     """
     [BETA] endpoint. This might change unexpectedly.
 
-    Proxy admins see every credential (values masked). Team-admins and
-    org-admins see only logging-typed destinations so they can self-assign
-    them; provider credentials stay invisible to non-PROXY_ADMINs. Plain
-    internal users with no team-admin or org-admin status get 403 — they
-    have no use for the list and shouldn't see destination names, hosts,
-    or scope metadata (Veria F2).
+    Proxy admins see every credential (values masked). A non-proxy-admin sees
+    only the logging destinations actually visible to a scope they administer:
+    the same ``is_destination_visible`` predicate the assignment validator and
+    the request-time resolver use, so the list can never show a destination a
+    caller could neither assign nor route to. Provider credentials, and logging
+    destinations scoped to other tenants, stay invisible. A caller who
+    administers nothing gets 403 (Veria F2).
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -280,8 +313,8 @@ async def get_credentials(
         if _is_proxy_admin(user_api_key_dict):
             visible = list(litellm.credential_list)
         else:
-            grantable = await _caller_grantable_team_ids(user_api_key_dict, prisma_client)
-            if not grantable:
+            scope = await _caller_admin_scope(user_api_key_dict, prisma_client)
+            if not scope.team_ids and not scope.org_ids:
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -295,7 +328,9 @@ async def get_credentials(
             visible = [
                 credential
                 for credential in litellm.credential_list
-                if is_admin_gated_credential_info(credential.credential_info)
+                if (info := parse_credential_info(credential.credential_info)) is not None
+                and info.credential_type == "logging"
+                and is_destination_visible(info, scope.team_ids, scope.org_ids)
             ]
         masked_credentials = [
             {

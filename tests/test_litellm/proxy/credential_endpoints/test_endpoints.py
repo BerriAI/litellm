@@ -339,14 +339,23 @@ def _team_admin_of(team_ids):
 
 @pytest.fixture
 def _patch_team_admin_lookup(monkeypatch):
-    """Substitute the DB-backed grant-capability lookup with a configurable mock."""
+    """Substitute the DB-backed admin-scope lookup with a configurable mock.
 
-    holder = {"ids": frozenset()}
+    ``ids`` is the caller's team-admin scope; ``org_ids`` the org-admin scope.
+    Patching the single source ``_caller_admin_scope`` covers both the list
+    endpoint and the PATCH decider, which reads team ids through the
+    ``_caller_grantable_team_ids`` wrapper.
+    """
+
+    holder = {"ids": frozenset(), "org_ids": frozenset()}
 
     async def _fake(user_api_key_dict, prisma_client):
-        return holder["ids"]
+        return endpoints.CallerAdminScope(
+            team_ids=frozenset(holder["ids"]),
+            org_ids=frozenset(holder["org_ids"]),
+        )
 
-    monkeypatch.setattr(endpoints, "_caller_grantable_team_ids", _fake)
+    monkeypatch.setattr(endpoints, "_caller_admin_scope", _fake)
     return holder
 
 
@@ -566,33 +575,107 @@ async def test_team_admin_cannot_flip_global(
 
 
 @pytest.mark.asyncio
-async def test_get_credentials_filters_to_logging_for_non_admin(
+async def test_get_credentials_shows_only_in_scope_destinations_for_non_admin(
     monkeypatch, _patch_team_admin_lookup
 ):
+    """Leak regression (Veria #1): a non-proxy-admin sees only destinations granted
+    to a scope they administer, not every logging destination. The caller admins
+    team-existing, so they see the destination granted to team-existing but never
+    the provider credential and never a destination scoped to another team."""
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(  # provider credential: never visible to a non-admin
+                credential_name="openai",
+                credential_values={"api_key": "sk-secret"},
+                credential_info={"custom_llm_provider": "openai"},
+            ),
+            CredentialItem(  # granted to team-existing
+                credential_name="poc-langfuse",
+                credential_values={"public_key": "pk-1"},
+                credential_info=_DEST_WITH_TEAMS,
+            ),
+            CredentialItem(  # granted to a DIFFERENT team: must stay hidden
+                credential_name="other-team-dest",
+                credential_values={},
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "arize",
+                    "access": {"teams": ["team-other"]},
+                },
+            ),
+        ],
+    )
+    _patch_team_admin_lookup["ids"] = frozenset({"team-existing"})
+    response = await endpoints.get_credentials(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        user_api_key_dict=_team_admin_of(["team-existing"]),
+    )
+    names = [c["credential_name"] for c in response["credentials"]]
+    assert names == ["poc-langfuse"]
+
+
+@pytest.mark.asyncio
+async def test_get_credentials_hides_out_of_scope_destination(
+    monkeypatch, _patch_team_admin_lookup
+):
+    """The exact leak: a team-admin of an unrelated team must see none of another
+    team's destinations. Pre-fix, get_credentials returned every logging
+    destination to any team/org admin regardless of the destination's access."""
     monkeypatch.setattr(
         litellm,
         "credential_list",
         [
             CredentialItem(
-                credential_name="openai",
-                credential_values={"api_key": "sk-secret"},
-                credential_info={"custom_llm_provider": "openai"},
-            ),
-            CredentialItem(
                 credential_name="poc-langfuse",
                 credential_values={"public_key": "pk-1"},
-                credential_info=_DEST_WITH_TEAMS,
+                credential_info=_DEST_WITH_TEAMS,  # granted to team-existing
             ),
         ],
     )
-    _patch_team_admin_lookup["ids"] = frozenset({"team-T"})
+    _patch_team_admin_lookup["ids"] = frozenset({"team-T"})  # NOT team-existing
     response = await endpoints.get_credentials(
         request=MagicMock(),
         fastapi_response=MagicMock(),
         user_api_key_dict=_team_admin_of(["team-T"]),
     )
+    assert response["credentials"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_credentials_shows_org_scoped_destination_to_org_admin(
+    monkeypatch, _patch_team_admin_lookup
+):
+    """An org-admin sees a destination granted to their org via access.orgs, matched
+    against the org-admin scope (not just team ids)."""
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="org-dest",
+                credential_values={},
+                credential_info={
+                    "credential_type": "logging",
+                    "description": "arize",
+                    "access": {"orgs": ["org-1"]},
+                },
+            ),
+        ],
+    )
+    _patch_team_admin_lookup["ids"] = frozenset()
+    _patch_team_admin_lookup["org_ids"] = frozenset({"org-1"})
+    response = await endpoints.get_credentials(
+        request=MagicMock(),
+        fastapi_response=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="k", user_role=LitellmUserRoles.INTERNAL_USER, user_id="oa"
+        ),
+    )
     names = [c["credential_name"] for c in response["credentials"]]
-    assert names == ["poc-langfuse"]
+    assert names == ["org-dest"]
 
 
 @pytest.mark.asyncio
