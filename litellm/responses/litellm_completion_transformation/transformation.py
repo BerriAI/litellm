@@ -2016,9 +2016,7 @@ class LiteLLMCompletionResponsesConfig:
                 and completion_details.reasoning_tokens is not None
                 and completion_details.reasoning_tokens > 0
             ):
-                output_details_dict["reasoning_tokens"] = (
-                    completion_details.reasoning_tokens
-                )
+                output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
 
             if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
                 output_details_dict["text_tokens"] = completion_details.text_tokens
