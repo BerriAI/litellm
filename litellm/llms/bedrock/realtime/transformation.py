@@ -325,6 +325,19 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self.client_audio_streamed = True
         messages: List[str] = []
 
+        if hasattr(self, "_audio_content_started") and self._audio_content_sample_rate != self.input_sample_rate_hertz:
+            mismatched_content_end = {
+                "event": {
+                    "contentEnd": {
+                        "promptName": self.prompt_name,
+                        "contentName": self.audio_content_name,
+                    }
+                }
+            }
+            messages.append(json.dumps(mismatched_content_end))
+            delattr(self, "_audio_content_started")
+            self.audio_content_name = str(uuid_lib.uuid4())
+
         # Check if we need to start audio content
         if not hasattr(self, "_audio_content_started"):
             audio_content_start = {
@@ -348,6 +361,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             }
             messages.append(json.dumps(audio_content_start))
             self._audio_content_started = True
+            self._audio_content_sample_rate = self.input_sample_rate_hertz
 
         # Send audio chunk
         audio_data = json_message.get("audio", "")
@@ -502,6 +516,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             }
             messages.append(json.dumps(trigger_content_start))
             self._audio_content_started = True
+            self._audio_content_sample_rate = TRIGGER_AUDIO_SAMPLE_RATE_HERTZ
 
         messages.extend(self._response_trigger_audio_messages())
         return messages

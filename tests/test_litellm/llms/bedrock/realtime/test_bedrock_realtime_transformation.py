@@ -328,6 +328,56 @@ class TestBedrockRealtimeResponseCreate:
 
         assert messages == []
 
+    def test_client_audio_after_trigger_reopens_block_at_client_sample_rate(self):
+        config = BedrockRealtimeConfig()
+        config.transform_realtime_request(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "instructions": "You are a helpful assistant.",
+                        "input_audio_format": "g711_ulaw",
+                    },
+                }
+            ),
+            "amazon.nova-sonic-v1:0",
+        )
+        config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+        trigger_content_name = config.audio_content_name
+
+        messages = config.transform_realtime_request(
+            json.dumps({"type": "input_audio_buffer.append", "audio": "c2lsZW5jZQ=="}),
+            "amazon.nova-sonic-v1:0",
+        )
+
+        events = [json.loads(message)["event"] for message in messages]
+        assert [next(iter(event)) for event in events] == [
+            "contentEnd",
+            "contentStart",
+            "audioInput",
+        ]
+        assert events[0]["contentEnd"]["contentName"] == trigger_content_name
+        new_content_start = events[1]["contentStart"]
+        assert new_content_start["contentName"] == config.audio_content_name
+        assert new_content_start["contentName"] != trigger_content_name
+        assert new_content_start["audioInputConfiguration"]["sampleRateHertz"] == 8000
+        assert events[2]["audioInput"]["contentName"] == config.audio_content_name
+
+    def test_client_audio_after_trigger_reuses_block_at_matching_sample_rate(self):
+        config = BedrockRealtimeConfig()
+        self._start_session(config)
+        config.transform_realtime_request(json.dumps({"type": "response.create"}), "amazon.nova-sonic-v1:0")
+        trigger_content_name = config.audio_content_name
+
+        messages = config.transform_realtime_request(
+            json.dumps({"type": "input_audio_buffer.append", "audio": "c2lsZW5jZQ=="}),
+            "amazon.nova-sonic-v1:0",
+        )
+
+        assert len(messages) == 1
+        audio_input = json.loads(messages[0])["event"]["audioInput"]
+        assert audio_input["contentName"] == trigger_content_name
+
     def test_session_close_messages_close_audio_prompt_and_session(self):
         config = BedrockRealtimeConfig()
         self._start_session(config)
