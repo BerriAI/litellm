@@ -11,7 +11,8 @@ sets itpm/otpm, those take precedence and its tpm/rpm limits are not enforced.
 A warning is logged the first time such a conflicting deployment is seen.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Set, Union
+import contextlib
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 import httpx
 
@@ -57,9 +58,9 @@ class ModelRateLimitingCheck(CustomLogger):
         self.dual_cache = dual_cache
         # model_ids already warned about conflicting itpm/otpm + tpm/rpm config,
         # so the warning is logged once per deployment rather than per request.
-        self._io_token_conflict_warned_ids: Set[str] = set()
+        self._io_token_conflict_warned_ids: set[str] = set()
 
-    def _warn_io_token_supersedes_tpm_rpm_once(self, deployment: Dict) -> None:
+    def _warn_io_token_supersedes_tpm_rpm_once(self, deployment: dict) -> None:
         tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
         if tpm_limit is None and rpm_limit is None:
             return
@@ -329,14 +330,13 @@ class ModelRateLimitingCheck(CustomLogger):
             _get_parent_otel_span_from_kwargs,
         )
 
-        try:
+        # Never fail the primary logging pipeline over an io-token refund error.
+        with contextlib.suppress(Exception):
             await async_io_token_refund_failure(
                 self.dual_cache,
                 kwargs,
                 parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
             )
-        except Exception as e:
-            verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_log_failure_event: {str(e)}")
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """

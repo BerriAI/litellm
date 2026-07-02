@@ -8900,14 +8900,14 @@ class Router:
                     rpm_usage += t
         return tpm_usage, rpm_usage
 
-    async def get_model_group_io_token_usage(self, model_group: str) -> Tuple[Optional[int], Optional[int]]:
+    async def get_model_group_io_token_usage(self, model_group: str) -> tuple[Optional[int], Optional[int]]:
         """
         Returns current ITPM/OTPM usage for a model group (sum across deployments).
         """
         dt = get_utc_datetime()
         current_minute = dt.strftime("%H-%M")
-        itpm_keys: List[str] = []
-        otpm_keys: List[str] = []
+        itpm_keys: list[str] = []
+        otpm_keys: list[str] = []
 
         model_list = self.get_model_list(model_name=model_group)
         if model_list is None:
@@ -8961,10 +8961,10 @@ class Router:
         """
         return self.get_model_group_info(model_group)
 
-    async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
+    async def get_remaining_model_group_usage(self, model_group: str) -> dict[str, int]:
         model_group_info = self._cached_get_model_group_info(model_group)
 
-        returned_dict: Dict[str, int] = {}
+        returned_dict: dict[str, int] = {}
 
         # ITPM/OTPM groups emit input/output token headers, but they may also set
         # tpm/rpm, so build both sets rather than returning early - clients and

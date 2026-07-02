@@ -1015,6 +1015,85 @@ async def test_set_response_headers_in_flight_delta_only_adjusts_tpm_rpm(model_l
 
 
 @pytest.mark.asyncio
+async def test_get_model_group_io_token_usage_sums_across_deployments():
+    """
+    get_model_group_io_token_usage must sum ITPM/OTPM across every deployment
+    in the model group (not just the first), reading the same per-deployment
+    cache keys the pre-call reservation writes to.
+    """
+    from litellm.types.router import RouterCacheEnum
+    from litellm.utils import get_utc_datetime
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "opus",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "itpm": 1000,
+                    "otpm": 500,
+                },
+                "model_info": {"id": "io-usage-dep-1"},
+            },
+            {
+                "model_name": "opus",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "itpm": 1000,
+                    "otpm": 500,
+                },
+                "model_info": {"id": "io-usage-dep-2"},
+            },
+        ]
+    )
+
+    minute = get_utc_datetime().strftime("%H-%M")
+    keys_and_values = [
+        (
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
+            30,
+        ),
+        (
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-1", model="openai/gpt-4o-mini", current_minute=minute
+            ),
+            10,
+        ),
+        (
+            RouterCacheEnum.ITPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
+            70,
+        ),
+        (
+            RouterCacheEnum.OTPM.value.format(
+                id="io-usage-dep-2", model="openai/gpt-4o", current_minute=minute
+            ),
+            20,
+        ),
+    ]
+    for key, value in keys_and_values:
+        await router.cache.async_increment_cache(key=key, value=value, ttl=60)
+
+    current_itpm, current_otpm = await router.get_model_group_io_token_usage("opus")
+
+    assert current_itpm == 100
+    assert current_otpm == 30
+
+
+@pytest.mark.asyncio
+async def test_get_model_group_io_token_usage_no_deployments_returns_none():
+    router = Router(model_list=[])
+    current_itpm, current_otpm = await router.get_model_group_io_token_usage(
+        "nonexistent-group"
+    )
+    assert current_itpm is None
+    assert current_otpm is None
+
+
+@pytest.mark.asyncio
 async def test_get_remaining_model_group_usage_merges_io_and_tpm_headers(model_list):
     """
     A model group with both itpm/otpm and tpm/rpm limits must expose the

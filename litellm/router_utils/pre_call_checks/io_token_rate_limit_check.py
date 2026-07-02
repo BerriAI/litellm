@@ -10,8 +10,9 @@ Used by ModelRateLimitingCheck when a deployment sets itpm/otpm.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import httpx
 
@@ -31,7 +32,7 @@ else:
 
 RoutingArgsTTL = 60
 
-_io_token_rate_limit_request_kwargs: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+_io_token_rate_limit_request_kwargs: contextvars.ContextVar[Optional[dict[str, Any]]] = contextvars.ContextVar(
     "io_token_rate_limit_request_kwargs",
     default=None,
 )
@@ -42,7 +43,7 @@ ITPM_CACHE_KEY = "_litellm_itpm_cache_key"
 OTPM_CACHE_KEY = "_litellm_otpm_cache_key"
 
 
-def set_io_token_rate_limit_request_kwargs(kwargs: Optional[Dict[str, Any]]) -> None:
+def set_io_token_rate_limit_request_kwargs(kwargs: Optional[dict[str, Any]]) -> None:
     # The reservation sentinels are server-only, but `metadata` is caller
     # controlled on proxy requests. Strip any client-supplied copies here (this
     # runs before the router stashes its own reservation) so a forged
@@ -52,7 +53,7 @@ def set_io_token_rate_limit_request_kwargs(kwargs: Optional[Dict[str, Any]]) -> 
     _io_token_rate_limit_request_kwargs.set(kwargs)
 
 
-def get_io_token_rate_limit_request_kwargs() -> Optional[Dict[str, Any]]:
+def get_io_token_rate_limit_request_kwargs() -> Optional[dict[str, Any]]:
     return _io_token_rate_limit_request_kwargs.get()
 
 
@@ -62,8 +63,8 @@ def seconds_until_minute_reset() -> int:
 
 
 def get_deployment_io_token_limits(
-    deployment: Dict,
-) -> Tuple[Optional[int], Optional[int]]:
+    deployment: dict,
+) -> tuple[Optional[int], Optional[int]]:
     itpm = deployment.get("itpm")
     otpm = deployment.get("otpm")
     litellm_params = deployment.get("litellm_params") or {}
@@ -79,12 +80,12 @@ def get_deployment_io_token_limits(
     return itpm, otpm
 
 
-def deployment_has_io_token_limits(deployment: Dict) -> bool:
+def deployment_has_io_token_limits(deployment: dict) -> bool:
     itpm, otpm = get_deployment_io_token_limits(deployment)
     return itpm is not None or otpm is not None
 
 
-def _get_cache_keys(deployment: Dict, current_minute: str) -> Optional[Tuple[str, str]]:
+def _get_cache_keys(deployment: dict, current_minute: str) -> Optional[tuple[str, str]]:
     model_id = deployment.get("model_info", {}).get("id")
     deployment_name = deployment.get("litellm_params", {}).get("model")
     # Without both a deployment id and model name the key would collapse to a
@@ -96,19 +97,32 @@ def _get_cache_keys(deployment: Dict, current_minute: str) -> Optional[Tuple[str
     return itpm_key, otpm_key
 
 
-def _estimate_input_tokens(request_kwargs: Optional[Dict[str, Any]]) -> int:
+def _estimate_input_tokens(request_kwargs: Optional[dict[str, Any]]) -> int:
     if not request_kwargs:
         return 0
     messages = request_kwargs.get("messages")
     prompt = request_kwargs.get("prompt")
     input_text = request_kwargs.get("input")
-    try:
+    # token_counter can raise from any of its tokenizer backends; this is a
+    # best-effort estimate for the ITPM reservation and must never fail the
+    # underlying request.
+    with contextlib.suppress(Exception):
         return max(0, int(token_counter(messages=messages, text=prompt or input_text)))
-    except Exception:
-        return 0
+    return 0
 
 
-def _resolve_max_tokens(request_kwargs: Optional[Dict[str, Any]], deployment: Dict) -> int:
+def _model_max_output_tokens(model_name: str) -> Optional[int]:
+    # litellm.get_model_info raises a bare Exception for an unrecognized model;
+    # this lookup is a fallback default and must never fail the request.
+    with contextlib.suppress(Exception):
+        info = litellm.get_model_info(model=model_name)
+        model_max = info.get("max_output_tokens") or info.get("max_tokens")
+        if model_max is not None:
+            return max(0, int(model_max))
+    return None
+
+
+def _resolve_max_tokens(request_kwargs: Optional[dict[str, Any]], deployment: dict) -> int:
     if request_kwargs:
         # An explicit max_tokens=0 must be honored, not treated as absent and
         # replaced by the model default.
@@ -120,17 +134,13 @@ def _resolve_max_tokens(request_kwargs: Optional[Dict[str, Any]], deployment: Di
 
     model_name = (deployment.get("litellm_params") or {}).get("model")
     if model_name:
-        try:
-            info = litellm.get_model_info(model=model_name)
-            model_max = info.get("max_output_tokens") or info.get("max_tokens")
-            if model_max is not None:
-                return max(0, int(model_max))
-        except Exception:
-            pass
+        model_max = _model_max_output_tokens(model_name)
+        if model_max is not None:
+            return model_max
     return 4096
 
 
-def _get_usage_tokens(usage: Any) -> Tuple[int, int, int]:
+def _get_usage_tokens(usage: Any) -> tuple[int, int, int]:
     if usage is None:
         return 0, 0, 0
     if hasattr(usage, "prompt_tokens"):
@@ -151,7 +161,7 @@ def _get_usage_tokens(usage: Any) -> Tuple[int, int, int]:
 
 
 def _stash_reservation_in_metadata(
-    request_kwargs: Optional[Dict[str, Any]],
+    request_kwargs: Optional[dict[str, Any]],
     *,
     itpm_reserved: int,
     otpm_reserved: int,
@@ -174,7 +184,7 @@ def _stash_reservation_in_metadata(
             request_kwargs[channel] = dict(reservation)
 
 
-def _extract_reservation(reservation: Dict[str, Any]) -> Tuple[int, int, Optional[str], Optional[str]]:
+def _extract_reservation(reservation: dict[str, Any]) -> tuple[int, int, Optional[str], Optional[str]]:
     itpm_cache_key = reservation.get(ITPM_CACHE_KEY)
     otpm_cache_key = reservation.get(OTPM_CACHE_KEY)
     return (
@@ -185,7 +195,7 @@ def _extract_reservation(reservation: Dict[str, Any]) -> Tuple[int, int, Optiona
     )
 
 
-def _reservation_channels(kwargs: Any) -> Tuple[Any, ...]:
+def _reservation_channels(kwargs: Any) -> tuple[Any, ...]:
     """
     Places a reservation may live, in priority order: the top-level metadata
     channels win over litellm_params.metadata (so a top-level stash is never
@@ -203,7 +213,7 @@ def _reservation_channels(kwargs: Any) -> Tuple[Any, ...]:
     return tuple(channels)
 
 
-def _read_reservation_from_kwargs(kwargs: Any) -> Tuple[int, int, Optional[str], Optional[str]]:
+def _read_reservation_from_kwargs(kwargs: Any) -> tuple[int, int, Optional[str], Optional[str]]:
     for channel_dict in _reservation_channels(kwargs):
         if isinstance(channel_dict, dict) and ITPM_RESERVED_KEY in channel_dict:
             return _extract_reservation(channel_dict)
@@ -267,9 +277,9 @@ async def _increment_with_rollback(
 
 async def async_io_token_pre_call_check(
     dual_cache: DualCache,
-    deployment: Dict,
+    deployment: dict,
     parent_otel_span: Optional[Span] = None,
-) -> Optional[Dict]:
+) -> Optional[dict]:
     itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
     if itpm_limit is None and otpm_limit is None:
         return deployment
@@ -415,8 +425,8 @@ def build_io_token_rate_limit_headers(
     otpm_limit: Optional[int],
     current_itpm: Optional[int],
     current_otpm: Optional[int],
-) -> Dict[str, int]:
-    headers: Dict[str, int] = {}
+) -> dict[str, int]:
+    headers: dict[str, int] = {}
     reset = seconds_until_minute_reset()
     if itpm_limit is not None:
         usage = current_itpm or 0
