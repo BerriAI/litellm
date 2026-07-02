@@ -38,10 +38,11 @@ _STRICT_TOOL = [
     [
         "bedrock/us.anthropic.claude-opus-4-7",
         "bedrock/us.anthropic.claude-opus-4-8",
+        "anthropic.claude-opus-4-7",
+        "anthropic.claude-opus-4-8",
         "anthropic.claude-opus-4-7-v1:0",
-        "anthropic.claude_opus_4_8-v1:0",
-        "bedrock/us.anthropic.claude-opus-4.7",
-        "bedrock/us.anthropic.claude_opus_4_8-v1:0",
+        "bedrock/eu.anthropic.claude-opus-4-8-v1:0",
+        "bedrock/global.anthropic.claude-opus-4-7",
     ],
 )
 def test_bedrock_tools_pt_strict_dropped_for_opus_47_48(model_id: str) -> None:
@@ -86,3 +87,21 @@ def test_bedrock_converse_supports_strict_tools_helper() -> None:
     assert bedrock_converse_supports_strict_tools("bedrock/us.anthropic.claude-opus-4-6") is True
     assert bedrock_converse_supports_strict_tools("us.amazon.nova-micro-v1:0") is False
     assert bedrock_converse_supports_strict_tools("") is False
+
+
+@pytest.mark.parametrize(
+    "cost_map_key",
+    [
+        "anthropic.claude-opus-4-7",
+        "us.anthropic.claude-opus-4-7",
+        "anthropic.claude-opus-4-8",
+        "us.anthropic.claude-opus-4-8",
+    ],
+)
+def test_strict_tools_flag_set_in_model_cost_map(cost_map_key: str) -> None:
+    """The gate is driven by ``bedrock_converse_supports_strict_tools: false`` in
+    ``model_prices_and_context_window.json``, not hardcoded model patterns."""
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    cost_map = GetModelCostMap.load_local_model_cost_map()
+    assert cost_map[cost_map_key]["bedrock_converse_supports_strict_tools"] is False

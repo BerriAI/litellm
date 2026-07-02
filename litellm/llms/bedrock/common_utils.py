@@ -4,9 +4,11 @@ from __future__ import annotations
 Common utilities used across bedrock chat/embedding/image generation
 """
 
+import contextlib
 import functools
 import json
 import os
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -718,36 +720,49 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     return any(pattern in model_lower for pattern in claude_4_5_patterns)
 
 
-# Bedrock Converse routes Claude Opus 4.7/4.8 through an Anthropic-compatible
-# validator that maps toolSpec to the native tool shape and rejects the extra
-# ``strict`` key (``tools.N.custom.strict: Extra inputs are not permitted``).
-# Sonnet 4.5/4.6 and Opus ≤4.6 accept ``toolSpec.strict``. See #31582.
-_BEDROCK_CONVERSE_STRICT_REJECTED_OPUS_PATTERNS = (
-    "claude-opus-4-7",
-    "claude_opus_4_7",
-    "claude-opus-4.7",
-    "claude_opus_4.7",
-    "claude-opus-4-8",
-    "claude_opus_4_8",
-    "claude-opus-4.8",
-    "claude_opus_4.8",
-)
+_BEDROCK_MODEL_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
 
 
 def bedrock_converse_supports_strict_tools(model: str) -> bool:
     """
     Whether ``toolSpec.strict`` can be forwarded to Bedrock Converse for ``model``.
 
-    Returns ``True`` only for Anthropic models that are NOT in the
-    Opus 4.7/4.8 family — those route through a stricter validator on the
-    Bedrock side that rejects the ``strict`` key on ``toolSpec`` even though
-    Anthropic's native API accepts it as a top-level tool field.
+    Non-Anthropic Bedrock families (Nova, Llama, GPT-OSS) reject the field
+    outright. Anthropic models forward it unless their entry in
+    ``model_prices_and_context_window.json`` sets
+    ``bedrock_converse_supports_strict_tools: false`` — Bedrock routes those
+    (Opus 4.7/4.8, see #31582) through a stricter validator that rejects the
+    ``strict`` key on ``toolSpec`` even though Anthropic's native API accepts
+    it as a top-level tool field.
     """
     base = get_bedrock_base_model(model)
     if not base.startswith("anthropic"):
         return False
-    base_lower = base.lower()
-    return not any(p in base_lower for p in _BEDROCK_CONVERSE_STRICT_REJECTED_OPUS_PATTERNS)
+    flag = _get_bedrock_converse_strict_tools_flag(base)
+    return flag if flag is not None else True
+
+
+def _get_bedrock_converse_strict_tools_flag(base_model: str) -> Optional[bool]:
+    candidates = dict.fromkeys((base_model, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base_model)))
+    for candidate in candidates:
+        with contextlib.suppress(Exception):
+            model_info = get_cached_model_info()(
+                model=candidate,
+                custom_llm_provider="bedrock",
+            )
+
+            flag = model_info.get("bedrock_converse_supports_strict_tools")
+            if isinstance(flag, bool):
+                return flag
+
+            model_cost_key = model_info.get("key")
+            if isinstance(model_cost_key, str):
+                local_flag = (
+                    _get_local_model_cost_map().get(model_cost_key, {}).get("bedrock_converse_supports_strict_tools")
+                )
+                if isinstance(local_flag, bool):
+                    return local_flag
+    return None
 
 
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
