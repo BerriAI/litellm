@@ -933,7 +933,7 @@ class TestBedrockMantleResponsesSigV4:
         )
         assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
         assert "Credential=AKIAEXAMPLE/" in headers["Authorization"]
-        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+        assert "/us-east-2/bedrock-mantle/aws4_request" in headers["Authorization"]
         assert "X-Amz-Date" in headers
         assert headers["X-Amz-Security-Token"] == "session-token-test"
         assert signed_body == b'{"input": "hi"}'
@@ -972,7 +972,7 @@ class TestBedrockMantleResponsesSigV4:
         assert call["aws_role_name"] == "arn:aws:iam::000000000000:role/test-role"
         assert call["aws_session_name"] == "litellm-test"
         assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
-        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+        assert "/us-east-2/bedrock-mantle/aws4_request" in headers["Authorization"]
 
     def test_signed_body_matches_final_data_after_normalize(self, monkeypatch):
         """Core regression: the signed bytes must equal the bytes actually sent.
@@ -1022,7 +1022,7 @@ class TestBedrockMantleResponsesSigV4:
             api_base="https://bedrock-mantle.eu-west-1.api.aws/openai/v1/responses",
             api_key=None,
         )
-        assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
+        assert "/eu-west-1/bedrock-mantle/aws4_request" in headers["Authorization"]
 
     def test_url_region_and_sigv4_region_agree_from_litellm_params(self, monkeypatch):
         """Adversarial-review regression: a caller-supplied aws_region_name (no region
@@ -1056,7 +1056,7 @@ class TestBedrockMantleResponsesSigV4:
             api_base=url,
             api_key=None,
         )
-        assert "/ap-southeast-2/bedrock/aws4_request" in headers["Authorization"]
+        assert "/ap-southeast-2/bedrock-mantle/aws4_request" in headers["Authorization"]
 
     def test_injected_default_region_base_does_not_override_aws_region_name(
         self, monkeypatch
@@ -1094,7 +1094,7 @@ class TestBedrockMantleResponsesSigV4:
             api_base=url,
             api_key=None,
         )
-        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+        assert "/us-east-2/bedrock-mantle/aws4_request" in headers["Authorization"]
         assert "us-east-1" not in headers["Authorization"]
 
     def test_custom_proxy_host_is_preserved(self, monkeypatch):
