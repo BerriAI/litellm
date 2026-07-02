@@ -160,10 +160,8 @@ class CheckBatchCost:
         )
 
         input_file_id = self._get_input_file_id(job)
-        if (
-            input_file_id is None
-            or not input_file_id.startswith("gs://")
-            or "publishers/" not in input_file_id
+        if not VertexAIBatchTransformation.is_unmanaged_gcs_batch_input_file_id(
+            input_file_id
         ):
             verbose_proxy_logger.info(
                 f"Skipping job {job.unified_object_id}: not an unmanaged vertex batch "
@@ -171,15 +169,16 @@ class CheckBatchCost:
             )
             self._record_error(prom_logger, "invalid_unified_id")
             return None
+        assert input_file_id is not None  # narrowed by is_unmanaged_gcs_batch_input_file_id
 
-        bare_model_name = VertexAIBatchTransformation._get_model_from_gcs_file(
+        bare_model_name = VertexAIBatchTransformation.get_bare_model_name_from_gcs_file(
             input_file_id
-        ).rsplit("/", 1)[-1]
-        model_group = self.llm_router.resolve_model_name_from_model_id(bare_model_name)
-        deployment_ids = (
-            self.llm_router.get_model_ids(model_name=model_group) if model_group else []
         )
-        if not deployment_ids:
+        model_group = self.llm_router.resolve_model_name_from_model_id(bare_model_name)
+        deployment_id = (
+            self._get_vertex_ai_deployment_id(model_group) if model_group else None
+        )
+        if deployment_id is None:
             verbose_proxy_logger.info(
                 f"Skipping unmanaged vertex batch {job.unified_object_id}: no vertex_ai "
                 f"deployment configured for model {bare_model_name}"
@@ -187,7 +186,29 @@ class CheckBatchCost:
             self._record_error(prom_logger, "unmanaged_no_matching_deployment")
             return None
 
-        return deployment_ids[0], job.unified_object_id
+        return deployment_id, job.unified_object_id
+
+    def _get_vertex_ai_deployment_id(self, model_group: str) -> Optional[str]:
+        """
+        Returns the first deployment id for `model_group` whose provider is vertex_ai,
+        skipping deployments from other providers that happen to share the model group name.
+        """
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        for deployment_id in self.llm_router.get_model_ids(model_name=model_group):
+            deployment_info = self.llm_router.get_deployment(model_id=deployment_id)
+            if deployment_info is None:
+                continue
+            try:
+                _, llm_provider, _, _ = get_llm_provider(
+                    model=deployment_info.litellm_params.model,
+                    custom_llm_provider=deployment_info.litellm_params.custom_llm_provider,
+                )
+            except Exception:
+                continue
+            if llm_provider == "vertex_ai":
+                return deployment_id
+        return None
 
     @staticmethod
     def _get_input_file_id(job: "LiteLLM_ManagedObjectTable") -> Optional[str]:

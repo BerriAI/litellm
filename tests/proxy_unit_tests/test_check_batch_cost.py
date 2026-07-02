@@ -398,6 +398,76 @@ class TestCheckBatchCost:
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_status", ["failed", "expired", "cancelled"])
+    async def test_terminal_status_marks_job_processed(
+        self,
+        check_batch_cost_instance,
+        mock_prisma_client,
+        mock_llm_router,
+        terminal_status,
+    ):
+        """When the provider reports a terminal status (failed/expired/cancelled), the row
+        must be written back with that status and batch_processed=True so it stops being
+        polled forever.
+        """
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-terminal-1"
+        mock_job.unified_object_id = "dW5pZmllZF9iYXRjaF9pZA=="
+        mock_job.created_by = "user-1"
+
+        assert check_batch_cost_instance._has_batch_processed_column is True
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = terminal_status
+        mock_response.model_dump_json.return_value = (
+            f'{{"id":"batch-1","status":"{terminal_status}"}}'
+        )
+
+        mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
+
+        decoded_id = "llm_model_id,model-123;llm_batch_id,batch-456;"
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_model_id_from_unified_batch_id",
+                return_value="model-123",
+            ),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.get_batch_id_from_unified_batch_id",
+                return_value="batch-456",
+            ),
+        ):
+            await check_batch_cost_instance.check_batch_cost()
+
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), f"Expected update() to be called exactly once for a {terminal_status} job"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert update_data["status"] == terminal_status
+        assert (
+            update_data["batch_processed"] is True
+        ), "terminal-status update() must set batch_processed=True so polling stops"
+
+    @pytest.mark.asyncio
     async def test_raw_output_file_id_converted_to_managed_id(
         self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
     ):
@@ -574,12 +644,19 @@ class TestUnmanagedVertexRouting:
         router.resolve_model_name_from_model_id.assert_not_called()
         router.get_model_ids.assert_not_called()
 
+    def _vertex_deployment(self):
+        deployment = MagicMock()
+        deployment.litellm_params.custom_llm_provider = "vertex_ai"
+        deployment.litellm_params.model = "vertex_ai/gemini-2.5-flash"
+        return deployment
+
     def test_flag_on_routes_to_vertex_deployment(self):
         """Flag on: derive the bare model from the gs:// path, resolve it to a deployment id,
         and use the raw unified_object_id as the provider batch id."""
         router = MagicMock()
         router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
         router.get_model_ids.return_value = ["deploy-1"]
+        router.get_deployment = MagicMock(return_value=self._vertex_deployment())
         instance = self._instance(track_unmanaged=True, router=router)
 
         with patch(_IS_B64, return_value=False):
@@ -591,6 +668,27 @@ class TestUnmanagedVertexRouting:
             "gemini-2.5-flash"
         )
         router.get_model_ids.assert_called_once_with(model_name="gemini-2.5-flash")
+
+    def test_flag_on_skips_non_vertex_deployment_sharing_model_group(self):
+        """Flag on, but the only deployment for the model group is a non-vertex_ai
+        provider: must not be selected, even though the model group name matches."""
+        router = MagicMock()
+        router.resolve_model_name_from_model_id.return_value = "gemini-2.5-flash"
+        router.get_model_ids.return_value = ["deploy-openai"]
+        non_vertex_deployment = MagicMock()
+        non_vertex_deployment.litellm_params.custom_llm_provider = "openai"
+        non_vertex_deployment.litellm_params.model = "gpt-4o"
+        router.get_deployment = MagicMock(return_value=non_vertex_deployment)
+        instance = self._instance(track_unmanaged=True, router=router)
+        prom = MagicMock()
+
+        with patch(_IS_B64, return_value=False):
+            result = instance._resolve_job_routing(self._job(), prom)
+
+        assert result is None
+        prom.record_check_batch_cost_error.assert_called_once_with(
+            "unmanaged_no_matching_deployment"
+        )
 
     def test_flag_on_no_matching_deployment_records_metric(self):
         """Flag on but no vertex_ai deployment for the model: skip with a distinct metric."""
