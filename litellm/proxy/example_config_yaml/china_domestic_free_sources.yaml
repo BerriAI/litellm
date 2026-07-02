@@ -1,0 +1,73 @@
+# China Domestic Free Sources Configuration
+# 中国开发者免费源配置模板
+#
+# This configuration provides pre-configured free LLM sources for Chinese developers.
+# These sources are accessible from mainland China without VPN.
+#
+# Sources:
+# - SiliconFlow (硅基流动): https://cloud.siliconflow.cn
+# - Zhipu (智谱): https://open.bigmodel.cn
+#
+# Usage:
+#   litellm --config china_domestic_free_sources.yaml
+
+model_list:
+  # ═══════════════════════════════════════════
+  # SiliconFlow 硅基流动 (国内直连，无需翻墙)
+  # 注册: https://cloud.siliconflow.cn → 自动送 14 元余额
+  # 免费模型会轮换，以下为当前可用
+  # ═══════════════════════════════════════════
+
+  - model_name: sf-deepseek-r1
+    litellm_params:
+      model: siliconflow/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+      api_key: os.environ/SILICONFLOW_API_KEY
+      api_base: https://api.siliconflow.cn/v1
+
+  - model_name: sf-qwen2.5-72b
+    litellm_params:
+      model: siliconflow/Qwen/Qwen2.5-72B-Instruct
+      api_key: os.environ/SILICONFLOW_API_KEY
+      api_base: https://api.siliconflow.cn/v1
+
+  # ═══════════════════════════════════════════
+  # 智谱 Zhipu (GLM-4-Flash 永久免费)
+  # 注册: https://open.bigmodel.cn → 送 20M tokens (永久)
+  # ═══════════════════════════════════════════
+
+  - model_name: glm-4-flash
+    litellm_params:
+      model: zhipu/glm-4-flash
+      api_key: os.environ/ZHIPU_API_KEY
+      api_base: https://open.bigmodel.cn/api/paas/v4
+
+  - model_name: glm-4.7-flash
+    litellm_params:
+      model: zhipu/glm-4.7-flash
+      api_key: os.environ/ZHIPU_API_KEY
+      api_base: https://open.bigmodel.cn/api/paas/v4
+
+# ═══════════════════════════════════════════
+# 路由策略 — 国内免费互备
+# ═══════════════════════════════════════════
+router_settings:
+  routing_strategy: usage-based-routing-v2
+  num_retries: 3
+  timeout: 60
+  fallbacks:
+    - sf-deepseek-r1: [sf-qwen2.5-72b, glm-4-flash, glm-4.7-flash]
+    - sf-qwen2.5-72b: [sf-deepseek-r1, glm-4-flash, glm-4.7-flash]
+    - glm-4-flash: [glm-4.7-flash, sf-qwen2.5-72b, sf-deepseek-r1]
+    - glm-4.7-flash: [glm-4-flash, sf-qwen2.5-72b, sf-deepseek-r1]
+
+general_settings:
+  port: 4000
+  host: 127.0.0.1
+
+litellm_settings:
+  return_response_headers: true
+  drop_params: true
+  cache: true
+  cache_params:
+    type: local
+    ttl: 300
