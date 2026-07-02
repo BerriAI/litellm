@@ -1,5 +1,6 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
+import logging
 from typing import (
     Any,
     List,
@@ -307,6 +308,17 @@ async def acompletion_with_mcp(
 
                 return chunk
 
+            async def _drain_inner_stream(self):
+                try:
+                    while True:
+                        await self._stream_iterator.__anext__()
+                except StopAsyncIteration:
+                    pass
+                except Exception:
+                    logging.getLogger("LiteLLM").exception(
+                        "Error draining inner MCP stream after final chunk; spend logging may be incomplete"
+                    )
+
             async def __anext__(self):
                 # Phase 1: Collect and yield initial stream chunks
                 if not self.stream_exhausted:
@@ -345,11 +357,7 @@ async def acompletion_with_mcp(
                             # end-of-stream handler (dispatch_success_handlers →
                             # _ProxyDBLogger → LiteLLM_SpendLogs).  The CSW may
                             # yield one usage chunk before raising StopAsyncIteration.
-                            try:
-                                while True:
-                                    await self._stream_iterator.__anext__()
-                            except StopAsyncIteration:
-                                pass
+                            await self._drain_inner_stream()
 
                         return chunk
                     except StopAsyncIteration:
