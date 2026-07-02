@@ -49,12 +49,16 @@ from litellm.proxy._types import (
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
     _sanitize_prometheus_label_value,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingGuardrailInformation,
+    StandardLoggingPayload,
+)
 
 if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -64,6 +68,8 @@ else:
 
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
+
+    _ADDITIVE_GUARDRAIL_MODES = frozenset((GuardrailEventHooks.pre_call.value, GuardrailEventHooks.post_call.value))
 
     @staticmethod
     def get_instance() -> Optional["PrometheusLogger"]:
@@ -343,6 +349,14 @@ class PrometheusLogger(CustomLogger):
                 buckets=self.latency_buckets,
             )
 
+            self.litellm_overhead_with_guardrails_latency_metric = self._histogram_factory(
+                "litellm_overhead_with_guardrails_latency_metric",
+                "Total internal latency (seconds) added by LiteLLM, including "
+                "pre/post-call guardrails (excludes the LLM API call)",
+                labelnames=self.get_labels_for_metric("litellm_overhead_with_guardrails_latency_metric"),
+                buckets=self.latency_buckets,
+            )
+
             # Request queue time metric
             self.litellm_request_queue_time_metric = self._histogram_factory(
                 "litellm_request_queue_time_seconds",
@@ -577,6 +591,21 @@ class PrometheusLogger(CustomLogger):
                 "litellm_check_batch_cost_last_run_timestamp",
                 "Unix timestamp of the last CheckBatchCost job run",
                 labelnames=[],
+            )
+
+            ########################################
+            # MCP Tool Call Metrics
+            ########################################
+            self.litellm_mcp_tool_calls_total = self._counter_factory(
+                name="litellm_mcp_tool_calls_total",
+                documentation="Total MCP tool calls, segmented by tool and server name",
+                labelnames=self.get_labels_for_metric("litellm_mcp_tool_calls_total"),
+            )
+
+            self.litellm_mcp_tool_call_spend_metric = self._counter_factory(
+                name="litellm_mcp_tool_call_spend_metric",
+                documentation="Total spend on MCP tool calls, segmented by tool and server name",
+                labelnames=self.get_labels_for_metric("litellm_mcp_tool_call_spend_metric"),
             )
 
         except Exception as e:
@@ -1001,6 +1030,67 @@ class PrometheusLogger(CustomLogger):
         self._cached_metric_labels[metric_name] = filtered_labels
         return filtered_labels
 
+    @staticmethod
+    def _guardrail_is_additive(info: StandardLoggingGuardrailInformation) -> bool:
+        mode = info.get("guardrail_mode")
+        modes = mode if isinstance(mode, list) else [mode]
+        mode_values = frozenset(
+            m.value if isinstance(m, GuardrailEventHooks) else m for m in modes if isinstance(m, str)
+        )
+        return bool(mode_values) and mode_values <= PrometheusLogger._ADDITIVE_GUARDRAIL_MODES
+
+    @staticmethod
+    def _get_guardrail_overhead_seconds(
+        standard_logging_payload: StandardLoggingPayload,
+    ) -> float:
+        """Seconds of additive guardrail time (pre/post-call only) on the payload.
+
+        during_call guardrails run concurrently with the LLM call, so their
+        wall-clock overlaps the provider call and is not additive overhead;
+        logging_only and MCP modes never block the user-facing response. A
+        guardrail counts only when every mode it carries is pre/post-call, so a
+        mixed list such as ["pre_call", "during_call"] is excluded.
+
+        guardrail_information is typed as a list, but some guardrails assign a
+        single dict directly, so normalize that shape to a one-item list.
+        """
+        guardrail_information = standard_logging_payload.get("guardrail_information")
+        entries: list[StandardLoggingGuardrailInformation] = (
+            [cast("StandardLoggingGuardrailInformation", guardrail_information)]
+            if isinstance(guardrail_information, dict)
+            else guardrail_information or []
+        )
+        return sum(
+            (float(info.get("duration") or 0.0) for info in entries if PrometheusLogger._guardrail_is_additive(info)),
+            0.0,
+        )
+
+    def _set_overhead_with_guardrails_metric(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
+    ) -> None:
+        """Record litellm_overhead_with_guardrails_latency_metric (seconds): SDK overhead +
+        pre/post-call guardrail time. Recorded outside the SDK-overhead gate so
+        guardrail-only overhead is still captured when litellm_overhead_time_ms
+        is 0 or absent.
+        """
+        litellm_overhead_time_ms = standard_logging_payload["hidden_params"].get("litellm_overhead_time_ms")
+        guardrail_overhead_seconds = self._get_guardrail_overhead_seconds(standard_logging_payload)
+        if litellm_overhead_time_ms is None and guardrail_overhead_seconds <= 0:
+            return
+        labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                metric_name="litellm_overhead_with_guardrails_latency_metric"
+            ),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        self.litellm_overhead_with_guardrails_latency_metric.labels(**labels).observe(
+            ((litellm_overhead_time_ms or 0.0) / 1000) + guardrail_overhead_seconds
+        )
+
     def _track_end_user_metric_series(
         self,
         metric: Any,
@@ -1225,6 +1315,13 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
 
+        # MCP tool call metrics
+        self._increment_mcp_tool_call_metrics(
+            standard_logging_payload=standard_logging_payload,
+            enum_values=enum_values,
+            response_cost=response_cost,
+        )
+
         # increment litellm_proxy_total_requests_metric for all successful requests
         # (both streaming and non-streaming) in this single location to prevent
         # double-counting that occurs when async_post_call_success_hook also increments
@@ -1445,6 +1542,49 @@ class PrometheusLogger(CustomLogger):
                     label_context=label_context,
                     amount=float(provider_cache_creation_tokens),
                 )
+
+    def _increment_mcp_tool_call_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        response_cost: float,
+    ) -> None:
+        metadata = standard_logging_payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        mcp_meta = metadata.get("mcp_tool_call_metadata")
+        if not isinstance(mcp_meta, dict):
+            return
+
+        mcp_enum_values = UserAPIKeyLabelValues(
+            mcp_tool_name=mcp_meta.get("name"),
+            mcp_server_name=mcp_meta.get("mcp_server_name"),
+            hashed_api_key=enum_values.hashed_api_key,
+            api_key_alias=enum_values.api_key_alias,
+            team=enum_values.team,
+            team_alias=enum_values.team_alias,
+            user=enum_values.user,
+            end_user=enum_values.end_user,
+        )
+        mcp_label_context = PrometheusLabelFactoryContext(mcp_enum_values)
+
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_mcp_tool_calls_total,
+            "litellm_mcp_tool_calls_total",
+            mcp_enum_values,
+            label_context=mcp_label_context,
+        )
+
+        if response_cost > 0:
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_mcp_tool_call_spend_metric,
+                "litellm_mcp_tool_call_spend_metric",
+                mcp_enum_values,
+                label_context=mcp_label_context,
+                amount=response_cost,
+            )
 
     async def _increment_remaining_budget_metrics(
         self,
@@ -2345,6 +2485,12 @@ class PrometheusLogger(CustomLogger):
                 self.litellm_overhead_latency_metric.labels(**_labels).observe(
                     litellm_overhead_time_ms / 1000
                 )  # set as seconds
+
+            self._set_overhead_with_guardrails_metric(
+                standard_logging_payload=standard_logging_payload,
+                enum_values=enum_values,
+                label_context=label_context,
+            )
 
             if remaining_requests:
                 """
@@ -3723,6 +3869,10 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
 ) -> Dict[str, Any]:
     """
     Combine the metadata sources that can supply custom Prometheus labels.
+
+    Includes top-level scalar fields from the standard logging metadata (e.g.
+    user_api_key_project_alias, user_api_key_team_alias) so they are accessible
+    via custom_prometheus_metadata_labels configuration.
     """
     if not isinstance(standard_logging_payload, dict):
         return {}
@@ -3736,6 +3886,7 @@ def _get_combined_custom_metadata_from_standard_logging_payload(
     spend_logs_metadata = standard_logging_metadata.get("spend_logs_metadata")
 
     return {
+        **{k: v for k, v in standard_logging_metadata.items() if not isinstance(v, dict)},
         **(requester_metadata if isinstance(requester_metadata, dict) else {}),
         **(user_api_key_auth_metadata if isinstance(user_api_key_auth_metadata, dict) else {}),
         **(spend_logs_metadata if isinstance(spend_logs_metadata, dict) else {}),
