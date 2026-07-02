@@ -97,11 +97,11 @@ class TaskAwareRoutingStrategy(BaseRoutingStrategy):
                 return healthy_deployments[0]
             return None
 
-        # Find matching healthy deployment
+        # Find matching healthy deployment (use forward match only)
         for model_name in task_models:
             for deployment in healthy_deployments:
                 dep_model = deployment.get("model_name") or deployment.get("litellm_params", {}).get("model", "")
-                if model_name in dep_model or dep_model in model_name:
+                if model_name in dep_model:
                     verbose_router_logger.debug(
                         f"Task-aware routing: task='{task}', selected='{dep_model}'"
                     )

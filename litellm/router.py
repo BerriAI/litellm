@@ -892,6 +892,8 @@ class Router:
         self.lowesttpm_logger_v2: Optional[LowestTPMLoggingHandler_v2] = None
         self.lowestlatency_logger: Optional[LowestLatencyLoggingHandler] = None
         self.lowestcost_logger: Optional[LowestCostLoggingHandler] = None
+        self.taskaware_logger = None
+        self.localfirst_logger = None
 
         selector = self._build_strategy_selector(
             strategy=routing_strategy,
@@ -10064,11 +10066,9 @@ class Router:
             # If still no deployments after checking for fallbacks, raise an error
             if len(healthy_deployments) == 0:
                 if self.get_model_list(model_name=model) is None:
-                    message = f"You passed in model={model}. There is no 'model_name' with this string".format(model)
+                    message = f"You passed in model={model}. There is no 'model_name' with this string"
                 else:
-                    message = f"You passed in model={model}. There are no healthy deployments for this model".format(
-                        model
-                    )
+                    message = f"You passed in model={model}. There are no healthy deployments for this model"
 
                 raise litellm.BadRequestError(
                     message=message,

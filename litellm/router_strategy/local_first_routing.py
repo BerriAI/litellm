@@ -84,18 +84,34 @@ class LocalFirstRoutingStrategy(BaseRoutingStrategy):
         if not healthy_deployments:
             return None
 
-        # Try local models first
-        for deployment in healthy_deployments:
-            model_name = deployment.get("model_name") or deployment.get("litellm_params", {}).get("model", "")
-            if self._is_local_model(model_name):
-                verbose_router_logger.debug(
-                    f"Local-first routing: using local model '{model_name}'"
-                )
-                return deployment
+        # Use local_fallback_order to determine priority
+        for fallback_type in self.local_fallback_order:
+            for deployment in healthy_deployments:
+                model_name = deployment.get("model_name") or deployment.get("litellm_params", {}).get("model", "")
+                if fallback_type == "local" and self._is_local_model(model_name):
+                    verbose_router_logger.debug(
+                        f"Local-first routing: using local model '{model_name}'"
+                    )
+                    return deployment
+                elif fallback_type == "domestic_free" and self._is_domestic_free(model_name):
+                    verbose_router_logger.debug(
+                        f"Local-first routing: using domestic free model '{model_name}'"
+                    )
+                    return deployment
+                elif fallback_type == "openrouter_free" and self._is_openrouter_free(model_name):
+                    verbose_router_logger.debug(
+                        f"Local-first routing: using openrouter free model '{model_name}'"
+                    )
+                    return deployment
+                elif fallback_type == "openrouter_paid" and self._is_openrouter_paid(model_name):
+                    verbose_router_logger.debug(
+                        f"Local-first routing: using openrouter paid model '{model_name}'"
+                    )
+                    return deployment
 
-        # No local model available, return first healthy deployment
+        # No model matched, return first healthy deployment
         verbose_router_logger.debug(
-            f"Local-first routing: no local model available, using first healthy deployment"
+            f"Local-first routing: no model matched, using first healthy deployment"
         )
         return healthy_deployments[0]
 
@@ -117,14 +133,32 @@ class LocalFirstRoutingStrategy(BaseRoutingStrategy):
         )
 
     def _is_local_model(self, model: str) -> bool:
-        """Check if a model is a local model"""
+        """Check if a model is a local model using local_provider"""
         local_indicators = [
-            "ollama/",
+            f"{self.local_provider}/",
             "localhost:",
             "127.0.0.1:",
             "local/",
         ]
         return any(indicator in model.lower() for indicator in local_indicators)
+
+    def _is_domestic_free(self, model: str) -> bool:
+        """Check if a model is a domestic free model (SiliconFlow, Zhipu)"""
+        domestic_indicators = [
+            "siliconflow/",
+            "zhipu/",
+            "sf-",
+            "glm-",
+        ]
+        return any(indicator in model.lower() for indicator in domestic_indicators)
+
+    def _is_openrouter_free(self, model: str) -> bool:
+        """Check if a model is an OpenRouter free model"""
+        return ":free" in model.lower() and "openrouter" in model.lower()
+
+    def _is_openrouter_paid(self, model: str) -> bool:
+        """Check if a model is an OpenRouter paid model"""
+        return "openrouter" in model.lower() and ":free" not in model.lower()
 
     def log_success(self, kwargs, response_obj, start_time, end_time):
         """Log successful request for analytics"""
