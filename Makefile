@@ -5,7 +5,7 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	lint-basedpyright lint-basedpyright-budget-update \
+	lint-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety pre-commit \
@@ -27,12 +27,12 @@ help:
 	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
-	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
+	@echo "  make lint-basedpyright-budget-update - Ratchet basedpyright limits down by what this branch fixed"
 	@echo "  make lint-format        - Check ruff format formatting (matches CI)"
-	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
+	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its limit"
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
-	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
-	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright)"
+	@echo "  make lint-ruff-budget-update - Ratchet ruff-strict-budget.json limits down by what this branch fixed"
+	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + basedpyright)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -88,7 +88,7 @@ install-hooks:
 
 # Formatting
 # Wrap width is ruff.toml's single source of truth (line-length = 120), shared by the
-# formatter, E501, and the import sorter so there's no 88-vs-120 split to reconcile.
+# formatter and the import sorter so there's no 88-vs-120 split to reconcile.
 format: install-dev
 	cd litellm && $(UV_RUN) ruff format --exclude '/enterprise/' . && cd ..
 
@@ -164,7 +164,9 @@ lint-basedpyright: install-dev lint-fetch-base
 lint-type-discipline: install-dev lint-fetch-base
 	$(UV_RUN) python scripts/type_discipline_gate.py --base origin/litellm_internal_staging
 
-lint-basedpyright-budget-update: install-dev
+# --update lowers each limit by what this branch fixed since its branch point, so
+# it needs the base ref fetched to resolve the merge-base.
+lint-basedpyright-budget-update: install-dev lint-fetch-base
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
 
 lint-format: format-check
@@ -177,11 +179,14 @@ lint-ruff-budget: install-dev
 lint-gate: install-dev lint-fetch-base
 	$(UV_RUN) python scripts/ruff_strict_gate.py --base origin/litellm_internal_staging
 
-lint-ruff-budget-update: install-dev
+lint-ruff-budget-update: install-dev lint-fetch-base
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
-# Ratchet all budgets in one shot (ruff strict + basedpyright)
-lint-budget-update: lint-ruff-budget-update lint-basedpyright-budget-update
+lint-type-discipline-budget-update: install-dev lint-fetch-base
+	$(UV_RUN) python scripts/type_discipline_gate.py --update
+
+# Ratchet all budgets in one shot (ruff strict + type-discipline + basedpyright)
+lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-basedpyright-budget-update
 
 check-circular-imports: install-dev
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..

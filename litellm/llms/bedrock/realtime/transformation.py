@@ -4,14 +4,18 @@ This file contains the transformation logic for Bedrock Nova Sonic realtime API.
 Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 """
 
+import base64
 import json
 import uuid as uuid_lib
 from typing import Any, List, Optional, Union
+
+from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeDoneEvent,
@@ -35,6 +39,17 @@ from litellm.types.realtime import (
 from litellm.utils import get_empty_usage
 
 
+class BedrockContentEnd(BaseModel):
+    stopReason: Optional[str] = None
+
+
+TRIGGER_AUDIO_SAMPLE_RATE_HERTZ = 16000
+TRIGGER_AUDIO_BYTES_PER_SECOND = TRIGGER_AUDIO_SAMPLE_RATE_HERTZ * 2
+TRIGGER_LEADING_SILENCE = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND // 2)
+TRIGGER_TRAILING_SILENCE = bytes(TRIGGER_AUDIO_BYTES_PER_SECOND * 3)
+TRIGGER_AUDIO_CHUNK_SIZE = 1024
+
+
 class BedrockRealtimeConfig(BaseRealtimeConfig):
     """Configuration for Bedrock Nova Sonic realtime transformations."""
 
@@ -43,6 +58,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self.prompt_name = str(uuid_lib.uuid4())
         self.content_name = str(uuid_lib.uuid4())
         self.audio_content_name = str(uuid_lib.uuid4())
+        self.prompt_started = False
+        self.client_audio_streamed = False
 
         # Default configuration values
         # Inference configuration
@@ -247,6 +264,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         prompt_start = {"event": {"promptStart": prompt_start_config}}
         messages.append(json.dumps(prompt_start))
+        self.prompt_started = True
 
         # Send system prompt if provided
         instructions = session_config.get("instructions")
@@ -304,7 +322,21 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             List of Bedrock format messages (JSON strings)
         """
         verbose_logger.debug("Handling input_audio_buffer.append")
+        self.client_audio_streamed = True
         messages: List[str] = []
+
+        if hasattr(self, "_audio_content_started") and self._audio_content_sample_rate != self.input_sample_rate_hertz:
+            mismatched_content_end = {
+                "event": {
+                    "contentEnd": {
+                        "promptName": self.prompt_name,
+                        "contentName": self.audio_content_name,
+                    }
+                }
+            }
+            messages.append(json.dumps(mismatched_content_end))
+            delattr(self, "_audio_content_started")
+            self.audio_content_name = str(uuid_lib.uuid4())
 
         # Check if we need to start audio content
         if not hasattr(self, "_audio_content_started"):
@@ -329,6 +361,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             }
             messages.append(json.dumps(audio_content_start))
             self._audio_content_started = True
+            self._audio_content_sample_rate = self.input_sample_rate_hertz
 
         # Send audio chunk
         audio_data = json_message.get("audio", "")
@@ -383,7 +416,6 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             List of Bedrock format messages (JSON strings)
         """
         verbose_logger.debug("Handling conversation.item.create")
-        messages: List[str] = []
 
         item = json_message.get("item", {})
         item_type = item.get("type")
@@ -391,6 +423,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # Handle tool result
         if item_type == "function_call_output":
             return self.transform_conversation_item_create_tool_result_event(json_message)
+
+        messages: list[str] = []
 
         # Handle regular message
         if item_type == "message":
@@ -443,6 +477,12 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         """
         Transform response.create event to Bedrock format.
 
+        Nova Sonic only starts generating after it detects user speech, so text-only
+        sessions never get a response on their own. Injecting a short spoken "ready"
+        utterance (followed by silence) makes the model respond to the pending
+        interactive text input. Sessions where the client streams its own audio rely
+        on Nova Sonic's built-in turn detection instead.
+
         Args:
             json_message: OpenAI response.create message
 
@@ -450,8 +490,53 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             List of Bedrock format messages (JSON strings)
         """
         verbose_logger.debug("Handling response.create")
-        # Bedrock starts generating automatically, no explicit trigger needed
-        return []
+        if not self.prompt_started or self.client_audio_streamed:
+            return []
+
+        messages: list[str] = []
+        if not hasattr(self, "_audio_content_started"):
+            trigger_content_start = {
+                "event": {
+                    "contentStart": {
+                        "promptName": self.prompt_name,
+                        "contentName": self.audio_content_name,
+                        "type": "AUDIO",
+                        "interactive": True,
+                        "role": "USER",
+                        "audioInputConfiguration": {
+                            "mediaType": self.input_media_type,
+                            "sampleRateHertz": TRIGGER_AUDIO_SAMPLE_RATE_HERTZ,
+                            "sampleSizeBits": self.input_sample_size_bits,
+                            "channelCount": self.input_channel_count,
+                            "audioType": self.input_audio_type,
+                            "encoding": self.input_encoding,
+                        },
+                    }
+                }
+            }
+            messages.append(json.dumps(trigger_content_start))
+            self._audio_content_started = True
+            self._audio_content_sample_rate = TRIGGER_AUDIO_SAMPLE_RATE_HERTZ
+
+        messages.extend(self._response_trigger_audio_messages())
+        return messages
+
+    def _response_trigger_audio_messages(self) -> list[str]:
+        pcm = TRIGGER_LEADING_SILENCE + ready_trigger_pcm() + TRIGGER_TRAILING_SILENCE
+        return [
+            json.dumps(
+                {
+                    "event": {
+                        "audioInput": {
+                            "promptName": self.prompt_name,
+                            "contentName": self.audio_content_name,
+                            "content": base64.b64encode(pcm[offset : offset + TRIGGER_AUDIO_CHUNK_SIZE]).decode(),
+                        }
+                    }
+                }
+            )
+            for offset in range(0, len(pcm), TRIGGER_AUDIO_CHUNK_SIZE)
+        ]
 
     def transform_response_cancel_event(self, json_message: dict) -> List[str]:
         """
@@ -466,6 +551,35 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling response.cancel")
         # Send interrupt signal if needed
         return []
+
+    def session_close_messages(self) -> list[str]:
+        """
+        Build the Bedrock events that gracefully close the session
+        (contentEnd for any open audio content, promptEnd, sessionEnd).
+
+        Returns:
+            List of Bedrock format messages (JSON strings)
+        """
+        if not self.prompt_started:
+            return []
+
+        messages: list[str] = []
+        if hasattr(self, "_audio_content_started"):
+            audio_content_end = {
+                "event": {
+                    "contentEnd": {
+                        "promptName": self.prompt_name,
+                        "contentName": self.audio_content_name,
+                    }
+                }
+            }
+            messages.append(json.dumps(audio_content_end))
+            delattr(self, "_audio_content_started")
+
+        messages.append(json.dumps({"event": {"promptEnd": {"promptName": self.prompt_name}}}))
+        messages.append(json.dumps({"event": {"sessionEnd": {}}}))
+        self.prompt_started = False
+        return messages
 
     def transform_realtime_request(
         self,
@@ -837,10 +951,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         Optional[ALL_DELTA_TYPES],
     ]:
         """
-        Transform Bedrock promptEnd event to OpenAI response.done.
+        Transform a Bedrock end-of-response event (promptEnd, completionEnd, or an
+        END_TURN contentEnd) to OpenAI response.done.
 
         Args:
-            event: Bedrock promptEnd event
+            event: Bedrock event that ends the response
             current_response_id: Current response ID
             current_conversation_id: Current conversation ID
 
@@ -848,7 +963,18 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             Tuple of (events, reset_output_item_id, reset_response_id, reset_delta_type)
         """
         verbose_logger.debug("Handling promptEnd")
+        return self._response_done_events(current_response_id, current_conversation_id)
 
+    def _response_done_events(
+        self,
+        current_response_id: Optional[str],
+        current_conversation_id: Optional[str],
+    ) -> tuple[
+        List[OpenAIRealtimeEvents],
+        Optional[str],
+        Optional[str],
+        Optional[ALL_DELTA_TYPES],
+    ]:
         if not current_response_id or not current_conversation_id:
             return [], None, None, None
 
@@ -1084,6 +1210,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_delta_chunks,
             )
             returned_messages.extend(events)
+            if BedrockContentEnd.model_validate(event["contentEnd"]).stopReason == "END_TURN":
+                (
+                    done_events,
+                    current_output_item_id,
+                    current_response_id,
+                    current_delta_type,
+                ) = self._response_done_events(current_response_id, current_conversation_id)
+                returned_messages.extend(done_events)
 
         elif "toolUse" in event:
             events, tool_call_id, tool_name = self.transform_tool_use_event(
@@ -1093,7 +1227,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             # Store tool call info for potential use
             verbose_logger.debug(f"Tool use event: {tool_name} (ID: {tool_call_id})")
 
-        elif "promptEnd" in event:
+        elif "promptEnd" in event or "completionEnd" in event:
             (
                 events,
                 current_output_item_id,
