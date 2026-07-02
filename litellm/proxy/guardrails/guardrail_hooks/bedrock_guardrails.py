@@ -1145,6 +1145,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # This means all actions were ANONYMIZED or NONE, so don't raise exception
         return False
 
+
+    def create_guardrail_blocked_response(self, response: str) -> ModelResponse:
+        from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+        return ModelResponse(
+            choices=[
+                Choices(
+                    message=Message(content=response),
+                )
+            ],
+            model="bedrock-guardrail",
+            usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        )
+
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,

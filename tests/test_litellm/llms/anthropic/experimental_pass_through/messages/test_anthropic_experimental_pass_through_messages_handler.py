@@ -821,3 +821,39 @@ def test_gate_passthrough_skipped_when_only_chat_completions_supported(monkeypat
     assert result == "translated"
     assert translation_calls["count"] == 1
     assert "config" not in captured
+
+
+def test_anthropic_messages_handler_mock_response_model_response():
+    """
+    Test that a ModelResponse mock_response (e.g. from a guardrail block
+    with disable_exception_on_block=True) is translated to Anthropic
+    format instead of being silently skipped or crashing.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/31976
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    blocked_response = ModelResponse(
+        choices=[
+            Choices(
+                message=Message(content="Blocked by guardrail"),
+            )
+        ],
+        model="bedrock-guardrail",
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+    )
+
+    result = anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="anthropic/claude-3-5-sonnet-20240620",
+        api_key="sk-test",
+        mock_response=blocked_response,
+    )
+
+    assert result is not None
+    assert result["role"] == "assistant"
+    assert result["content"][0]["text"] == "Blocked by guardrail"
