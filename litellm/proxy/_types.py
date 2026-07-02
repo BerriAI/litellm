@@ -1048,6 +1048,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     mcp_rpm_limit: Optional[Dict[str, int]] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
+    logging_exporters: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
@@ -1705,6 +1706,7 @@ class NewTeamRequest(TeamBase):
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
+    logging_exporters: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
@@ -1771,6 +1773,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
+    logging_exporters: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     disable_global_guardrails: Optional[bool] = None
     team_member_budget: Optional[float] = None
@@ -1914,6 +1917,7 @@ class NewOrganizationRequest(LiteLLM_BudgetTable):
     models: List = []
     budget_id: Optional[str] = None
     metadata: Optional[dict] = None
+    logging_exporters: Optional[List[str]] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
 
@@ -2598,6 +2602,7 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     models: Optional[List[str]] = None
+    logging_exporters: Optional[List[str]] = None
     updated_by: Optional[str] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     model_tpm_limit: Optional[Dict[str, int]] = None

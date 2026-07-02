@@ -992,8 +992,7 @@ async def new_team(
             _is_user_org_admin_for_org_id,
         )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            LOGGING_EXPORTERS_KEY,
-            validate_logging_exporter_assignment,
+            validate_logging_exporter_field,
         )
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
@@ -1010,9 +1009,9 @@ async def new_team(
         # the destination org may assign logging exporters at creation time.
         # Skip the org-admin lookup entirely when the field isn't being
         # written, to avoid hitting the cache for unrelated /team/new calls.
-        if isinstance(data.metadata, dict) and LOGGING_EXPORTERS_KEY in data.metadata:
-            validate_logging_exporter_assignment(
-                data.metadata,
+        if data.logging_exporters is not None:
+            validate_logging_exporter_field(
+                data.logging_exporters,
                 user_api_key_dict,
                 caller_is_org_admin=await _is_user_org_admin_for_org_id(
                     user_api_key_dict=user_api_key_dict,
@@ -1663,7 +1662,7 @@ async def update_team(
             _is_user_org_admin_for_team,
         )
         from litellm.proxy.management_endpoints.logging_exporter_validation import (
-            validate_logging_exporter_assignment,
+            validate_logging_exporter_field,
         )
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,
@@ -1725,18 +1724,15 @@ async def update_team(
         # this path. Pass only the org-admin flag so the validator can't
         # silently grant team-admins if the route gate is ever widened. The
         # validator no-ops when the effective value doesn't change; pass the
-        # stored metadata so removal-via-omission gates too (Veria F4).
-        if isinstance(data.metadata, dict):
-            existing_team_metadata = (
-                existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else None
-            )
-            validate_logging_exporter_assignment(
-                data.metadata,
+        # stored column value so a non-admin cannot clear an admin-assigned one.
+        if data.logging_exporters is not None:
+            validate_logging_exporter_field(
+                data.logging_exporters,
                 user_api_key_dict,
                 caller_is_org_admin=await _is_user_org_admin_for_team(
                     user_api_key_dict=user_api_key_dict, team_obj=team_for_auth
                 ),
-                existing_metadata=existing_team_metadata,
+                existing_exporters=getattr(existing_team_row, "logging_exporters", None),
                 scope_team_id=getattr(team_for_auth, "team_id", None),
                 scope_org_id=getattr(team_for_auth, "organization_id", None),
             )

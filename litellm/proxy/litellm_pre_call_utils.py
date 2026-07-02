@@ -544,57 +544,73 @@ async def _effective_org_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
 async def _union_logging_exporter_names(user_api_key_dict: UserAPIKeyAuth, org_id: Optional[str]) -> set:
     """The union of admin-assigned exporter names across the request's identity chain.
 
-    Resolves each level from its OWN record: the key's ``metadata`` is shadowed by the
-    team's on the auth object, so it is fetched fresh via ``get_key_object``; the org's
-    metadata is fetched via ``get_org_object`` using the effective ``org_id`` (token org
-    or team fallback); the team's is already its own on ``team_metadata``. Internal-user
-    is intentionally not a routing dimension. The lists are admin-owned; the request
-    never supplies them. Degrades to team-only when no DB is connected (SDK mode).
+    Each level is read from its own ``logging_exporters`` column: the key via
+    ``get_key_object`` (the auth object's fields are the team's shadow, so it is
+    fetched fresh), the team via ``get_team_object``, the org via ``get_org_object``
+    on the effective ``org_id`` (token org or team fallback). Internal-user is
+    intentionally not a routing dimension. The assignment is an admin-owned column;
+    the request never supplies it. Needs a DB connection: in SDK mode there is no
+    identity to resolve against, so this is empty (admin-owned destinations do not
+    apply off the proxy).
     """
     from litellm.proxy import proxy_server
-    from litellm.proxy.auth.auth_checks import get_key_object, get_org_object
-
-    names: set = set()
-
-    def _add(metadata: Any) -> None:
-        if not isinstance(metadata, dict):
-            return
-        assigned = metadata.get("logging_exporters")
-        if isinstance(assigned, list):
-            names.update(str(name) for name in assigned)
+    from litellm.proxy.auth.auth_checks import (
+        get_key_object,
+        get_org_object,
+        get_team_object,
+    )
 
     prisma_client = proxy_server.prisma_client
+    if prisma_client is None:
+        return set()
     cache = proxy_server.user_api_key_cache
     span = getattr(user_api_key_dict, "parent_otel_span", None)
+    names: set = set()
 
-    # KEY: the key's own metadata (the auth object's .metadata is the team's shadow).
-    if user_api_key_dict.token and prisma_client is not None:
+    def _add(obj: object) -> None:
+        assigned = getattr(obj, "logging_exporters", None)
+        if isinstance(assigned, (list, tuple)):
+            names.update(str(name) for name in assigned)
+
+    if user_api_key_dict.token:
         try:
-            key_obj = await get_key_object(
-                hashed_token=user_api_key_dict.token,
-                prisma_client=prisma_client,
-                user_api_key_cache=cache,
-                parent_otel_span=span,
-                proxy_logging_obj=proxy_server.proxy_logging_obj,
+            _add(
+                await get_key_object(
+                    hashed_token=user_api_key_dict.token,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=cache,
+                    parent_otel_span=span,
+                    proxy_logging_obj=proxy_server.proxy_logging_obj,
+                )
             )
-            _add(key_obj.metadata)
         except Exception:  # noqa: BLE001
             pass
 
-    # TEAM: team_metadata is already the team's own.
-    _add(user_api_key_dict.team_metadata)
-
-    # ORG: the org's own metadata (central catch-all).
-    if org_id and prisma_client is not None:
+    if user_api_key_dict.team_id:
         try:
-            org_obj = await get_org_object(
-                org_id=org_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=cache,
-                parent_otel_span=span,
-                proxy_logging_obj=proxy_server.proxy_logging_obj,
+            _add(
+                await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=cache,
+                    parent_otel_span=span,
+                    proxy_logging_obj=proxy_server.proxy_logging_obj,
+                )
             )
-            _add(getattr(org_obj, "metadata", None))
+        except Exception:  # noqa: BLE001
+            pass
+
+    if org_id:
+        try:
+            _add(
+                await get_org_object(
+                    org_id=org_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=cache,
+                    parent_otel_span=span,
+                    proxy_logging_obj=proxy_server.proxy_logging_obj,
+                )
+            )
         except Exception:  # noqa: BLE001
             pass
 

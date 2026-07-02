@@ -172,6 +172,38 @@ def _exporter_value_changes(
     return requested_metadata.get(LOGGING_EXPORTERS_KEY) != existing
 
 
+def validate_logging_exporter_field(
+    requested_exporters: Optional[list],
+    user_api_key_dict: UserAPIKeyAuth,
+    *,
+    caller_is_team_admin: bool = False,
+    caller_is_org_admin: bool = False,
+    existing_exporters: Optional[list] = None,
+    scope_team_id: Optional[str] = None,
+    scope_org_id: Optional[str] = None,
+) -> None:
+    """Authorize a typed ``logging_exporters`` write (the column-backed field).
+
+    Adapts the typed list to the metadata-shaped input the shared assignment
+    validator expects, so the authorization logic lives in one place.
+    ``requested_exporters is None`` means the field was not provided (no-op); an
+    empty list is an explicit clear and is gated like any other change.
+    ``existing_exporters`` is the stored column value, passed so a change is
+    detected and a non-admin cannot silently clear an admin-assigned value.
+    """
+    requested_metadata = None if requested_exporters is None else {LOGGING_EXPORTERS_KEY: requested_exporters}
+    existing_metadata = None if existing_exporters is None else {LOGGING_EXPORTERS_KEY: existing_exporters}
+    validate_logging_exporter_assignment(
+        requested_metadata,
+        user_api_key_dict,
+        caller_is_team_admin=caller_is_team_admin,
+        caller_is_org_admin=caller_is_org_admin,
+        existing_metadata=existing_metadata,
+        scope_team_id=scope_team_id,
+        scope_org_id=scope_org_id,
+    )
+
+
 def validate_logging_exporter_assignment(
     metadata: Optional[dict],
     user_api_key_dict: UserAPIKeyAuth,

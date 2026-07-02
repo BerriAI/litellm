@@ -22,6 +22,7 @@ from litellm.proxy.management_endpoints.logging_exporter_validation import (
     is_admin_gated_credential_info,
     validate_credential_access,
     validate_logging_exporter_assignment,
+    validate_logging_exporter_field,
 )
 
 
@@ -393,3 +394,60 @@ def test_validate_credential_access_rejects_unknown_field():
         validate_credential_access({"access": {"global": True, "legacy_field": "x"}})
     assert exc.value.status_code == 400
     assert "legacy_field" in exc.value.detail["error"]
+
+
+# --- validate_logging_exporter_field (the column-backed adapter) ------------
+#
+# The endpoints now pass a typed list off the request's ``logging_exporters``
+# field instead of a metadata dict. The adapter must gate the same way, and the
+# typed field's None-means-omitted semantics must not open a bypass.
+
+
+def test_field_none_is_noop_for_non_admin(_registry):
+    """A request that omits logging_exporters (None) must not require authorization."""
+    validate_logging_exporter_field(None, _non_admin())
+
+
+def test_field_set_by_non_admin_without_flags_is_forbidden(_registry):
+    with pytest.raises(HTTPException) as exc:
+        validate_logging_exporter_field(["langfuse-eu"], _non_admin())
+    assert exc.value.status_code == 403
+
+
+def test_field_scoped_rejection_for_out_of_scope_team(_registry):
+    """arize-ds is granted to ds-team; a team admin writing in another team's scope
+    cannot name it, exactly as the metadata path gated it."""
+    with pytest.raises(HTTPException) as exc:
+        validate_logging_exporter_field(
+            ["arize-ds"],
+            _non_admin(),
+            caller_is_team_admin=True,
+            scope_team_id="platform-team",
+        )
+    assert exc.value.status_code == 403
+
+
+def test_field_empty_clear_over_existing_is_gated_for_non_admin(_registry):
+    """Clearing an admin-assigned value ([] over a non-empty stored column) is a
+    change and must be authorized; a non-admin cannot silently wipe it."""
+    with pytest.raises(HTTPException) as exc:
+        validate_logging_exporter_field(
+            [],
+            _non_admin(),
+            existing_exporters=["langfuse-eu"],
+        )
+    assert exc.value.status_code == 403
+
+
+def test_field_unchanged_value_is_noop(_registry):
+    """Re-sending the same column value is a no-op even for a non-admin."""
+    validate_logging_exporter_field(
+        ["langfuse-eu"],
+        _non_admin(),
+        existing_exporters=["langfuse-eu"],
+    )
+
+
+def test_field_admin_can_assign_out_of_scope(_registry):
+    """Proxy admin skips the scope check (parity with the metadata path)."""
+    validate_logging_exporter_field(["arize-ds"], _admin(), scope_team_id="platform-team")

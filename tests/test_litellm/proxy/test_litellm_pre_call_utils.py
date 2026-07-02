@@ -4845,24 +4845,46 @@ def _seeded_logging_credentials():
         litellm.credential_list = original
 
 
-def _auth(team_exporters=None, token=None, org_id=None, team_id=None):
-    return UserAPIKeyAuth(
-        api_key="hashed-key",
-        token=token,
-        org_id=org_id,
-        team_id=team_id,
-        team_metadata=({"logging_exporters": team_exporters} if team_exporters else {}),
+def _auth(token="hashed-key", org_id=None, team_id="team-x"):
+    return UserAPIKeyAuth(api_key="hashed-key", token=token, org_id=org_id, team_id=team_id)
+
+
+def _patch_identity(monkeypatch, *, key=(), team=(), org=(), team_org_id=None):
+    """Route the resolver's identity lookups to ``logging_exporters`` columns.
+
+    Assignments now live on typed columns, so the resolver reads each level from
+    its own DB object. This connects a prisma client and patches
+    ``get_key_object`` / ``get_team_object`` / ``get_org_object`` to return objects
+    carrying the given ``logging_exporters``. ``team_org_id`` sets the team's
+    ``organization_id`` for the token-has-no-org_id org fallback.
+    """
+    from types import SimpleNamespace
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.auth import auth_checks
+
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(
+        auth_checks, "get_key_object", AsyncMock(return_value=SimpleNamespace(logging_exporters=list(key)))
+    )
+    monkeypatch.setattr(
+        auth_checks,
+        "get_team_object",
+        AsyncMock(return_value=SimpleNamespace(logging_exporters=list(team), organization_id=team_org_id)),
+    )
+    monkeypatch.setattr(
+        auth_checks, "get_org_object", AsyncMock(return_value=SimpleNamespace(logging_exporters=list(org)))
     )
 
 
 @pytest.mark.asyncio
-async def test_resolve_logging_exporters_team_level(_seeded_logging_credentials):
-    # team_metadata is the team's own (not shadowed); resolves without a DB fetch.
+async def test_resolve_logging_exporters_team_level(_seeded_logging_credentials, monkeypatch):
+    # team assignment lives on the team's logging_exporters column.
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    destinations, backends = await _resolve_logging_exporters(
-        _auth(team_exporters=["langfuse-eu"])
-    )
+    _patch_identity(monkeypatch, team=["langfuse-eu"])
+    destinations, backends = await _resolve_logging_exporters(_auth())
     assert {d["endpoint"] for d in destinations} == {
         "https://cloud.langfuse.com/api/public/otel"
     }
@@ -4873,35 +4895,13 @@ async def test_resolve_logging_exporters_team_level(_seeded_logging_credentials)
 async def test_resolve_logging_exporters_unions_key_team_org(
     _seeded_logging_credentials, monkeypatch
 ):
-    # key + org are read from their OWN records (the key's .metadata is team-shadowed),
-    # team from team_metadata. All three union, deduped.
-    from types import SimpleNamespace
-
-    import litellm.proxy.proxy_server as proxy_server
-    from litellm.proxy.auth import auth_checks
+    # key, team, and org are each read from their OWN logging_exporters column.
+    # All three union, deduped.
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
-    monkeypatch.setattr(
-        auth_checks,
-        "get_key_object",
-        AsyncMock(
-            return_value=SimpleNamespace(metadata={"logging_exporters": ["arize-prod"]})
-        ),
-    )
-    monkeypatch.setattr(
-        auth_checks,
-        "get_org_object",
-        AsyncMock(
-            return_value=SimpleNamespace(
-                metadata={"logging_exporters": ["langfuse-eu"]}
-            )
-        ),
-    )
+    _patch_identity(monkeypatch, key=["arize-prod"], team=["langfuse-eu"], org=["langfuse-eu"])
 
-    destinations, backends = await _resolve_logging_exporters(
-        _auth(team_exporters=["langfuse-eu"], token="hashed-key", org_id="org-1")
-    )
+    destinations, backends = await _resolve_logging_exporters(_auth(org_id="org-1"))
 
     assert {d["endpoint"] for d in destinations} == {
         "https://cloud.langfuse.com/api/public/otel",  # team + org (deduped)
@@ -4912,13 +4912,12 @@ async def test_resolve_logging_exporters_unions_key_team_org(
 
 @pytest.mark.asyncio
 async def test_resolve_logging_exporters_carries_arize_project(
-    _seeded_logging_credentials,
+    _seeded_logging_credentials, monkeypatch
 ):
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    destinations, _ = await _resolve_logging_exporters(
-        _auth(team_exporters=["arize-prod"])
-    )
+    _patch_identity(monkeypatch, team=["arize-prod"])
+    destinations, _ = await _resolve_logging_exporters(_auth())
 
     assert destinations == [
         {
@@ -4945,20 +4944,19 @@ async def test_resolve_logging_exporters_empty_without_assignment(
 
 @pytest.mark.asyncio
 async def test_resolve_logging_exporters_skips_unknown_and_provider_creds(
-    _seeded_logging_credentials,
+    _seeded_logging_credentials, monkeypatch
 ):
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
     # unknown name + a provider credential (not credential_type=logging) -> nothing
-    destinations, backends = await _resolve_logging_exporters(
-        _auth(team_exporters=["does-not-exist", "openai-key"])
-    )
+    _patch_identity(monkeypatch, team=["does-not-exist", "openai-key"])
+    destinations, backends = await _resolve_logging_exporters(_auth())
     assert destinations == [] and backends == []
 
 
 @pytest.mark.asyncio
 async def test_apply_admin_logging_exporters_stamps_and_activates(
-    _seeded_logging_credentials,
+    _seeded_logging_credentials, monkeypatch
 ):
     from litellm.integrations.otel.plumbing.context import (
         _request_destinations,
@@ -4966,12 +4964,11 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(
     )
     from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
 
+    _patch_identity(monkeypatch, team=["langfuse-eu"])
     token = _request_destinations.set(())
     data: dict = {}
     try:
-        await _apply_admin_logging_exporters(
-            data, _auth(team_exporters=["langfuse-eu"])
-        )
+        await _apply_admin_logging_exporters(data, _auth())
 
         # destinations live under litellm_metadata so the body does not leak an
         # unknown top-level key to the provider; the top-level key stays absent
@@ -5074,7 +5071,7 @@ async def test_client_cannot_control_otel_destinations(_seeded_logging_credentia
 
 @pytest.mark.asyncio
 async def test_apply_admin_logging_exporters_registers_on_failure(
-    _seeded_logging_credentials,
+    _seeded_logging_credentials, monkeypatch
 ):
     """An admin-owned destination must capture a FAILED upstream call, not only a
     successful one.
@@ -5088,14 +5085,13 @@ async def test_apply_admin_logging_exporters_registers_on_failure(
     from litellm.integrations.otel.plumbing.context import _request_destinations
     from litellm.proxy.litellm_pre_call_utils import _apply_admin_logging_exporters
 
+    _patch_identity(monkeypatch, team=["langfuse-eu", "arize-prod"])
     token = _request_destinations.set(())
     # Seed a pre-existing failure callback to prove backends are unioned in, not
     # overwriting, and that a duplicate backend is not appended twice.
     data: dict = {"failure_callback": ["arize"]}
     try:
-        await _apply_admin_logging_exporters(
-            data, _auth(team_exporters=["langfuse-eu", "arize-prod"])
-        )
+        await _apply_admin_logging_exporters(data, _auth())
         for callback_list in ("success_callback", "failure_callback"):
             registered = data[callback_list]
             assert "langfuse_otel" in registered
@@ -5176,31 +5172,29 @@ async def test_resolve_grant_does_not_auto_enable(
 
 @pytest.mark.asyncio
 async def test_resolve_name_with_grant_enables(
-    _seeded_logging_credentials_with_access,
+    _seeded_logging_credentials_with_access, monkeypatch
 ):
     """Naming a destination the caller is granted enables it (alongside the
     auto_enable default)."""
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    destinations, _ = await _resolve_logging_exporters(
-        _auth(team_id="team-eu", team_exporters=["langfuse-eu"])
-    )
+    _patch_identity(monkeypatch, team=["langfuse-eu"])
+    destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-eu"))
 
     assert {d["endpoint"] for d in destinations} == {_LANGFUSE_ENDPOINT, _ARIZE_ENDPOINT}
 
 
 @pytest.mark.asyncio
 async def test_resolve_name_without_visibility_is_dropped(
-    _seeded_logging_credentials_with_access,
+    _seeded_logging_credentials_with_access, monkeypatch
 ):
     """A name that points at a destination NOT visible to the request identity is
     defensively ignored, so a stale or cross-tenant assignment can never route
     traffic out. team-other names langfuse-eu (granted only to team-eu)."""
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
-    destinations, _ = await _resolve_logging_exporters(
-        _auth(team_id="team-other", team_exporters=["langfuse-eu"])
-    )
+    _patch_identity(monkeypatch, team=["langfuse-eu"])
+    destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-other"))
 
     # langfuse-eu dropped (not visible to team-other); only auto_enable survives.
     assert {d["endpoint"] for d in destinations} == {_ARIZE_ENDPOINT}
@@ -5248,11 +5242,7 @@ async def test_resolve_org_scoped_via_team_when_token_has_no_org_id(monkeypatch)
     accepts the assignment, so the resolver must agree (M1); without the fallback the
     org-granted destination is named but invisible (org_id None) and silently dropped.
     Reverting _effective_org_id to user_api_key_dict.org_id fails this test."""
-    from types import SimpleNamespace
-
-    import litellm.proxy.proxy_server as proxy_server
     from litellm.models.credentials import CredentialItem
-    from litellm.proxy.auth import auth_checks
     from litellm.proxy.litellm_pre_call_utils import _resolve_logging_exporters
 
     original = litellm.credential_list
@@ -5267,26 +5257,11 @@ async def test_resolve_org_scoped_via_team_when_token_has_no_org_id(monkeypatch)
             },
         ),
     ]
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", MagicMock())
-    monkeypatch.setattr(
-        auth_checks, "get_key_object", AsyncMock(return_value=SimpleNamespace(metadata={}))
-    )
-    monkeypatch.setattr(
-        auth_checks,
-        "get_org_object",
-        AsyncMock(return_value=SimpleNamespace(metadata={})),
-    )
-    # the key's token has no org_id; the team it belongs to is in org-7.
-    monkeypatch.setattr(
-        auth_checks,
-        "get_team_object",
-        AsyncMock(return_value=SimpleNamespace(organization_id="org-7")),
-    )
+    # The key's token has no org_id; the team it belongs to is in org-7, and the
+    # arize-org destination is named on the team's logging_exporters column.
+    _patch_identity(monkeypatch, team=["arize-org"], team_org_id="org-7")
     try:
-        destinations, _ = await _resolve_logging_exporters(
-            _auth(team_id="team-x", team_exporters=["arize-org"])
-        )
+        destinations, _ = await _resolve_logging_exporters(_auth(team_id="team-x"))
         assert {d["endpoint"] for d in destinations} == {"https://otlp.arize.com/v1"}
     finally:
         litellm.credential_list = original

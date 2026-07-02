@@ -93,6 +93,21 @@ FORK C - Y7 fan_out/routing: **C2 chosen**. Merge `TenantFanOutSpanProcessor` in
 
 - Y6 full carrier removal (request-data -> ContextVar for the gen-AI span): NOT done blind. Evidence against a naive removal: the gen-AI logger binds the tenant tracer from `standard_callback_dynamic_params.otel_destinations` (`logger.py:237`, and the deferred close path `:344/:364`). The tracer is bound at `log_pre_api_call` (request task, ContextVar present) for the mainline, but `streaming_handler.py:1668` closes via `asyncio.run(...)`, a fresh event-loop context where the server-only ContextVar may not survive, whereas the kwargs-borne `dynamic_params` always does. So moving the gen-AI path to the ContextVar risks a streaming tenant-routing regression that cannot be validated without a live streaming proxy. Recommendation: keep `dynamic_params` as the robust carrier, rely on the now-hardened wipe for the trust boundary (Y3 proven), and treat ContextVar unification as a follow-up gated on live streaming validation. Open for the maintainer's call.
 
+## 7b. A2 progress (as built, uncommitted WIP)
+
+Environment self-unblocked: installed + generated prisma-client-py 0.11.0 (was an ungenerated namespace stub), stood up a throwaway Postgres (docker `litellm-pg`, port 5599), `prisma db push` applied the schema.
+
+Done and DB-validated:
+- `logging_exporters String[] @default([])` added to `LiteLLM_TeamTable`, `LiteLLM_OrganizationTable`, `LiteLLM_VerificationToken`, and the `Deleted*` mirrors, in all three synced `schema.prisma` copies. Round-trip proven against real Postgres: `team.logging_exporters` and `key.logging_exporters` persist and read back through the generated client.
+- Pydantic mirrors carry the field (`litellm/models/team.py`, `organization.py`, `verification_token.py`); it propagates to `LiteLLM_VerificationTokenView` / `UserAPIKeyAuth`. `get_key_object`/`get_org_object`/`get_team_object` hydrate via `**model_dump()`, so the column flows in automatically.
+- Resolver read path (`_union_logging_exporter_names`) migrated from `metadata.logging_exporters` to the `.logging_exporters` column, reading each level from its own object (key/team/org), DB-required.
+
+Remaining for a complete, consistent A2 (this is why the tree currently has 5 red resolver tests, since a half-migration is intentionally not committed):
+- Write path across 6 endpoint sites (key generate/update/regenerate, team new/update, org new/update), each with bespoke persistence (team `/new` auto-persists via `data.json()` -> mirror; keys map fields explicitly). Recommended low-churn approach: add `logging_exporters: Optional[list[str]]` to the request models, feed the existing `validate_logging_exporter_assignment` a synthesized `{"logging_exporters": data.logging_exporters}` dict (leaving the validator and its 38 tests unchanged), and persist the field to the column.
+- Update the 5 resolver tests to the column model (mock `get_team_object`; set `prisma_client`).
+- Add the proxy-extras `migration.sql` (`ADD COLUMN IF NOT EXISTS "logging_exporters" TEXT[] DEFAULT ARRAY[]::TEXT[]` on the four tables, per the `policies` precedent).
+- UI: send `logging_exporters` as a top-level field, read from the column.
+
 ## 8. Test plan (maps to the 6 required areas)
 
 1. Visibility: proxy-admin sees per policy; team/org-admin cannot see out-of-scope destinations from `GET /credentials`; global/scoped/auto_enable follow policy.
