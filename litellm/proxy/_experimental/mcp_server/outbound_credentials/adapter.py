@@ -12,7 +12,7 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, NoReturn, Optional
+from typing import TYPE_CHECKING, Literal, NoReturn, Optional
 
 from fastapi import HTTPException
 from pydantic import SecretStr
@@ -63,7 +63,7 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
     explicitly mapped or explicitly deferred, rather than silently falling through to v1. Live
     modes: ``none``, the static-header family (``api_key`` plus the Authorization schemes,
     all shared-key), ``oauth2`` per-user tokens (``authorization_code``), and
-    ``oauth2_token_exchange`` (RFC 8693 OBO); client_credentials (M2M), delegated/passthrough
+    ``oauth2_token_exchange`` (OBO); client_credentials (M2M), delegated/passthrough
     oauth2, and SigV4 return None and stay on v1.
     """
     if server.is_byok:
@@ -102,22 +102,28 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
 
 
 def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
-    """Build a token_exchange (RFC 8693 OBO) spec, or defer (None) when it is not OBO-configured.
+    """Build a token_exchange (OBO) spec, or defer (None) when it is not OBO-configured.
 
     An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
     ``token_exchange_endpoint``/``token_url`` is absent: a missing endpoint then fails closed (412) at
     the exchanger rather than silently deferring to v1 and connecting unauthenticated, since the
     gateway must not guess the IdP or fall back to a weaker source. Without client credentials there is
-    nothing to own, so the server stays on v1 (parity-safe). ``audience`` is forwarded only when the
-    operator set it; a missing one is omitted, not derived.
+    nothing to own, so the server stays on v1 (parity-safe). ``profile`` selects the wire dialect
+    (``rfc8693`` default, ``entra_obo`` for Microsoft Entra On-Behalf-Of); an unrecognized value
+    normalizes to ``rfc8693`` so a bad config value cannot crash spec-building. ``audience`` is
+    forwarded only when the operator set it; a missing one is omitted, not derived.
     """
     endpoint = server.token_exchange_endpoint or server.token_url
     if not server.client_id or not server.client_secret:
         return None
+    profile: Literal["rfc8693", "entra_obo"] = (
+        "entra_obo" if server.token_exchange_profile == "entra_obo" else "rfc8693"
+    )
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
         config=TokenExchangeConfig(
+            profile=profile,
             subject_token_type=server.subject_token_type or "urn:ietf:params:oauth:token-type:access_token",
             token_exchange_endpoint=endpoint,
             audience=server.audience,

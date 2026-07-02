@@ -1,11 +1,14 @@
-"""v2-native RFC 8693 token exchange (OBO): swap the caller's token for an upstream one.
+"""v2-native OBO token exchange: swap the caller's token for an upstream-bound one.
 
-The pure core of the ``token_exchange`` mode. Given the caller's ``subject_token`` and the server's
-``TokenExchangeConfig``, ``Rfc8693TokenExchanger.exchange`` POSTs the RFC 8693 token-exchange grant to
-the configured endpoint and returns the upstream-bound ``access_token`` as a typed ``OAuthToken``, or a
-typed ``CredError`` - never a raise (the HTTP edge is the injected ``ExchangeHttpPost``, whose adapter
-contains the I/O). The exchanged token is cached and single-flighted per ``(subject_token, server)`` so
-a repeated caller token skips the IdP round-trip and concurrent calls collapse to one exchange, reusing
+The pure core of the ``token_exchange`` mode. Given the caller's inbound token and the server's
+``TokenExchangeConfig``, ``OboTokenExchanger.exchange`` POSTs the grant selected by ``config.profile``
+to the configured endpoint and returns the upstream-bound ``access_token`` as a typed ``OAuthToken``,
+or a typed ``CredError`` - never a raise (the HTTP edge is the injected ``ExchangeHttpPost``, whose
+adapter contains the I/O). Two profiles share this one engine: ``rfc8693`` (the RFC 8693 token-exchange
+grant) and ``entra_obo`` (Microsoft Entra On-Behalf-Of, which is the RFC 7523 ``jwt-bearer`` grant);
+only the request form differs, so the cache, single-flight, and TTL machinery are dialect-agnostic. The
+exchanged token is cached and single-flighted per ``(subject_token, tenant, config, server)`` so a
+repeated caller token skips the IdP round-trip and concurrent calls collapse to one exchange, reusing
 the shared in-process cache + coordinator foundation. A rotated caller token hashes to a new key and
 re-exchanges. Pure v2 apart from the shared RFC 6749 client-auth helper, which carries no v1 state.
 
@@ -19,7 +22,9 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Awaitable, Callable
-from typing import Protocol
+from typing import Literal, Protocol
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
@@ -51,6 +56,10 @@ _MIN_TTL_SECONDS = 10.0
 _EXPIRY_BUFFER_SECONDS = 60.0
 
 _GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
+# Microsoft Entra On-Behalf-Of speaks the RFC 7523 jwt-bearer grant, not RFC 8693, and gates delegation
+# behind ``requested_token_use=on_behalf_of`` (a Microsoft extension present in neither RFC).
+_JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+_REQUESTED_TOKEN_USE_OBO = "on_behalf_of"
 
 # RFC 8693 3 token-type URNs that are not usable as an upstream Bearer access token. token_type
 # already rejects the common non-access case (N_A); this catches a malformed STS that mints one of
@@ -106,16 +115,18 @@ class TokenExchanger(Protocol):
 def _cache_key(subject_token: str, tenant_id: str, config: TokenExchangeConfig) -> str:
     """Bind the cache entry to the caller token, the tenant, AND the exchange config that minted it.
 
-    A rotated caller token, a different tenant, endpoint, audience, scope, client_id, secret, auth
-    method, or subject_token_type all change the key, so two tenants behind the same opaque token
-    never share an entry and a config change forces a fresh exchange instead of serving a token
-    minted for the old config until TTL. Everything is hashed, so no secret is held in the key.
+    A rotated caller token, a different tenant, profile, endpoint, audience, scope, client_id, secret,
+    auth method, or subject_token_type all change the key, so two tenants behind the same opaque token
+    never share an entry and a config change (including a profile flip that alters the wire form)
+    forces a fresh exchange instead of serving a token minted for the old config until TTL. Everything
+    is hashed, so no secret is held in the key.
     """
     secret = config.client_secret.get_secret_value() if config.client_secret else ""
     material = "\x00".join(
         (
             subject_token,
             tenant_id,
+            config.profile,
             config.token_exchange_endpoint or "",
             config.audience or "",
             config.subject_token_type,
@@ -141,7 +152,7 @@ def _parse_expires_in(raw: object) -> int | None:
     return None
 
 
-def _build_exchange_form(
+def _rfc8693_form(
     *,
     subject_token: str,
     subject_token_type: str,
@@ -157,8 +168,53 @@ def _build_exchange_form(
     }
 
 
-class Rfc8693TokenExchanger:
-    """``TokenExchanger`` that runs the RFC 8693 grant once per caller token, then caches the result.
+def _entra_obo_form(
+    *,
+    subject_token: str,
+    scopes: tuple[str, ...],
+) -> dict[str, str]:
+    # Microsoft Entra On-Behalf-Of (RFC 7523 jwt-bearer, not RFC 8693): the caller's inbound access
+    # token rides as ``assertion`` (its ``aud`` must be this gateway's ``client_id``); the target
+    # resource is carried in ``scope`` (e.g. api://<app-id>/.default), since Entra has no audience
+    # parameter and ignores subject_token_type; ``requested_token_use=on_behalf_of`` is the Microsoft
+    # extension that turns the jwt-bearer grant into a delegation. ``scope`` is required, and the
+    # exchange precondition rejects an empty one, so it is always present here. Client authentication
+    # (client_id/client_secret via post, or Basic) is layered on by the caller through
+    # build_token_endpoint_client_auth, so it is not built into the form here.
+    return {
+        "grant_type": _JWT_BEARER_GRANT_TYPE,
+        "assertion": subject_token,
+        "scope": " ".join(scopes),
+        "requested_token_use": _REQUESTED_TOKEN_USE_OBO,
+    }
+
+
+def _build_exchange_form(
+    *,
+    profile: Literal["rfc8693", "entra_obo"],
+    subject_token: str,
+    subject_token_type: str,
+    audience: str | None,
+    scopes: tuple[str, ...],
+) -> dict[str, str]:
+    match profile:
+        case "rfc8693":
+            return _rfc8693_form(
+                subject_token=subject_token,
+                subject_token_type=subject_token_type,
+                audience=audience,
+                scopes=scopes,
+            )
+        case "entra_obo":
+            return _entra_obo_form(
+                subject_token=subject_token,
+                scopes=scopes,
+            )
+    assert_never(profile)
+
+
+class OboTokenExchanger:
+    """``TokenExchanger`` that runs the profile's OBO grant once per caller token, then caches the result.
 
     The HTTP post is injected (``None`` on any IdP failure, mirroring v1: a failed exchange is a miss,
     not a 500). The cache and single-flight coordinator default to the in-process foundation; a
@@ -199,6 +255,13 @@ class Rfc8693TokenExchanger:
             )
         if not client_id or client_secret is None:
             return Error(CredError.of_misconfigured("token_exchange requires client_id and client_secret"))
+        if config.profile == "entra_obo" and not config.scopes:
+            # Entra carries the target resource in ``scope`` (api://<app-id>/.default); with no scope the
+            # IdP cannot resolve an audience, so fail closed as misconfigured rather than POST a form the
+            # IdP will reject.
+            return Error(
+                CredError.of_misconfigured("entra_obo token exchange requires a scope (e.g. api://<app-id>/.default)")
+            )
 
         cache_key = _cache_key(subject_token, tenant_id, config)
         server_id = server.server_id
@@ -214,6 +277,7 @@ class Rfc8693TokenExchanger:
         )
         form = {
             **_build_exchange_form(
+                profile=config.profile,
                 subject_token=subject_token,
                 subject_token_type=config.subject_token_type,
                 audience=config.audience,

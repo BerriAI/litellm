@@ -13,7 +13,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_
     build_token_exchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
-    Rfc8693TokenExchanger,
+    OboTokenExchanger,
     SubjectTokenRejected,
     TokenExchangeClientError,
 )
@@ -41,7 +41,7 @@ def _client_raising_4xx(body: object):
 
 
 def test_build_token_exchanger_returns_an_exchanger():
-    assert isinstance(build_token_exchanger(), Rfc8693TokenExchanger)
+    assert isinstance(build_token_exchanger(), OboTokenExchanger)
 
 
 def test_build_gives_each_caller_an_independent_cache():

@@ -160,6 +160,50 @@ def test_token_exchange_with_creds_but_no_endpoint_is_owned_for_fail_closed():
     assert spec.config.token_exchange_endpoint is None
 
 
+def test_token_exchange_maps_entra_obo_profile():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_profile="entra_obo",
+            scopes=["api://target/.default"],
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "entra_obo"
+
+
+def test_token_exchange_defaults_to_rfc8693_profile():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "rfc8693"
+
+
+@pytest.mark.parametrize("bogus", ["", "RFC8693", "jwt_bearer", "entra", "unknown"])
+def test_token_exchange_unknown_profile_normalizes_to_rfc8693(bogus):
+    # A bad DB/config value must normalize to rfc8693, not raise a ValidationError building the spec.
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp/token",
+            client_id="cid",
+            client_secret="csec",
+            token_exchange_profile=bogus,
+        )
+    )
+    assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.profile == "rfc8693"
+
+
 def test_token_exchange_omits_audience_when_unset():
     spec = to_server_spec(
         _server(

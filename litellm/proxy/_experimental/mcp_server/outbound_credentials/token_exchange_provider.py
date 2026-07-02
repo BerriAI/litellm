@@ -1,6 +1,6 @@
 """Composition root for the v2-native token_exchange (OBO) exchanger.
 
-Wires the pure ``Rfc8693TokenExchanger`` to its runtime edges: the real httpx POST against the IdP and
+Wires the pure ``OboTokenExchanger`` to its runtime edges: the real httpx POST against the IdP and
 the configured cache sizing/TTL constants. ``build_token_exchanger`` is built once at egress
 construction and reused, so the in-process exchanged-token cache survives across requests. Unlike the
 per-user store, nothing here reads a runtime global at build time (the httpx client is acquired per
@@ -22,7 +22,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
     InMemoryTokenCacheBackend,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
-    Rfc8693TokenExchanger,
+    OboTokenExchanger,
     SubjectTokenRejected,
     TokenExchangeClientError,
 )
@@ -95,8 +95,8 @@ async def _post_exchange_endpoint(
     return parsed  # pyright: ignore
 
 
-def build_token_exchanger() -> Rfc8693TokenExchanger:
-    return Rfc8693TokenExchanger(
+def build_token_exchanger() -> OboTokenExchanger:
+    return OboTokenExchanger(
         _post_exchange_endpoint,
         cache=InMemoryTokenCacheBackend(max_size=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE),
         default_ttl_seconds=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,

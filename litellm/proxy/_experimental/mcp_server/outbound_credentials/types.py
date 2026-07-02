@@ -182,18 +182,27 @@ class ClientCredentialsConfig(BaseModel):
 
 
 class TokenExchangeConfig(BaseModel):
-    """RFC 8693 OBO; swap the caller's live subject_token for a token bound to the upstream's
-    audience. The gateway authenticates to the exchange endpoint as an OAuth client
-    (`client_id`/`client_secret`); the inbound token is sent only to that endpoint, never to the
-    upstream.
+    """OBO: swap the caller's live inbound token for a token bound to the upstream's audience. The
+    gateway authenticates to the exchange endpoint as an OAuth client (`client_id`/`client_secret`);
+    the inbound token is sent only to that endpoint, never to the upstream.
 
-    `audience` is the RFC 8693 target; it is optional and sent only when the operator configured
-    one, since both `audience` and `resource` are optional in the spec and the authorization server
-    applies its own default when neither is sent (fabricating one risks `invalid_target`).
+    `profile` selects the wire dialect, since not every IdP speaks RFC 8693:
+      - `rfc8693` (default) is the standard token-exchange grant: the inbound token is the
+        `subject_token` (typed by `subject_token_type`), the target is the optional `audience`.
+      - `entra_obo` is Microsoft Entra On-Behalf-Of, which is the RFC 7523 `jwt-bearer` grant rather
+        than 8693: the inbound token rides as `assertion`, the target resource is carried in `scopes`
+        (`api://<app-id>/.default`, since Entra has no audience parameter), and the Microsoft-only
+        `requested_token_use=on_behalf_of` extension makes the jwt-bearer grant a delegation.
+        `subject_token_type` and `audience` are unused in this profile.
+
+    `audience` (rfc8693 only) is optional and sent only when the operator configured one, since both
+    `audience` and `resource` are optional in RFC 8693 and the authorization server applies its own
+    default when neither is sent (fabricating one risks `invalid_target`).
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
+    profile: Literal["rfc8693", "entra_obo"] = "rfc8693"
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     token_exchange_endpoint: str | None = None
     audience: str | None = None

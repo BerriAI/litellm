@@ -718,6 +718,41 @@ class TestMCPServerManager:
             client_secret="csec",
         )
 
+    @pytest.mark.asyncio
+    async def test_entra_obo_profile_survives_db_credentials_round_trip(self):
+        # A credentials blob from the management API / DB carries token_exchange_profile; the DB build
+        # must reconstruct it onto the MCPServer, and the v2 adapter must map it onto the resolver
+        # config. Without threading it through, an entra_obo server persisted via the API silently
+        # falls back to rfc8693 and posts the wrong grant to the IdP.
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import to_server_spec
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import TokenExchangeConfig
+
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="entra-db-1",
+            alias="entra_db",
+            description="entra obo from db",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_exchange_endpoint": "https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+                "scopes": ["api://target/.default"],
+                "token_exchange_profile": "entra_obo",
+            },
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+        assert built.token_exchange_profile == "entra_obo"
+
+        spec = to_server_spec(built)
+        assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+        assert spec.config.profile == "entra_obo"
+
     async def _capture_subject_token(self, call) -> Optional[str]:
         """Run a manager method (via ``call(manager)``) and return the subject_token it threaded
         into ``_create_mcp_client``."""
