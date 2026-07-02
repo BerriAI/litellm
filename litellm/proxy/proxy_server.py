@@ -63,6 +63,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.proxy._types import (
     UI_TEAM_ID,
     CallbackDelete,
@@ -637,6 +638,65 @@ premium_user_data: Optional["EnterpriseLicenseData"] = _license_check.airgapped_
 global_max_parallel_request_retries_env: Optional[str] = os.getenv("LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES")
 proxy_state = ProxyState()
 SENSITIVE_DATA_MASKER = SensitiveDataMasker()
+
+
+# Secret-bearing general_settings fields the segment masker does not match by
+# name: database_url and database_extra_connection_params embed DB credentials,
+# pass_through_endpoints carry upstream Authorization headers, and
+# alert_to_webhook_url is itself a webhook secret
+_EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset(
+    {
+        "database_url",
+        "database_extra_connection_params",
+        "pass_through_endpoints",
+        "alert_to_webhook_url",
+    }
+)
+
+
+_EXTRA_SECRET_MASK = "REDACTED"
+
+
+def _redact_config_dict_for_logging(data: dict[str, object]) -> dict[str, object]:
+    """Mask secret-bearing entries in a proxy config-shaped dict.
+
+    Combines the segment-matching masker (catches `master_key`, `api_key`,
+    `*_token`, etc.) with an explicit whole-value replacement for the
+    URL/webhook fields that embed credentials but do not contain any
+    sensitive-pattern segment (e.g. `database_url` splits into
+    `['database', 'url']`, so segment matching misses it). The whole-value
+    replacement covers non-string shapes (`alert_to_webhook_url` is a dict,
+    `pass_through_endpoints` is a list), which the string-only
+    `mask_sensitive_keys` helper would otherwise pass through unchanged.
+    """
+    segment_masked = SENSITIVE_DATA_MASKER.mask_dict(data)
+    return {
+        key: _EXTRA_SECRET_MASK if key in _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS and value is not None else value
+        for key, value in segment_masked.items()
+    }
+
+
+def _redact_worker_config_for_logging(worker_config: str | dict[str, object] | None) -> str | dict[str, object] | None:
+    """Mask sensitive fields in the worker config before it enters a log record.
+
+    `worker_config` reaches `proxy_startup_event` as either the JSON blob
+    persisted by `save_worker_config` (a string) or the dict passed directly
+    to `initialize`. Both shapes can carry `master_key`, `database_url`,
+    provider API keys, etc.; passing the raw value to `verbose_proxy_logger`
+    leaks them whenever the last-line-of-defense regex filter is bypassed
+    (`LITELLM_DISABLE_REDACT_SECRETS=true`, an older log sink, a downstream
+    handler that captures records pre-filter). Redact at the source.
+    """
+    if worker_config is None:
+        return None
+    if isinstance(worker_config, dict):
+        return _redact_config_dict_for_logging(worker_config)
+    parsed = safe_json_loads(worker_config, default=None)
+    if isinstance(parsed, dict):
+        return safe_dumps(_redact_config_dict_for_logging(parsed))
+    return worker_config
+
+
 if global_max_parallel_request_retries_env is None:
     global_max_parallel_request_retries: int = 3
 else:
@@ -833,7 +893,7 @@ async def proxy_startup_event(app: FastAPI):
     ### LOAD CONFIG ###
     worker_config: Optional[Union[str, dict]] = get_secret("WORKER_CONFIG")  # type: ignore
     env_config_yaml: Optional[str] = get_secret_str("CONFIG_FILE_PATH")
-    verbose_proxy_logger.debug("worker_config: %s", worker_config)
+    verbose_proxy_logger.debug("worker_config: %s", _redact_worker_config_for_logging(worker_config))
     # check if it's a valid file path
     if env_config_yaml is not None:
         if os.path.isfile(env_config_yaml) and proxy_config.is_yaml(config_file_path=env_config_yaml):
@@ -4336,9 +4396,9 @@ class ProxyConfig:
             ### CONNECT TO DATABASE ###
             database_url = general_settings.get("database_url", None)
             if database_url and database_url.startswith("os.environ/"):
-                verbose_proxy_logger.debug("GOING INTO LITELLM.GET_SECRET!")
+                verbose_proxy_logger.debug("Resolving database_url via secret manager")
                 database_url = get_secret(database_url)
-                verbose_proxy_logger.debug("RETRIEVED DB URL: %s", database_url)
+                verbose_proxy_logger.debug("Resolved database_url from secret manager")
             ### MASTER KEY ###
             master_key = general_settings.get("master_key", get_secret("LITELLM_MASTER_KEY", None))
 
@@ -4738,7 +4798,7 @@ class ProxyConfig:
         """
 
         _alerting_callbacks = general_settings.get("alerting", None)
-        verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
+        verbose_proxy_logger.debug("_alerting_callbacks: %s", _alerting_callbacks)
         if _alerting_callbacks is None:
             return
 
@@ -14216,20 +14276,6 @@ async def update_config_general_settings(
         register_plugins_from_config(general_settings)
 
     return response
-
-
-# Secret-bearing general_settings fields the segment masker does not match by
-# name: database_url and database_extra_connection_params embed DB credentials,
-# pass_through_endpoints carry upstream Authorization headers, and
-# alert_to_webhook_url is itself a webhook secret
-_EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset(
-    {
-        "database_url",
-        "database_extra_connection_params",
-        "pass_through_endpoints",
-        "alert_to_webhook_url",
-    }
-)
 
 
 def _is_secret_general_setting_field(field_name: str) -> bool:
