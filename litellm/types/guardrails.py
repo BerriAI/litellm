@@ -44,6 +44,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.datafog import (
+    DataFogGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.repelloai import (
     RepelloAIGuardrailConfigModel,
 )
@@ -133,6 +136,7 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    DATAFOG = "datafog"
 
 
 class Role(Enum):
@@ -982,6 +986,7 @@ class LitellmParams(
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
+    DataFogGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
