@@ -1,5 +1,6 @@
 from typing import Dict, Optional
 
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.utils import StandardCallbackDynamicParams
 
 
@@ -101,5 +102,18 @@ def initialize_standard_callback_dynamic_params(
                     _param_value = metadata.get(param)
                     validate_no_callback_env_reference(param, _param_value, source="metadata")
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
+
+        # turn_off_message_logging is admin-only and is read from top-level kwargs only
+        # (not from the metadata fallback path above, which clients can populate).
+        # The proxy strips any client-supplied top-level value at
+        # litellm_pre_call_utils.py before admin callback_vars repopulate it.
+        if "turn_off_message_logging" in kwargs:
+            _tom_value = kwargs["turn_off_message_logging"]
+            if isinstance(_tom_value, bool):
+                standard_callback_dynamic_params["turn_off_message_logging"] = _tom_value
+            elif isinstance(_tom_value, str):
+                _parsed = str_to_bool(_tom_value)
+                if _parsed is not None:
+                    standard_callback_dynamic_params["turn_off_message_logging"] = _parsed
 
     return standard_callback_dynamic_params
