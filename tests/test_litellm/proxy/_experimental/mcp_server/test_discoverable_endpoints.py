@@ -3011,3 +3011,357 @@ async def test_token_endpoint_client_secret_basic_without_secret_returns_400():
             code_verifier="verifier",
         )
     assert exc_info.value.status_code == 400
+
+
+# -------------------------------------------------------------------
+# Tests for delegate_auth_to_upstream OAuth discovery (LIT-4120)
+# -------------------------------------------------------------------
+
+
+def _create_delegate_auth_server(
+    server_id="delegate_server",
+    name="delegate_mcp",
+    server_name="delegate_mcp",
+    url="https://upstream-mcp.example.com/mcp",
+    authorization_url="https://upstream-idp.example.com/authorize",
+    token_url="https://upstream-idp.example.com/token",
+    registration_url=None,
+    client_id=None,
+    client_secret=None,
+):
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        server_name=server_name,
+        url=url,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+        authorization_url=authorization_url,
+        token_url=token_url,
+        registration_url=registration_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=["read"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_delegate_auth_resource_metadata_proxies_upstream():
+    """When upstream has oauth-protected-resource metadata, the gateway
+    should proxy it (with resource rewritten) for delegate_auth_to_upstream
+    servers, just like is_oauth_passthrough servers."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _create_delegate_auth_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    upstream_metadata = {
+        "authorization_servers": ["https://upstream-idp.example.com"],
+        "resource": "https://upstream-mcp.example.com/mcp",
+        "scopes_supported": ["read", "write"],
+    }
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.fetch_upstream_oauth_protected_resource",
+            new_callable=AsyncMock,
+            return_value=upstream_metadata,
+        ):
+            response = await _build_oauth_protected_resource_response(
+                request=mock_request,
+                mcp_server_name="delegate_mcp",
+                use_standard_pattern=True,
+            )
+        assert response["authorization_servers"] == ["https://upstream-idp.example.com"]
+        assert response["resource"] == "https://gateway.example.com/mcp/delegate_mcp"
+        assert response["scopes_supported"] == ["read", "write"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_delegate_auth_resource_metadata_fallback_to_gateway():
+    """When upstream has no oauth-protected-resource metadata, the gateway
+    should serve its own resource metadata (with authorization_servers
+    pointing at the gateway) for delegate_auth_to_upstream servers.
+    The AS metadata endpoint will return the upstream's endpoints."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _create_delegate_auth_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.fetch_upstream_oauth_protected_resource",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            response = await _build_oauth_protected_resource_response(
+                request=mock_request,
+                mcp_server_name="delegate_mcp",
+                use_standard_pattern=True,
+            )
+        assert response["authorization_servers"] == ["https://gateway.example.com/delegate_mcp"]
+        assert response["resource"] == "https://gateway.example.com/mcp/delegate_mcp"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_delegate_auth_resource_metadata_fetch_error_falls_back():
+    """When fetching upstream metadata fails for a delegate_auth_to_upstream
+    server, fall back to gateway metadata (unlike passthrough which 502s)."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_protected_resource_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _create_delegate_auth_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.fetch_upstream_oauth_protected_resource",
+            new_callable=AsyncMock,
+            side_effect=Exception("connection refused"),
+        ):
+            response = await _build_oauth_protected_resource_response(
+                request=mock_request,
+                mcp_server_name="delegate_mcp",
+                use_standard_pattern=True,
+            )
+        assert response["authorization_servers"] == ["https://gateway.example.com/delegate_mcp"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def test_delegate_auth_as_metadata_returns_upstream_endpoints():
+    """The authorization server metadata for a delegate_auth_to_upstream
+    server should return the upstream's authorization/token endpoints,
+    not the gateway's proxy endpoints."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _create_delegate_auth_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="delegate_mcp",
+        )
+        assert response["authorization_endpoint"] == "https://upstream-idp.example.com/authorize"
+        assert response["token_endpoint"] == "https://upstream-idp.example.com/token"
+        assert response["token_endpoint_auth_methods_supported"] == ["none"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def test_delegate_auth_as_metadata_uses_upstream_registration_url():
+    """When the delegate_auth_to_upstream server has a registration_url,
+    the AS metadata should return it instead of the gateway's."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _create_delegate_auth_server(
+        registration_url="https://upstream-idp.example.com/register",
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="delegate_mcp",
+        )
+        assert response["registration_endpoint"] == "https://upstream-idp.example.com/register"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+def test_delegate_auth_as_metadata_falls_back_to_gateway_register():
+    """When the delegate_auth_to_upstream server has no registration_url,
+    the AS metadata registration_endpoint should point at the gateway."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _build_oauth_authorization_server_response,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    server = _create_delegate_auth_server(registration_url=None)
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    try:
+        response = _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="delegate_mcp",
+        )
+        assert response["registration_endpoint"] == "https://gateway.example.com/delegate_mcp/register"
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_delegate_auth_register_passes_client_redirect_uris():
+    """For delegate_auth_to_upstream servers, the registration dummy
+    response should use the client's redirect_uris, not the gateway's."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    server = _create_delegate_auth_server(
+        client_id="upstream-client",
+        client_secret="upstream-secret",
+    )
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    result = await register_client_with_server(
+        request=mock_request,
+        mcp_server=server,
+        client_name="opencode",
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        token_endpoint_auth_method="none",
+        client_redirect_uris=["http://127.0.0.1:9876/callback"],
+    )
+    assert result["redirect_uris"] == ["http://127.0.0.1:9876/callback"]
+
+
+@pytest.mark.asyncio
+async def test_non_delegate_register_uses_gateway_callback():
+    """For non-delegate servers, the registration response should
+    use the gateway's callback URL as before."""
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        register_client_with_server,
+    )
+
+    server = MCPServer(
+        server_id="normal_oauth",
+        name="normal_oauth",
+        server_name="normal_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="client-id",
+        client_secret="client-secret",
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/token",
+    )
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://gateway.example.com/"
+    mock_request.headers = {}
+
+    result = await register_client_with_server(
+        request=mock_request,
+        mcp_server=server,
+        client_name="opencode",
+        grant_types=["authorization_code"],
+        response_types=["code"],
+        token_endpoint_auth_method="none",
+        client_redirect_uris=["http://127.0.0.1:9876/callback"],
+    )
+    assert result["redirect_uris"] == ["https://gateway.example.com/callback"]
+
+
+def test_delegates_interactive_oauth_to_upstream_property():
+    """Verify the MCPServer property correctly identifies servers that
+    should delegate OAuth to the upstream."""
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    delegate_server = MCPServer(
+        server_id="s1",
+        name="s1",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+    )
+    assert delegate_server.delegates_interactive_oauth_to_upstream is True
+
+    non_delegate_server = MCPServer(
+        server_id="s2",
+        name="s2",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=False,
+    )
+    assert non_delegate_server.delegates_interactive_oauth_to_upstream is False
+
+    m2m_delegate_server = MCPServer(
+        server_id="s3",
+        name="s3",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        delegate_auth_to_upstream=True,
+        oauth2_flow="client_credentials",
+        client_id="cid",
+        client_secret="csec",
+        token_url="https://idp.example.com/token",
+    )
+    assert m2m_delegate_server.delegates_interactive_oauth_to_upstream is False
+
+    none_auth_server = MCPServer(
+        server_id="s4",
+        name="s4",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        delegate_auth_to_upstream=True,
+    )
+    assert none_auth_server.delegates_interactive_oauth_to_upstream is False

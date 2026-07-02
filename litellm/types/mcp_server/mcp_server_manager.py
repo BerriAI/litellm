@@ -204,6 +204,21 @@ class MCPServer(BaseModel):
         return any(h.lower() == "authorization" for h in self.extra_headers)
 
     @property
+    def delegates_interactive_oauth_to_upstream(self) -> bool:
+        """True when the gateway should point MCP clients at the upstream IdP
+        for OAuth discovery rather than acting as an OAuth intermediary.
+
+        Requires ``auth_type=oauth2``, ``delegate_auth_to_upstream=True``, and
+        NOT ``client_credentials`` (M2M servers use stored creds; exposing
+        them anonymously would be a privilege escalation).
+        """
+        return (
+            self.auth_type == MCPAuth.oauth2
+            and self.delegate_auth_to_upstream is True
+            and not self.has_client_credentials
+        )
+
+    @property
     def has_token_exchange_config(self) -> bool:
         """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
         return (
