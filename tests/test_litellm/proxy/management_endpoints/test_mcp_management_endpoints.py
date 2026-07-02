@@ -3126,41 +3126,18 @@ class TestMCPApprovalWorkflow:
         assert result.pending_review == 1
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "user_role, expected_global_value",
-        [
-            (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
-            (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
-        ],
-    )
-    async def test_get_submissions_redacts_global_env_for_view_only_admin(
-        self, user_role, expected_global_value
-    ):
-        """Read-only admins reviewing the submission queue must not receive the
-        submitter's global env var secrets; full admins still see them."""
+    async def test_get_submissions_sanitizes_for_view_only_admin(self):
+        """PROXY_ADMIN_VIEW_ONLY reviewing the submission queue must go through
+        the non-admin sanitizer that fetch/list endpoints use: url,
+        static_headers, env, env_vars, and credentials are all dropped. A
+        mutation swapping the gate back to the old partial-blank pattern (which
+        left url/static_headers/env and env-var names intact) would fail this."""
         from litellm.proxy._types import MCPSubmissionsSummary
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_mcp_server_submissions,
         )
 
-        base = generate_mock_mcp_server_db_record(alias="Pending")
-        item = LiteLLM_MCPServerTable(
-            **{
-                **base.model_dump(),
-                "env_vars": [
-                    {
-                        "name": "ADMIN_API_KEY",
-                        "value": "super-secret",
-                        "scope": "global",
-                    },
-                    {
-                        "name": "USER_TOKEN",
-                        "value": "placeholder-hint",
-                        "scope": "user",
-                    },
-                ],
-            }
-        )
+        item = _leaky_list_server()
         item.approval_status = "pending_review"
         summary = MCPSubmissionsSummary(
             total=1, pending_review=1, active=0, rejected=0, items=[item]
@@ -3177,12 +3154,70 @@ class TestMCPApprovalWorkflow:
             ),
         ):
             result = await get_mcp_server_submissions(
-                user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+                ),
             )
 
-        by_name = {ev.name: ev for ev in result.items[0].env_vars}
-        assert by_name["ADMIN_API_KEY"].value == expected_global_value
-        assert by_name["USER_TOKEN"].value == "placeholder-hint"
+        assert len(result.items) == 1
+        sanitized = result.items[0]
+        assert sanitized.url is None
+        assert sanitized.static_headers is None
+        assert sanitized.env == {}
+        assert sanitized.env_vars is None
+        assert sanitized.credentials is None
+
+        # The source record must not be mutated by sanitization.
+        assert item.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+        assert item.static_headers == {"Authorization": "Bearer sk-secret-header"}
+
+    @pytest.mark.asyncio
+    async def test_get_submissions_full_admin_still_sees_secrets(self):
+        """The view-only redaction must not over-redact for a full PROXY_ADMIN,
+        who needs url/static_headers/env/env_vars to review the pending
+        submission. Only the explicit credentials field is cleared."""
+        from litellm.proxy._types import MCPSubmissionsSummary
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_server_submissions,
+        )
+
+        item = _leaky_list_server()
+        item.approval_status = "pending_review"
+        summary = MCPSubmissionsSummary(
+            total=1, pending_review=1, active=0, rejected=0, items=[item]
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_submissions",
+                AsyncMock(return_value=summary),
+            ),
+        ):
+            result = await get_mcp_server_submissions(
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        assert len(result.items) == 1
+        raw = result.items[0]
+        assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
+        assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
+        assert raw.env == {"UPSTREAM_TOKEN": "sk-secret-env"}
+        assert raw.credentials is None
+        assert raw.env_vars is not None
+        assert len(raw.env_vars) == 1
+        # ``model_construct`` in ``_leaky_list_server`` skips validation, so
+        # env_vars stays as raw dicts; mirror the fixture shape here.
+        entry = raw.env_vars[0]
+        name = entry["name"] if isinstance(entry, dict) else entry.name
+        value = entry["value"] if isinstance(entry, dict) else entry.value
+        assert name == "GLOBAL_KEY"
+        assert value == "super-secret"
 
     @pytest.mark.asyncio
     async def test_approve_non_pending_server_raises_400(self):

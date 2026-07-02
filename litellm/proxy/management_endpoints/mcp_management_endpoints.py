@@ -148,7 +148,6 @@ if MCP_AVAILABLE:
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
-        MCPEnvVarScope,
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
@@ -459,18 +458,6 @@ if MCP_AVAILABLE:
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
-
-    def _redact_global_env_var_values(mcp_server: LiteLLM_MCPServerTable) -> None:
-        """Blank admin-supplied ``scope="global"`` env var secrets in place.
-
-        Global entries hold the admin's plaintext credential (API key,
-        password, ...) and must never reach non-admin callers. Per-user
-        entries only carry a placeholder the user fills in themselves, so
-        their value is left intact.
-        """
-        for env_var in mcp_server.env_vars or []:
-            if env_var.scope == MCPEnvVarScope.global_:
-                env_var.value = ""
 
     def _user_is_full_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """True only for ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` returns False.
@@ -1114,9 +1101,9 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
         submissions = await get_mcp_submissions(prisma_client)
+        submissions.items = _redact_mcp_credentials_list(submissions.items)
         if not _user_is_full_admin(user_api_key_dict):
-            for item in submissions.items:
-                _redact_global_env_var_values(item)
+            submissions.items = _sanitize_mcp_server_list_for_non_admin(submissions.items)
         return submissions
 
     @router.put(
