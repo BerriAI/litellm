@@ -311,23 +311,25 @@ async def async_io_token_reconcile_success(
     itpm_key = RouterCacheEnum.ITPM.value.format(id=model_id, model=model, current_minute=current_minute)
     otpm_key = RouterCacheEnum.OTPM.value.format(id=model_id, model=model, current_minute=current_minute)
 
-    itpm_delta = billable_input - itpm_reserved
-    if itpm_delta != 0:
-        await dual_cache.async_increment_cache(
-            key=itpm_key,
-            value=itpm_delta,
-            ttl=RoutingArgsTTL,
-            parent_otel_span=parent_otel_span,
-        )
+    if itpm_reserved > 0:
+        itpm_delta = billable_input - itpm_reserved
+        if itpm_delta != 0:
+            await dual_cache.async_increment_cache(
+                key=itpm_key,
+                value=itpm_delta,
+                ttl=RoutingArgsTTL,
+                parent_otel_span=parent_otel_span,
+            )
 
-    otpm_delta = completion_tokens - otpm_reserved
-    if otpm_delta != 0:
-        await dual_cache.async_increment_cache(
-            key=otpm_key,
-            value=otpm_delta,
-            ttl=RoutingArgsTTL,
-            parent_otel_span=parent_otel_span,
-        )
+    if otpm_reserved > 0:
+        otpm_delta = completion_tokens - otpm_reserved
+        if otpm_delta != 0:
+            await dual_cache.async_increment_cache(
+                key=otpm_key,
+                value=otpm_delta,
+                ttl=RoutingArgsTTL,
+                parent_otel_span=parent_otel_span,
+            )
 
     verbose_router_logger.debug(
         f"[IO TOKEN LIMIT] model_id={model_id} reconciled "

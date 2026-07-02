@@ -199,6 +199,49 @@ class TestModelRateLimitingCheckIOTokens:
         assert current == 0
 
     @pytest.mark.asyncio
+    async def test_io_limits_supersede_tpm_rpm_with_warning(self, caplog):
+        import logging
+
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        model_id = "io-mixed-id"
+        deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
+        deployment = {
+            "litellm_params": {
+                "model": deployment_name,
+                "itpm": 100,
+                "rpm": 1,
+            },
+            "model_info": {"id": model_id},
+            "model_name": "opus",
+        }
+
+        # rpm counter is already over the rpm=1 limit; the legacy path would
+        # atomically increment and raise, the io path must never touch it.
+        minute = get_utc_datetime().strftime("%H-%M")
+        rpm_key = f"{model_id}:{deployment_name}:rpm:{minute}"
+        await dual_cache.async_increment_cache(key=rpm_key, value=5, ttl=60)
+
+        set_io_token_rate_limit_request_kwargs(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 5,
+                "metadata": {},
+            }
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+            result = await check.async_pre_call_check(deployment)
+
+        # io path taken, rpm limit not enforced.
+        assert result is deployment
+        assert await dual_cache.async_get_cache(key=rpm_key) == 5
+        # the conflict is surfaced, not silent.
+        assert any("take precedence" in record.message for record in caplog.records)
+
+    @pytest.mark.asyncio
     async def test_failure_refunds_itpm_reservation(self):
         from litellm.utils import get_utc_datetime
 
