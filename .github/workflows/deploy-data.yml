@@ -46,7 +46,7 @@ jobs:
         run: terraform validate
 
       - name: Terraform Plan
-        run: terraform plan -var-file=config/prod/variables.tfvars -out=tfplan
+        run: terraform plan -var-file=config/prod/terraform.tfvars -out=tfplan
 
 
       - name: Terraform Apply
