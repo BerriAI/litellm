@@ -117,12 +117,13 @@ def _parse_sse_event_types(raw: str) -> List[str]:
     return event_types
 
 
-async def _run_hook(end: bool, sampling_rate: int = 1) -> str:
+async def _run_hook(end: bool, sampling_rate: int = 1, end_of_stream_only: bool = False) -> str:
     guardrail = _BlockingGuardrail(guardrail_name="test-blocking-guardrail", event_hook="post_call")
     # sampling_rate controls how many chunks are forwarded before the block
     # fires: 1 blocks on the first chunk (nothing sent yet); >1 forwards earlier
     # chunks first, exercising the mid-stream "continue the message" path.
     guardrail.streaming_sampling_rate = sampling_rate
+    guardrail.streaming_end_of_stream_only = end_of_stream_only
 
     unified_guardrail = UnifiedLLMGuardrails()
     user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/v1/messages")
@@ -159,6 +160,21 @@ def _assert_clean_block_termination(raw: str) -> None:
     assert any('"stop_reason"' in block and "message_delta" in block for block in raw.split("\n\n"))
 
 
+def _parse_sse_payloads(raw: str) -> List[dict]:
+    payloads = []
+    for block in raw.split("\n\n"):
+        for line in block.strip().split("\n"):
+            if line.startswith("data:"):
+                payload = line[len("data:") :].strip()
+                try:
+                    parsed = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    payloads.append(parsed)
+    return payloads
+
+
 @pytest.mark.asyncio
 async def test_mid_stream_block_emits_clean_anthropic_sse():
     """Per-chunk block: a clean SSE termination with the block message, no error blob."""
@@ -183,6 +199,22 @@ async def test_mid_stream_block_after_prior_chunks_continues_message():
     # ...and the block continues that same message (single message_start) with
     # the block message appended, ending cleanly.
     _assert_clean_block_termination(raw)
+
+
+@pytest.mark.asyncio
+async def test_end_of_stream_only_block_does_not_append_after_message_stop():
+    raw = await _run_hook(end=True, end_of_stream_only=True)
+    event_types = _parse_sse_event_types(raw)
+    message_delta_usages = [
+        payload.get("usage", {}).get("output_tokens")
+        for payload in _parse_sse_payloads(raw)
+        if payload.get("type") == "message_delta"
+    ]
+
+    assert BLOCK_MESSAGE in raw
+    assert event_types.count("message_stop") == 1
+    assert event_types[-1] == "message_stop"
+    assert message_delta_usages[-1] == 5
 
 
 class TestContentBlockState:

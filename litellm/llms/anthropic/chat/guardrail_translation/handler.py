@@ -73,6 +73,22 @@ class AnthropicMessagesHandler(BaseTranslation):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
 
+    @staticmethod
+    def _build_streaming_usage_response(
+        responses_so_far: list[Any],
+        request_data: Optional[dict],
+    ) -> Optional[ModelResponse]:
+        chunks = tuple(response for response in responses_so_far if isinstance(response, (str, bytes)))
+        if not chunks:
+            return None
+        try:
+            return AnthropicPassthroughLoggingHandler._build_usage_only_response_from_chunks(
+                all_chunks=chunks,
+                model=str((request_data or {}).get("model") or ""),
+            )
+        except (AttributeError, TypeError, ValueError):
+            return None
+
     def build_block_sse_chunks(
         self,
         exc: "ModifyResponseException",
@@ -557,6 +573,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
         """
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
@@ -581,25 +599,35 @@ class AnthropicMessagesHandler(BaseTranslation):
                 if tool_calls_list:
                     guardrail_inputs["tool_calls"] = tool_calls_list
 
-                _guardrailed_inputs = (
-                    await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
+                try:
+                    _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                         inputs=guardrail_inputs,
                         request_data=request_data if request_data is not None else {},
                         input_type="response",
                         logging_obj=litellm_logging_obj,
                     )
-                )
+                except ModifyResponseException as e:
+                    if e.original_response is None:
+                        e.original_response = built_response or self._build_streaming_usage_response(
+                            responses_so_far, request_data
+                        )
+                    raise
             else:
                 verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
-        _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(  # allow rejecting the response, if invalid
-            inputs={"texts": [string_so_far]},
-            request_data=request_data if request_data is not None else {},
-            input_type="response",
-            logging_obj=litellm_logging_obj,
-        )
+        try:
+            _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [string_so_far]},
+                request_data=request_data if request_data is not None else {},
+                input_type="response",
+                logging_obj=litellm_logging_obj,
+            )
+        except ModifyResponseException as e:
+            if e.original_response is None:
+                e.original_response = self._build_streaming_usage_response(responses_so_far, request_data)
+            raise
         return responses_so_far
 
     def _prepare_request_data(

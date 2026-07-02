@@ -22,14 +22,14 @@ def blocked_response_usage(original_response: Optional[Any]) -> AnthropicUsage:
     elif original_response is not None:
         usage_obj = getattr(original_response, "usage", None)
 
-    def _tokens(key: str) -> int:
+    def _tokens(key: str, fallback_key: str) -> int:
         if isinstance(usage_obj, dict):
-            return int(usage_obj.get(key, 0) or 0)
-        return int(getattr(usage_obj, key, 0) or 0)
+            return int(usage_obj.get(key, usage_obj.get(fallback_key, 0)) or 0)
+        return int(getattr(usage_obj, key, getattr(usage_obj, fallback_key, 0)) or 0)
 
     return AnthropicUsage(
-        input_tokens=_tokens("input_tokens"),
-        output_tokens=_tokens("output_tokens"),
+        input_tokens=_tokens("input_tokens", "prompt_tokens"),
+        output_tokens=_tokens("output_tokens", "completion_tokens"),
     )
 
 

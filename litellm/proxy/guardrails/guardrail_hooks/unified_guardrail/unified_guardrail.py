@@ -384,6 +384,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type = None
         chunk_counter = 0
         responses_so_far: List[Any] = []
+        responses_yielded: list[Any] = []
+        pending_end_of_stream_items: list[Any] = []
         # Whether any real response chunk has been forwarded to the client.
         # Drives how a block terminates the stream: continue the in-progress
         # message (True) vs emit a standalone block message (False, buffered).
@@ -415,8 +417,16 @@ class UnifiedLLMGuardrails(CustomLogger):
             # moderation runs below.
             if end_of_stream_only:
                 if not buffer_until_moderated:
-                    chunks_yielded = True
-                    yield item
+                    endpoint_translation = endpoint_guardrail_translation_mappings[CallTypes(call_type)]()
+                    stream_has_ended = hasattr(
+                        endpoint_translation, "_check_streaming_has_ended"
+                    ) and endpoint_translation._check_streaming_has_ended(responses_so_far)
+                    if pending_end_of_stream_items or stream_has_ended:
+                        pending_end_of_stream_items.append(item)
+                    else:
+                        chunks_yielded = True
+                        responses_yielded.append(item)
+                        yield item
                 continue
 
             # Process chunk based on sampling rate
@@ -447,6 +457,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                         request_data=request_data,
                     )
                 except ModifyResponseException as e:
+                    if e.original_response is None:
+                        e.original_response = responses_so_far
                     # Guardrail blocked the response mid-stream. Emit a clean
                     # terminating SSE sequence delivering the block message
                     # instead of letting the exception propagate into a bare
@@ -460,7 +472,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         e,
                         endpoint_translation,
                         stream_started=chunks_yielded,
-                        responses_so_far=responses_so_far[:-1],
+                        responses_so_far=responses_yielded,
                     ):
                         yield block_chunk
                     return
@@ -491,9 +503,11 @@ class UnifiedLLMGuardrails(CustomLogger):
                         return
                     raise
                 chunks_yielded = True
+                responses_yielded.append(original_item)
                 yield original_item
             else:
                 chunks_yielded = True
+                responses_yielded.append(item)
                 yield item
 
         # Stream has ended - do final processing with all collected chunks
@@ -527,7 +541,12 @@ class UnifiedLLMGuardrails(CustomLogger):
                 if buffered_items is not None:
                     for buffered_item in buffered_items:
                         yield buffered_item
+                for pending_item in pending_end_of_stream_items:
+                    responses_yielded.append(pending_item)
+                    yield pending_item
             except ModifyResponseException as e:
+                if e.original_response is None:
+                    e.original_response = responses_so_far
                 # Block detected during end-of-stream processing. Emit a clean
                 # terminating SSE sequence with the block message rather than
                 # propagating into a bare error blob that truncates the stream.
@@ -535,8 +554,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                 async for block_chunk in self._handle_streaming_block(
                     e,
                     endpoint_translation,
-                    stream_started=chunks_yielded,
-                    responses_so_far=responses_so_far,
+                    stream_started=bool(responses_yielded),
+                    responses_so_far=responses_yielded,
                 ):
                     yield block_chunk
                 return
