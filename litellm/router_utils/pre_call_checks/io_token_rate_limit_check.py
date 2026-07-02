@@ -110,7 +110,11 @@ def _estimate_input_tokens(request_kwargs: Optional[Dict[str, Any]]) -> int:
 
 def _resolve_max_tokens(request_kwargs: Optional[Dict[str, Any]], deployment: Dict) -> int:
     if request_kwargs:
-        explicit = request_kwargs.get("max_tokens") or request_kwargs.get("max_completion_tokens")
+        # An explicit max_tokens=0 must be honored, not treated as absent and
+        # replaced by the model default.
+        explicit = request_kwargs.get("max_tokens")
+        if explicit is None:
+            explicit = request_kwargs.get("max_completion_tokens")
         if explicit is not None:
             return max(0, int(explicit))
 

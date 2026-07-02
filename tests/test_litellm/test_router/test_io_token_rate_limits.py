@@ -14,6 +14,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     OTPM_CACHE_KEY,
     OTPM_RESERVED_KEY,
+    _resolve_max_tokens,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     build_io_token_rate_limit_headers,
@@ -31,6 +32,13 @@ class TestIOTokenRateLimitHelpers:
     def test_deployment_has_io_token_limits(self):
         assert deployment_has_io_token_limits({"litellm_params": {"itpm": 100, "otpm": 50}})
         assert not deployment_has_io_token_limits({"litellm_params": {"model": "x"}})
+
+    def test_resolve_max_tokens_respects_explicit_zero(self):
+        deployment = {"litellm_params": {"model": "openai/gpt-4o-mini"}}
+        # An explicit max_tokens=0 is honored, not replaced by the model default.
+        assert _resolve_max_tokens({"max_tokens": 0}, deployment) == 0
+        # max_completion_tokens is the fallback only when max_tokens is absent.
+        assert _resolve_max_tokens({"max_completion_tokens": 12}, deployment) == 12
 
     def test_build_io_token_rate_limit_headers(self):
         headers = build_io_token_rate_limit_headers(
