@@ -1882,14 +1882,18 @@ async def add_litellm_data_to_request(
         )
 
     # Team Callbacks controls
-    # A client must never set or override OTEL destinations; they are admin-owned and
-    # resolved server-side below. Drop any value carried in the request at either the
-    # top level OR inside litellm_metadata (the resolver stashes admin-resolved values
-    # in litellm_metadata.otel_destinations; we wipe the client's first so injection
-    # via either spot is inert).
+    # OTEL destinations are admin-owned and resolved server-side below; a client must
+    # never set or override them. Drop any client value from every metadata carrier
+    # before the resolver runs so injection is inert regardless of the slot used: the
+    # top level, the request metadata key, and litellm_metadata (where the resolver
+    # stashes the admin-resolved value the dynamic-params reader later picks up). The
+    # server sets only litellm_metadata at resolve time, so wiping the others here
+    # removes client input only.
     data.pop("otel_destinations", None)
-    if isinstance(data.get("litellm_metadata"), dict):
-        data["litellm_metadata"].pop("otel_destinations", None)
+    for _carrier_key in (_metadata_variable_name, "litellm_metadata"):
+        carrier = data.get(_carrier_key)
+        if isinstance(carrier, dict):
+            carrier.pop("otel_destinations", None)
     callback_settings_obj = _get_dynamic_logging_metadata(
         user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
     )

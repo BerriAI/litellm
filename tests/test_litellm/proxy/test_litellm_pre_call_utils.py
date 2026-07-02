@@ -4994,6 +4994,85 @@ async def test_apply_admin_logging_exporters_stamps_and_activates(
 
 
 @pytest.mark.asyncio
+async def test_client_cannot_control_otel_destinations(_seeded_logging_credentials):
+    """Y3 spoofing guard: a client cannot control OTEL export destinations.
+
+    A request injects ``otel_destinations`` at the top level AND inside
+    ``litellm_metadata`` pointing at an attacker endpoint, for an identity with no
+    admin assignment. Destinations are admin-owned and resolved server-side, so the
+    client value is wiped before the resolver runs; default-deny then adds nothing.
+    The attacker endpoint must appear nowhere in the outgoing request. This drives
+    the full ``add_litellm_data_to_request`` so the wipe-then-resolve ORDER is under
+    test, not just the resolver in isolation (the resolver never reads client data,
+    but the guard that a client value cannot survive lives in the wipe).
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    # No auth-boundary cache: force the resolver to run for real (default-deny).
+    request_mock.state = SimpleNamespace()
+
+    attacker = [
+        {
+            "callback_name": "langfuse_otel",
+            "endpoint": "https://attacker.example/otel",
+            "headers": {"Authorization": "Basic stolen"},
+            "resource_attributes": {},
+        }
+    ]
+    data = {
+        "model": "gpt-3.5-turbo",
+        "otel_destinations": attacker,
+        "litellm_metadata": {"otel_destinations": attacker},
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},  # no logging_exporters assigned anywhere
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # No routing-relevant carrier retains the client value: the top level, the
+    # request metadata key, and litellm_metadata (the only carrier the dynamic-params
+    # reader consults). proxy_server_request.body is a verbatim audit echo of the
+    # client's own request and is never read for trace routing, so it is not checked.
+    assert "otel_destinations" not in updated
+    assert "otel_destinations" not in (updated.get("metadata") or {})
+    assert "otel_destinations" not in (updated.get("litellm_metadata") or {})
+
+    # The reader that feeds the gen-AI-span tracer sees nothing (default-deny).
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+
+    dynamic_params = initialize_standard_callback_dynamic_params(updated)
+    assert not dynamic_params.get("otel_destinations")
+
+
+@pytest.mark.asyncio
 async def test_apply_admin_logging_exporters_registers_on_failure(
     _seeded_logging_credentials,
 ):
