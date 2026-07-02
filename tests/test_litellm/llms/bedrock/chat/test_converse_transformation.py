@@ -4560,38 +4560,54 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
     must honor the requested `control.ttl`, mirroring the message/system
     cache_control behavior, instead of always emitting a bare
     {"type": "default"} cachePoint with no ttl.
+
+    Forces the bundled local cost map so `is_claude_4_5_on_bedrock` (which
+    reads `cache_creation_input_token_cost_above_1hr` from litellm.model_cost)
+    sees this branch's pricing data rather than the network-fetched `main`
+    copy, which lacks it until merge.
     """
-    config = AmazonConverseConfig()
-    messages = [
-        {"role": "user", "content": "What is the weather?"},
-    ]
-    optional_params = {
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get weather for a location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"location": {"type": "string"}},
-                        "required": ["location"],
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        config = AmazonConverseConfig()
+        messages = [
+            {"role": "user", "content": "What is the weather?"},
+        ]
+        optional_params = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
                     },
-                },
-            }
-        ],
-        "cache_control_injection_points": [
-            {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
-        ],
-    }
-    result = config._transform_request(
-        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        messages=messages,
-        optional_params=optional_params,
-        litellm_params={},
-    )
-    tools = result["toolConfig"]["tools"]
-    assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+                }
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+        result = config._transform_request(
+            model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        tools = result["toolConfig"]["tools"]
+        assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
 
 
 def test_cache_control_injection_tool_config_drops_ttl_for_unsupported_model():

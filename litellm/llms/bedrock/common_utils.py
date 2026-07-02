@@ -683,39 +683,44 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
-def is_claude_4_5_on_bedrock(model: str) -> bool:
+def bedrock_converse_supports_strict_tool_schemas(model: str) -> bool:
     """
-    Check if the model is a Claude 4.5 model on Bedrock.
-    Claude 4.5 models support prompt caching with '5m' and '1h' TTL on Bedrock.
+    Claude on Bedrock Converse honours ``strict``/``additionalProperties`` in
+    ``toolSpec``, but Opus 4.7 and 4.8 map onto Bedrock's native Anthropic
+    tool validator (the "custom" tool shape) and reject any ``strict`` key
+    outright, even ``strict: false`` (e.g. from MCP tool expansion), with
+    ``tools.0.custom.strict: Extra inputs are not permitted``.
+
+    Ref: https://github.com/BerriAI/litellm/issues/31582
     """
+    if not get_bedrock_base_model(model).startswith("anthropic"):
+        return False
     model_lower = model.lower()
-    claude_4_5_patterns = [
-        "sonnet-4.5",
-        "sonnet_4.5",
-        "sonnet-4-5",
-        "sonnet_4_5",
-        "haiku-4.5",
-        "haiku_4.5",
-        "haiku-4-5",
-        "haiku_4_5",
-        "opus-4.5",
-        "opus_4.5",
-        "opus-4-5",
-        "opus_4_5",
-        "sonnet-4.6",
-        "sonnet_4.6",
-        "sonnet-4-6",
-        "sonnet_4_6",
-        "opus-4.6",
-        "opus_4.6",
-        "opus-4-6",
-        "opus_4_6",
-        "opus-4.7",
-        "opus_4.7",
+    unsupported_patterns = (
         "opus-4-7",
         "opus_4_7",
-    ]
-    return any(pattern in model_lower for pattern in claude_4_5_patterns)
+        "opus-4.7",
+        "opus_4.7",
+        "opus-4-8",
+        "opus_4_8",
+        "opus-4.8",
+        "opus_4.8",
+    )
+    return not any(pattern in model_lower for pattern in unsupported_patterns)
+
+
+def is_claude_4_5_on_bedrock(model: str) -> bool:
+    """
+    Check if the model supports Bedrock prompt caching with an extended '1h' TTL
+    (in addition to the default 5m TTL).
+
+    Backed by the ``cache_creation_input_token_cost_above_1hr`` field in
+    ``model_prices_and_context_window.json`` instead of a hardcoded list of
+    model-name patterns, so newly released models pick up support as soon as
+    their pricing entry ships, with no code change required here.
+    """
+    model_info = litellm.model_cost.get(model) or litellm.model_cost.get(get_bedrock_base_model(model)) or {}
+    return model_info.get("cache_creation_input_token_cost_above_1hr") is not None
 
 
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:

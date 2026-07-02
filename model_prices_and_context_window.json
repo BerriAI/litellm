@@ -787,8 +787,6 @@
         "output_cost_per_token_above_200k_tokens": 3e-05,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
-        "cache_creation_input_token_cost_above_1hr": 7.5e-06,
-        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.5e-05,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07
     },
@@ -813,9 +811,7 @@
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 3e-05,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
-        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
-        "cache_creation_input_token_cost_above_1hr": 7.5e-06,
-        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.5e-05
+        "cache_read_input_token_cost_above_200k_tokens": 6e-07
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
