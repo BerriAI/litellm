@@ -11,6 +11,9 @@ from typing import Dict, List, Optional, Set, Tuple
 from packaging.requirements import Requirement
 import requests
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent.parent
+
 DEFAULT_TRANSITIVE_PIN_PACKAGES = (
     "aiofiles",
     "anyio",
@@ -50,7 +53,7 @@ class PackageLicense:
 
 class LicenseChecker:
     def __init__(
-        self, config_file: Path = Path("./tests/code_coverage_tests/liccheck.ini")
+        self, config_file: Path = _SCRIPT_DIR / "liccheck.ini"
     ):
         if not config_file.exists():
             print(f"Error: Config file {config_file} not found")
@@ -71,7 +74,7 @@ class LicenseChecker:
         self.authorized_packages = self._parse_authorized_packages()
 
         # Initialize cache
-        self.cache_file = Path("license_cache.json")
+        self.cache_file = _SCRIPT_DIR / "license_cache.json"
         self.license_cache: Dict[str, str] = {}
         if self.cache_file.exists():
             with open(self.cache_file) as f:
@@ -314,9 +317,9 @@ class LicenseChecker:
                 with open(requirements_file) as f:
                     requirement_lines = f.readlines()
             else:
-                with open("pyproject.toml", "rb") as f:
+                with open(_REPO_ROOT / "pyproject.toml", "rb") as f:
                     pyproject = tomllib.load(f)
-                with open("uv.lock", "rb") as f:
+                with open(_REPO_ROOT / "uv.lock", "rb") as f:
                     lock_data = tomllib.load(f)
 
                 requirement_lines = list(pyproject["project"].get("dependencies", []))

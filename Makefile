@@ -87,7 +87,7 @@ install-hooks:
 	./scripts/install_git_hooks.sh
 
 # Formatting
-# Wrap width is ruff.toml's single source of truth (line-length = 120), shared by the
+# Wrap width is pyproject.toml [tool.ruff]'s single source of truth (line-length = 120), shared by the
 # formatter and the import sorter so there's no 88-vs-120 split to reconcile.
 format: install-dev
 	cd litellm && $(UV_RUN) ruff format --exclude '/enterprise/' . && cd ..

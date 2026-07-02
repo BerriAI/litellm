@@ -1,4 +1,4 @@
-extend = "ruff.toml"
+extend = "pyproject.toml"
 
 [lint]
 preview = true
