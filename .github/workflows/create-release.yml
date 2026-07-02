@@ -148,6 +148,7 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: response.data.id,
+                tag_name: tag,
                 body: updatedBody,
                 draft: false,
               });
@@ -157,6 +158,7 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   release_id: response.data.id,
+                  tag_name: tag,
                   make_latest: makeLatest,
                 });
               }
