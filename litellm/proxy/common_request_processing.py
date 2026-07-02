@@ -1427,27 +1427,27 @@ class ProxyBaseLLMRequestProcessing:
 
         response = responses[1]
 
-        # GH#30566: overhead for non-chat-completions routes.
-        # Skip chat routes (acompletion/completion) because the SDK already
-        # sets litellm_overhead_time_ms in litellm.utils.completion().
-        _hidden_params = getattr(response, "_hidden_params", {}) or {}
-        if not _hidden_params.get("litellm_overhead_time_ms") and route_type not in ("acompletion", "completion"):
+        # GH#30566: set overhead duration for non-chat-completions
+        # routes (/v1/messages, /v1/responses). Chat completions
+        # already have litellm_overhead_time_ms from the SDK.
+        # Only set the overhead field directly (don't call
+        # update_response_metadata which also touches cost).
+        _overhead_hidden_params = getattr(response, "_hidden_params", {}) or {}
+        if not _overhead_hidden_params.get("litellm_overhead_time_ms") and route_type not in (
+            "acompletion",
+            "completion",
+        ):
             end_time = datetime.now()
             _logging_obj = self.data.get("litellm_logging_obj")
-            if _logging_obj is not None:
-                from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-                    update_response_metadata,
+            if _logging_obj is not None and _logging_obj.start_time is not None:
+                overhead_ms = (end_time - _logging_obj.start_time).total_seconds() * 1000 - (
+                    _logging_obj.model_call_details.get("llm_api_duration_ms", 0)
                 )
-
-                _start_time = _logging_obj.start_time or end_time
-                update_response_metadata(
-                    result=response,
-                    logging_obj=_logging_obj,
-                    model=self.data.get("model"),
-                    kwargs=self.data,
-                    start_time=_start_time,
-                    end_time=end_time,
-                )
+                if not isinstance(_overhead_hidden_params, dict):
+                    _overhead_hidden_params = {}
+                _overhead_hidden_params["litellm_overhead_time_ms"] = overhead_ms
+                if hasattr(response, "_hidden_params"):
+                    response._hidden_params = _overhead_hidden_params
 
         _exception_raised = False
         try:
