@@ -50,12 +50,18 @@ _STRICT_TOOL = [
         "bedrock/apac.anthropic.claude-sonnet-4-20250514-v1:0",
     ],
 )
-def test_bedrock_tools_pt_strict_dropped_for_opus_47_48(model_id: str) -> None:
-    """Opus 4.7/4.8 and Sonnet 4 on Bedrock Converse reject toolSpec.strict — must be dropped."""
+def test_bedrock_tools_pt_strict_dropped_for_strict_unsupported_models(
+    model_id: str,
+) -> None:
+    """Opus 4.7/4.8 and Sonnet 4 reject toolSpec.strict and additionalProperties."""
     result = _bedrock_tools_pt(_STRICT_TOOL, model=model_id)
+    tool_spec = result[0]["toolSpec"]
     assert (
-        "strict" not in result[0]["toolSpec"]
-    ), f"strict leaked into toolSpec for {model_id}: {result[0]['toolSpec']}"
+        "strict" not in tool_spec
+    ), f"strict leaked into toolSpec for {model_id}: {tool_spec}"
+    assert (
+        "additionalProperties" not in tool_spec["inputSchema"]["json"]
+    ), f"additionalProperties leaked into toolSpec for {model_id}: {tool_spec}"
 
 
 @pytest.mark.parametrize(
