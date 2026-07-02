@@ -95,7 +95,7 @@ describe("CacheSettings", () => {
       await user.type(startupNodes, "not json");
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-      expect(await screen.findByText(/Must be valid JSON/i)).toBeInTheDocument();
+      expect(await screen.findByText(/Must be a valid JSON array/i)).toBeInTheDocument();
       expect(updateCacheSettingsCall).not.toHaveBeenCalled();
     });
   });
@@ -118,6 +118,18 @@ describe("CacheSettings", () => {
           ssl_check_hostname: false,
         }),
       );
+    });
+
+    it("should include a numeric field like Database Index in the save payload", async () => {
+      const user = userEvent.setup();
+      renderSettings();
+
+      await user.type(await screen.findByLabelText("Redis URL"), "redis://host:6379/1");
+      await user.type(await screen.findByLabelText("Database Index"), "2");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(updateCacheSettingsCall).toHaveBeenCalled());
+      expect(updateCacheSettingsCall.mock.calls[0][1]).toMatchObject({ db: 2, url: "redis://host:6379/1" });
     });
   });
 });
