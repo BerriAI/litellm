@@ -44,6 +44,9 @@ class MicroloopGuardrail(CustomGuardrail):
     ):
         super().__init__(guardrail_name="microloop", supported_event_hooks=["pre_call"], default_on=True, **kwargs)
 
+        if max_repeats < 2:
+            raise ValueError("max_repeats must be at least 2")
+
         self.max_repeats = max_repeats
         self.history_window = history_window
         self.volatile_fields = volatile_fields or []
@@ -78,7 +81,7 @@ class MicroloopGuardrail(CustomGuardrail):
 
         return self._engines[session_id]
 
-    def _extract_all_tool_calls(self, data: dict[str, Any]) -> List[dict[str, Any]]:
+    def _extract_all_tool_calls(self, data: dict[str, Any]) -> list[dict[str, Any]]:
         """Extracts all tool calls, supporting both OpenAI and Anthropic formats."""
         messages = data.get("messages", [])
         if not messages:
@@ -152,4 +155,4 @@ class MicroloopGuardrail(CustomGuardrail):
                     f"Microloop: Infinite loop detected on tool '{tool_name}' "
                     f"(verdict: {verdict}). Blocked to prevent runaway API costs."
                 )
-                raise GuardrailRaisedException(exception=Exception(error_msg))
+                raise GuardrailRaisedException(guardrail_name="microloop", message=error_msg)
