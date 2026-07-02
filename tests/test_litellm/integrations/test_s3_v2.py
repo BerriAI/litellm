@@ -1208,8 +1208,21 @@ def _expected_content_md5(payload: dict) -> str:
     ).decode()
 
 
+def _require_non_security_md5(monkeypatch):
+    import hashlib
+
+    original_md5 = hashlib.md5
+
+    def fips_md5(data=b"", *, usedforsecurity=True):
+        if usedforsecurity:
+            raise ValueError("MD5 blocked for security use")
+        return original_md5(data, usedforsecurity=usedforsecurity)
+
+    monkeypatch.setattr(hashlib, "md5", fips_md5)
+
+
 @pytest.mark.asyncio
-async def test_async_upload_sets_content_md5_header():
+async def test_async_upload_sets_content_md5_header(monkeypatch):
     """
     Object Lock buckets reject PUTs without a Content-MD5 header (AWS spec).
     The async upload must send a base64 md5 of the exact signed body.
@@ -1231,6 +1244,7 @@ async def test_async_upload_sets_content_md5_header():
         payload=payload,
         s3_object_download_filename="test-md5.json",
     )
+    _require_non_security_md5(monkeypatch)
 
     response = MagicMock()
     response.status_code = 200
@@ -1245,7 +1259,7 @@ async def test_async_upload_sets_content_md5_header():
     assert "x-amz-server-side-encryption" not in headers
 
 
-def test_sync_upload_sets_content_md5_header():
+def test_sync_upload_sets_content_md5_header(monkeypatch):
     """The sync upload path must also send Content-MD5 for Object Lock buckets."""
     from unittest.mock import MagicMock
 
@@ -1264,6 +1278,7 @@ def test_sync_upload_sets_content_md5_header():
         payload=payload,
         s3_object_download_filename="test-sync-md5.json",
     )
+    _require_non_security_md5(monkeypatch)
 
     response = MagicMock()
     response.status_code = 200
