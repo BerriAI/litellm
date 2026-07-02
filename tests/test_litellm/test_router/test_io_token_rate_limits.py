@@ -227,15 +227,13 @@ class TestModelRateLimitingCheckIOTokens:
             "model_name": "opus",
         }
 
-        # No messages/prompt -> pre-call estimate is 0, so nothing is reserved,
-        # but the actual billable input must still be tracked post-call.
         request_kwargs = {"max_tokens": 5, "metadata": {}}
         set_io_token_rate_limit_request_kwargs(request_kwargs)
         await check.async_pre_call_check(deployment)
 
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key = f"global_router:io-zero-est-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
-        assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
+        assert await dual_cache.async_get_cache(key=itpm_key) == 100
 
         kwargs = {
             "standard_logging_object": {
@@ -252,6 +250,68 @@ class TestModelRateLimitingCheckIOTokens:
         await check.async_log_success_event(kwargs, response, None, None)
 
         assert await dual_cache.async_get_cache(key=itpm_key) == 7
+
+    @pytest.mark.asyncio
+    async def test_zero_estimate_reserves_capacity_before_reconcile(self):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {
+                "model": "bedrock_mantle/anthropic.claude-opus-4-7",
+                "itpm": 2,
+            },
+            "model_info": {"id": "io-zero-cap-id"},
+            "model_name": "opus",
+        }
+        request_kwargs = {"max_tokens": 5, "metadata": {}}
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        await check.async_pre_call_check(deployment)
+        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}})
+
+        with pytest.raises(litellm.RateLimitError):
+            await check.async_pre_call_check(deployment)
+
+    def test_sync_io_pre_call_reserves_and_reconciles(self):
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        deployment = {
+            "litellm_params": {
+                "model": "bedrock_mantle/anthropic.claude-opus-4-7",
+                "itpm": 100,
+                "otpm": 50,
+            },
+            "model_info": {"id": "io-sync-id"},
+            "model_name": "opus",
+        }
+        request_kwargs = {
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 10,
+            "metadata": {},
+        }
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
+        check.pre_call_check(deployment)
+
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key = f"global_router:io-sync-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
+        otpm_key = f"global_router:io-sync-id:bedrock_mantle/anthropic.claude-opus-4-7:otpm:{minute}"
+        kwargs = {
+            "standard_logging_object": {
+                "model_id": "io-sync-id",
+                "hidden_params": {"litellm_model_name": "bedrock_mantle/anthropic.claude-opus-4-7"},
+                "metadata": dict(request_kwargs["metadata"]),
+            },
+            "metadata": request_kwargs["metadata"],
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8),
+        )
+        check.log_success_event(kwargs, response, None, None)
+
+        assert dual_cache.get_cache(key=itpm_key) == 5
+        assert dual_cache.get_cache(key=otpm_key) == 3
 
     @pytest.mark.asyncio
     async def test_reconcile_runs_via_success_event_without_model_id(self):

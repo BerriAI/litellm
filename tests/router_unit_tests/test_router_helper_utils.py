@@ -1162,6 +1162,38 @@ async def test_set_response_headers_native_input_token_header_does_not_suppress_
 
 
 @pytest.mark.asyncio
+async def test_set_response_headers_native_token_header_does_not_suppress_io_headers(model_list):
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 42
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-tokens": 1000,
+            "x-ratelimit-remaining-requests": 100,
+            "x-ratelimit-remaining-input-tokens": 900,
+            "x-ratelimit-remaining-output-tokens": 450,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {"additional_headers": {"x-ratelimit-remaining-tokens": 5}}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == 5
+    assert headers["x-ratelimit-remaining-requests"] == 99
+    assert headers["x-ratelimit-remaining-input-tokens"] == 900
+    assert headers["x-ratelimit-remaining-output-tokens"] == 450
+
+
+@pytest.mark.asyncio
 async def test_set_response_headers_handles_missing_usage(model_list):
     """
     Streaming chunks and some response shapes may lack a `usage` attribute or

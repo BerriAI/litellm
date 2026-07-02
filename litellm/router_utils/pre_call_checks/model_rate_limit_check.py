@@ -25,6 +25,9 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
     deployment_has_io_token_limits,
+    io_token_pre_call_check,
+    io_token_reconcile_success,
+    io_token_refund_failure,
     ITPM_RESERVED_KEY,
 )
 from litellm.types.router import RouterErrors
@@ -123,6 +126,13 @@ class ModelRateLimitingCheck(CustomLogger):
         Raises RateLimitError if deployment exceeds TPM/RPM limits.
         """
         try:
+            if deployment_has_io_token_limits(deployment):
+                self._warn_io_token_supersedes_tpm_rpm_once(deployment)
+                return io_token_pre_call_check(
+                    self.dual_cache,
+                    deployment,
+                )
+
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
             # If no limits are set, allow the request
@@ -345,6 +355,16 @@ class ModelRateLimitingCheck(CustomLogger):
         """
         try:
             standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get("standard_logging_object")
+            slo_metadata = (standard_logging_object.get("metadata") or {}) if standard_logging_object else {}
+            kwargs_metadata = kwargs.get("metadata") or {}
+            if ITPM_RESERVED_KEY in slo_metadata or ITPM_RESERVED_KEY in kwargs_metadata:
+                io_token_reconcile_success(
+                    self.dual_cache,
+                    kwargs,
+                    response_obj,
+                )
+                return
+
             if standard_logging_object is None:
                 return
 
@@ -370,3 +390,10 @@ class ModelRateLimitingCheck(CustomLogger):
 
         except Exception as e:
             verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.log_success_event: {str(e)}")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        with contextlib.suppress(Exception):
+            io_token_refund_failure(
+                self.dual_cache,
+                kwargs,
+            )

@@ -9045,11 +9045,7 @@ class Router:
                 if decision.get("complexity_tier") is not None:
                     additional_headers["x-litellm-quality-router-complexity"] = str(decision["complexity_tier"])
 
-            if (
-                "x-ratelimit-remaining-tokens" not in additional_headers
-                and "x-ratelimit-remaining-requests" not in additional_headers
-                and model_group is not None
-            ):
+            if model_group is not None:
                 remaining_usage = await self.get_remaining_model_group_usage(model_group)
 
                 # get_remaining_model_group_usage reads the router's TPM/RPM
@@ -9076,7 +9072,7 @@ class Router:
                 }
 
                 for header, value in remaining_usage.items():
-                    if value is not None:
+                    if value is not None and header not in additional_headers:
                         additional_headers[header] = value - in_flight_delta.get(header, 0)
         return response
 

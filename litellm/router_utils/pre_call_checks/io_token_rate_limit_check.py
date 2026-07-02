@@ -231,6 +231,59 @@ def _clear_reservation_from_kwargs(kwargs: Any) -> None:
                 channel_dict.pop(key, None)
 
 
+def _reservation_value(value: int, limit: Optional[int]) -> int:
+    if limit is None:
+        return 0
+    if value > 0:
+        return value
+    return max(1, limit)
+
+
+def _rate_limit_error(limit_label: str, limit: int, current: float) -> litellm.RateLimitError:
+    return litellm.RateLimitError(
+        message=f"Model rate limit exceeded. {limit_label} limit={limit}, current usage={current}",
+        llm_provider="",
+        model="",
+        response=httpx.Response(
+            status_code=429,
+            content=(
+                f"{RouterErrors.user_defined_ratelimit_error.value} "
+                f"{limit_label} limit={limit}. current usage={current}."
+            ),
+            headers={"retry-after": str(RoutingArgsTTL)},
+            request=httpx.Request(
+                method="io_token_rate_limit_check",
+                url="https://github.com/BerriAI/litellm",
+            ),
+        ),
+        num_retries=0,
+    )
+
+
+def _sync_increment_with_rollback(
+    dual_cache: DualCache,
+    key: str,
+    value: int,
+    limit: Optional[int],
+    *,
+    limit_label: str,
+) -> None:
+    if value <= 0 or limit is None:
+        return
+    current = dual_cache.increment_cache(
+        key=key,
+        value=value,
+        ttl=RoutingArgsTTL,
+    )
+    if current is not None and current > limit:
+        dual_cache.increment_cache(
+            key=key,
+            value=-value,
+            ttl=RoutingArgsTTL,
+        )
+        raise _rate_limit_error(limit_label, limit, current)
+
+
 async def _increment_with_rollback(
     dual_cache: DualCache,
     key: str,
@@ -255,24 +308,68 @@ async def _increment_with_rollback(
             ttl=RoutingArgsTTL,
             parent_otel_span=parent_otel_span,
         )
-        raise litellm.RateLimitError(
-            message=f"Model rate limit exceeded. {limit_label} limit={limit}, current usage={current}",
-            llm_provider="",
-            model="",
-            response=httpx.Response(
-                status_code=429,
-                content=(
-                    f"{RouterErrors.user_defined_ratelimit_error.value} "
-                    f"{limit_label} limit={limit}. current usage={current}."
-                ),
-                headers={"retry-after": str(RoutingArgsTTL)},
-                request=httpx.Request(
-                    method="io_token_rate_limit_check",
-                    url="https://github.com/BerriAI/litellm",
-                ),
-            ),
-            num_retries=0,
+        raise _rate_limit_error(limit_label, limit, current)
+
+
+def io_token_pre_call_check(
+    dual_cache: DualCache,
+    deployment: dict,
+) -> Optional[dict]:
+    itpm_limit, otpm_limit = get_deployment_io_token_limits(deployment)
+    if itpm_limit is None and otpm_limit is None:
+        return deployment
+
+    request_kwargs = get_io_token_rate_limit_request_kwargs()
+    estimated_input = _estimate_input_tokens(request_kwargs)
+    max_tokens = _resolve_max_tokens(request_kwargs, deployment)
+
+    dt = get_utc_datetime()
+    current_minute = dt.strftime("%H-%M")
+    cache_keys = _get_cache_keys(deployment, current_minute)
+    if cache_keys is None:
+        return deployment
+    itpm_key, otpm_key = cache_keys
+
+    itpm_reserved = 0
+    otpm_reserved = 0
+
+    if itpm_limit is not None:
+        itpm_reserved = _reservation_value(estimated_input, itpm_limit)
+        _sync_increment_with_rollback(
+            dual_cache,
+            itpm_key,
+            itpm_reserved,
+            itpm_limit,
+            limit_label="ITPM",
         )
+
+    if otpm_limit is not None:
+        otpm_reserved = _reservation_value(max_tokens, otpm_limit)
+        try:
+            _sync_increment_with_rollback(
+                dual_cache,
+                otpm_key,
+                otpm_reserved,
+                otpm_limit,
+                limit_label="OTPM",
+            )
+        except Exception:
+            if itpm_reserved > 0:
+                dual_cache.increment_cache(
+                    key=itpm_key,
+                    value=-itpm_reserved,
+                    ttl=RoutingArgsTTL,
+                )
+            raise
+
+    _stash_reservation_in_metadata(
+        request_kwargs,
+        itpm_reserved=itpm_reserved,
+        otpm_reserved=otpm_reserved,
+        itpm_cache_key=itpm_key if itpm_limit is not None else None,
+        otpm_cache_key=otpm_key if otpm_limit is not None else None,
+    )
+    return deployment
 
 
 async def async_io_token_pre_call_check(
@@ -298,23 +395,24 @@ async def async_io_token_pre_call_check(
     itpm_reserved = 0
     otpm_reserved = 0
 
-    if itpm_limit is not None and estimated_input > 0:
+    if itpm_limit is not None:
+        itpm_reserved = _reservation_value(estimated_input, itpm_limit)
         await _increment_with_rollback(
             dual_cache,
             itpm_key,
-            estimated_input,
+            itpm_reserved,
             itpm_limit,
             parent_otel_span=parent_otel_span,
             limit_label="ITPM",
         )
-        itpm_reserved = estimated_input
 
-    if otpm_limit is not None and max_tokens > 0:
+    if otpm_limit is not None:
+        otpm_reserved = _reservation_value(max_tokens, otpm_limit)
         try:
             await _increment_with_rollback(
                 dual_cache,
                 otpm_key,
-                max_tokens,
+                otpm_reserved,
                 otpm_limit,
                 parent_otel_span=parent_otel_span,
                 limit_label="OTPM",
@@ -331,7 +429,6 @@ async def async_io_token_pre_call_check(
                     parent_otel_span=parent_otel_span,
                 )
             raise
-        otpm_reserved = max_tokens
 
     _stash_reservation_in_metadata(
         request_kwargs,
@@ -341,6 +438,47 @@ async def async_io_token_pre_call_check(
         otpm_cache_key=otpm_key if otpm_limit is not None else None,
     )
     return deployment
+
+
+def io_token_reconcile_success(
+    dual_cache: DualCache,
+    kwargs: Any,
+    response_obj: Any,
+) -> None:
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(kwargs)
+    if itpm_key is None and otpm_key is None:
+        return
+
+    usage = getattr(response_obj, "usage", None)
+    prompt_tokens, completion_tokens, cached_tokens = _get_usage_tokens(usage)
+    billable_input = max(0, prompt_tokens - cached_tokens)
+
+    try:
+        if itpm_key is not None:
+            itpm_delta = billable_input - itpm_reserved
+            if itpm_delta != 0:
+                dual_cache.increment_cache(
+                    key=itpm_key,
+                    value=itpm_delta,
+                    ttl=RoutingArgsTTL,
+                )
+
+        if otpm_key is not None:
+            otpm_delta = completion_tokens - otpm_reserved
+            if otpm_delta != 0:
+                dual_cache.increment_cache(
+                    key=otpm_key,
+                    value=otpm_delta,
+                    ttl=RoutingArgsTTL,
+                )
+    finally:
+        _clear_reservation_from_kwargs(kwargs)
+
+    verbose_router_logger.debug(
+        f"[IO TOKEN LIMIT] reconciled "
+        f"(itpm_reserved={itpm_reserved}, billable_input={billable_input}, "
+        f"otpm_reserved={otpm_reserved}, output={completion_tokens})"
+    )
 
 
 async def async_io_token_reconcile_success(
@@ -392,6 +530,27 @@ async def async_io_token_reconcile_success(
         f"(itpm_reserved={itpm_reserved}, billable_input={billable_input}, "
         f"otpm_reserved={otpm_reserved}, output={completion_tokens})"
     )
+
+
+def io_token_refund_failure(
+    dual_cache: DualCache,
+    kwargs: Any,
+) -> None:
+    itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(kwargs)
+    if itpm_key is not None and itpm_reserved > 0:
+        dual_cache.increment_cache(
+            key=itpm_key,
+            value=-itpm_reserved,
+            ttl=RoutingArgsTTL,
+        )
+    if otpm_key is not None and otpm_reserved > 0:
+        dual_cache.increment_cache(
+            key=otpm_key,
+            value=-otpm_reserved,
+            ttl=RoutingArgsTTL,
+        )
+    _clear_reservation_from_kwargs(kwargs)
+    verbose_router_logger.debug(f"[IO TOKEN LIMIT] refunded ITPM={itpm_reserved} OTPM={otpm_reserved}")
 
 
 async def async_io_token_refund_failure(
