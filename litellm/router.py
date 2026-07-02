@@ -774,6 +774,8 @@ class Router:
         "usage-based-routing-v2": "lowesttpm_logger_v2",
         "latency-based-routing": "lowestlatency_logger",
         "cost-based-routing": "lowestcost_logger",
+        "task-aware-routing": "taskaware_logger",
+        "local-first-routing": "localfirst_logger",
     }
 
     @staticmethod
@@ -840,6 +842,20 @@ class Router:
                 selector = LowestCostLoggingHandler(
                     router_cache=self.cache,
                     routing_args={},
+                )
+            case RoutingStrategy.TASK_AWARE_ROUTING.value:
+                from litellm.router_strategy.task_aware_routing import TaskAwareRoutingStrategy
+                selector = TaskAwareRoutingStrategy(
+                    dual_cache=self.cache,
+                    task_mapping=routing_strategy_args.get("task_mapping", {}),
+                    default_task=routing_strategy_args.get("default_task", "general"),
+                )
+            case RoutingStrategy.LOCAL_FIRST_ROUTING.value:
+                from litellm.router_strategy.local_first_routing import LocalFirstRoutingStrategy
+                selector = LocalFirstRoutingStrategy(
+                    dual_cache=self.cache,
+                    local_provider=routing_strategy_args.get("local_provider", "ollama"),
+                    local_fallback_order=routing_strategy_args.get("local_fallback_order", []),
                 )
 
         if selector is not None and register_callbacks and isinstance(litellm.callbacks, list):
@@ -1036,6 +1052,14 @@ class Router:
                     input=input,
                     request_kwargs=request_kwargs,
                 )
+            case "task-aware-routing" | "local-first-routing":
+                return await selector.async_get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
             case _:
                 return None
 
@@ -1074,6 +1098,14 @@ class Router:
                     input=input,
                 )
             case "latency-based-routing":
+                return selector.get_available_deployments(
+                    model_group=model,
+                    healthy_deployments=healthy_deployments,
+                    messages=messages,
+                    input=input,
+                    request_kwargs=request_kwargs,
+                )
+            case "task-aware-routing" | "local-first-routing":
                 return selector.get_available_deployments(
                     model_group=model,
                     healthy_deployments=healthy_deployments,

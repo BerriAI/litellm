@@ -20,6 +20,20 @@ from litellm.constants import (
     MODEL_COST_MAP_MAX_SHRINK_RATIO,
     MODEL_COST_MAP_MIN_MODEL_COUNT,
 )
+from litellm.litellm_core_utils.fallback_generalizations import (
+    set_fallback_generalizations,
+)
+
+FALLBACK_GENERALIZATIONS_KEY = "fallback_generalizations"
+
+# Reserved top-level keys that are not model entries. They must be excluded
+# from the model-count integrity check so a real upstream shrink can't be masked.
+RESERVED_TOP_LEVEL_KEYS = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
+
+
+def _count_model_entries(model_cost: dict) -> int:
+    """Count actual model entries, excluding reserved meta keys."""
+    return sum(1 for key in model_cost if key not in RESERVED_TOP_LEVEL_KEYS)
 
 
 class GetModelCostMap:
@@ -46,7 +60,7 @@ class GetModelCostMap:
         """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
             backup = cls.load_local_model_cost_map()
-            cls._backup_model_count = len(backup)
+            cls._backup_model_count = _count_model_entries(backup)
         return cls._backup_model_count
 
     @staticmethod
@@ -76,7 +90,7 @@ class GetModelCostMap:
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
     ) -> bool:
         """Check 2: model count has not reduced significantly vs backup."""
-        fetched_count = len(fetched_map)
+        fetched_count = _count_model_entries(fetched_map)
 
         if fetched_count < min_model_count:
             verbose_logger.warning(
@@ -234,6 +248,18 @@ def _expand_model_aliases(model_cost: dict) -> dict:
     return model_cost
 
 
+def _finalize_model_cost_map(model_cost: dict) -> dict:
+    """Extract fallback generalizations out of the raw map, then expand aliases.
+
+    The ``fallback_generalizations`` block is installed into the generalizations
+    module and removed from the map so it is never treated as a model entry.
+    """
+    raw = model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
+    rules = raw.get("rules") if isinstance(raw, dict) else None
+    set_fallback_generalizations(rules)
+    return _expand_model_aliases(model_cost)
+
+
 def get_model_cost_map(url: str) -> dict:
     """
     Public entry point — returns the model cost map dict.
@@ -253,7 +279,7 @@ def get_model_cost_map(url: str) -> dict:
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True
         _cost_map_source_info.fallback_reason = None
-        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
+        return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
@@ -268,7 +294,7 @@ def get_model_cost_map(url: str) -> dict:
         )
         _cost_map_source_info.source = "local"
         _cost_map_source_info.fallback_reason = f"Remote fetch failed: {str(e)}"
-        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
+        return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
@@ -281,8 +307,8 @@ def get_model_cost_map(url: str) -> dict:
         )
         _cost_map_source_info.source = "local"
         _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
-        return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
+        return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
     _cost_map_source_info.source = "remote"
     _cost_map_source_info.fallback_reason = None
-    return _expand_model_aliases(content)
+    return _finalize_model_cost_map(content)
