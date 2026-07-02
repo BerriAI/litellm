@@ -4,10 +4,12 @@ GigaChat Chat Transformation
 Transforms OpenAI-format requests to GigaChat format and back.
 """
 
+from __future__ import annotations
+
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator
 
 import httpx
 
@@ -212,7 +214,7 @@ class GigaChatConfig(BaseConfig):
                 )
         return functions
 
-    def _map_tool_choice(self, tool_choice: Union[str, dict]) -> Union[str, dict] | None:
+    def _map_tool_choice(self, tool_choice: str | dict) -> str | dict | None:
         """
         Map OpenAI tool_choice to GigaChat function_call format.
 
@@ -488,7 +490,7 @@ class GigaChatConfig(BaseConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: Union[dict, httpx.Headers],
+        headers: dict | httpx.Headers,
     ) -> BaseLLMException:
         """Return GigaChat error class."""
         return GigaChatError(
@@ -499,7 +501,7 @@ class GigaChatConfig(BaseConfig):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
     ):
