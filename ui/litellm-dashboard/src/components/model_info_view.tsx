@@ -63,10 +63,112 @@ interface ModelInfoViewProps {
 // names like "openai/*" — carries at most a single "*"), so this reliably detects a
 // redacted value without a provider-metadata lookup. API-key rotation goes through
 // UpdateModelCredentialsModal instead, which sends only the new key.
-const isMaskedSecret = (value: unknown): boolean => typeof value === "string" && /\*{2,}/.test(value);
+const isMaskedSecret = (value: unknown): boolean => {
+  if (typeof value === "string") {
+    return /\*{2,}/.test(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(isMaskedSecret);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).some(isMaskedSecret);
+  }
+  return false;
+};
 
-const stripMaskedSecrets = (params: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(params).filter(([, value]) => !isMaskedSecret(value)));
+const stripMaskedSecrets = (
+  params: Record<string, unknown>,
+): { readonly safe: Record<string, unknown>; readonly dropped: readonly string[] } => {
+  const entries = Object.entries(params);
+  return {
+    safe: Object.fromEntries(entries.filter(([, value]) => !isMaskedSecret(value))),
+    dropped: entries.filter(([, value]) => isMaskedSecret(value)).map(([key]) => key),
+  };
+};
+
+const seedTruthyCostPerMillion = (paramValue: unknown, modelInfoValue: unknown): number | null =>
+  paramValue ? (paramValue as number) * 1_000_000 : (modelInfoValue as number) * 1_000_000 || null;
+
+const seedExactCostPerMillion = (paramValue: unknown, modelInfoValue: unknown): number | null => {
+  if (paramValue !== undefined && paramValue !== null) {
+    return (paramValue as number) * 1_000_000;
+  }
+  if (modelInfoValue !== undefined && modelInfoValue !== null) {
+    return (modelInfoValue as number) * 1_000_000;
+  }
+  return null;
+};
+
+type JsonRecordResult = { readonly ok: true; readonly value: Record<string, unknown> } | { readonly ok: false };
+
+const parseJsonRecord = (raw: string | undefined): JsonRecordResult => {
+  if (!raw) {
+    return { ok: true, value: {} };
+  }
+  try {
+    return { ok: true, value: JSON.parse(raw) as Record<string, unknown> };
+  } catch {
+    return { ok: false };
+  }
+};
+
+const diffRecords = (current: Record<string, unknown>, initial: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries(current).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(initial[key])),
+  );
+
+type ModelInfoPatch =
+  | { readonly kind: "omit" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "include"; readonly value: Record<string, unknown> };
+
+type ModelInfoPatchInput = {
+  readonly changed: boolean;
+  readonly modelInfoText: string | undefined;
+  readonly accessGroups: unknown;
+  readonly healthCheckModel: unknown;
+  readonly baseModelInfo: Record<string, unknown>;
+};
+
+const buildModelInfoPatch = ({
+  changed,
+  modelInfoText,
+  accessGroups,
+  healthCheckModel,
+  baseModelInfo,
+}: ModelInfoPatchInput): ModelInfoPatch => {
+  if (!changed) {
+    return { kind: "omit" };
+  }
+  const parsed = parseJsonRecord(modelInfoText);
+  if (!parsed.ok) {
+    return { kind: "invalid" };
+  }
+  const base = modelInfoText ? parsed.value : baseModelInfo;
+  return {
+    kind: "include",
+    value: {
+      ...base,
+      ...(accessGroups ? { access_groups: accessGroups } : {}),
+      ...(healthCheckModel !== undefined ? { health_check_model: healthCheckModel } : {}),
+      id: baseModelInfo.id,
+      db_model: baseModelInfo.db_model,
+    },
+  };
+};
+
+const CHANGED_SCALAR_PARAM_FIELDS: ReadonlyArray<readonly [outboundKey: string, fieldName: string]> = [
+  ["model", "litellm_model_name"],
+  ["api_base", "api_base"],
+  ["custom_llm_provider", "custom_llm_provider"],
+  ["organization", "organization"],
+  ["tpm", "tpm"],
+  ["rpm", "rpm"],
+  ["max_retries", "max_retries"],
+  ["timeout", "timeout"],
+  ["stream_timeout", "stream_timeout"],
+  ["tags", "tags"],
+];
 
 export default function ModelInfoView({
   modelId,
@@ -241,35 +343,84 @@ export default function ModelInfoView({
     NotificationsManager.success("Credential stored successfully");
   };
 
+  const initialValues = useMemo<Record<string, unknown>>(() => {
+    if (!localModelData) {
+      return {};
+    }
+    const params = localModelData.litellm_params ?? {};
+    const modelInfo = localModelData.model_info ?? {};
+    const isWildcard =
+      typeof localModelData.litellm_model_name === "string" && localModelData.litellm_model_name.includes("*");
+    return {
+      model_name: localModelData.model_name,
+      litellm_model_name: localModelData.litellm_model_name,
+      api_base: params.api_base,
+      custom_llm_provider: params.custom_llm_provider,
+      organization: params.organization,
+      tpm: params.tpm,
+      rpm: params.rpm,
+      max_retries: params.max_retries,
+      timeout: params.timeout,
+      stream_timeout: params.stream_timeout,
+      input_cost: seedTruthyCostPerMillion(params.input_cost_per_token, modelInfo.input_cost_per_token),
+      output_cost: seedTruthyCostPerMillion(params.output_cost_per_token, modelInfo.output_cost_per_token),
+      cache_read_cost: seedExactCostPerMillion(
+        params.cache_read_input_token_cost,
+        modelInfo.cache_read_input_token_cost,
+      ),
+      cache_write_cost: seedExactCostPerMillion(
+        params.cache_creation_input_token_cost,
+        modelInfo.cache_creation_input_token_cost,
+      ),
+      cache_control: params.cache_control_injection_points ? true : false,
+      cache_control_injection_points: params.cache_control_injection_points || [],
+      model_access_group: Array.isArray(modelInfo.access_groups) ? modelInfo.access_groups : [],
+      guardrails: Array.isArray(params.guardrails) ? params.guardrails : [],
+      vector_store_ids:
+        Array.isArray(params.vector_store_ids) && params.vector_store_ids.length > 0
+          ? params.vector_store_ids
+          : undefined,
+      tags: Array.isArray(params.tags) ? params.tags : [],
+      health_check_model: isWildcard ? modelInfo.health_check_model : null,
+      litellm_credential_name: params.litellm_credential_name || "",
+      litellm_extra_params: JSON.stringify(
+        Object.fromEntries(
+          Object.entries(params).filter(([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value)),
+        ),
+        null,
+        2,
+      ),
+    };
+  }, [localModelData]);
+
   const handleModelUpdate = async (values: any) => {
     try {
       if (!accessToken) return;
       setIsSaving(true);
 
-      // Parse LiteLLM extra params from JSON text area
-      let parsedExtraParams: Record<string, any> = {};
-      try {
-        parsedExtraParams = values.litellm_extra_params ? JSON.parse(values.litellm_extra_params) : {};
-        delete parsedExtraParams.litellm_credential_name;
-      } catch (e) {
+      const parsedExtra = parseJsonRecord(values.litellm_extra_params);
+      if (!parsedExtra.ok) {
         NotificationsManager.fromBackend("Invalid JSON in LiteLLM Params");
         setIsSaving(false);
         return;
       }
+      const currentExtraParams = Object.fromEntries(
+        Object.entries(parsedExtra.value).filter(([key]) => key !== "litellm_credential_name"),
+      );
+      const initialExtraRaw = initialValues.litellm_extra_params;
+      const initialExtraResult = parseJsonRecord(typeof initialExtraRaw === "string" ? initialExtraRaw : undefined);
+      const initialExtraParams = initialExtraResult.ok ? initialExtraResult.value : {};
+      const changedExtraParams = diffRecords(currentExtraParams, initialExtraParams);
 
-      let updatedLitellmParams = {
-        ...values.litellm_params,
-        ...parsedExtraParams,
-        model: values.litellm_model_name,
-        api_base: values.api_base,
-        custom_llm_provider: values.custom_llm_provider,
-        organization: values.organization,
-        tpm: values.tpm,
-        rpm: values.rpm,
-        max_retries: values.max_retries,
-        timeout: values.timeout,
-        stream_timeout: values.stream_timeout,
-        tags: values.tags,
+      const changedScalarParams = Object.fromEntries(
+        CHANGED_SCALAR_PARAM_FIELDS.filter(([, fieldName]) => form.isFieldTouched(fieldName)).map(
+          ([outboundKey, fieldName]) => [outboundKey, values[fieldName]],
+        ),
+      );
+
+      const updatedLitellmParams: Record<string, unknown> = {
+        ...changedExtraParams,
+        ...changedScalarParams,
       };
 
       if (form.isFieldTouched("input_cost")) {
@@ -344,49 +495,51 @@ export default function ModelInfoView({
         delete updatedLitellmParams.cache_control_injection_points;
       }
 
-      // Parse the model_info from the form values
-      let updatedModelInfo;
-      try {
-        updatedModelInfo = values.model_info ? JSON.parse(values.model_info) : modelData.model_info;
-        // Update access_groups from the form
-        if (values.model_access_group) {
-          updatedModelInfo = {
-            ...updatedModelInfo,
-            access_groups: values.model_access_group,
-          };
-        }
-        // Override health_check_model from the form
-        if (values.health_check_model !== undefined) {
-          updatedModelInfo = {
-            ...updatedModelInfo,
-            health_check_model: values.health_check_model,
-          };
-        }
-      } catch (e) {
+      const modelInfoChanged =
+        form.isFieldTouched("model_info") ||
+        form.isFieldTouched("model_access_group") ||
+        form.isFieldTouched("health_check_model");
+      const modelInfoPatch = buildModelInfoPatch({
+        changed: modelInfoChanged,
+        modelInfoText: values.model_info,
+        accessGroups: values.model_access_group,
+        healthCheckModel: values.health_check_model,
+        baseModelInfo: modelData.model_info,
+      });
+      if (modelInfoPatch.kind === "invalid") {
         NotificationsManager.fromBackend("Invalid JSON in Model Info");
+        setIsSaving(false);
         return;
       }
 
       // Final guard: never PATCH a redacted secret. The /model/info snapshot that
-      // seeds this form masks secrets, and any save re-sends the whole params blob;
-      // without this strip a masked value would be re-encrypted over the real secret.
+      // seeds this form masks secrets; without this strip a masked value (top-level
+      // or nested inside an object/array) would be re-encrypted over the real secret.
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
-      const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const { safe: safeLitellmParams, dropped: droppedMaskedParams } = stripMaskedSecrets(updatedLitellmParams);
+      if (droppedMaskedParams.length > 0) {
+        NotificationsManager.warning(
+          `These fields still held a redacted value and were not saved: ${droppedMaskedParams.join(
+            ", ",
+          )}. Re-enter their real value to change them, or rotate the API key from "Update API Key".`,
+        );
+      }
 
+      const modelNameChanged = form.isFieldTouched("model_name");
       const updateData = {
-        model_name: values.model_name,
+        ...(modelNameChanged ? { model_name: values.model_name } : {}),
         litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        ...(modelInfoPatch.kind === "include" ? { model_info: modelInfoPatch.value } : {}),
       };
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
 
       const updatedModelData = {
         ...localModelData,
-        model_name: values.model_name,
-        litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
-        model_info: updatedModelInfo,
+        ...(modelNameChanged ? { model_name: values.model_name } : {}),
+        ...(form.isFieldTouched("litellm_model_name") ? { litellm_model_name: values.litellm_model_name } : {}),
+        litellm_params: { ...localModelData.litellm_params, ...safeLitellmParams },
+        ...(modelInfoPatch.kind === "include" ? { model_info: modelInfoPatch.value } : {}),
       };
 
       setLocalModelData(updatedModelData);
@@ -693,65 +846,7 @@ export default function ModelInfoView({
                 <Form
                   form={form}
                   onFinish={handleModelUpdate}
-                  initialValues={{
-                    model_name: localModelData.model_name,
-                    litellm_model_name: localModelData.litellm_model_name,
-                    api_base: localModelData.litellm_params.api_base,
-                    custom_llm_provider: localModelData.litellm_params.custom_llm_provider,
-                    organization: localModelData.litellm_params.organization,
-                    tpm: localModelData.litellm_params.tpm,
-                    rpm: localModelData.litellm_params.rpm,
-                    max_retries: localModelData.litellm_params.max_retries,
-                    timeout: localModelData.litellm_params.timeout,
-                    stream_timeout: localModelData.litellm_params.stream_timeout,
-                    input_cost: localModelData.litellm_params.input_cost_per_token
-                      ? localModelData.litellm_params.input_cost_per_token * 1_000_000
-                      : localModelData.model_info?.input_cost_per_token * 1_000_000 || null,
-                    output_cost: localModelData.litellm_params?.output_cost_per_token
-                      ? localModelData.litellm_params.output_cost_per_token * 1_000_000
-                      : localModelData.model_info?.output_cost_per_token * 1_000_000 || null,
-                    cache_read_cost:
-                      localModelData.litellm_params?.cache_read_input_token_cost !== undefined &&
-                      localModelData.litellm_params?.cache_read_input_token_cost !== null
-                        ? localModelData.litellm_params.cache_read_input_token_cost * 1_000_000
-                        : localModelData.model_info?.cache_read_input_token_cost !== undefined &&
-                            localModelData.model_info?.cache_read_input_token_cost !== null
-                          ? localModelData.model_info.cache_read_input_token_cost * 1_000_000
-                          : null,
-                    cache_write_cost:
-                      localModelData.litellm_params?.cache_creation_input_token_cost !== undefined &&
-                      localModelData.litellm_params?.cache_creation_input_token_cost !== null
-                        ? localModelData.litellm_params.cache_creation_input_token_cost * 1_000_000
-                        : localModelData.model_info?.cache_creation_input_token_cost !== undefined &&
-                            localModelData.model_info?.cache_creation_input_token_cost !== null
-                          ? localModelData.model_info.cache_creation_input_token_cost * 1_000_000
-                          : null,
-                    cache_control: localModelData.litellm_params?.cache_control_injection_points ? true : false,
-                    cache_control_injection_points: localModelData.litellm_params?.cache_control_injection_points || [],
-                    model_access_group: Array.isArray(localModelData.model_info?.access_groups)
-                      ? localModelData.model_info.access_groups
-                      : [],
-                    guardrails: Array.isArray(localModelData.litellm_params?.guardrails)
-                      ? localModelData.litellm_params.guardrails
-                      : [],
-                    vector_store_ids:
-                      Array.isArray(localModelData.litellm_params?.vector_store_ids) &&
-                      localModelData.litellm_params.vector_store_ids.length > 0
-                        ? localModelData.litellm_params.vector_store_ids
-                        : undefined,
-                    tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
-                    health_check_model: isWildcardModel ? localModelData.model_info?.health_check_model : null,
-                    litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
-                    litellm_extra_params: JSON.stringify(
-                      Object.fromEntries(
-                        Object.entries(localModelData.litellm_params || {}).filter(
-                          ([key, value]) => key !== "litellm_credential_name" && !isMaskedSecret(value),
-                        ),
-                      ),
-                      null,
-                      2,
-                    ),
-                  }}
+                  initialValues={initialValues}
                   layout="vertical"
                   onValuesChange={() => setIsDirty(true)}
                 >

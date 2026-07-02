@@ -111,9 +111,8 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # update litellm params
     if updated_patch.litellm_params:
         # Encrypt any sensitive values
-        encrypted_params = {
-            k: encrypt_value_helper(v) for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
-        }
+        set_params = updated_patch.litellm_params.model_dump(exclude_unset=True)
+        encrypted_params = {k: encrypt_value_helper(v) for k, v in set_params.items() if v is not None}
 
         merged_deployment_dict["litellm_params"].update(encrypted_params)  # type: ignore
 

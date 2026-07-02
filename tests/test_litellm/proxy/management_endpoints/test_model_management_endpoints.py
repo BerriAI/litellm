@@ -2675,6 +2675,257 @@ class TestUpdateDBModelClearPricing:
         assert info["cache_creation_input_token_cost"] == 0.000003
 
 
+class TestUpdateDBModelMergeOnlySetFields:
+    """`update_db_model` must merge only the litellm_params the client explicitly
+    set. The four default-`False` booleans (use_in_pass_through, use_litellm_proxy,
+    use_xai_oauth, merge_reasoning_content_in_choices) are not `None`, so the old
+    `model_dump(exclude_none=True)` merge re-sent them as `False` on every PATCH and
+    clobbered a stored `True`. `exclude_unset=True` fixes that while still carrying
+    `extra="allow"` passthrough keys."""
+
+    def test_minimal_patch_preserves_stored_use_in_pass_through_true(self):
+        """THE regression: a PATCH that only sets `tpm` must leave a stored
+        `use_in_pass_through=True` intact instead of resetting it to `False`."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                use_in_pass_through=True,
+            ),
+            model_info=ModelInfo(id="dep-passthrough-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(tpm=100)),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["use_in_pass_through"] is True
+        assert params["tpm"] == 100
+
+    def test_minimal_patch_preserves_other_default_false_booleans(self):
+        """The same clobber affects every default-`False` boolean, not just
+        use_in_pass_through."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                use_litellm_proxy=True,
+                use_xai_oauth=True,
+                merge_reasoning_content_in_choices=True,
+            ),
+            model_info=ModelInfo(id="dep-bools-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(rpm=42)),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["use_litellm_proxy"] is True
+        assert params["use_xai_oauth"] is True
+        assert params["merge_reasoning_content_in_choices"] is True
+        assert params["rpm"] == 42
+
+    def test_patch_can_still_flip_boolean_to_false(self):
+        """`exclude_unset` must not make the field un-settable: an explicit `False`
+        the client did send still overwrites a stored `True`."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                use_in_pass_through=True,
+            ),
+            model_info=ModelInfo(id="dep-passthrough-1"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(use_in_pass_through=False)),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["use_in_pass_through"] is False
+
+    def test_passthrough_extra_key_is_written(self, monkeypatch):
+        """An `extra="allow"` key the client sends must survive the merge — the
+        provider passthrough kwargs the endpoint accepts cannot be dropped. Its
+        string value is encrypted at the boundary like any other secret."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            decrypt_value_helper,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-extra-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(**{"tpm": 5, "some_provider_kwarg": "written"})
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert "some_provider_kwarg" in params
+        assert decrypt_value_helper(params["some_provider_kwarg"], key="some_provider_kwarg") == "written"
+        assert params["tpm"] == 5
+
+    def test_explicit_null_on_general_field_preserves_stored_value(self):
+        """Today's semantics: an explicit `null` on a general (non-pricing) field
+        leaves the stored value untouched (the `if v is not None` filter)."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                api_base="https://stored.example.com",
+            ),
+            model_info=ModelInfo(id="dep-null-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(api_base=None)),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["api_base"] == "https://stored.example.com"
+
+    def test_special_pricing_null_still_clears(self):
+        """The SPECIAL_MODEL_INFO_PARAMS explicit-null clear path is unchanged: an
+        explicit `input_cost_per_token=None` still removes the stored override."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(input_cost_per_token=None)),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+
+    def test_included_secret_is_encrypted(self, monkeypatch):
+        """A secret carried in the PATCH is encrypted at the merge boundary."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+            decrypt_value_helper,
+        )
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(model="openai/*"),
+            model_info=ModelInfo(id="dep-secret-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(api_key="new-plaintext-secret")),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["api_key"] != "new-plaintext-secret"
+        assert decrypt_value_helper(params["api_key"], key="api_key") == "new-plaintext-secret"
+
+    def test_omitted_secret_is_preserved_unchanged(self, monkeypatch):
+        """A secret the PATCH does not mention is left byte-for-byte untouched — it
+        is neither dropped nor re-encrypted."""
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                api_key="already-stored-secret",
+            ),
+            model_info=ModelInfo(id="dep-secret-1"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(tpm=7)),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["api_key"] == "already-stored-secret"
+
+
 class TestGetModelInfoWithIdBlocked:
     """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
     column into the in-memory `model_info` dict so the router filter can read it."""

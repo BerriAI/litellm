@@ -16,6 +16,7 @@ vi.mock("./molecules/notifications_manager", () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    warning: vi.fn(),
     fromBackend: vi.fn(),
   },
 }));
@@ -760,5 +761,244 @@ describe("ModelInfoView", () => {
       expect(screen.getByText(/Created At/)).toBeInTheDocument();
       expect(screen.getByText(/Created By/)).toBeInTheDocument();
     });
+  });
+
+  it("sends only the changed scalar field and omits untouched ones (regression: whole-params over-send)", async () => {
+    // Editing only TPM used to re-send api_base, organization, custom_llm_provider,
+    // stream_timeout, etc. unchanged, re-encrypting every value on the backend and
+    // resurrecting stale ones. A save must carry only the fields the user actually changed.
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const tpmInput = await screen.findByPlaceholderText("Enter TPM");
+    await user.type(tpmInput, "100");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params).toHaveProperty("tpm");
+    expect(updatePayload.litellm_params).not.toHaveProperty("api_base");
+    expect(updatePayload.litellm_params).not.toHaveProperty("organization");
+    expect(updatePayload.litellm_params).not.toHaveProperty("custom_llm_provider");
+    expect(updatePayload.litellm_params).not.toHaveProperty("stream_timeout");
+  });
+
+  it("never seeds or re-sends a masked secret nested inside an object (regression: nested-secret corruption)", async () => {
+    // /model/info masks secrets in place, including ones nested inside objects such as
+    // extra_headers.Authorization. The old top-level-only guard let the masked object
+    // seed the LiteLLM Params textarea and flow back on save, re-encrypting the mask
+    // over the real header value.
+    const nestedMaskedModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        model: "azure/gpt-4o",
+        api_base: "https://example-az.openai.azure.com",
+        custom_llm_provider: "azure",
+        extra_headers: { Authorization: "Bear****key" },
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [nestedMaskedModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [nestedMaskedModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) =>
+          input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"custom_llm_provider"'),
+      ) as HTMLTextAreaElement | undefined;
+    expect(litellmParamsInput).toBeDefined();
+    // The masked nested secret must never seed the editable textarea.
+    expect(litellmParamsInput?.value).not.toContain("**");
+    expect(litellmParamsInput?.value).not.toContain("extra_headers");
+
+    const tpmInput = await screen.findByPlaceholderText("Enter TPM");
+    await user.type(tpmInput, "100");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    const serializedParams = JSON.stringify(updatePayload.litellm_params);
+    expect(serializedParams).not.toContain("**");
+    expect(serializedParams).not.toContain("extra_headers");
+  });
+
+  it("warns and does not save a changed param whose value still looks redacted", async () => {
+    const modelData = {
+      ...defaultModelData,
+      litellm_params: {
+        model: "gpt-4",
+        api_base: "https://api.openai.com/v1",
+        custom_llm_provider: "openai",
+        extra_setting_a: "original-a",
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [modelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [modelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"extra_setting_a"'),
+      ) as HTMLTextAreaElement | undefined;
+    expect(litellmParamsInput).toBeDefined();
+    if (!litellmParamsInput) {
+      return;
+    }
+    await user.clear(litellmParamsInput);
+    await user.paste(
+      '{"model":"gpt-4","api_base":"https://api.openai.com/v1","custom_llm_provider":"openai","extra_setting_a":"sk-1****cdef"}',
+    );
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params).not.toHaveProperty("extra_setting_a");
+    expect(mockNotificationsManager.warning).toHaveBeenCalledWith(expect.stringContaining("extra_setting_a"));
+  });
+
+  it("sends only the edited key from the LiteLLM Params textarea, not the whole parsed blob", async () => {
+    const multiKeyModelData = {
+      ...defaultModelData,
+      litellm_params: {
+        model: "gpt-4",
+        api_base: "https://api.openai.com/v1",
+        custom_llm_provider: "openai",
+        extra_setting_a: "original-a",
+        extra_setting_b: "original-b",
+      },
+    };
+    mockUseModelsInfo.mockReturnValue({
+      data: { data: [multiKeyModelData] },
+      isLoading: false,
+      error: null,
+    });
+    mockModelInfoV1Call.mockResolvedValue({ data: [multiKeyModelData] });
+
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const litellmParamsInput = screen
+      .getAllByRole("textbox")
+      .find(
+        (input) => input.tagName === "TEXTAREA" && (input as HTMLTextAreaElement).value.includes('"extra_setting_a"'),
+      ) as HTMLTextAreaElement | undefined;
+    expect(litellmParamsInput).toBeDefined();
+    if (!litellmParamsInput) {
+      return;
+    }
+    await user.clear(litellmParamsInput);
+    await user.paste(
+      '{"model":"gpt-4","api_base":"https://api.openai.com/v1","custom_llm_provider":"openai","extra_setting_a":"changed-a","extra_setting_b":"original-b"}',
+    );
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params.extra_setting_a).toBe("changed-a");
+    expect(updatePayload.litellm_params).not.toHaveProperty("extra_setting_b");
+    expect(updatePayload.litellm_params).not.toHaveProperty("model");
+    expect(updatePayload.litellm_params).not.toHaveProperty("api_base");
+    expect(updatePayload.litellm_params).not.toHaveProperty("custom_llm_provider");
+  });
+
+  it("omits model_info from the PATCH when no model_info field changed, and includes it (with real id/db_model) when the access group changes", async () => {
+    const user = userEvent.setup();
+
+    // Case 1: touch only a litellm_params field; model_info must be omitted entirely.
+    const { unmount } = render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const tpmInput = await screen.findByPlaceholderText("Enter TPM");
+    await user.type(tpmInput, "100");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+    expect(mockModelPatchUpdateCall.mock.calls[0][1]).not.toHaveProperty("model_info");
+
+    unmount();
+    vi.clearAllMocks();
+    mockModelPatchUpdateCall.mockResolvedValue({});
+
+    // Case 2: change the access group; model_info must be included and carry the real id/db_model.
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    const accessGroupLabel = await screen.findByText("Model Access Groups");
+    const accessGroupInput = accessGroupLabel.parentElement?.querySelector("input");
+    expect(accessGroupInput).toBeTruthy();
+    await user.click(accessGroupInput as HTMLInputElement);
+    await user.type(accessGroupInput as HTMLInputElement, "group1{Enter}");
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload).toHaveProperty("model_info");
+    expect(updatePayload.model_info.id).toBe("123");
+    expect(updatePayload.model_info.db_model).toBe(true);
+    expect(updatePayload.model_info.access_groups).toContain("group1");
   });
 });
