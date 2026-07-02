@@ -41,6 +41,24 @@ const portRule: CacheFieldRule = {
   },
 };
 
+const jsonListRule: CacheFieldRule = {
+  validator: (_rule, value) => {
+    if (value === undefined || value === null || String(value).trim() === "") {
+      return Promise.resolve();
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(String(value));
+    } catch {
+      return Promise.reject(new Error("Must be valid JSON"));
+    }
+    if (!Array.isArray(parsed)) {
+      return Promise.reject(new Error("Must be a JSON array"));
+    }
+    return Promise.resolve();
+  },
+};
+
 export const CACHE_FIELDS: readonly CacheField[] = [
   {
     name: "url",
@@ -100,6 +118,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "cluster",
     helpText: "List of startup nodes for Redis Cluster (e.g., [{'host': '127.0.0.1', 'port': '7001'}])",
     redisType: "cluster",
+    rules: [jsonListRule],
   },
   {
     name: "sentinel_nodes",
@@ -108,6 +127,7 @@ export const CACHE_FIELDS: readonly CacheField[] = [
     section: "sentinel",
     helpText: "List of Sentinel nodes (e.g., [['localhost', 26379]])",
     redisType: "sentinel",
+    rules: [jsonListRule],
   },
   {
     name: "service_name",

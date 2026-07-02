@@ -85,6 +85,19 @@ describe("CacheSettings", () => {
       expect(await screen.findByText(/Port must be an integer between 1 and 65535/i)).toBeInTheDocument();
       expect(updateCacheSettingsCall).not.toHaveBeenCalled();
     });
+
+    it("should block save when a list field holds malformed JSON instead of silently dropping it", async () => {
+      const user = userEvent.setup();
+      getCacheSettingsCall.mockResolvedValue({ current_values: { redis_type: "cluster" } });
+      renderSettings();
+
+      const startupNodes = await screen.findByLabelText("Startup Nodes");
+      await user.type(startupNodes, "not json");
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      expect(await screen.findByText(/Must be valid JSON/i)).toBeInTheDocument();
+      expect(updateCacheSettingsCall).not.toHaveBeenCalled();
+    });
   });
 
   describe("when saving a valid node configuration", () => {
