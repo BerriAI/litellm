@@ -544,7 +544,7 @@ describe("ModelInfoView", () => {
     });
   });
 
-  it("should keep selector credential and ignore litellm_credential_name from LiteLLM Params json", async () => {
+  it("ignores litellm_credential_name typed into the LiteLLM Params json and never re-sends the untouched selector credential", async () => {
     const user = userEvent.setup();
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
 
@@ -575,8 +575,9 @@ describe("ModelInfoView", () => {
     });
 
     const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
-    expect(updatePayload.litellm_params.litellm_credential_name).toBe("selected-credential");
+    expect(updatePayload.litellm_params.timeout).toBe(42);
     expect(updatePayload.litellm_params.litellm_credential_name).not.toBe("from-json");
+    expect(updatePayload.litellm_params).not.toHaveProperty("litellm_credential_name");
   });
 
   it("should not include vector_store_ids in update payload when model has none", async () => {
@@ -790,6 +791,8 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("organization");
     expect(updatePayload.litellm_params).not.toHaveProperty("custom_llm_provider");
     expect(updatePayload.litellm_params).not.toHaveProperty("stream_timeout");
+    expect(updatePayload.litellm_params).not.toHaveProperty("guardrails");
+    expect(updatePayload.litellm_params).not.toHaveProperty("litellm_credential_name");
   });
 
   it("never seeds or re-sends a masked secret nested inside an object (regression: nested-secret corruption)", async () => {

@@ -471,12 +471,10 @@ export default function ModelInfoView({
         }
       }
 
-      if (values.litellm_credential_name) {
+      if (form.isFieldTouched("litellm_credential_name") && values.litellm_credential_name) {
         updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
-      } else {
-        delete updatedLitellmParams.litellm_credential_name;
       }
-      if (values.guardrails) {
+      if (form.isFieldTouched("guardrails")) {
         updatedLitellmParams.guardrails = values.guardrails;
       }
       if (values.vector_store_ids?.length > 0) {
