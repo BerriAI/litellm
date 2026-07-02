@@ -1,6 +1,7 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
 import logging
+from collections import deque
 from typing import (
     Any,
     List,
@@ -246,7 +247,7 @@ async def acompletion_with_mcp(
                 self.follow_up_iterator = None
                 self.follow_up_exhausted = False
                 self.held_tool_call_chunks: list[ModelResponseStream] = []
-                self.pending_chunks: list[ModelResponseStream] = []
+                self.pending_chunks: deque[ModelResponseStream] = deque()
                 self.any_chunk_yielded = False
 
             async def __aiter__(self):
@@ -352,9 +353,17 @@ async def acompletion_with_mcp(
                 if self.follow_up_stream is not None:
                     self.held_tool_call_chunks = []
 
+            def _flush_held_and_final(self, final_chunk: ModelResponseStream) -> ModelResponseStream:
+                flushed_final = self._add_mcp_tool_metadata_to_final_chunk(final_chunk)
+                self.pending_chunks = deque(
+                    [chunk for chunk in self.held_tool_call_chunks if chunk is not final_chunk] + [flushed_final]
+                )
+                self.held_tool_call_chunks = []
+                return self._yield_chunk(self.pending_chunks.popleft())
+
             async def __anext__(self):
                 if self.pending_chunks:
-                    return self._yield_chunk(self.pending_chunks.pop(0))
+                    return self._yield_chunk(self.pending_chunks.popleft())
 
                 # Phase 1: Collect and yield initial stream chunks
                 while not self.stream_exhausted:
@@ -376,10 +385,7 @@ async def acompletion_with_mcp(
                         await self._finish_initial_turn()
                         if self.follow_up_stream is not None:
                             break
-                        final_chunk = self._add_mcp_tool_metadata_to_final_chunk(self.collected_chunks[-1])
-                        self.pending_chunks = self.held_tool_call_chunks + [final_chunk]
-                        self.held_tool_call_chunks = []
-                        return self._yield_chunk(self.pending_chunks.pop(0))
+                        return self._flush_held_and_final(self.collected_chunks[-1])
 
                     self.collected_chunks.append(chunk)
 
@@ -388,10 +394,7 @@ async def acompletion_with_mcp(
                         await self._finish_initial_turn()
                         if self.follow_up_stream is not None:
                             break
-                        chunk = self._add_mcp_tool_metadata_to_final_chunk(chunk)
-                        self.pending_chunks = self.held_tool_call_chunks + [chunk]
-                        self.held_tool_call_chunks = []
-                        return self._yield_chunk(self.pending_chunks.pop(0))
+                        return self._flush_held_and_final(chunk)
 
                     if self._chunk_has_tool_call_delta(chunk):
                         self.held_tool_call_chunks.append(chunk)

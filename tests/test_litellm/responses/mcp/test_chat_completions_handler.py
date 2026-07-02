@@ -1605,3 +1605,76 @@ async def test_acompletion_with_mcp_streaming_flushes_tool_call_turn_when_no_fol
         getattr(chunk.choices[0].delta, "tool_calls", None) for chunk in all_chunks if chunk.choices
     ), "Held tool-call chunks must be flushed when no follow-up stream is created"
     assert all_chunks[-1].choices[0].finish_reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_streaming_no_duplicate_chunk_on_abrupt_termination(monkeypatch):
+    """
+    Regression test for a duplicate-chunk bug in the abrupt-termination fallback:
+    when the initial stream ends via StopAsyncIteration without a finish_reason
+    chunk and the last collected chunk is a held tool-call delta, that chunk is
+    both in held_tool_call_chunks and collected_chunks[-1]. It must be yielded
+    to the client exactly once.
+    """
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "local_search", "arguments": "{}"},
+        }
+    ]
+
+    initial_chunks = [
+        _create_mcp_stream_chunk("partial answer "),
+        _create_mcp_stream_chunk(
+            None,
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call-1",
+                    type="function",
+                    function=Function(name="local_search", arguments="{}"),
+                    index=0,
+                )
+            ],
+        ),
+    ]
+
+    InitialStream = _make_mock_stream_class(initial_chunks)
+
+    async def mock_acompletion(**kwargs):
+        return InitialStream()
+
+    mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
+    _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls, tool_results=[])
+
+    with (
+        patch("litellm.acompletion", mock_acompletion_func),
+        patch.object(
+            chat_completions_handler,
+            "litellm_acompletion",
+            mock_acompletion_func,
+            create=True,
+        ),
+    ):
+        result = await acompletion_with_mcp(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=True,
+        )
+
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
+    tool_call_chunk_count = sum(
+        1 for chunk in all_chunks if chunk.choices and getattr(chunk.choices[0].delta, "tool_calls", None)
+    )
+    assert tool_call_chunk_count == 1, (
+        f"The held tool-call chunk must be yielded exactly once on abrupt termination. Got chunks: {all_chunks}"
+    )
+    assert len(all_chunks) == len(set(id(chunk) for chunk in all_chunks)), "No chunk object may be yielded twice"
