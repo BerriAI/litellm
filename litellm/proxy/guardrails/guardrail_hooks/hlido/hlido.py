@@ -228,6 +228,9 @@ class HlidoGuardrail(CustomGuardrail):
         ):
             return data
         await self._check_request(data)
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
         return data
 
     async def _check_request(self, data: dict) -> None:

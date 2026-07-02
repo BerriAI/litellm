@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -27,13 +27,13 @@ class HlidoGuardrailConfigModelOptionalParams(BaseModel):
             "per-request 'hlido_slugs' list in request metadata."
         ),
     )
-    on_unverified: Optional[str] = Field(
+    on_unverified: Optional[Literal["allow", "block"]] = Field(
         default=None,
         description=(
             "Action when a slug has no Hlido review: 'allow' (default) or 'block'."
         ),
     )
-    on_error: Optional[str] = Field(
+    on_error: Optional[Literal["allow", "block"]] = Field(
         default=None,
         description=(
             "Action when the Hlido API is unreachable: 'allow' (default) or 'block'."
