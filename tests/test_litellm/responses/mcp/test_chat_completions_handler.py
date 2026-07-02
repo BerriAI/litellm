@@ -1678,3 +1678,126 @@ async def test_acompletion_with_mcp_streaming_no_duplicate_chunk_on_abrupt_termi
         f"The held tool-call chunk must be yielded exactly once on abrupt termination. Got chunks: {all_chunks}"
     )
     assert len(all_chunks) == len(set(id(chunk) for chunk in all_chunks)), "No chunk object may be yielded twice"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_streaming_abrupt_termination_with_follow_up_suppresses_tool_turn(monkeypatch):
+    """
+    When the initial stream ends via StopAsyncIteration without ever emitting a
+    finish_reason chunk but tool execution still succeeds, the held tool-call
+    chunks must be suppressed and the follow-up answer streamed, same as the
+    clean-termination path.
+    """
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "local_search", "arguments": "{}"},
+        }
+    ]
+    tool_results = [{"tool_call_id": "call-1", "result": "executed"}]
+
+    initial_chunks = [
+        _create_mcp_stream_chunk(
+            None,
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call-1",
+                    type="function",
+                    function=Function(name="local_search", arguments="{}"),
+                    index=0,
+                )
+            ],
+        ),
+    ]
+    follow_up_chunks = [
+        _create_mcp_stream_chunk("Hello"),
+        _create_mcp_stream_chunk(" world", finish_reason="stop"),
+    ]
+
+    InitialStream = _make_mock_stream_class(initial_chunks)
+    FollowUpStream = _make_mock_stream_class(follow_up_chunks)
+
+    async def mock_acompletion(**kwargs):
+        messages = kwargs.get("messages", [])
+        is_follow_up = any(
+            isinstance(msg, dict) and msg.get("role") == "tool" for msg in messages
+        )
+        return FollowUpStream() if is_follow_up else InitialStream()
+
+    mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
+    _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls, tool_results)
+
+    with (
+        patch("litellm.acompletion", mock_acompletion_func),
+        patch.object(
+            chat_completions_handler,
+            "litellm_acompletion",
+            mock_acompletion_func,
+            create=True,
+        ),
+    ):
+        result = await acompletion_with_mcp(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=True,
+        )
+
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
+    assert all(
+        not getattr(chunk.choices[0].delta, "tool_calls", None) for chunk in all_chunks if chunk.choices
+    ), f"tool_call deltas must not leak even when the initial stream ends abruptly. Got: {all_chunks}"
+    finish_reasons = [
+        chunk.choices[0].finish_reason
+        for chunk in all_chunks
+        if chunk.choices and chunk.choices[0].finish_reason is not None
+    ]
+    assert finish_reasons == ["stop"], f"Expected a single terminal stop. Got: {finish_reasons}"
+    content = "".join(
+        chunk.choices[0].delta.content or "" for chunk in all_chunks if chunk.choices and chunk.choices[0].delta
+    )
+    assert content == "Hello world"
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_streaming_empty_initial_stream_terminates_cleanly(monkeypatch):
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+
+    InitialStream = _make_mock_stream_class([])
+
+    async def mock_acompletion(**kwargs):
+        return InitialStream()
+
+    mock_acompletion_func = AsyncMock(side_effect=mock_acompletion)
+    _patch_mcp_auto_exec_scaffolding(monkeypatch, tools, openai_tools, tool_calls=[], tool_results=[])
+
+    with (
+        patch("litellm.acompletion", mock_acompletion_func),
+        patch.object(
+            chat_completions_handler,
+            "litellm_acompletion",
+            mock_acompletion_func,
+            create=True,
+        ),
+    ):
+        result = await acompletion_with_mcp(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=True,
+        )
+
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
+    assert all_chunks == [], "An empty initial stream must terminate cleanly with no chunks"
