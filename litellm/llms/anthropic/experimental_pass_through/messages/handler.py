@@ -37,6 +37,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
+from litellm.types.utils import ModelResponse
 
 from ..utils import is_reasoning_auto_summary_enabled
 
@@ -468,6 +469,15 @@ def anthropic_messages_handler(
         # This is set in the async wrapper above when stream=True is converted to stream=False
         if kwargs.get("_websearch_interception_converted_stream", False):
             litellm_logging_obj.model_call_details["websearch_interception_converted_stream"] = True
+
+    if litellm_params.mock_response and isinstance(litellm_params.mock_response, ModelResponse):
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            LiteLLMAnthropicMessagesAdapter,
+        )
+
+        return LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+            response=litellm_params.mock_response,
+        )
 
     if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
         return mock_response(
