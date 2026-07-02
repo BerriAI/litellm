@@ -2093,7 +2093,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 3.75e-06,
@@ -2420,7 +2421,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "assemblyai/best": {
         "input_cost_per_second": 3.333e-05,
@@ -14824,7 +14826,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": {
         "cache_creation_input_token_cost": 4.125e-06,
@@ -20243,7 +20246,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
         "cache_creation_input_token_cost": 1.25e-06,
@@ -33343,7 +33347,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "bedrock_converse_supports_strict_tools": false
     },
     "us.deepseek.r1-v1:0": {
         "input_cost_per_token": 1.35e-06,
