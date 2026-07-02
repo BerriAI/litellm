@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage } from "@/components/networking";
 import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ProjectResponse, projectKeys } from "./useProjects";
@@ -21,7 +21,6 @@ const fetchProjectDetails = async (accessToken: string, projectId: string): Prom
   if (!response.ok) {
     const errorData = await response.json();
     const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
     throw new Error(errorMessage);
   }
 

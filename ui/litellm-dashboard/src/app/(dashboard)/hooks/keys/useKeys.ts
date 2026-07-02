@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
@@ -85,7 +85,6 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
     if (!response.ok) {
       const errorData = await response.json();
       const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
       throw new Error(errorMessage);
     }
 

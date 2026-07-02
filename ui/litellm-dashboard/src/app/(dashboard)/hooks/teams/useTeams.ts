@@ -4,7 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { teamInfoCall } from "@/components/networking";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage } from "@/components/networking";
 
 export interface TeamsResponse {
   teams: Team[];
@@ -72,7 +72,6 @@ export const teamListCall = async (
     if (!response.ok) {
       const errorData = await response.json();
       const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
       throw new Error(errorMessage);
     }
 
@@ -220,7 +219,6 @@ const deletedTeamListCall = async (
     if (!response.ok) {
       const errorData = await response.json();
       const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
       throw new Error(errorMessage);
     }
 
