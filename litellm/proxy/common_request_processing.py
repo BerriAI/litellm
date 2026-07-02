@@ -1431,10 +1431,7 @@ class ProxyBaseLLMRequestProcessing:
         # Skip chat routes (acompletion/completion) because the SDK already
         # sets litellm_overhead_time_ms in litellm.utils.completion().
         _hidden_params = getattr(response, "_hidden_params", {}) or {}
-        if (
-            not _hidden_params.get("litellm_overhead_time_ms")
-            and route_type not in ("acompletion", "completion")
-        ):
+        if not _hidden_params.get("litellm_overhead_time_ms") and route_type not in ("acompletion", "completion"):
             end_time = datetime.now()
             _logging_obj = self.data.get("litellm_logging_obj")
             if _logging_obj is not None:
