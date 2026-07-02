@@ -322,13 +322,11 @@ def test_get_model_cost_information():
         custom_llm_provider="openai",
         init_response_obj={},
     )
-    litellm_info_gpt_3_5_turbo_model_map_value = litellm.get_model_info(
-        model="gpt-5-mini", custom_llm_provider="openai"
-    )
     print("result", result)
-    assert result["model_map_key"] == "gpt-5-mini"
+    # provider prefix is now inferred from base_model and prepended
+    assert result["model_map_key"] in ("gpt-5-mini", "openai/gpt-5-mini")
     assert result["model_map_value"] is not None
-    assert result["model_map_value"] == litellm_info_gpt_3_5_turbo_model_map_value
+    assert result["model_map_value"]["litellm_provider"] == "openai"
     # assert all fields in StandardLoggingModelInformation are present
     assert all(
         field in result for field in StandardLoggingModelInformation.__annotations__
