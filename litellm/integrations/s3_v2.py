@@ -323,7 +323,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Calculate SHA256 hash of the content
             content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
-            content_md5 = base64.b64encode(hashlib.md5(json_string.encode("utf-8")).digest()).decode()
+            content_md5 = base64.b64encode(
+                hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
+            ).decode()
 
             # Prepare the request
             headers = {
@@ -496,7 +498,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Calculate SHA256 hash of the content
             content_hash = hashlib.sha256(json_string.encode("utf-8")).hexdigest()
-            content_md5 = base64.b64encode(hashlib.md5(json_string.encode("utf-8")).digest()).decode()
+            content_md5 = base64.b64encode(
+                hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
+            ).decode()
 
             # Prepare the request
             headers = {
