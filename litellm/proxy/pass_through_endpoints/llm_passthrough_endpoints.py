@@ -6,10 +6,12 @@ Provider-specific Pass-Through Endpoints
 Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
-from typing import TYPE_CHECKING, Any, Callable, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -730,7 +732,7 @@ async def handle_bedrock_passthrough_router_model(
     user_max_tokens: int | None,
     user_api_base: str | None,
     version: str | None,
-) -> Union[Response, StreamingResponse]:
+) -> Response | StreamingResponse:
     """
     Handle Bedrock passthrough for router models (models defined in config.yaml).
 
@@ -2421,7 +2423,7 @@ async def handle_gigachat_passthrough_router_model(
     user_max_tokens: int | None,
     user_api_base: str | None,
     version: str | None,
-) -> Union[Response, StreamingResponse]:
+) -> Response | StreamingResponse:
     """
     Handle Gigachat passthrough for router models (models defined in config.yaml).
 

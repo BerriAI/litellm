@@ -5,8 +5,9 @@ Transforms OpenAI /v1/embeddings format to GigaChat format.
 API Documentation: https://developers.sber.ru/docs/ru/gigachat/api/reference/rest/post-embeddings
 """
 
+from __future__ import annotations
+
 import types
-from typing import Union
 
 import httpx
 
@@ -200,9 +201,7 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         }
         return {**default_headers, **headers}
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """Return GigaChat-specific error class."""
         return GigaChatEmbeddingError(
             status_code=status_code,

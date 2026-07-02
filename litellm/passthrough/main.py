@@ -2,6 +2,8 @@
 This module is used to pass through requests to the LLM APIs.
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextvars
 from functools import partial
@@ -12,8 +14,6 @@ from typing import (
     Coroutine,
     Generator,
     List,
-    Optional,
-    Union,
     cast,
 )
 
@@ -239,9 +239,9 @@ async def allm_passthrough_route(
     json: Any | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
-    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
-) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
+) -> httpx.Response | AsyncGenerator[Any, Any]:
     """
     Async: Reranks a list of documents based on their relevance to the query
     """
@@ -260,7 +260,7 @@ async def allm_passthrough_route(
         from litellm.utils import ProviderConfigManager
 
         provider_config = cast(
-            Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+            "BasePassthroughConfig" | None, kwargs.get("provider_config")
         ) or ProviderConfigManager.get_provider_passthrough_config(
             provider=LlmProviders(custom_llm_provider),
             model=model,
@@ -328,7 +328,7 @@ async def allm_passthrough_route(
         if resolved_custom_llm_provider:
             try:
                 provider_config = cast(
-                    Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+                    "BasePassthroughConfig" | None, kwargs.get("provider_config")
                 ) or ProviderConfigManager.get_provider_passthrough_config(
                     provider=LlmProviders(resolved_custom_llm_provider),
                     model=model,
@@ -365,15 +365,15 @@ def llm_passthrough_route(
     json: Any | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
-    client: Union[HTTPHandler, AsyncHTTPHandler] | None = None,
+    client: HTTPHandler | AsyncHTTPHandler | None = None,
     **kwargs,
-) -> Union[
-    httpx.Response,
-    Coroutine[Any, Any, httpx.Response],
-    Coroutine[Any, Any, Union[httpx.Response, AsyncGenerator[Any, Any]]],
-    Generator[Any, Any, Any],
-    AsyncGenerator[Any, Any],
-]:
+) -> (
+    httpx.Response
+    | Coroutine[Any, Any, httpx.Response]
+    | Coroutine[Any, Any, httpx.Response | AsyncGenerator[Any, Any]]
+    | Generator[Any, Any, Any]
+    | AsyncGenerator[Any, Any]
+):
     """
     Pass through requests to the LLM APIs.
 
@@ -432,7 +432,7 @@ def llm_passthrough_route(
     )
 
     provider_config = cast(
-        Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+        "BasePassthroughConfig" | None, kwargs.get("provider_config")
     ) or ProviderConfigManager.get_provider_passthrough_config(
         provider=LlmProviders(custom_llm_provider),
         model=model,
@@ -547,12 +547,12 @@ def llm_passthrough_route(
 
 
 async def _async_passthrough_request(
-    client: Union[HTTPHandler, AsyncHTTPHandler],
+    client: HTTPHandler | AsyncHTTPHandler,
     request: httpx.Request,
     is_streaming_request: bool,
     litellm_logging_obj: "LiteLLMLoggingObj",
     provider_config: "BasePassthroughConfig",
-) -> Union[httpx.Response, AsyncGenerator[Any, Any]]:
+) -> httpx.Response | AsyncGenerator[Any, Any]:
     """
     Handle async passthrough requests.
     Uses async client to send request and properly handles streaming.
