@@ -19,6 +19,7 @@ from litellm.integrations.otel.mappers.utils import (
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPListToolsSpanData,
     MCPToolCallSpanData,
     ServiceSpanData,
     ToolDefinition,
@@ -100,6 +101,15 @@ class GenAIMapper:
         f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,
     }
 
+    # A tools/list discovery span: the method and session only. Per semconv it must
+    # NOT carry gen_ai.operation.name (execute_tool) or gen_ai.tool.name — those are
+    # for tool calls, and listing executes no tool.
+    _MCP_LIST_ATTRS: dict[str, Callable[[MCPListToolsSpanData], AttrValue | None]] = {
+        MCP.METHOD_NAME: lambda d: d.method,
+        MCP.SESSION_ID: lambda d: d.session_id,
+        LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
+    }
+
     _GUARDRAIL_ATTRS: dict[str, Callable[[GuardrailSpanData], AttrValue | None]] = {
         LiteLLM.GUARDRAIL_NAME: lambda d: d.guardrail_name,
         LiteLLM.GUARDRAIL_MODE: lambda d: d.mode,
@@ -130,6 +140,8 @@ class GenAIMapper:
                 return self._llm_call(data)
             case MCPToolCallSpanData():
                 return collect(self._MCP_ATTRS, data)
+            case MCPListToolsSpanData():
+                return collect(self._MCP_LIST_ATTRS, data)
             case GuardrailSpanData():
                 return self._guardrail(data)
             case ServiceSpanData():
