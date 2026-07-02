@@ -1548,3 +1548,105 @@ def test_ProxyConfig__update_config_fields_invalid_param_raises():
     with pytest.raises(Exception):
         # Missing required arg.
         pc._update_config_fields(current_config={}, param_name="general_settings")  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_with_misspelled_key_backward_compatibility_default(
+    tmp_path, monkeypatch
+):
+    """
+    Ensure backward compatibility (by default, strict_config_validation is false / not set).
+    Loading a configuration with misspelled keys should NOT raise ValueError.
+
+    This test will fail on the current code because it raises ValueError unconditionally.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("LITELLM_STRICT_CONFIG_VALIDATION", raising=False)
+    monkeypatch.delenv("STRICT_CONFIG_VALIDATION", raising=False)
+
+    typos = [
+        "general_setting",
+        "model_detail",
+        "model_details",
+        "litellm_setting",
+        "router_setting",
+    ]
+
+    for typo in typos:
+        f = tmp_path / f"config_with_{typo}.yaml"
+        f.write_text(f"""
+model_list: []
+{typo}: {{}}
+""")
+        pc = ProxyConfig()
+        # In expected backward-compatible default behavior, this should NOT raise ValueError
+        await pc.load_config(router=None, config_file_path=str(f))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "config_content",
+    [
+        # strict_config_validation in general_settings
+        """
+model_list: []
+general_settings:
+  strict_config_validation: true
+general_setting: {}
+""",
+        # strict_config_validation in litellm_settings
+        """
+model_list: []
+litellm_settings:
+  strict_config_validation: true
+general_setting: {}
+""",
+    ]
+)
+async def test_ProxyConfig_load_config_with_misspelled_key_strict_validation(
+    config_content, tmp_path, monkeypatch
+):
+    """
+    Ensure that with strict_config_validation set to true (either in general_settings
+    or litellm_settings), a ValueError is raised for misspelled root-level keys.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.delenv("LITELLM_STRICT_CONFIG_VALIDATION", raising=False)
+    monkeypatch.delenv("STRICT_CONFIG_VALIDATION", raising=False)
+
+    f = tmp_path / "strict_config.yaml"
+    f.write_text(config_content)
+    pc = ProxyConfig()
+    with pytest.raises(ValueError) as exc_info:
+        await pc.load_config(router=None, config_file_path=str(f))
+
+    assert "Configuration Error: Invalid root-level key" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_with_misspelled_key_strict_validation_env_var(
+    tmp_path, monkeypatch
+):
+    """
+    Ensure that with strict_config_validation set to true via an environment variable,
+    a ValueError is raised for misspelled root-level keys.
+    """
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setenv("LITELLM_STRICT_CONFIG_VALIDATION", "True")
+
+    f = tmp_path / "strict_env_config.yaml"
+    f.write_text("""
+model_list: []
+general_setting: {}
+""")
+    pc = ProxyConfig()
+    with pytest.raises(ValueError) as exc_info:
+        await pc.load_config(router=None, config_file_path=str(f))
+
+    assert "Configuration Error: Invalid root-level key" in str(exc_info.value)
