@@ -18,6 +18,7 @@ import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
+import ByokFields from "./ByokFields";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
@@ -34,7 +35,13 @@ interface MCPServerEditProps {
   availableAccessGroups: string[];
 }
 
-const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
+const AUTH_TYPES_REQUIRING_AUTH_VALUE = [
+  AUTH_TYPE.API_KEY,
+  AUTH_TYPE.BEARER_TOKEN,
+  AUTH_TYPE.TOKEN,
+  AUTH_TYPE.BASIC,
+  AUTH_TYPE.AUTHORIZATION,
+];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
 export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
@@ -65,6 +72,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
+  const isByokRaw = Form.useWatch("is_byok", form);
+  const isByok = shouldShowAuthValueField && Boolean(isByokRaw);
   const isOAuthAuthType = authType === AUTH_TYPE.OAUTH2;
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
@@ -587,6 +596,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         restValues.transport = "http";
       }
 
+      // BYOK is only valid for static-credential auth types; drop a stale ``true``
+      // (and its metadata) left behind by switching auth_type after toggling it on.
+      const isByokEnabled =
+        AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(restValues.auth_type) && Boolean(restValues.is_byok);
+      restValues.is_byok = isByokEnabled;
+      restValues.byok_description = isByokEnabled ? restValues.byok_description || [] : [];
+      restValues.byok_api_key_help_url = isByokEnabled ? restValues.byok_api_key_help_url || null : null;
+
       // Parse token_validation JSON if provided
       let tokenValidation: Record<string, any> | null = null;
       if (rawTokenValidationJson && rawTokenValidationJson.trim() !== "") {
@@ -670,7 +687,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       };
 
       const includeCredentials =
-        restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
+        !isByokEnabled && restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
@@ -818,11 +835,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   <Select.Option value="bearer_token">Bearer Token</Select.Option>
                   <Select.Option value="token">Token</Select.Option>
                   <Select.Option value="basic">Basic Auth</Select.Option>
+                  <Select.Option value="authorization">Authorization Header</Select.Option>
                   <Select.Option value="oauth2">OAuth</Select.Option>
                   <Select.Option value="aws_sigv4">AWS SigV4 (Bedrock AgentCore MCPs)</Select.Option>
                 </Select>
               </Form.Item>
             )}
+
+            {!isStdioTransport && shouldShowAuthValueField && <ByokFields form={form} />}
 
             {isStdioTransport && (
               <div className="rounded-lg border border-gray-200 p-4 space-y-4">
@@ -884,7 +904,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               </div>
             )}
 
-            {!isStdioTransport && shouldShowAuthValueField && (
+            {!isStdioTransport && shouldShowAuthValueField && !isByok && (
               <Form.Item
                 label={
                   <span className="text-sm font-medium text-gray-700 flex items-center">
