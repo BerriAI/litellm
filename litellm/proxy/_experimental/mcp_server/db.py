@@ -9,6 +9,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+    normalize_token_endpoint_auth_method,
+)
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -1030,20 +1034,21 @@ async def refresh_user_oauth_token(
         )
         return None
 
-    token_data: Dict[str, str] = {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }
-    if client_id:
-        token_data["client_id"] = client_id
-    if client_secret:
-        token_data["client_secret"] = client_secret
-
     try:
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=normalize_token_endpoint_auth_method(getattr(server, "token_endpoint_auth_method", None)),
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        token_data: Dict[str, str] = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            **client_auth.body,
+        }
         async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
         response = await async_client.post(
             token_url,
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/json", **client_auth.headers},
             data=token_data,
         )
         response.raise_for_status()
