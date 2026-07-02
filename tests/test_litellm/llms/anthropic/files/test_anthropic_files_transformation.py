@@ -326,6 +326,20 @@ class TestAnthropicFilesConfig:
         assert url == f"{ANTHROPIC_FILES_API_BASE}/v1/messages/batches/msgbatch_abc123/results"
         assert params == {}
 
+    def test_transform_file_content_request_msgbatch_encodes_path_traversal(self):
+        url, params = self.config.transform_file_content_request(
+            file_content_request={
+                "file_id": "msgbatch_x/../../../v1/messages/batches?limit=1#frag"
+            },
+            optional_params={},
+            litellm_params={},
+        )
+        assert (
+            url
+            == f"{ANTHROPIC_FILES_API_BASE}/v1/messages/batches/msgbatch_x%2F..%2F..%2F..%2Fv1%2Fmessages%2Fbatches%3Flimit%3D1%23frag/results"
+        )
+        assert params == {}
+
     def test_transform_file_content_response(self):
         mock_response = Mock(spec=httpx.Response)
         result = self.config.transform_file_content_response(

@@ -272,8 +272,9 @@ class AnthropicFilesConfig(BaseFilesConfig):
             or ANTHROPIC_FILES_API_BASE
         )
         if file_id and file_id.startswith("msgbatch_"):
+            encoded_batch_id = encode_url_path_segment(file_id, field_name="file_id")
             return (
-                f"{api_base.rstrip('/')}/v1/messages/batches/{file_id}/results",
+                f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}/results",
                 {},
             )
 
