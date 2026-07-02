@@ -683,65 +683,9 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
-def bedrock_converse_supports_strict_tool_schemas(model: str) -> bool:
-    """
-    Claude on Bedrock Converse honours ``strict``/``additionalProperties`` in
-    ``toolSpec``, but Opus 4.7 and 4.8 map onto Bedrock's native Anthropic
-    tool validator (the "custom" tool shape) and reject any ``strict`` key
-    outright, even ``strict: false`` (e.g. from MCP tool expansion), with
-    ``tools.0.custom.strict: Extra inputs are not permitted``.
-
-    Ref: https://github.com/BerriAI/litellm/issues/31582
-    """
-    if not get_bedrock_base_model(model).startswith("anthropic"):
-        return False
-    model_lower = model.lower()
-    unsupported_patterns = (
-        "opus-4-7",
-        "opus_4_7",
-        "opus-4.7",
-        "opus_4.7",
-        "opus-4-8",
-        "opus_4_8",
-        "opus-4.8",
-        "opus_4.8",
-    )
-    return not any(pattern in model_lower for pattern in unsupported_patterns)
-
-
-_CLAUDE_BEDROCK_PARALLEL_TOOL_USE_PATTERNS: tuple[str, ...] = (
-    "sonnet-4.5",
-    "sonnet_4.5",
-    "sonnet-4-5",
-    "sonnet_4_5",
-    "haiku-4.5",
-    "haiku_4.5",
-    "haiku-4-5",
-    "haiku_4_5",
-    "opus-4.5",
-    "opus_4.5",
-    "opus-4-5",
-    "opus_4_5",
-    "sonnet-4.6",
-    "sonnet_4.6",
-    "sonnet-4-6",
-    "sonnet_4_6",
-    "opus-4.6",
-    "opus_4.6",
-    "opus-4-6",
-    "opus_4_6",
-    "opus-4.7",
-    "opus_4.7",
-    "opus-4-7",
-    "opus_4_7",
-    "sonnet-5",
-    "sonnet_5",
-)
-
-
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
-    model_lower = model.lower()
-    return any(pattern in model_lower for pattern in _CLAUDE_BEDROCK_PARALLEL_TOOL_USE_PATTERNS)
+    model_info = litellm.model_cost.get(model) or litellm.model_cost.get(get_bedrock_base_model(model)) or {}
+    return model_info.get("supports_parallel_tool_use_config") is True
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
