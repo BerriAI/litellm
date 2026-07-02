@@ -637,6 +637,10 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     ($0.017/min). The .completed events carry usage {type: duration, seconds: N};
     cost must equal total_seconds * input_cost_per_second.
     """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -667,17 +671,29 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
         results=results
     )
+    logging_obj = Logging(
+        model="gpt-realtime-whisper",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-transcription-cost-breakdown-test",
+        function_id="realtime-transcription-cost-breakdown-test",
+    )
     cost = handle_realtime_stream_cost_calculation(
         results=results,
         combined_usage_object=combined,
         custom_llm_provider="openai",
         litellm_model_name="gpt-realtime-whisper",
+        litellm_logging_obj=logging_obj,
     )
 
     # 90 seconds at $0.017/minute.
     expected = 90.0 * (0.017 / 60)
     assert abs(cost - expected) < 1e-9
     assert cost > 0  # guards against the duration branch being dropped
+    assert logging_obj.cost_breakdown is not None
+    assert abs(logging_obj.cost_breakdown["total_cost"] - cost) < 1e-9
 
 
 def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
