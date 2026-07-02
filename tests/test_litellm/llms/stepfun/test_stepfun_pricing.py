@@ -1,0 +1,79 @@
+import math
+
+import litellm
+from litellm.cost_calculator import cost_per_token
+
+
+def _load_local_model_cost():
+    import os
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+
+def test_stepfun_models_in_model_cost():
+    _load_local_model_cost()
+
+    stepfun_models = [
+        "stepfun/step-3.7-flash",
+        "stepfun/step-3.5-flash",
+        "stepfun/step-3.5-flash-2603",
+        "stepfun/stepaudio-2.5-tts",
+        "stepfun/step-tts-2",
+        "stepfun/stepaudio-2.5-asr",
+        "stepfun/stepaudio-2.5-tts-voice-clone",
+        "stepfun/step-tts-2-voice-clone",
+    ]
+
+    for model in stepfun_models:
+        assert model in litellm.model_cost, f"Model {model} not found in model_cost"
+        assert litellm.model_cost[model]["litellm_provider"] == "stepfun"
+
+
+def test_stepfun_step_35_flash_cost_calculation():
+    _load_local_model_cost()
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="stepfun/step-3.5-flash",
+        prompt_tokens=1000000,
+        completion_tokens=1000000,
+        custom_llm_provider="stepfun",
+    )
+
+    assert math.isclose(prompt_cost, 0.10, rel_tol=1e-6)
+    assert math.isclose(completion_cost, 0.30, rel_tol=1e-6)
+
+
+def test_stepfun_step_37_flash_cost_calculation():
+    _load_local_model_cost()
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="stepfun/step-3.7-flash",
+        prompt_tokens=1000000,
+        completion_tokens=1000000,
+        custom_llm_provider="stepfun",
+    )
+
+    assert math.isclose(prompt_cost, 0.20, rel_tol=1e-6)
+    assert math.isclose(completion_cost, 1.15, rel_tol=1e-6)
+
+
+def test_stepfun_step_35_flash_cache_hit_cost():
+    _load_local_model_cost()
+
+    prompt_cost, _ = cost_per_token(
+        model="stepfun/step-3.5-flash",
+        prompt_tokens=0,
+        completion_tokens=0,
+        cache_read_input_tokens=1000000,
+        custom_llm_provider="stepfun",
+    )
+
+    assert math.isclose(prompt_cost, 0.02, rel_tol=1e-6)
+
+
+def test_stepfun_reasoning_models_support_reasoning():
+    _load_local_model_cost()
+
+    for model in ("stepfun/step-3.5-flash", "stepfun/step-3.5-flash-2603", "stepfun/step-3.7-flash"):
+        assert litellm.model_cost[model]["supports_reasoning"] is True
