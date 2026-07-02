@@ -3,7 +3,7 @@
 import importlib
 import os
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional, cast
+from typing import Any, Dict, List, Literal, Optional, Set, Type, cast
 
 from pydantic import ValidationError
 
@@ -54,7 +54,7 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_llm_as_a_judge,
 }
 
-guardrail_class_registry: dict[str, type[CustomGuardrail]] = {
+guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {
     SupportedGuardrailIntegrations.GRAYSWAN.value: GraySwanGuardrail
 }
 
@@ -220,7 +220,7 @@ class GuardrailRegistry:
     ###########################################################
     ########### In memory management helpers for guardrails ###########
     ############################################################
-    def get_initialized_guardrail_callback(self, guardrail_name: str) -> CustomGuardrail | None:
+    def get_initialized_guardrail_callback(self, guardrail_name: str) -> Optional[CustomGuardrail]:
         """
         Returns the initialized guardrail callback for a given guardrail name
         """
@@ -314,7 +314,7 @@ class GuardrailRegistry:
     @staticmethod
     async def get_all_guardrails_from_db(
         prisma_client: PrismaClient,
-    ) -> list[Guardrail]:
+    ) -> List[Guardrail]:
         """
         Get all active guardrails from the database.
         Only rows with status == "active" are returned (pending_review and rejected are excluded).
@@ -325,7 +325,7 @@ class GuardrailRegistry:
                 order={"created_at": "desc"},
             )
 
-            guardrails: list[Guardrail] = []
+            guardrails: List[Guardrail] = []
             for guardrail in guardrails_from_db:
                 guardrails.append(Guardrail(**(dict(guardrail))))  # type: ignore
 
@@ -333,7 +333,7 @@ class GuardrailRegistry:
         except Exception as e:
             raise Exception(f"Error getting guardrails from DB: {str(e)}")
 
-    async def get_guardrail_by_id_from_db(self, guardrail_id: str, prisma_client: PrismaClient) -> Guardrail | None:
+    async def get_guardrail_by_id_from_db(self, guardrail_id: str, prisma_client: PrismaClient) -> Optional[Guardrail]:
         """
         Get a guardrail by its ID from the database
         """
@@ -349,7 +349,9 @@ class GuardrailRegistry:
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {str(e)}")
 
-    async def get_guardrail_by_name_from_db(self, guardrail_name: str, prisma_client: PrismaClient) -> Guardrail | None:
+    async def get_guardrail_by_name_from_db(
+        self, guardrail_name: str, prisma_client: PrismaClient
+    ) -> Optional[Guardrail]:
         """
         Get a guardrail by its name from the database
         """
@@ -372,17 +374,17 @@ class InMemoryGuardrailHandler:
     """
 
     def __init__(self):
-        self.IN_MEMORY_GUARDRAILS: dict[str, Guardrail] = {}
+        self.IN_MEMORY_GUARDRAILS: Dict[str, Guardrail] = {}
         """
         Guardrail id to Guardrail object mapping
         """
 
-        self.guardrail_id_to_custom_guardrail: dict[str, CustomGuardrail | None] = {}
+        self.guardrail_id_to_custom_guardrail: Dict[str, Optional[CustomGuardrail]] = {}
         """
         Guardrail id to CustomGuardrail object mapping
         """
 
-        self._sources: dict[str, Literal["db", "config"]] = {}
+        self._sources: Dict[str, Literal["db", "config"]] = {}
         """
         Guardrail id to provenance marker. "db" entries are reconciled against
         the DB on each polling tick; "config" entries are owned by proxy_config.yaml
@@ -392,10 +394,10 @@ class InMemoryGuardrailHandler:
     def initialize_guardrail(
         self,
         guardrail: Guardrail,
-        config_file_path: str | None = None,
+        config_file_path: Optional[str] = None,
         llm_router: Optional["Router"] = None,
         source: Literal["db", "config"] = "config",
-    ) -> Guardrail | None:
+    ) -> Optional[Guardrail]:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
 
@@ -411,7 +413,7 @@ class InMemoryGuardrailHandler:
             self._sources[guardrail_id] = source
             return self.IN_MEMORY_GUARDRAILS[guardrail_id]
 
-        custom_guardrail_callback: CustomGuardrail | None = None
+        custom_guardrail_callback: Optional[CustomGuardrail] = None
         litellm_params_data = guardrail["litellm_params"]
         verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
@@ -487,11 +489,11 @@ class InMemoryGuardrailHandler:
 
     def initialize_custom_guardrail(
         self,
-        guardrail: dict,
+        guardrail: Dict,
         guardrail_type: str,
         litellm_params: LitellmParams,
-        config_file_path: str | None = None,
-    ) -> CustomGuardrail | None:
+        config_file_path: Optional[str] = None,
+    ) -> Optional[CustomGuardrail]:
         """
         Initialize a Custom Guardrail from a python file or module path
 
@@ -576,25 +578,25 @@ class InMemoryGuardrailHandler:
 
         litellm.logging_callback_manager.remove_callback_from_all_lists(custom_guardrail_callback)
 
-    def list_in_memory_guardrails(self) -> list[Guardrail]:
+    def list_in_memory_guardrails(self) -> List[Guardrail]:
         """
         List all guardrails in memory
         """
         return list(self.IN_MEMORY_GUARDRAILS.values())
 
-    def get_guardrail_by_id(self, guardrail_id: str) -> Guardrail | None:
+    def get_guardrail_by_id(self, guardrail_id: str) -> Optional[Guardrail]:
         """
         Get a guardrail by its ID from memory
         """
         return self.IN_MEMORY_GUARDRAILS.get(guardrail_id)
 
-    def get_source(self, guardrail_id: str) -> Literal["db", "config"] | None:
+    def get_source(self, guardrail_id: str) -> Optional[Literal["db", "config"]]:
         """
         Return the provenance of an in-memory guardrail.
         """
         return self._sources.get(guardrail_id)
 
-    def reconcile_db_guardrails(self, db_guardrail_ids: set[str]) -> list[str]:
+    def reconcile_db_guardrails(self, db_guardrail_ids: Set[str]) -> List[str]:
         """
         Drop in-memory entries that originated from the DB but are no longer
         present in db_guardrail_ids. Config-loaded guardrails are never touched.
@@ -617,8 +619,8 @@ class InMemoryGuardrailHandler:
 
     @staticmethod
     def _normalize_litellm_params_for_comparison(
-        params: Any | None,
-    ) -> dict[str, Any] | None:
+        params: Optional[Any],
+    ) -> Optional[Dict[str, Any]]:
         """
         Render litellm_params to a canonical dict so an in-memory LitellmParams and
         the raw dict loaded from the DB compare equal when they describe the same
@@ -682,9 +684,9 @@ class InMemoryGuardrailHandler:
     def reinitialize_guardrail(
         self,
         guardrail: Guardrail,
-        config_file_path: str | None = None,
+        config_file_path: Optional[str] = None,
         source: Literal["db", "config"] = "config",
-    ) -> Guardrail | None:
+    ) -> Optional[Guardrail]:
         """
         Force re-initialization of a guardrail even if it exists in memory.
         Removes old callback from litellm.callbacks and creates fresh instance.
@@ -701,7 +703,9 @@ class InMemoryGuardrailHandler:
         # Initialize fresh (will add new callback to litellm.callbacks)
         return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
 
-    def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
+    def sync_guardrail_from_db(
+        self, guardrail: Guardrail, config_file_path: Optional[str] = None
+    ) -> Optional[Guardrail]:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
         This is the method to call during DB polling.

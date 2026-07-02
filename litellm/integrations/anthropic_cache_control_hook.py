@@ -10,7 +10,7 @@ Supported for both `v1/chat/completions` (via the prompt-management hook) and
 """
 
 import copy
-from typing import TYPE_CHECKING, Any, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -39,27 +39,27 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: PromptSpec | None = None,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
-        ignore_prompt_manager_model: bool | None = False,
-        ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Apply cache control directives based on specified injection points.
 
         Returns:
         - model: str - the model to use
-        - messages: list[AllMessageValues] - messages with applied cache controls
+        - messages: List[AllMessageValues] - messages with applied cache controls
         - non_default_params: dict - params with any global cache controls
         """
         # Extract cache control injection points
-        injection_points: list[CacheControlInjectionPoint] = non_default_params.pop(
+        injection_points: List[CacheControlInjectionPoint] = non_default_params.pop(
             "cache_control_injection_points", []
         )
         if not injection_points:
@@ -69,8 +69,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         processed_messages = copy.deepcopy(messages)
 
         # Separate message-level and non-message-level injection points
-        message_points: list[CacheControlMessageInjectionPoint] = []
-        remaining_points: list[CacheControlInjectionPoint] = []
+        message_points: List[CacheControlMessageInjectionPoint] = []
+        remaining_points: List[CacheControlInjectionPoint] = []
         for point in injection_points:
             if point.get("location") == "message":
                 message_points.append(cast(CacheControlMessageInjectionPoint, point))
@@ -97,10 +97,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _apply_message_injections(
-        points: list[CacheControlMessageInjectionPoint],
-        messages: list[AllMessageValues],
+        points: List[CacheControlMessageInjectionPoint],
+        messages: List[AllMessageValues],
         max_blocks: int,
-    ) -> list[AllMessageValues]:
+    ) -> List[AllMessageValues]:
         """Apply message-level cache control injection points in order.
 
         Anthropic allows at most ``MAX_CACHE_CONTROL_BLOCKS`` cache_control
@@ -149,11 +149,11 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _resolve_target_indices(
-        point: CacheControlMessageInjectionPoint, messages: list[AllMessageValues]
-    ) -> list[int]:
+        point: CacheControlMessageInjectionPoint, messages: List[AllMessageValues]
+    ) -> List[int]:
         """Resolve which message indices an injection point targets."""
-        _targetted_index: Union[int, str] | None = point.get("index", None)
-        targetted_index: int | None = None
+        _targetted_index: Optional[Union[int, str]] = point.get("index", None)
+        targetted_index: Optional[int] = None
         if isinstance(_targetted_index, str):
             try:
                 targetted_index = int(_targetted_index)
@@ -230,10 +230,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def apply_to_anthropic_messages_request(
-        messages: list[dict],
+        messages: List[Dict],
         system: str | list | None,
-        injection_points: list[CacheControlInjectionPoint],
-    ) -> tuple[list[dict], str | list | None, list[CacheControlInjectionPoint]]:
+        injection_points: List[CacheControlInjectionPoint],
+    ) -> Tuple[List[Dict], str | list | None, List[CacheControlInjectionPoint]]:
         """Apply cache control injection for the Anthropic-native v1/messages endpoint.
 
         Returns (messages, system, remaining_non_message_points).
@@ -241,12 +241,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return messages, system, []
 
-        processed_messages: list[dict] = copy.deepcopy(messages)
+        processed_messages: List[Dict] = copy.deepcopy(messages)
         processed_system = copy.deepcopy(system) if system is not None else None
 
-        message_points: list[CacheControlMessageInjectionPoint] = []
-        system_points: list[CacheControlMessageInjectionPoint] = []
-        remaining_points: list[CacheControlInjectionPoint] = []
+        message_points: List[CacheControlMessageInjectionPoint] = []
+        system_points: List[CacheControlMessageInjectionPoint] = []
+        remaining_points: List[CacheControlInjectionPoint] = []
 
         for point in injection_points:
             if point.get("location") == "message":
@@ -290,7 +290,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         processed_messages = AnthropicCacheControlHook._apply_message_injections(
             points=message_points,
-            messages=cast(list[AllMessageValues], processed_messages),
+            messages=cast(List[AllMessageValues], processed_messages),
             max_blocks=max_blocks - used_blocks,
         )
 
@@ -298,10 +298,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def maybe_inject_cache_control(
-        messages: list[dict],
+        messages: List[Dict],
         system: str | list | None,
-        kwargs: dict[str, Any],
-    ) -> tuple[list[dict], str | list | None]:
+        kwargs: Dict[str, Any],
+    ) -> Tuple[List[Dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
 
         Pops the key from kwargs; if remaining (non-message) points exist they
@@ -327,8 +327,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: str | None,
-        prompt_spec: PromptSpec | None,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         """Always return False since this is not a true prompt management system."""
@@ -336,12 +336,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     def _compile_prompt_helper(
         self,
-        prompt_id: str | None,
-        prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         """Not used - this hook only modifies messages, doesn't fetch prompts."""
         return PromptManagementClient(
@@ -354,12 +354,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     async def async_compile_prompt_helper(
         self,
-        prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
-        prompt_spec: PromptSpec | None = None,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
     ) -> PromptManagementClient:
         """Not used - this hook only modifies messages, doesn't fetch prompts."""
         return self._compile_prompt_helper(
@@ -374,19 +374,19 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     async def async_get_chat_completion_prompt(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: List[AllMessageValues],
         non_default_params: dict,
-        prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
-        prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
-        prompt_label: str | None = None,
-        prompt_version: int | None = None,
-        ignore_prompt_manager_model: bool | None = False,
-        ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+        prompt_spec: Optional[PromptSpec] = None,
+        tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
         """Async version - delegates to sync since no async operations needed."""
         return self.get_chat_completion_prompt(
             model=model,
@@ -403,15 +403,15 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
     @staticmethod
-    def should_use_anthropic_cache_control_hook(non_default_params: dict) -> bool:
+    def should_use_anthropic_cache_control_hook(non_default_params: Dict) -> bool:
         if non_default_params.get("cache_control_injection_points", None):
             return True
         return False
 
     @staticmethod
     def get_custom_logger_for_anthropic_cache_control_hook(
-        non_default_params: dict,
-    ) -> CustomLogger | None:
+        non_default_params: Dict,
+    ) -> Optional[CustomLogger]:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
         )
