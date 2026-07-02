@@ -654,29 +654,7 @@ _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS = frozenset(
 )
 
 
-_EXTRA_SECRET_MASK = "REDACTED"
-
-
-def _redact_config_dict_for_logging(data: dict[str, object]) -> dict[str, object]:
-    """Mask secret-bearing entries in a proxy config-shaped dict.
-
-    Combines the segment-matching masker (catches `master_key`, `api_key`,
-    `*_token`, etc.) with an explicit whole-value replacement for the
-    URL/webhook fields that embed credentials but do not contain any
-    sensitive-pattern segment (e.g. `database_url` splits into
-    `['database', 'url']`, so segment matching misses it). The whole-value
-    replacement covers non-string shapes (`alert_to_webhook_url` is a dict,
-    `pass_through_endpoints` is a list), which the string-only
-    `mask_sensitive_keys` helper would otherwise pass through unchanged.
-    """
-    segment_masked = SENSITIVE_DATA_MASKER.mask_dict(data)
-    return {
-        key: _EXTRA_SECRET_MASK if key in _EXTRA_SECRET_GENERAL_SETTINGS_FIELDS and value is not None else value
-        for key, value in segment_masked.items()
-    }
-
-
-def _redact_worker_config_for_logging(worker_config: str | dict[str, object] | None) -> str | dict[str, object] | None:
+def _redact_worker_config_for_logging(worker_config: str | dict[str, JsonValue] | None) -> JsonValue:
     """Mask sensitive fields in the worker config before it enters a log record.
 
     `worker_config` reaches `proxy_startup_event` as either the JSON blob
@@ -690,10 +668,10 @@ def _redact_worker_config_for_logging(worker_config: str | dict[str, object] | N
     if worker_config is None:
         return None
     if isinstance(worker_config, dict):
-        return _redact_config_dict_for_logging(worker_config)
+        return _redact_secret_values_in_obj(worker_config)
     parsed = safe_json_loads(worker_config, default=None)
     if isinstance(parsed, dict):
-        return safe_dumps(_redact_config_dict_for_logging(parsed))
+        return safe_dumps(_redact_secret_values_in_obj(parsed))
     return worker_config
 
 
@@ -4333,7 +4311,9 @@ class ProxyConfig:
                             raise Exception(
                                 f"team_id missing from default_team_settings at index={idx}\npassed in value={type(team_setting)}"
                             )
-                    verbose_proxy_logger.debug(f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}")
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, value, is_full_admin=False)}{reset_color_code}"
+                    )
                     setattr(litellm, key, value)
                 elif key == "upperbound_key_generate_params":
                     if value is not None and isinstance(value, dict):
@@ -4348,7 +4328,9 @@ class ProxyConfig:
                     litellm._turn_on_json()
                     verbose_proxy_logger.debug(f"{blue_color_code} Enabled JSON logging via config{reset_color_code}")
                 else:
-                    verbose_proxy_logger.debug(f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}")
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} setting litellm.{key}={_redact_general_setting_value(key, value, is_full_admin=False)}{reset_color_code}"
+                    )
                     setattr(litellm, key, value)
                     if key == "request_timeout":
                         litellm.request_timeout_explicitly_set = True
@@ -5706,7 +5688,11 @@ class ProxyConfig:
 
             param_name = getattr(response, "param_name", None)
             param_value = getattr(response, "param_value", None)
-            verbose_proxy_logger.debug(f"param_name={param_name}, param_value={param_value}")
+            verbose_proxy_logger.debug(
+                "param_name=%s, param_value=%s",
+                param_name,
+                _redact_secret_values_in_obj(param_value) if isinstance(param_value, (dict, list)) else param_value,
+            )
 
             if param_name is not None and param_value is not None:
                 config = self._update_config_fields(
