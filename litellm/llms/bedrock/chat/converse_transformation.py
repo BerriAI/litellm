@@ -76,6 +76,7 @@ from litellm.utils import (
 from ..common_utils import (
     BedrockError,
     BedrockModelInfo,
+    bedrock_converse_supports_parallel_tool_use_config,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_claude_4_5_on_bedrock,
@@ -1251,7 +1252,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Handle parallel_tool_calls configuration
         parallel_tool_use_config = additional_request_params.pop("_parallel_tool_use_config", None)
-        if parallel_tool_use_config is not None and is_claude_4_5_on_bedrock(model):
+        if parallel_tool_use_config is not None and bedrock_converse_supports_parallel_tool_use_config(model):
             for key, value in parallel_tool_use_config.items():
                 if (
                     key in additional_request_params
@@ -1537,7 +1538,7 @@ class AmazonConverseConfig(BaseConfig):
             for point in cache_injection_points:
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)
-                    bedrock_tools.append(ToolBlock(cachePoint=cache_point))
+                    bedrock_tools.append({"cachePoint": cache_point})
                     break
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None

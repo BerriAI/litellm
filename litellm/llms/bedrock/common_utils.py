@@ -709,6 +709,39 @@ def bedrock_converse_supports_strict_tool_schemas(model: str) -> bool:
     return not any(pattern in model_lower for pattern in unsupported_patterns)
 
 
+_CLAUDE_BEDROCK_PARALLEL_TOOL_USE_PATTERNS: tuple[str, ...] = (
+    "sonnet-4.5",
+    "sonnet_4.5",
+    "sonnet-4-5",
+    "sonnet_4_5",
+    "haiku-4.5",
+    "haiku_4.5",
+    "haiku-4-5",
+    "haiku_4_5",
+    "opus-4.5",
+    "opus_4.5",
+    "opus-4-5",
+    "opus_4_5",
+    "sonnet-4.6",
+    "sonnet_4.6",
+    "sonnet-4-6",
+    "sonnet_4_6",
+    "opus-4.6",
+    "opus_4.6",
+    "opus-4-6",
+    "opus_4_6",
+    "opus-4.7",
+    "opus_4.7",
+    "opus-4-7",
+    "opus_4_7",
+)
+
+
+def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
+    model_lower = model.lower()
+    return any(pattern in model_lower for pattern in _CLAUDE_BEDROCK_PARALLEL_TOOL_USE_PATTERNS)
+
+
 def is_claude_4_5_on_bedrock(model: str) -> bool:
     """
     Check if the model supports Bedrock prompt caching with an extended '1h' TTL

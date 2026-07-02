@@ -4130,6 +4130,34 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
 
+def test_parallel_tool_calls_newer_model_without_ttl_pricing_adds_disable_flag():
+    config = AmazonConverseConfig()
+    model = "anthropic.claude-opus-4-7-unlisted-v1:0"
+    messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
+
+    optional_params = config.map_openai_params(
+        non_default_params={"parallel_tool_calls": False, "tools": _TOOL_PARAM},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    request_data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert (
+        request_data["additionalModelRequestFields"]["tool_choice"][
+            "disable_parallel_tool_use"
+        ]
+        is True
+    )
+
+
 def test_parallel_tool_calls_older_model_drops_disable_flag():
     """Older Claude models (pre-4.5) must NOT receive disable_parallel_tool_use — Bedrock rejects it."""
     config = AmazonConverseConfig()
