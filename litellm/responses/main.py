@@ -4,6 +4,7 @@ from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Coroutine,
     Dict,
     Iterable,
@@ -858,6 +859,205 @@ def _responses_try_dispatch_emulated_file_search(
     )
 
 
+def _emulate_or_reraise_primary(emulate_fn, stamp_fn, primary_exc):
+    """Sync: emulate via chat completions; if that also fails, re-raise the
+    primary surface's original error (clearer than a chat-emulation error)."""
+    try:
+        return stamp_fn(emulate_fn())
+    except Exception:
+        if primary_exc is not None:
+            raise primary_exc
+        raise
+
+
+async def _aemulate_or_reraise_primary(emulate_fn, primary_exc):
+    """Async counterpart of :func:`_emulate_or_reraise_primary`."""
+    try:
+        res = emulate_fn()
+        if asyncio.iscoroutine(res):
+            res = await res
+        return res
+    except Exception:
+        if primary_exc is not None:
+            raise primary_exc
+        raise
+
+
+def _run_responses_surface_chain_sync(
+    *,
+    configs_to_try: list[BaseResponsesAPIConfig],
+    run_config: Callable[[BaseResponsesAPIConfig], Any],
+    stamp_fn: Callable[[Any], Any],
+    emulate_fn: Callable[[], Any],
+    should_try_next: Callable[[Exception], bool],
+):
+    """Try each responses surface in order; on a fall-through-eligible error advance
+    to the next surface, else raise. Emulate via chat-completions if the chain is
+    exhausted. Extracted from ``_execute_responses_with_surface_fallback`` to keep
+    that function's complexity within the strict-lint budget."""
+    primary_exc: Optional[Exception] = None
+    for cfg in configs_to_try:
+        try:
+            return stamp_fn(run_config(cfg))
+        except Exception as inner_exc:
+            primary_exc = primary_exc or inner_exc
+            if should_try_next(inner_exc):
+                continue
+            raise
+    return _emulate_or_reraise_primary(emulate_fn, stamp_fn, primary_exc)
+
+
+async def _run_responses_surface_chain_async(
+    *,
+    configs_to_try: list[BaseResponsesAPIConfig],
+    run_config: Callable[[BaseResponsesAPIConfig], Any],
+    emulate_fn: Callable[[], Any],
+    should_try_next: Callable[[Exception], bool],
+):
+    """Async variant of :func:`_run_responses_surface_chain_sync`. Async callers
+    (``aresponses``) do their own response-id stamping, so no stamping happens here.
+    The handler returns a coroutine for real async calls but may return a plain value
+    (e.g. a mocked/sync handler), so only await when awaitable."""
+    primary_exc: Optional[Exception] = None
+    for cfg in configs_to_try:
+        try:
+            res = run_config(cfg)
+            if asyncio.iscoroutine(res):
+                res = await res
+            return res
+        except Exception as inner_exc:
+            primary_exc = primary_exc or inner_exc
+            if should_try_next(inner_exc):
+                continue
+            raise
+    return await _aemulate_or_reraise_primary(emulate_fn, primary_exc)
+
+
+def _execute_responses_with_surface_fallback(
+    *,
+    responses_api_provider_config: BaseResponsesAPIConfig,
+    model: str,
+    input: str | ResponseInputParam,
+    response_api_optional_params: Any,
+    allowed_openai_params: Any,
+    custom_llm_provider: str,
+    litellm_params: Any,
+    litellm_logging_obj: Any,
+    litellm_call_id: Any,
+    user: Any,
+    stream: Optional[bool],
+    extra_headers: Any,
+    extra_body: Any,
+    timeout: Any,
+    request_timeout: Any,
+    _is_async: bool,
+    kwargs: dict,
+):
+    """Run a Responses API request, trying the provider's surface-fallback chain.
+
+    Provider-agnostic: a provider opts in by returning a non-empty ordered chain
+    from ``get_responses_surface_fallbacks()``; we then try each surface in turn
+    (retrying the next one when ``should_fallback_on_responses_error()`` is True)
+    and, if the whole chain is exhausted, fall through to chat-completions
+    emulation. The default ``[]`` preserves single-config behavior for every other
+    provider. Streaming uses the primary surface only.
+    """
+    surface_fallback_chain: list[BaseResponsesAPIConfig] = (
+        responses_api_provider_config.get_responses_surface_fallbacks(model) if not stream else []
+    )
+    if surface_fallback_chain:
+        configs_to_try = surface_fallback_chain
+        use_surface_fallback = True
+    else:
+        configs_to_try = [responses_api_provider_config]
+        use_surface_fallback = False
+
+    def _run_responses_config(cfg: BaseResponsesAPIConfig):
+        _params: dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+            model=model,
+            responses_api_provider_config=cfg,
+            response_api_optional_params=response_api_optional_params,
+            allowed_openai_params=allowed_openai_params,
+        )
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
+            model=model,
+            user=user,
+            optional_params=dict(_params),
+            litellm_params={
+                **_params,
+                "aresponses": _is_async,
+                "litellm_call_id": litellm_call_id,
+                "model_info": kwargs.get("model_info"),
+                "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
+                "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+        return base_llm_http_handler.response_api_handler(
+            model=model,
+            input=input,
+            responses_api_provider_config=cfg,
+            response_api_optional_request_params=_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout or request_timeout,
+            _is_async=_is_async,
+            client=kwargs.get("client"),
+            fake_stream=cfg.should_fake_stream(model=model, stream=stream, custom_llm_provider=custom_llm_provider),
+            litellm_metadata=kwargs.get("litellm_metadata", {}),
+            shared_session=kwargs.get("shared_session"),
+        )
+
+    def _emulate_via_chat_completions():
+        return litellm_completion_transformation_handler.response_api_handler(
+            model=model,
+            input=input,
+            responses_api_request=response_api_optional_params,
+            custom_llm_provider=custom_llm_provider,
+            _is_async=_is_async,
+            stream=stream,
+            extra_headers=extra_headers,
+            extra_body=extra_body,
+            timeout=timeout if timeout is not None else request_timeout,
+            **kwargs,
+        )
+
+    def _stamp_response(response):
+        # Update the responses_api_response_id with the model_id and stamp
+        # custom_llm_provider (mirrors litellm/main.py for chat completions).
+        if isinstance(response, ResponsesAPIResponse):
+            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+                responses_api_response=response,
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                custom_llm_provider=custom_llm_provider,
+            )
+            response._hidden_params["custom_llm_provider"] = custom_llm_provider
+        return response
+
+    def _should_try_next_surface(exc: Exception) -> bool:
+        return use_surface_fallback and responses_api_provider_config.should_fallback_on_responses_error(exc)
+
+    if _is_async:
+        return _run_responses_surface_chain_async(
+            configs_to_try=configs_to_try,
+            run_config=_run_responses_config,
+            emulate_fn=_emulate_via_chat_completions,
+            should_try_next=_should_try_next_surface,
+        )
+
+    return _run_responses_surface_chain_sync(
+        configs_to_try=configs_to_try,
+        run_config=_run_responses_config,
+        stamp_fn=_stamp_response,
+        emulate_fn=_emulate_via_chat_completions,
+        should_try_next=_should_try_next_surface,
+    )
+
+
 @client
 def responses(
     input: Union[str, ResponseInputParam],
@@ -1062,30 +1262,6 @@ def responses(
                 **kwargs,
             )
 
-        # Get optional parameters for the responses API
-        responses_api_request_params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_params=response_api_optional_params,
-            allowed_openai_params=allowed_openai_params,
-        )
-
-        litellm_logging_obj.update_from_kwargs(
-            kwargs=kwargs,
-            model=model,
-            user=user,
-            optional_params=dict(responses_api_request_params),
-            litellm_params={
-                **responses_api_request_params,
-                "aresponses": _is_async,
-                "litellm_call_id": litellm_call_id,
-                "model_info": kwargs.get("model_info"),
-                "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
-                "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
-            },
-            custom_llm_provider=custom_llm_provider,
-        )
-
         # Decode any litellm-encoded encrypted-content item IDs back to their original IDs
         input = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(input)
 
@@ -1093,38 +1269,25 @@ def responses(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        response = base_llm_http_handler.response_api_handler(
+        return _execute_responses_with_surface_fallback(
+            responses_api_provider_config=responses_api_provider_config,
             model=model,
             input=input,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_request_params=responses_api_request_params,
+            response_api_optional_params=response_api_optional_params,
+            allowed_openai_params=allowed_openai_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
+            litellm_logging_obj=litellm_logging_obj,
+            litellm_call_id=litellm_call_id,
+            user=user,
+            stream=stream,
             extra_headers=extra_headers,
             extra_body=extra_body,
-            timeout=timeout or request_timeout,
+            timeout=timeout,
+            request_timeout=request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
-            fake_stream=responses_api_provider_config.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
-            shared_session=kwargs.get("shared_session"),
+            kwargs=kwargs,
         )
-
-        # Update the responses_api_response_id with the model_id
-        if isinstance(response, ResponsesAPIResponse):
-            response = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
-                responses_api_response=response,
-                litellm_metadata=kwargs.get("litellm_metadata", {}),
-                custom_llm_provider=custom_llm_provider,
-            )
-            # Stamp custom_llm_provider so callbacks can identify the provider
-            # (mirrors litellm/main.py:1371 for chat completions)
-            response._hidden_params["custom_llm_provider"] = custom_llm_provider
-
-        return response
     except Exception as e:
         raise litellm.exception_type(
             model=model,

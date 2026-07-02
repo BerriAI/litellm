@@ -26,6 +26,7 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         aembedding=None,
         custom_endpoint: Optional[bool] = None,
         headers: Optional[dict] = None,
+        litellm_params: Optional[dict] = None,
     ) -> EmbeddingResponse:
         # Check for custom user agent in optional_params or environment
         # This allows partners building on LiteLLM to set their own telemetry
@@ -37,6 +38,8 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
             or os.getenv("DATABRICKS_USER_AGENT")
         )
 
+        databricks_profile = optional_params.pop("databricks_profile", None)
+
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
             api_key=api_key,
@@ -44,6 +47,10 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
             custom_endpoint=custom_endpoint,
             headers=headers,
             custom_user_agent=custom_user_agent,
+            databricks_profile=databricks_profile,
+        )
+        headers = self.apply_request_tags_header(
+            headers, optional_params=optional_params, litellm_params=litellm_params
         )
         return super().embedding(
             model=model,

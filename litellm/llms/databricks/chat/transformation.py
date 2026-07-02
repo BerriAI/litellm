@@ -223,6 +223,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             or os.getenv("DATABRICKS_USER_AGENT")
         )
 
+        # Named CLI profile (popped so it never leaks into the request body).
+        databricks_profile = optional_params.pop("databricks_profile", None) or litellm_params.get("databricks_profile")
+
         api_base, headers = self.databricks_validate_environment(
             api_base=api_base,
             api_key=api_key,
@@ -230,9 +233,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             custom_endpoint=False,
             headers=headers,
             custom_user_agent=custom_user_agent,
+            databricks_profile=databricks_profile,
         )
         # Ensure Content-Type header is set
         headers["Content-Type"] = "application/json"
+        # AI Gateway usage tagging (system.ai_gateway.usage)
+        headers = self.apply_request_tags_header(
+            headers, optional_params=optional_params, litellm_params=litellm_params
+        )
         return headers
 
     def get_complete_url(
@@ -244,9 +252,37 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = self._get_api_base(api_base)
-        complete_url = f"{api_base}/chat/completions"
-        return complete_url
+        from ..ai_gateway import (
+            build_chat_url,
+            has_explicit_custom_path,
+            parse_use_ai_gateway_flag,
+            resolve_surface,
+            workspace_host_from_base,
+        )
+
+        # `user_api_base` is the caller-provided base (param / litellm.api_base /
+        # DATABRICKS_API_BASE) before any SDK-derived "/serving-endpoints" default.
+        # Only this counts as an explicit surface choice for strict-Q4 handling.
+        user_api_base = api_base
+
+        # An explicit base with a custom (non-surface) path is opaque: use it
+        # verbatim, exactly like the legacy connector — never rewrite to gateway.
+        if user_api_base and has_explicit_custom_path(user_api_base):
+            return f"{user_api_base.rstrip('/')}/chat/completions"
+
+        resolved_base = self._get_api_base(api_base)
+        host = workspace_host_from_base(resolved_base)
+
+        # Pure, no-network surface resolution: optimistic gateway-first unless this
+        # host is already cached as gateway-absent (learned reactively from a prior
+        # request — see `databricks_chat_completion_with_surface_fallback`).
+        use_ai_gateway = parse_use_ai_gateway_flag(litellm_params, optional_params)
+        surface = resolve_surface(
+            api_base=user_api_base,
+            use_ai_gateway=use_ai_gateway,
+            host=host,
+        )
+        return build_chat_url(host, surface)
 
     def get_supported_openai_params(self, model: Optional[str] = None) -> list:
         return [

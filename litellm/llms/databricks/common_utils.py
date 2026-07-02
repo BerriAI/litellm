@@ -7,7 +7,15 @@ for the Databricks LLM provider integration.
 Authentication priority:
 1. OAuth M2M (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) - Recommended for production
 2. PAT (DATABRICKS_API_KEY) - Supported for development
-3. Databricks SDK automatic auth - Fallback (uses unified auth)
+3. PROFILE (databricks_profile / DATABRICKS_CONFIG_PROFILE) - named ~/.databrickscfg profile
+4. Databricks SDK automatic auth - Fallback (unified auth chain)
+
+Note on U2M (browser OAuth): litellm is a stateless library that resolves auth
+headers per request, so it does NOT run an interactive PKCE browser flow inline.
+U2M is delivered through the Databricks SDK (the PROFILE and UNIFIED paths): once a
+user runs ``databricks auth login [--profile X]``, the SDK caches and auto-refreshes
+the U2M OAuth token, and ``WorkspaceClient(profile=X)`` / ``WorkspaceClient()`` mints
+the Bearer header from it.
 """
 
 import os
@@ -176,6 +184,85 @@ class DatabricksBase:
         # Default: just litellm
         return f"litellm/{version}"
 
+    @staticmethod
+    def build_request_tags_header(
+        optional_params: Optional[dict],
+        litellm_params: Optional[Any],
+    ) -> Optional[str]:
+        """Build the ``Databricks-Ai-Gateway-Request-Tags`` header value.
+
+        The header is a JSON object of string->string, logged by the AI Gateway to
+        ``system.ai_gateway.usage`` / inference tables. Sources (merged in order):
+
+        1. ``databricks_ai_gateway_request_tags`` — explicit dict (consumed/popped
+           from ``optional_params`` so it never leaks into the request body).
+        2. litellm standard ``tags`` (list) — joined under the ``"tags"`` key.
+
+        Full ``metadata`` is intentionally NOT auto-included: in the proxy it carries
+        internal keys (api key info, logging objects, …) that must not become tags.
+
+        Returns the JSON string, or ``None`` if there are no tags.
+        """
+        import json
+
+        def _read(key: str, pop: bool = False) -> Any:
+            if isinstance(optional_params, dict) and optional_params.get(key) is not None:
+                return optional_params.pop(key) if pop else optional_params.get(key)
+            if litellm_params is None:
+                return None
+            if isinstance(litellm_params, dict):
+                return litellm_params.get(key)
+            return getattr(litellm_params, key, None)
+
+        tags_obj: dict[str, str] = {}
+
+        explicit = _read("databricks_ai_gateway_request_tags", pop=True)
+        if isinstance(explicit, dict):
+            for k, v in explicit.items():
+                if v is not None:
+                    tags_obj[str(k)] = str(v)
+
+        tags = _read("tags")
+        if isinstance(tags, (list, tuple)):
+            string_tags = [str(t) for t in tags if t is not None and str(t) != ""]
+            if string_tags:
+                tags_obj.setdefault("tags", ",".join(string_tags))
+
+        if not tags_obj:
+            return None
+        return json.dumps(tags_obj, separators=(",", ":"), sort_keys=True)
+
+    def apply_request_tags_header(
+        self,
+        headers: dict,
+        optional_params: Optional[dict] = None,
+        litellm_params: Optional[Any] = None,
+    ) -> dict:
+        """Set ``Databricks-Ai-Gateway-Request-Tags`` on ``headers`` when tags exist."""
+        header_val = self.build_request_tags_header(optional_params, litellm_params)
+        if header_val:
+            headers["Databricks-Ai-Gateway-Request-Tags"] = header_val
+        return headers
+
+    @staticmethod
+    def resolve_databricks_profile(*sources: Any) -> Optional[str]:
+        """Extract an explicit ``databricks_profile`` from the given param sources
+        (each a dict or a ``GenericLiteLLMParams``-like object), in order.
+
+        Returns ``None`` if unset; ``databricks_resolve_auth`` then falls back to
+        the standard ``DATABRICKS_CONFIG_PROFILE`` env var.
+        """
+        for src in sources:
+            if src is None:
+                continue
+            if isinstance(src, dict):
+                val = src.get("databricks_profile")
+            else:
+                val = getattr(src, "databricks_profile", None)
+            if val:
+                return str(val)
+        return None
+
     def _get_api_base(self, api_base: Optional[str]) -> str:
         """
         Get the Databricks API base URL.
@@ -258,7 +345,11 @@ class DatabricksBase:
         return token_data["access_token"]
 
     def _get_databricks_credentials(
-        self, api_key: Optional[str], api_base: Optional[str], headers: Optional[dict]
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        headers: Optional[dict],
+        profile: Optional[str] = None,
     ) -> Tuple[str, dict]:
         """
         Get Databricks credentials using the Databricks SDK.
@@ -270,6 +361,9 @@ class DatabricksBase:
             api_key: Optional API key (PAT)
             api_base: Optional API base URL
             headers: Optional existing headers
+            profile: Optional named ``~/.databrickscfg`` profile. When set, the SDK
+                client is constructed with that profile (PROFILE strategy);
+                otherwise the SDK unified auth chain is used (UNIFIED strategy).
 
         Returns:
             Tuple of (api_base, headers)
@@ -281,7 +375,7 @@ class DatabricksBase:
             # Register LiteLLM as partner for Databricks telemetry attribution
             useragent.with_partner("litellm")
 
-            databricks_client = WorkspaceClient()
+            databricks_client = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
 
             api_base = api_base or f"{databricks_client.config.host}/serving-endpoints"
 
@@ -309,6 +403,7 @@ class DatabricksBase:
         custom_endpoint: Optional[bool],
         headers: Optional[dict],
         custom_user_agent: Optional[str] = None,
+        databricks_profile: Optional[str] = None,
     ) -> Tuple[str, dict]:
         """
         Validate and configure the Databricks environment.
@@ -316,7 +411,8 @@ class DatabricksBase:
         Authentication priority:
         1. OAuth M2M (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) - Recommended
         2. PAT (DATABRICKS_API_KEY) - Supported for development
-        3. Databricks SDK automatic auth - Fallback (uses unified auth)
+        3. PROFILE (databricks_profile / DATABRICKS_CONFIG_PROFILE)
+        4. Databricks SDK automatic auth - Fallback (unified auth chain)
 
         Args:
             api_key: Personal access token (PAT)
@@ -325,15 +421,57 @@ class DatabricksBase:
             custom_endpoint: Whether using a custom endpoint URL
             headers: Existing headers dict
             custom_user_agent: Optional custom user agent to prefix
+            databricks_profile: Optional named ~/.databrickscfg profile
 
         Returns:
             Tuple of (api_base, headers) with authentication configured
+        """
+        api_base, headers = self.databricks_resolve_auth(
+            api_key=api_key,
+            api_base=api_base,
+            custom_endpoint=custom_endpoint,
+            headers=headers,
+            custom_user_agent=custom_user_agent,
+            databricks_profile=databricks_profile,
+        )
+
+        if endpoint_type == "chat_completions" and custom_endpoint is not True:
+            api_base = "{}/chat/completions".format(api_base)
+        elif endpoint_type == "embeddings" and custom_endpoint is not True:
+            api_base = "{}/embeddings".format(api_base)
+
+        return api_base, headers
+
+    def databricks_resolve_auth(
+        self,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        custom_endpoint: Optional[bool],
+        headers: Optional[dict],
+        custom_user_agent: Optional[str] = None,
+        databricks_profile: Optional[str] = None,
+    ) -> tuple[str, dict]:
+        """Resolve Databricks authentication headers and the workspace base URL.
+
+        This is the surface-agnostic auth core shared by every Databricks API
+        family (chat, embeddings, anthropic messages, responses, gemini). It does
+        NOT append any endpoint path — callers add the family-specific path.
+
+        Authentication priority:
+        1. OAuth M2M (DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET) - Recommended
+        2. PAT (DATABRICKS_API_KEY) - Supported for development
+        3. PROFILE (databricks_profile / DATABRICKS_CONFIG_PROFILE) - named CLI profile
+        4. Databricks SDK automatic auth - Fallback (unified auth chain; also how
+           browser-OAuth/U2M tokens minted by ``databricks auth login`` are used)
         """
         from litellm._logging import verbose_logger
 
         # Check for OAuth M2M credentials (recommended for production)
         client_id = os.getenv("DATABRICKS_CLIENT_ID")
         client_secret = os.getenv("DATABRICKS_CLIENT_SECRET")
+
+        # Named CLI profile (explicit param wins over the standard SDK env var)
+        profile = databricks_profile or os.getenv("DATABRICKS_CONFIG_PROFILE")
 
         # Determine api_base first
         if api_base is None:
@@ -347,7 +485,16 @@ class DatabricksBase:
             headers["Authorization"] = f"Bearer {access_token}"
             headers["Content-Type"] = "application/json"
         elif api_key is None and not headers:
-            if custom_endpoint is True:
+            if profile:
+                # PROFILE: authenticate via a named ~/.databrickscfg profile.
+                verbose_logger.debug(f"Using Databricks CLI profile '{profile}' for authentication")
+                api_base, headers = self._get_databricks_credentials(
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=headers,
+                    profile=profile,
+                )
+            elif custom_endpoint is True:
                 raise DatabricksException(
                     status_code=400,
                     message="Missing API Key - A call is being made to LLM Provider but no key is set either in the environment variables ({LLM_PROVIDER}_API_KEY) or via params",
@@ -367,7 +514,10 @@ class DatabricksBase:
                 )
             else:
                 api_base, headers = self._get_databricks_credentials(
-                    api_base=api_base, api_key=api_key, headers=headers
+                    api_base=api_base,
+                    api_key=api_key,
+                    headers=headers,
+                    profile=profile,
                 )
 
         if headers is None:
@@ -387,10 +537,5 @@ class DatabricksBase:
 
         # Debug logging with redaction (never log actual tokens)
         verbose_logger.debug(f"Databricks request headers: {self.redact_headers_for_logging(headers)}")
-
-        if endpoint_type == "chat_completions" and custom_endpoint is not True:
-            api_base = "{}/chat/completions".format(api_base)
-        elif endpoint_type == "embeddings" and custom_endpoint is not True:
-            api_base = "{}/embeddings".format(api_base)
 
         return api_base, headers

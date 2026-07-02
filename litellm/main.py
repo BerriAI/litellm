@@ -3053,8 +3053,19 @@ def _complete_databricks(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     headers = headers or litellm.headers
 
     ## COMPLETION CALL
+    # Optimistic AI Gateway routing with reactive serving-endpoints fallback
+    # (self-contained in the Databricks connector). The reactive retry must
+    # re-enter the *full* handler so the surface (gateway vs. serving-endpoints)
+    # is re-resolved from the updated per-host cache after a gateway-absent error
+    # is observed. This wrapper is a thin, Databricks-only shim around
+    # base_llm_http_handler.completion and adds no provider-agnostic surface area.
+    from litellm.llms.databricks.chat.surface_fallback import (
+        databricks_chat_completion_with_surface_fallback,
+    )
+
     try:
-        response = base_llm_http_handler.completion(
+        response = databricks_chat_completion_with_surface_fallback(
+            base_llm_http_handler,
             model=model,
             stream=stream,
             messages=messages,
@@ -6067,6 +6078,7 @@ def embedding(
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "hosted_vllm":
             api_base = api_base or litellm.api_base or get_secret_str("HOSTED_VLLM_API_BASE")
