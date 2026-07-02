@@ -2768,7 +2768,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
 
         # Claude 4.5 model: ttl should be preserved
         result = add_cache_point_tool_block(
-            tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+            tool_with_1h, model="jp.anthropic.claude-opus-4-7"
         )
         assert result is not None
         assert result["cachePoint"]["type"] == "default"
@@ -2779,7 +2779,7 @@ def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
             "cache_control": {"type": "ephemeral", "ttl": "5m"},
         }
         result_5m = add_cache_point_tool_block(
-            tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+            tool_with_5m, model="jp.anthropic.claude-opus-4-7"
         )
         assert result_5m is not None
         assert result_5m["cachePoint"]["ttl"] == "5m"
@@ -2853,9 +2853,7 @@ def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
         ]
 
         # Claude 4.5: cachePoint should have ttl
-        result = _bedrock_tools_pt(
-            tools, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-        )
+        result = _bedrock_tools_pt(tools, model="jp.anthropic.claude-opus-4-7")
         cache_blocks = [b for b in result if "cachePoint" in b]
         assert len(cache_blocks) == 1
         assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"

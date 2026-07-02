@@ -700,8 +700,15 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     model-name patterns, so newly released models pick up support as soon as
     their pricing entry ships, with no code change required here.
     """
-    model_info = litellm.model_cost.get(model) or litellm.model_cost.get(get_bedrock_base_model(model)) or {}
-    return model_info.get("cache_creation_input_token_cost_above_1hr") is not None
+    base_model = get_bedrock_base_model(model)
+    model_infos = (
+        litellm.model_cost.get(model),
+        litellm.model_cost.get(base_model),
+    )
+    return any(
+        model_info is not None and model_info.get("cache_creation_input_token_cost_above_1hr") is not None
+        for model_info in model_infos
+    )
 
 
 _BEDROCK_MODEL_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")

@@ -4683,7 +4683,7 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
             ],
         }
         result = config._transform_request(
-            model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            model="jp.anthropic.claude-opus-4-7",
             messages=messages,
             optional_params=optional_params,
             litellm_params={},
