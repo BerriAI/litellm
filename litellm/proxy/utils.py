@@ -3272,7 +3272,7 @@ class PrismaClient:
                                 {"expires": {"gt": expires}},
                             ],
                             "budget_reset_at": {"lt": reset_at},
-                        }
+                        },
                     )
                     if response is not None and len(response) > 0:
                         for r in response:
@@ -3328,7 +3328,7 @@ class PrismaClient:
                         skip=offset,
                         where={  # type: ignore
                             "budget_reset_at": {"lt": reset_at},
-                        }
+                        },
                     )
                 elif query_type == "find_all" and user_id_list is not None:
                     response = await UserRepository(self).table.find_many(where={"user_id": {"in": user_id_list}})
@@ -3416,7 +3416,7 @@ class PrismaClient:
                         skip=offset,
                         where={  # type: ignore
                             "budget_reset_at": {"lt": reset_at},
-                        }
+                        },
                     )
                 elif query_type == "find_all" and user_id is not None:
                     response = await TeamRepository(self).table.find_many(
