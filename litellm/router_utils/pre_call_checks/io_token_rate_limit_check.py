@@ -190,6 +190,26 @@ def _read_reservation_from_kwargs(kwargs: Any) -> Tuple[int, int, Optional[str],
     return 0, 0, None, None
 
 
+def _clear_reservation_from_kwargs(kwargs: Any) -> None:
+    """
+    Remove the stashed reservation so a retry on a different (e.g. non-IO)
+    deployment does not re-process the already-reconciled/refunded reservation.
+    """
+    if not isinstance(kwargs, dict):
+        return
+    candidates = [kwargs.get("metadata"), kwargs.get("litellm_metadata")]
+    litellm_params = kwargs.get("litellm_params")
+    if isinstance(litellm_params, dict):
+        candidates.append(litellm_params.get("metadata"))
+    standard_logging_object = kwargs.get("standard_logging_object")
+    if isinstance(standard_logging_object, dict):
+        candidates.append(standard_logging_object.get("metadata"))
+    for channel_dict in candidates:
+        if isinstance(channel_dict, dict):
+            for key in (ITPM_RESERVED_KEY, OTPM_RESERVED_KEY, ITPM_CACHE_KEY, OTPM_CACHE_KEY):
+                channel_dict.pop(key, None)
+
+
 async def _increment_with_rollback(
     dual_cache: DualCache,
     key: str,
@@ -335,6 +355,8 @@ async def async_io_token_reconcile_success(
                 parent_otel_span=parent_otel_span,
             )
 
+    _clear_reservation_from_kwargs(kwargs)
+
     verbose_router_logger.debug(
         f"[IO TOKEN LIMIT] reconciled "
         f"(itpm_reserved={itpm_reserved}, billable_input={billable_input}, "
@@ -363,6 +385,7 @@ async def async_io_token_refund_failure(
             ttl=RoutingArgsTTL,
             parent_otel_span=parent_otel_span,
         )
+    _clear_reservation_from_kwargs(kwargs)
     verbose_router_logger.debug(f"[IO TOKEN LIMIT] refunded ITPM={itpm_reserved} OTPM={otpm_reserved}")
 
 

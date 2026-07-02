@@ -266,6 +266,54 @@ class TestModelRateLimitingCheckIOTokens:
         assert await dual_cache.async_get_cache(key=itpm_key) == 3
 
     @pytest.mark.asyncio
+    async def test_failure_clears_reservation_so_retry_is_not_poisoned(self):
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key = f"global_router:io-first:bedrock_mantle/test:itpm:{minute}"
+        await dual_cache.async_increment_cache(key=itpm_key, value=8, ttl=60)
+
+        # Shared request metadata carrying the first (IO) deployment's reservation.
+        metadata = {ITPM_RESERVED_KEY: 8, ITPM_CACHE_KEY: itpm_key}
+        fail_kwargs = {
+            "metadata": metadata,
+            "standard_logging_object": {
+                "model_id": "io-first",
+                "hidden_params": {"litellm_model_name": "bedrock_mantle/test"},
+                "metadata": {},
+            },
+        }
+        await check.async_log_failure_event(fail_kwargs, None, None, None)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 0
+        assert ITPM_RESERVED_KEY not in metadata
+        assert ITPM_CACHE_KEY not in metadata
+
+        # Retry succeeds on a non-IO fallback deployment reusing the same metadata.
+        retry_kwargs = {
+            "metadata": metadata,
+            "standard_logging_object": {
+                "model_id": "non-io-second",
+                "hidden_params": {"litellm_model_name": "openai/gpt-4o-mini"},
+                "metadata": {},
+                "total_tokens": 12,
+            },
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=6, completion_tokens=6, total_tokens=12),
+        )
+        await check.async_log_success_event(retry_kwargs, response, None, None)
+
+        # The first deployment's ITPM counter is not driven negative...
+        assert await dual_cache.async_get_cache(key=itpm_key) == 0
+        # ...and the non-IO deployment's TPM usage is tracked normally.
+        tpm_key = f"non-io-second:openai/gpt-4o-mini:tpm:{minute}"
+        assert await dual_cache.async_get_cache(key=tpm_key) == 12
+
+    @pytest.mark.asyncio
     async def test_reconcile_uses_reservation_minute_key(self):
         dual_cache = DualCache()
         # Reservation was made on a fixed minute key; a call that finishes in a
