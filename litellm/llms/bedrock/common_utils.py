@@ -686,8 +686,10 @@ def get_bedrock_base_model(model: str) -> str:
 
 
 def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
-    model_info = litellm.model_cost.get(model) or litellm.model_cost.get(get_bedrock_base_model(model)) or {}
-    return model_info.get("supports_parallel_tool_use_config") is True
+    return any(
+        (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
+        for candidate in (model, get_bedrock_base_model(model))
+    )
 
 
 def is_claude_4_5_on_bedrock(model: str) -> bool:
@@ -700,14 +702,9 @@ def is_claude_4_5_on_bedrock(model: str) -> bool:
     model-name patterns, so newly released models pick up support as soon as
     their pricing entry ships, with no code change required here.
     """
-    base_model = get_bedrock_base_model(model)
-    model_infos = (
-        litellm.model_cost.get(model),
-        litellm.model_cost.get(base_model),
-    )
     return any(
-        model_info is not None and model_info.get("cache_creation_input_token_cost_above_1hr") is not None
-        for model_info in model_infos
+        (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
+        for candidate in (model, get_bedrock_base_model(model))
     )
 
 

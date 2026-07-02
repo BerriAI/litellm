@@ -1538,7 +1538,7 @@ class AmazonConverseConfig(BaseConfig):
             for point in cache_injection_points:
                 if point.get("location") == "tool_config":
                     cache_point = self._build_cache_point_block(point.get("control"), model)
-                    bedrock_tools.append({"cachePoint": cache_point})
+                    bedrock_tools.append(ToolBlock(cachePoint=cache_point))
                     break
 
         bedrock_tool_config: Optional[ToolConfigBlock] = None

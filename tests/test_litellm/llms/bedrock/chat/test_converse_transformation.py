@@ -4189,10 +4189,17 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
     assert "parallel_tool_calls" not in request_data["additionalModelRequestFields"]
 
 
-def test_parallel_tool_calls_newer_model_without_ttl_pricing_adds_disable_flag():
-    """A model with supports_parallel_tool_use_config but no 1h-TTL pricing entry must still get the flag."""
+def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
+    """
+    The disable_parallel_tool_use gate must read supports_parallel_tool_use_config,
+    not the 1h-TTL pricing field: a model carrying only the former still gets the flag.
+    """
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
     config = AmazonConverseConfig()
-    model = "jp.anthropic.claude-opus-4-7"
+    model = "anthropic.claude-parallel-tool-use-only"
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_parallel_tool_use_config": True})
+    assert is_claude_4_5_on_bedrock(model) is False
     messages = [{"role": "user", "content": "What's the weather in SF and NYC?"}]
 
     optional_params = config.map_openai_params(
@@ -4659,6 +4666,59 @@ def test_cache_control_injection_tool_config_honors_ttl_for_supported_model():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     try:
+        config = AmazonConverseConfig()
+        messages = [
+            {"role": "user", "content": "What is the weather?"},
+        ]
+        optional_params = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"location": {"type": "string"}},
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+            "cache_control_injection_points": [
+                {"location": "tool_config", "control": {"type": "ephemeral", "ttl": "1h"}},
+            ],
+        }
+        result = config._transform_request(
+            model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+        )
+        tools = result["toolConfig"]["tools"]
+        assert tools[-1] == {"cachePoint": {"type": "default", "ttl": "1h"}}
+    finally:
+        litellm.model_cost = old_cost
+        if old_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = old_env
+
+
+def test_cache_control_injection_tool_config_honors_ttl_for_regional_model_lacking_own_pricing():
+    """
+    Regression test: a regional pricing entry that omits
+    `cache_creation_input_token_cost_above_1hr` (e.g. `jp.anthropic.claude-opus-4-7`)
+    must not shadow the base model entry that carries it; the requested ttl
+    survives through the base-model fallback.
+    """
+    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    old_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        assert "cache_creation_input_token_cost_above_1hr" not in litellm.model_cost["jp.anthropic.claude-opus-4-7"]
+        assert "cache_creation_input_token_cost_above_1hr" in litellm.model_cost["anthropic.claude-opus-4-7"]
         config = AmazonConverseConfig()
         messages = [
             {"role": "user", "content": "What is the weather?"},
