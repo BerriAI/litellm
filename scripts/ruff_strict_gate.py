@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Total-count gate for the strict ruff rules in ruff-strict.toml.
 
-Each rule has a hard ceiling (baseline + slack) in ruff-strict-budget.json. The
-gate counts each rule across the whole tree and fails when a rule is both over
-its ceiling and higher than the base it merges into, so a change is blamed for
-the violations it adds, never for drift that already exists in the base.
+Each rule has a hard ``limit`` in ruff-strict-budget.json. The gate counts each
+rule across the whole tree and fails when a rule is both over its limit and
+higher than the base it merges into, so a change is blamed for the violations it
+adds, never for drift that already exists in the base. ``--update`` ratchets each
+rule's limit down by the number of violations this branch fixed relative to its
+branch point (the merge-base).
 """
 
 import argparse
@@ -23,7 +25,6 @@ STRICT_CONFIG = REPO_ROOT / "ruff-strict.toml"
 BUDGET_PATH = REPO_ROOT / "ruff-strict-budget.json"
 TARGET = "litellm"
 DEFAULT_BASE = "origin/litellm_internal_staging"
-_FALLBACK_BASE = "upstream/litellm_internal_staging"
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -86,7 +87,7 @@ def base_counts(ref: str) -> dict:
 def evaluate(head: dict, base: dict, budget: dict) -> list:
     breaches = []
     for rule, spec in budget.items():
-        cap = spec["baseline"] + spec["slack"]
+        cap = spec["limit"]
         total = head.get(rule, 0)
         if total > cap and total > base.get(rule, 0):
             breaches.append(Breach(rule, total, cap, total - base.get(rule, 0)))
@@ -122,51 +123,58 @@ def cmd_check(base: str) -> None:
         head,
         parse_changed_lines(_run(["git", "diff", base_point, "--unified=0", "--no-color", "--", TARGET])),
     )
-    print(f"FAIL: strict-rule totals exceed their ceiling (base {base}):")
+    print(f"FAIL: strict-rule totals exceed their limit (base {base}):")
     for breach in breaches:
-        print(f"  {breach.rule}: total {breach.total} over cap {breach.cap} (this change added {breach.added})")
+        print(f"  {breach.rule}: total {breach.total} over limit {breach.cap} (this change added {breach.added})")
         for violation in sorted(v for v in new if v.code == breach.rule):
             print(f"    {violation.file}:{violation.line}")
     print(
-        "Reduce the new violations or remove an equal number elsewhere; the ceiling is baseline + slack in ruff-strict-budget.json."
+        "Reduce the new violations or remove an equal number elsewhere; the ceiling is the limit in ruff-strict-budget.json."
     )
     raise SystemExit(1)
 
 
-def cmd_update() -> None:
+def ratcheted_budget(budget: dict, current: dict, base: dict) -> dict:
+    """Each rule's limit lowered by the violations `current` fixed vs `base`.
+
+    `base` is the count at the branch point (the commit this branch diverged
+    from). The drop is clamped to what was actually cleared (a rule that grew
+    stays put), so the limit only ever falls.
+    """
+    return {
+        rule: {"limit": max(0, spec["limit"] - max(0, base.get(rule, 0) - current.get(rule, 0)))}
+        for rule, spec in sorted(budget.items())
+    }
+
+
+def cmd_update(base_ref: str = DEFAULT_BASE) -> None:
+    """Ratchet each rule's limit down by the violations this branch fixed.
+
+    The working-tree count is compared against a ruff pass over a detached
+    worktree at the branch point (the merge-base with `base_ref`), so a branch's
+    fixes tighten its own ceilings by exactly what they cleared since it diverged.
+    """
     budget = json.loads(BUDGET_PATH.read_text())
-    head = count_by_rule(head_violations())
-    for rule in budget:
-        budget[rule]["baseline"] = head.get(rule, 0)
-    BUDGET_PATH.write_text(json.dumps(budget, indent=2, sort_keys=True) + "\n")
-    print("Re-captured per-rule baselines from the current tree")
+    base_point = _run(["git", "merge-base", base_ref, "HEAD"]).strip() or base_ref
+    updated = ratcheted_budget(budget, count_by_rule(head_violations()), base_counts(base_point))
+    BUDGET_PATH.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n")
+    cleared = sum(budget[rule]["limit"] - updated[rule]["limit"] for rule in updated)
+    print(f"Ratcheted strict-rule limits down by {cleared} violations this branch fixed")
 
 
 def _resolve_base(ref: str) -> str:
-    """Return ref if it resolves; fall back to the upstream remote equivalent.
-
-    Forks that use a different remote name (e.g. Azure DevOps as 'origin')
-    won't have 'origin/litellm_internal_staging', so we try the upstream
-    remote as a fallback before giving up.
-    """
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", ref],
-        cwd=REPO_ROOT,
-        capture_output=True,
-    )
-    if result.returncode == 0:
+    """Return *ref* if it resolves; fall back to the upstream/ equivalent."""
+    if subprocess.run(["git", "rev-parse", "--verify", ref], cwd=REPO_ROOT, capture_output=True).returncode == 0:
         return ref
     fallback = ref.replace("origin/", "upstream/", 1)
-    if fallback != ref:
-        fb_result = subprocess.run(
-            ["git", "rev-parse", "--verify", fallback],
-            cwd=REPO_ROOT,
-            capture_output=True,
-        )
-        if fb_result.returncode == 0:
-            print(f"Note: '{ref}' not found, using '{fallback}' as base.", file=sys.stderr)
-            return fallback
-    return ref  # let cmd_check fail with a clear git error
+    if (
+        fallback != ref
+        and subprocess.run(["git", "rev-parse", "--verify", fallback], cwd=REPO_ROOT, capture_output=True).returncode
+        == 0
+    ):
+        print(f"Note: '{ref}' not found, using '{fallback}' as base.", file=sys.stderr)
+        return fallback
+    return ref
 
 
 def main() -> None:
@@ -174,10 +182,8 @@ def main() -> None:
     parser.add_argument("--base", default=DEFAULT_BASE)
     parser.add_argument("--update", action="store_true")
     args = parser.parse_args()
-    if args.update:
-        cmd_update()
-    else:
-        cmd_check(_resolve_base(args.base))
+    resolved = _resolve_base(args.base)
+    cmd_update(resolved) if args.update else cmd_check(resolved)
 
 
 if __name__ == "__main__":
