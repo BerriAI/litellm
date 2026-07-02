@@ -43,6 +43,12 @@ OTPM_CACHE_KEY = "_litellm_otpm_cache_key"
 
 
 def set_io_token_rate_limit_request_kwargs(kwargs: Optional[Dict[str, Any]]) -> None:
+    # The reservation sentinels are server-only, but `metadata` is caller
+    # controlled on proxy requests. Strip any client-supplied copies here (this
+    # runs before the router stashes its own reservation) so a forged
+    # reservation can't drive the post-call reconcile/refund against an
+    # arbitrary counter and bypass the configured limits.
+    _clear_reservation_from_kwargs(kwargs)
     _io_token_rate_limit_request_kwargs.set(kwargs)
 
 

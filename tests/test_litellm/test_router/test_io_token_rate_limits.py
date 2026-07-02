@@ -12,9 +12,12 @@ from litellm.caching.dual_cache import DualCache
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_CACHE_KEY,
     ITPM_RESERVED_KEY,
+    OTPM_CACHE_KEY,
+    OTPM_RESERVED_KEY,
     async_io_token_reconcile_success,
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
+    get_io_token_rate_limit_request_kwargs,
     set_io_token_rate_limit_request_kwargs,
 )
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
@@ -312,6 +315,51 @@ class TestModelRateLimitingCheckIOTokens:
         # ...and the non-IO deployment's TPM usage is tracked normally.
         tpm_key = f"non-io-second:openai/gpt-4o-mini:tpm:{minute}"
         assert await dual_cache.async_get_cache(key=tpm_key) == 12
+
+    @pytest.mark.asyncio
+    async def test_client_supplied_reservation_keys_are_stripped(self):
+        # metadata is caller-controlled; the server-only reservation sentinels
+        # must be removed before the router captures the request kwargs.
+        forged = {
+            "metadata": {ITPM_RESERVED_KEY: 999999, ITPM_CACHE_KEY: "attacker:key:itpm:00-00"},
+            "litellm_metadata": {OTPM_RESERVED_KEY: 7},
+            "litellm_params": {"metadata": {OTPM_CACHE_KEY: "attacker:key:otpm:00-00"}},
+        }
+        set_io_token_rate_limit_request_kwargs(forged)
+        stored = get_io_token_rate_limit_request_kwargs()
+
+        assert ITPM_RESERVED_KEY not in stored["metadata"]
+        assert ITPM_CACHE_KEY not in stored["metadata"]
+        assert OTPM_RESERVED_KEY not in stored["litellm_metadata"]
+        assert OTPM_CACHE_KEY not in stored["litellm_params"]["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_forged_reservation_cannot_decrement_counter(self):
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        victim_key = "global_router:victim:model:itpm:00-00"
+        await dual_cache.async_increment_cache(key=victim_key, value=100, ttl=60)
+
+        # A caller forges a reservation pointing at another deployment's counter.
+        kwargs = {
+            "metadata": {ITPM_RESERVED_KEY: 100, ITPM_CACHE_KEY: victim_key},
+            "standard_logging_object": {
+                "model_id": "m",
+                "hidden_params": {"litellm_model_name": "model"},
+                "metadata": {},
+                "total_tokens": 2,
+            },
+        }
+        # The router sanitizes the request kwargs before the call runs.
+        set_io_token_rate_limit_request_kwargs(kwargs)
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        )
+        await check.async_log_success_event(kwargs, response, None, None)
+
+        # The forged reservation was stripped, so the victim counter is untouched.
+        assert await dual_cache.async_get_cache(key=victim_key) == 100
 
     @pytest.mark.asyncio
     async def test_reconcile_uses_reservation_minute_key(self):
