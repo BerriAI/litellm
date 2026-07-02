@@ -5999,11 +5999,7 @@ async def _get_entity_access_group_models(
     group_ids: List[str] = list(user_api_key_dict.access_group_ids or [])
 
     effective_team_id = team_id or user_api_key_dict.team_id
-    if (
-        effective_team_id
-        and prisma_client is not None
-        and user_api_key_cache is not None
-    ):
+    if effective_team_id and prisma_client is not None and user_api_key_cache is not None:
         try:
             team_object = await get_team_object(
                 team_id=effective_team_id,
