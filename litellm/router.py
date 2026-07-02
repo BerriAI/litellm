@@ -6729,11 +6729,7 @@ class Router:
                     deployment_id=id,
                 )
 
-                deployment_dict = (
-                    deployment_info
-                    if isinstance(deployment_info, dict)
-                    else deployment_info.model_dump()
-                )
+                deployment_dict = deployment_info if isinstance(deployment_info, dict) else deployment_info.model_dump()
                 if deployment_has_io_token_limits(deployment_dict):
                     return
 
@@ -8965,9 +8961,7 @@ class Router:
     async def get_remaining_model_group_usage(self, model_group: str) -> Dict[str, int]:
         model_group_info = self._cached_get_model_group_info(model_group)
 
-        if model_group_info is not None and (
-            model_group_info.itpm is not None or model_group_info.otpm is not None
-        ):
+        if model_group_info is not None and (model_group_info.itpm is not None or model_group_info.otpm is not None):
             current_itpm, current_otpm = await self.get_model_group_io_token_usage(model_group)
             return build_io_token_rate_limit_headers(
                 itpm_limit=model_group_info.itpm,
@@ -9082,7 +9076,7 @@ class Router:
                 in_flight_delta = {
                     "x-ratelimit-remaining-tokens": in_flight_tokens,
                     "x-ratelimit-remaining-requests": 1,
-                    "x-ratelimit-remaining-input-tokens": in_flight_input + in_flight_output,
+                    "x-ratelimit-remaining-input-tokens": in_flight_input,
                     "x-ratelimit-remaining-output-tokens": in_flight_output,
                 }
 

@@ -924,6 +924,42 @@ async def test_set_response_headers_subtracts_in_flight_delta(model_list):
 
 
 @pytest.mark.asyncio
+async def test_set_response_headers_input_output_token_in_flight_delta(model_list):
+    """
+    The in-flight replay for `x-ratelimit-remaining-input-tokens` must subtract
+    input (prompt) tokens only, and `-output-tokens` must subtract completion
+    tokens only. Subtracting total tokens from the input header would understate
+    remaining input quota by the number of completion tokens on every response.
+    """
+    from pydantic import BaseModel
+
+    class _Usage(BaseModel):
+        total_tokens: int = 30
+        prompt_tokens: int = 20
+        completion_tokens: int = 10
+
+    class _Resp(BaseModel):
+        usage: _Usage = _Usage()
+        _hidden_params: dict = {}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-remaining-input-tokens": 1000,
+            "x-ratelimit-remaining-output-tokens": 500,
+        }
+    )
+
+    resp = _Resp()
+    resp._hidden_params = {}
+    await router.set_response_headers(response=resp, model_group="gpt-3.5-turbo")
+
+    headers = resp._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-input-tokens"] == 980
+    assert headers["x-ratelimit-remaining-output-tokens"] == 490
+
+
+@pytest.mark.asyncio
 async def test_set_response_headers_handles_missing_usage(model_list):
     """
     Streaming chunks and some response shapes may lack a `usage` attribute or
