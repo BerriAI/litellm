@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -292,3 +292,38 @@ def test_get_projected_spend_over_limit_without_duration_keeps_month_end_behavio
     assert result is not None
     projected, _ = result
     assert projected == pytest.approx(8.0 + (8.0 / 14) * 16)
+
+
+def test_get_projected_spend_over_limit_uses_reset_timezone_not_host_timezone(monkeypatch):
+    _freeze_today(monkeypatch, date(2024, 1, 16))
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2024, 1, 15, 23, 30, tzinfo=tz)
+
+    monkeypatch.setattr("litellm.proxy.utils.datetime", _FrozenDatetime)
+    result = _get_projected_spend_over_limit(
+        current_spend=8.0,
+        soft_budget_limit=10.0,
+        budget_duration="1d",
+        budget_reset_at=datetime(2024, 1, 16, 0, 0, 0, tzinfo=timezone.utc),
+    )
+    assert result is not None
+    projected, exceed_date = result
+    assert projected == 16.0
+    assert exceed_date <= date(2024, 1, 16)
+
+
+def test_get_projected_spend_over_limit_exceed_date_never_past_reset(monkeypatch):
+    _freeze_today(monkeypatch, date(2024, 1, 15))
+    for spend, soft in [(8.0, 9.99), (8.0, 13.9), (8.0, 13.99)]:
+        result = _get_projected_spend_over_limit(
+            current_spend=spend,
+            soft_budget_limit=soft,
+            budget_duration="7d",
+            budget_reset_at=datetime(2024, 1, 18, 0, 0, 0),
+        )
+        assert result is not None
+        _, exceed_date = result
+        assert exceed_date <= date(2024, 1, 18)

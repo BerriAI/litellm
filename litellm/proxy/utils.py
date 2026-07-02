@@ -5598,7 +5598,11 @@ def _get_projected_spend_over_limit(
     if soft_budget_limit is None:
         return None
 
-    today = date.today()
+    today = (
+        datetime.now(budget_reset_at.tzinfo).date()
+        if budget_reset_at is not None and budget_reset_at.tzinfo is not None
+        else date.today()
+    )
     window_end, elapsed_days = _get_budget_window(today, budget_duration, budget_reset_at)
     remaining_days = max((window_end - today).days, 0)
     daily_spend = current_spend / elapsed_days
