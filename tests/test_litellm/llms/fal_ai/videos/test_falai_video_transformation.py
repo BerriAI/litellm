@@ -14,6 +14,7 @@ from litellm.types.videos.utils import (
 SORA_2_MODEL = "fal_ai/fal-ai/sora-2/text-to-video"
 KLING_MODEL = "fal_ai/fal-ai/kling-video/v2.5-turbo/pro/text-to-video"
 KLING_MODEL_ID = "fal-ai/kling-video/v2.5-turbo/pro/text-to-video"
+KLING_QUEUE_NAMESPACE = "fal-ai/kling-video"
 FAL_API_BASE = "https://queue.fal.run"
 
 
@@ -150,7 +151,7 @@ class TestFalAIVideoTransformation:
             headers={},
         )
 
-        assert url == f"{FAL_API_BASE}/{KLING_MODEL_ID}/requests/abc-123/status"
+        assert url == f"{FAL_API_BASE}/{KLING_QUEUE_NAMESPACE}/requests/abc-123/status"
         assert params == {}
 
     def test_transform_video_status_retrieve_request_reconstructs_from_model_id(self):
@@ -162,8 +163,41 @@ class TestFalAIVideoTransformation:
             headers={},
         )
 
-        assert url == f"https://attacker.example.com/{KLING_MODEL_ID}/requests/abc-123/status"
+        assert (
+            url
+            == f"https://attacker.example.com/{KLING_QUEUE_NAMESPACE}/requests/abc-123/status"
+        )
         assert params == {}
+
+    def test_status_and_content_urls_use_owner_app_namespace(self):
+        seedance_id = "fal-ai/bytedance/seedance/v2/pro/text-to-video"
+        encoded_id = encode_video_id_with_provider("abc-123", "fal_ai", seedance_id)
+
+        status_url, _ = self.config.transform_video_status_retrieve_request(
+            video_id=encoded_id,
+            api_base=FAL_API_BASE,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        content_url, _ = self.config.transform_video_content_request(
+            video_id=encoded_id,
+            api_base=FAL_API_BASE,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert status_url == f"{FAL_API_BASE}/fal-ai/bytedance/requests/abc-123/status"
+        assert content_url == f"{FAL_API_BASE}/fal-ai/bytedance/requests/abc-123"
+
+    def test_queue_namespace_keeps_two_segment_model_ids(self):
+        encoded_id = encode_video_id_with_provider("abc-123", "fal_ai", "fal-ai/sora-2")
+        url, _ = self.config.transform_video_status_retrieve_request(
+            video_id=encoded_id,
+            api_base=FAL_API_BASE,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert url == f"{FAL_API_BASE}/fal-ai/sora-2/requests/abc-123/status"
 
     def test_transform_video_status_request_url_path_segment_is_encoded(self):
         encoded_id = encode_video_id_with_provider(
@@ -232,7 +266,7 @@ class TestFalAIVideoTransformation:
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
-        assert url == f"{FAL_API_BASE}/{KLING_MODEL_ID}/requests/abc-123"
+        assert url == f"{FAL_API_BASE}/{KLING_QUEUE_NAMESPACE}/requests/abc-123"
         assert params == {}
 
     def test_transform_video_content_request_reconstructs_from_model_id(self):
@@ -243,7 +277,10 @@ class TestFalAIVideoTransformation:
             litellm_params=GenericLiteLLMParams(),
             headers={},
         )
-        assert url == f"https://attacker.example.com/{KLING_MODEL_ID}/requests/abc-123"
+        assert (
+            url
+            == f"https://attacker.example.com/{KLING_QUEUE_NAMESPACE}/requests/abc-123"
+        )
         assert params == {}
 
     def test_extract_video_url_handles_video_object(self):

@@ -225,7 +225,8 @@ class FalAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         original_id, model_id = self._extract_request_and_model_id(video_id)
         encoded = encode_url_path_segment(original_id, field_name="video_id")
-        return f"{api_base}/{model_id}/requests/{encoded}/status", {}
+        namespace = self._queue_request_namespace(model_id)
+        return f"{api_base}/{namespace}/requests/{encoded}/status", {}
 
     def transform_video_status_retrieve_response(
         self,
@@ -289,7 +290,8 @@ class FalAIVideoConfig(BaseVideoConfig):
     ) -> Tuple[str, Dict]:
         original_id, model_id = self._extract_request_and_model_id(video_id)
         encoded = encode_url_path_segment(original_id, field_name="video_id")
-        return f"{api_base}/{model_id}/requests/{encoded}", {}
+        namespace = self._queue_request_namespace(model_id)
+        return f"{api_base}/{namespace}/requests/{encoded}", {}
 
     def transform_video_content_response(
         self,
@@ -321,9 +323,7 @@ class FalAIVideoConfig(BaseVideoConfig):
     def _extract_video_url(response_data: Dict[str, Any]) -> str:
         error_payload = response_data.get("error")
         if error_payload:
-            raise ValueError(
-                f"fal.ai video generation failed: {error_payload}"
-            )
+            raise ValueError(f"fal.ai video generation failed: {error_payload}")
 
         video = response_data.get("video")
         if isinstance(video, dict):
@@ -338,6 +338,14 @@ class FalAIVideoConfig(BaseVideoConfig):
         raise ValueError(
             "Video URL not found in fal.ai response. The job may still be processing."
         )
+
+    @staticmethod
+    def _queue_request_namespace(model_id: str) -> str:
+        # Queue submits accept full model subpaths (fal-ai/kling-video/v3/pro/
+        # image-to-video), but request status/result routes only exist under the
+        # owner/app prefix; deeper paths answer 405 Method Not Allowed.
+        segments = [segment for segment in model_id.split("/") if segment]
+        return "/".join(segments[:2])
 
     @staticmethod
     def _extract_request_and_model_id(video_id: str) -> Tuple[str, str]:
