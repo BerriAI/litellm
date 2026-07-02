@@ -33010,6 +33010,8 @@ export interface components {
             updated_at?: string | null;
             /** Updated By */
             updated_by?: string | null;
+            /** Use Local Token Counter */
+            use_local_token_counter?: boolean | null;
         } & {
             [key: string]: unknown;
         };

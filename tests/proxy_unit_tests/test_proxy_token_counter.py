@@ -1364,3 +1364,86 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
+
+
+@pytest.mark.asyncio
+async def test_get_provider_token_counter_respects_use_local_token_counter():
+    """
+    Regression: a deployment whose model_info sets use_local_token_counter=True must NOT
+    resolve a provider (remote) token counter, so callers fall back to the local tokenizer.
+    Without the flag, the Bedrock provider counter is still returned.
+    """
+    from litellm.proxy.proxy_server import _get_provider_token_counter
+
+    bedrock_params = {"model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"}
+    resolved_model = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+    with_flag = {
+        "litellm_params": bedrock_params,
+        "model_info": {"use_local_token_counter": True},
+    }
+    without_flag = {
+        "litellm_params": bedrock_params,
+        "model_info": {},
+    }
+
+    assert _get_provider_token_counter(with_flag, resolved_model) == (None, None, None)
+
+    counter, _model, provider = _get_provider_token_counter(without_flag, resolved_model)
+    assert isinstance(counter, BedrockTokenCounter)
+    assert provider == "bedrock"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_local", [True, False])
+async def test_token_counter_use_local_flag_bypasses_bedrock_api(use_local):
+    """
+    Regression for the per-model model_info.use_local_token_counter flag.
+
+    call_endpoint=True normally routes Bedrock models to the remote CountTokens API. With
+    use_local_token_counter=True the proxy must skip the remote API entirely and count locally,
+    never instantiating/calling the Bedrock handler. Without it, the remote API is still used.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    model_info = {"use_local_token_counter": True} if use_local else {}
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "claude-bedrock",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+                },
+                "model_info": model_info,
+            }
+        ]
+    )
+    setattr(proxy_server, "llm_router", llm_router)
+
+    with patch(
+        "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
+    ) as MockHandler:
+        mock_handler_instance = MockHandler.return_value
+        mock_handler_instance.handle_count_tokens_request = AsyncMock(
+            return_value={"input_tokens": 999}
+        )
+
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="claude-bedrock",
+                messages=[
+                    {"role": "user", "content": "Hello Claude, how are you today?"}
+                ],
+            ),
+            call_endpoint=True,
+        )
+
+    if use_local:
+        mock_handler_instance.handle_count_tokens_request.assert_not_called()
+        assert response.tokenizer_type != "bedrock_api"
+        assert response.total_tokens > 0
+        assert response.total_tokens != 999
+    else:
+        mock_handler_instance.handle_count_tokens_request.assert_called_once()
+        assert response.tokenizer_type == "bedrock_api"
+        assert response.total_tokens == 999
