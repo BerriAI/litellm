@@ -3,8 +3,14 @@ import { Typography, Button, Divider } from "antd";
 import { WarningOutlined, InfoCircleOutlined, CopyOutlined } from "@ant-design/icons";
 import { testConnectionRequest } from "../networking";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
+import type { ModelTestDeployment } from "./handle_add_auto_router_submit";
 import NotificationsManager from "../molecules/notifications_manager";
 const { Text } = Typography;
+
+type PrepareDeployments = (
+  formValues: Record<string, unknown>,
+  accessToken: string,
+) => Promise<ModelTestDeployment[] | undefined>;
 
 interface ModelConnectionTestProps {
   formValues: Record<string, any>;
@@ -13,6 +19,7 @@ interface ModelConnectionTestProps {
   modelName?: string;
   onClose?: () => void;
   onTestComplete?: () => void;
+  prepareDeployments?: PrepareDeployments;
 }
 
 const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
@@ -22,6 +29,7 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
   modelName = "this model",
   onClose,
   onTestComplete,
+  prepareDeployments = (formValues, accessToken) => prepareModelAddRequest(formValues, accessToken, null),
 }) => {
   const [error, setError] = React.useState<Error | string | null>(null);
   const [rawRequest, setRawRequest] = React.useState<any>(null);
@@ -43,9 +51,9 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
 
     try {
       console.log("Testing connection with form values:", formValues);
-      const result = await prepareModelAddRequest(formValues, accessToken, null);
+      const result = await prepareDeployments(formValues, accessToken);
 
-      if (!result) {
+      if (!result || result.length === 0) {
         console.log("No result from prepareModelAddRequest");
         setError("Failed to prepare model data. Please check your form inputs.");
         setIsSuccess(false);
@@ -57,7 +65,9 @@ const ModelConnectionTest: React.FC<ModelConnectionTestProps> = ({
 
       const { litellmParamsObj, modelInfoObj, modelName: returnedModelName } = result[0];
 
-      const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, modelInfoObj?.mode);
+      const rawMode = modelInfoObj?.mode;
+      const resolvedMode = typeof rawMode === "string" ? rawMode : testMode;
+      const response = await testConnectionRequest(accessToken, litellmParamsObj, modelInfoObj, resolvedMode);
       if (response.status === "success") {
         NotificationsManager.success("Connection test successful!");
         setError(null);
