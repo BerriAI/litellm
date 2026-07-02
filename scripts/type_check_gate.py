@@ -63,7 +63,7 @@ def _to_relative(raw: str, root: Path) -> str | None:
     path = Path(raw)
     absolute = path if path.is_absolute() else root / path
     try:
-        return absolute.resolve().relative_to(root).as_posix()
+        return absolute.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return None
 

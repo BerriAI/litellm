@@ -3497,6 +3497,17 @@ def filter_out_litellm_params(kwargs: dict) -> dict:
     return {key: value for key, value in kwargs.items() if key not in all_litellm_params}
 
 
+def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
+    if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
+        return True
+    try:
+        provider = LlmProviders(custom_llm_provider)
+    except ValueError:
+        return False
+    provider_config = ProviderConfigManager.get_provider_chat_config(model="", provider=provider)
+    return bool(getattr(provider_config, "supports_vertex_params", False))
+
+
 class PreProcessNonDefaultParams:
     @staticmethod
     def base_pre_process_non_default_params(
@@ -3518,11 +3529,7 @@ class PreProcessNonDefaultParams:
                 continue
             elif k == "hf_model_name" and custom_llm_provider != "sagemaker":
                 continue
-            elif (
-                k.startswith("vertex_")
-                and custom_llm_provider != "vertex_ai"
-                and custom_llm_provider != "vertex_ai_beta"
-            ):  # allow dynamically setting vertex ai init logic
+            elif k.startswith("vertex_") and not _provider_supports_vertex_params(custom_llm_provider):
                 continue
             passed_params[k] = v
 
@@ -5465,6 +5472,7 @@ def _get_model_info_helper(
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
+                bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get("search_context_cost_per_query", None),
                 web_search_billing_unit=_model_info.get("web_search_billing_unit", None),
@@ -7687,6 +7695,10 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langflow_config(),
                 False,
             ),
+            LlmProviders.GDC: (
+                lambda: litellm.GDCGeminiConfig(),
+                False,
+            ),
         }
 
     @staticmethod
@@ -8003,6 +8015,13 @@ class ProviderConfigManager:
             )
 
             return TencentAnthropicMessagesConfig()
+        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
+            if "claude" in model_lower:
+                from litellm.llms.github_copilot.messages.transformation import (
+                    GithubCopilotAnthropicMessagesConfig,
+                )
+
+                return GithubCopilotAnthropicMessagesConfig()
         return None
 
     @staticmethod

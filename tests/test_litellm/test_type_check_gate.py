@@ -54,6 +54,21 @@ def test_paths_outside_repo_are_skipped():
     assert gate.count_basedpyright(payload) == {}
 
 
+def test_symlinked_root_keeps_diagnostics_in_tree(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    payload = json.dumps(
+        {
+            "generalDiagnostics": [
+                _bpr(link / "litellm" / "x.py", "error", "reportArgumentType")
+            ]
+        }
+    )
+    assert gate.count_basedpyright(payload, root=link) == {"reportArgumentType": 1}
+
+
 def test_at_or_under_ceiling_passes():
     budget = {"no-any-return": {"limit": 5}}
     assert gate.evaluate({"no-any-return": 5}, {}, budget) == []
