@@ -885,7 +885,7 @@ async def _aemulate_or_reraise_primary(emulate_fn, primary_exc):
 
 def _run_responses_surface_chain_sync(
     *,
-    configs_to_try: List[BaseResponsesAPIConfig],
+    configs_to_try: list[BaseResponsesAPIConfig],
     run_config: Callable[[BaseResponsesAPIConfig], Any],
     stamp_fn: Callable[[Any], Any],
     emulate_fn: Callable[[], Any],
@@ -909,7 +909,7 @@ def _run_responses_surface_chain_sync(
 
 async def _run_responses_surface_chain_async(
     *,
-    configs_to_try: List[BaseResponsesAPIConfig],
+    configs_to_try: list[BaseResponsesAPIConfig],
     run_config: Callable[[BaseResponsesAPIConfig], Any],
     emulate_fn: Callable[[], Any],
     should_try_next: Callable[[Exception], bool],
@@ -937,7 +937,7 @@ def _execute_responses_with_surface_fallback(
     *,
     responses_api_provider_config: BaseResponsesAPIConfig,
     model: str,
-    input: Union[str, ResponseInputParam],
+    input: str | ResponseInputParam,
     response_api_optional_params: Any,
     allowed_openai_params: Any,
     custom_llm_provider: str,
@@ -962,7 +962,7 @@ def _execute_responses_with_surface_fallback(
     emulation. The default ``[]`` preserves single-config behavior for every other
     provider. Streaming uses the primary surface only.
     """
-    surface_fallback_chain: List[BaseResponsesAPIConfig] = (
+    surface_fallback_chain: list[BaseResponsesAPIConfig] = (
         responses_api_provider_config.get_responses_surface_fallbacks(model) if not stream else []
     )
     if surface_fallback_chain:
@@ -973,7 +973,7 @@ def _execute_responses_with_surface_fallback(
         use_surface_fallback = False
 
     def _run_responses_config(cfg: BaseResponsesAPIConfig):
-        _params: Dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+        _params: dict = ResponsesAPIRequestUtils.get_optional_params_responses_api(
             model=model,
             responses_api_provider_config=cfg,
             response_api_optional_params=response_api_optional_params,

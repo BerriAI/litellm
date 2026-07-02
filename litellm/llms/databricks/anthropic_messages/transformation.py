@@ -17,7 +17,7 @@ via :class:`DatabricksBase`, emitting ``Authorization: Bearer <token>`` rather
 than Anthropic's ``x-api-key``.
 """
 
-from typing import Any, List, Optional, Tuple
+from typing import Any, Optional
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
@@ -49,12 +49,12 @@ class DatabricksAnthropicMessagesConfig(DatabricksBase, AnthropicMessagesConfig)
         self,
         headers: dict,
         model: str,
-        messages: List[Any],
+        messages: list[Any],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-    ) -> Tuple[dict, Optional[str]]:
+    ) -> tuple[dict, Optional[str]]:
         custom_user_agent = (
             optional_params.pop("user_agent", None)
             or optional_params.pop("databricks_user_agent", None)

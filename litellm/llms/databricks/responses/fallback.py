@@ -21,7 +21,7 @@ that exhausts the chain re-raises the **primary** surface's original error (see
 ``litellm.responses.main``), so a real validation error surfaces clearly.
 """
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 from litellm.llms.databricks.ai_gateway import ProviderFamily, detect_family
 
@@ -45,7 +45,7 @@ _FALLBACK_MARKERS = (
 _STRONG_ABSENT_MARKERS = ("endpoint_not_found", "resource_does_not_exist")
 
 
-def databricks_responses_config_chain(model: str) -> List["BaseResponsesAPIConfig"]:
+def databricks_responses_config_chain(model: str) -> list["BaseResponsesAPIConfig"]:
     """Ordered responses configs to try for ``model``. An empty tail (chain
     exhausted) means the caller should emulate via chat completions."""
     from litellm.llms.databricks.responses.transformation import (

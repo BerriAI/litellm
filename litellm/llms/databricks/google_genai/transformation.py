@@ -14,7 +14,7 @@ Databricks credential resolution (M2M / PAT / SDK unified) emitting
 (this surface exists only on the AI Gateway).
 """
 
-from typing import Optional, Tuple, Union
+from typing import Optional
 
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
 from litellm.types.router import GenericLiteLLMParams
@@ -32,7 +32,7 @@ class DatabricksGoogleGenAIConfig(DatabricksBase, GoogleGenAIConfig):
         api_key: Optional[str],
         headers: Optional[dict],
         model: str,
-        litellm_params: Optional[Union[GenericLiteLLMParams, dict]],
+        litellm_params: Optional[GenericLiteLLMParams | dict],
     ) -> dict:
         params = dict(litellm_params or {})
         resolved_key = api_key or params.get("api_key") or params.get("databricks_key")
@@ -56,7 +56,7 @@ class DatabricksGoogleGenAIConfig(DatabricksBase, GoogleGenAIConfig):
         model: str,
         litellm_params: dict,
         stream: bool,
-    ) -> Tuple[dict, str]:
+    ) -> tuple[dict, str]:
         headers = self.validate_environment(
             api_key=litellm_params.get("api_key"),
             headers=None,
@@ -76,7 +76,7 @@ class DatabricksGoogleGenAIConfig(DatabricksBase, GoogleGenAIConfig):
         model: str,
         litellm_params: dict,
         stream: bool,
-    ) -> Tuple[dict, str]:
+    ) -> tuple[dict, str]:
         # Databricks auth (bearer token / SDK) is synchronous; reuse the sync path.
         return self.sync_get_auth_token_and_url(
             api_base=api_base,

@@ -22,7 +22,7 @@ import re
 import threading
 import time
 from enum import Enum
-from typing import Dict, Literal, Optional, Tuple
+from typing import Literal, Optional
 
 # Prefixes stripped from a model id before name-pattern matching. Supports both
 # "databricks/databricks-claude-..." and bare "databricks-claude-..." forms.
@@ -303,7 +303,7 @@ def build_chat_url(host_or_base: str, surface: Surface) -> str:
 # host until the TTL expires.
 
 # host -> (available, epoch_seconds_cached_at)
-_GATEWAY_CACHE: Dict[str, Tuple[bool, float]] = {}
+_GATEWAY_CACHE: dict[str, tuple[bool, float]] = {}
 _GATEWAY_CACHE_LOCK = threading.Lock()
 # Cache lifetime. Gateway enablement changes rarely; an hour re-checks enablement
 # within a session lifetime while keeping at most one reactive fallback per host/hour.

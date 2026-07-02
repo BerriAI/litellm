@@ -214,7 +214,7 @@ class DatabricksBase:
                 return litellm_params.get(key)
             return getattr(litellm_params, key, None)
 
-        tags_obj: Dict[str, str] = {}
+        tags_obj: dict[str, str] = {}
 
         explicit = _read("databricks_ai_gateway_request_tags", pop=True)
         if isinstance(explicit, dict):
@@ -450,7 +450,7 @@ class DatabricksBase:
         headers: Optional[dict],
         custom_user_agent: Optional[str] = None,
         databricks_profile: Optional[str] = None,
-    ) -> Tuple[str, dict]:
+    ) -> tuple[str, dict]:
         """Resolve Databricks authentication headers and the workspace base URL.
 
         This is the surface-agnostic auth core shared by every Databricks API
