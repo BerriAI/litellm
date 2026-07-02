@@ -279,7 +279,7 @@ def test__redact_worker_config_for_logging_passthrough_for_none_and_non_json_str
     assert _redact_worker_config_for_logging("/tmp/some_config.yaml") == "/tmp/some_config.yaml"
 
 
-def test__redact_config_dict_for_logging_masks_non_string_url_webhook_values():
+def test__redact_worker_config_for_logging_masks_non_string_url_webhook_values():
     """The URL/webhook fields the segment masker cannot catch by key name
     (``alert_to_webhook_url``, ``pass_through_endpoints``,
     ``database_extra_connection_params``) can hold non-string shapes:
@@ -288,7 +288,7 @@ def test__redact_config_dict_for_logging_masks_non_string_url_webhook_values():
     the whole value is replaced regardless of shape so a nested webhook or
     Bearer token under a non-segment-matched key does not slip through.
     """
-    from litellm.proxy.proxy_server import _redact_config_dict_for_logging
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
 
     nested_webhook_secret = "https://hooks.slack.com/services/T0/B0/nested-webhook-secret-xyz"
     data = {
@@ -303,7 +303,7 @@ def test__redact_config_dict_for_logging_masks_non_string_url_webhook_values():
         ],
         "database_extra_connection_params": {"password": "extra-db-password-abc"},
     }
-    redacted = _redact_config_dict_for_logging(data)
+    redacted = _redact_worker_config_for_logging(data)
     rendered = repr(redacted)
     for secret in (
         "sk-should-be-masked",
@@ -312,6 +312,43 @@ def test__redact_config_dict_for_logging_masks_non_string_url_webhook_values():
         "extra-db-password-abc",
     ):
         assert secret not in rendered, f"leak: {secret} in {rendered!r}"
+
+
+def test__redact_worker_config_for_logging_masks_nested_secret_fields():
+    """LIT-4152 nested regression: the URL/webhook credential fields the segment
+    masker cannot catch by name (``database_url``,
+    ``database_extra_connection_params``, ``pass_through_endpoints``,
+    ``alert_to_webhook_url``) must be redacted at any depth, not just the top
+    level. A worker_config that nests ``general_settings`` under a parent key
+    must not leak a nested ``database_url`` or webhook secret; the earlier
+    top-level-only redaction would have passed these through raw.
+    """
+    from litellm.proxy.proxy_server import _redact_worker_config_for_logging
+
+    nested_db_url = "postgresql://nested_user:nested_pw_4152@nested-host:5432/db"
+    nested_webhook = "https://hooks.slack.com/services/T0/B0/nested-4152-webhook"
+    nested_extra_pw = "nested-extra-conn-pw-4152"
+    nested_bearer = "Bearer nested-passthrough-token-4152"
+    data = {
+        "config": {
+            "general_settings": {
+                "database_url": nested_db_url,
+                "database_extra_connection_params": {"password": nested_extra_pw},
+                "alert_to_webhook_url": {"budget_alerts": nested_webhook},
+                "pass_through_endpoints": [
+                    {"path": "/up", "headers": {"Authorization": nested_bearer}}
+                ],
+            }
+        }
+    }
+    redacted = _redact_worker_config_for_logging(data)
+    rendered = repr(redacted)
+    for secret in (nested_db_url, nested_webhook, nested_extra_pw, nested_bearer):
+        assert secret not in rendered, f"nested leak: {secret} in {rendered!r}"
+
+    inner = redacted["config"]["general_settings"]
+    assert inner["database_url"] == "REDACTED"
+    assert inner["pass_through_endpoints"] == "REDACTED"
 
 
 # ---------------------------------------------------------------------------
