@@ -376,7 +376,7 @@
       "count": 1
     }
   },
-  "src/components/DefaultUserSettings.tsx": {
+  "src/app/(dashboard)/users/_components/DefaultUserSettings.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -505,7 +505,7 @@
       "count": 1
     }
   },
-  "src/components/SearchTools/CreateSearchTools.tsx": {
+  "src/app/(dashboard)/search-tools/_components/CreateSearchTools.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -513,17 +513,17 @@
       "count": 1
     }
   },
-  "src/components/SearchTools/SearchToolTester.tsx": {
+  "src/app/(dashboard)/search-tools/_components/SearchToolTester.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/SearchTools/SearchToolView.tsx": {
+  "src/app/(dashboard)/search-tools/_components/SearchToolView.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/SearchTools/SearchTools.tsx": {
+  "src/app/(dashboard)/search-tools/_components/SearchTools.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -873,11 +873,6 @@
       "count": 1
     }
   },
-  "src/components/claude_code_plugins/helpers.test.ts": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/components/claude_code_plugins/plugin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1006,7 +1001,7 @@
       "count": 1
     }
   },
-  "src/components/edit_user.tsx": {
+  "src/app/(dashboard)/users/_components/edit_user.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
@@ -1130,20 +1125,6 @@
       "count": 1
     },
     "react-hooks/purity": {
-      "count": 1
-    }
-  },
-  "src/components/key_team_helpers/filter_logic.tsx": {
-    "react-hooks/purity": {
-      "count": 1
-    },
-    "react-hooks/refs": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 3
-    },
-    "react-hooks/use-memo": {
       "count": 1
     }
   },
@@ -1976,12 +1957,12 @@
       "count": 2
     }
   },
-  "src/components/user_edit_view.test.tsx": {
+  "src/app/(dashboard)/users/_components/user_edit_view.test.tsx": {
     "react/display-name": {
       "count": 1
     }
   },
-  "src/components/user_edit_view.tsx": {
+  "src/app/(dashboard)/users/_components/user_edit_view.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2066,7 +2047,7 @@
       "count": 2
     }
   },
-  "src/components/view_users.tsx": {
+  "src/app/(dashboard)/users/_components/view_users.tsx": {
     "no-restricted-imports": {
       "count": 1
     },
@@ -2074,7 +2055,7 @@
       "count": 1
     }
   },
-  "src/components/view_users/columns.tsx": {
+  "src/app/(dashboard)/users/_components/view_users/columns.tsx": {
     "max-params": {
       "count": 1
     },
@@ -2082,12 +2063,12 @@
       "count": 1
     }
   },
-  "src/components/view_users/table.tsx": {
+  "src/app/(dashboard)/users/_components/view_users/table.tsx": {
     "no-restricted-imports": {
       "count": 1
     }
   },
-  "src/components/view_users/user_info_view.tsx": {
+  "src/app/(dashboard)/users/_components/view_users/user_info_view.tsx": {
     "no-restricted-imports": {
       "count": 1
     },

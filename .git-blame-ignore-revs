@@ -13,7 +13,7 @@
 7edf3a9cb55548b143df1692f4ed7c4681d7fcf7
 
 # style: reformat litellm/ with ruff format (#31317)
-430b5b8f1b12dc261a49fda99ac5d1b22381a428
+17bfd415aeb5a57fb646b5cc67da1c730aa7c50b
 
 # style: unify ruff format width on 120 (#31518)
-3dfbeabe626d203ac9de86024519d9a96c484ce4
+48b5a5a0cc5a694a11219416ee0b6eb6e620e74e

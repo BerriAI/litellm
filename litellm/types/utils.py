@@ -152,6 +152,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
+    bedrock_converse_supports_strict_tools: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -2812,6 +2813,7 @@ class CostBreakdown(TypedDict, total=False):
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
     output_cost: float  # Cost of output/completion tokens (includes reasoning if applicable)
+    reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
     additional_costs: Dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
@@ -3081,6 +3083,7 @@ agentic_loop_internal_litellm_params = [
     "max_agentic_loops",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
 ]
 
@@ -3387,6 +3390,7 @@ class LlmProviders(str, Enum):
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
+    GDC = "gdc"
 
 
 # Create a set of all provider values for quick lookup

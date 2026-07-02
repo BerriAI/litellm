@@ -22,6 +22,8 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useQueryClient } from "@tanstack/react-query";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -67,6 +69,7 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
   const { data: keyCredentialsData } = useCredentials();
@@ -347,6 +350,7 @@ export default function KeyInfoView({
       if (!accessToken) return;
       await keyDeleteCall(accessToken as string, currentKeyData.token || currentKeyData.token_id);
       NotificationManager.success("Key deleted successfully");
+      await queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
       if (onDelete) {
         onDelete();
       }

@@ -50,7 +50,7 @@ import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import SearchToolSelector from "../SearchTools/SearchToolSelector";
+import SearchToolSelector from "../search_tools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import LoggingExportersSelect from "../logging_credentials/LoggingExportersSelect";
 import { loggingExportersOf } from "../logging_credentials/loggingExportersOf";

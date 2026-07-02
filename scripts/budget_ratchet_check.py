@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""Non-gating ratchet guard: budget baselines and ceilings may only fall, never rise.
+"""Non-gating ratchet guard: budget limits may only fall, never rise.
 
 Every `*-budget.json` file (ruff-strict, type-discipline, basedpyright-code) is a
-one-way ratchet: each rule's ceiling is `baseline + slack`, and both the recorded
-`baseline` (the live violation count) and that ceiling are meant to be driven DOWN
-over time. This check compares every budget file against its own content at the
-merge-base with the target branch and fails (exits 1, red) if:
+one-way ratchet: each rule's ceiling is its `limit`, and that limit is meant to be
+driven DOWN over time. This check compares every budget file against its own
+content at the merge-base with the target branch and fails (exits 1, red) if:
 
-  * a rule's ceiling (`baseline + slack`) went up,
-  * a rule's `baseline` went up, even if `slack` was lowered to keep the ceiling
-    flat (a higher baseline bakes in more accepted debt and must be acknowledged),
+  * a rule's `limit` went up,
   * a rule was dropped from a budget (its ceiling effectively became infinite), or
   * an entire budget file was deleted.
 
-New rules and lowered/equal baselines and ceilings are fine.
+New rules and lowered/equal limits are fine.
 
 This is deliberately NOT a gating check. It should turn the run red so that a
 loosening is impossible to miss in review, but it must stay OUT of the
@@ -89,19 +86,21 @@ def _load_base(rel: str, ref: str) -> dict | None:
     return json.loads(proc.stdout)
 
 
-def _baselines(budget: dict) -> dict[str, int]:
-    """Map each rule to its recorded baseline; skip malformed specs."""
-    return {
-        rule: int(spec.get("baseline", 0))
-        for rule, spec in budget.items()
-        if isinstance(spec, dict)
-    }
+def _ceiling(spec: dict) -> int:
+    """A rule's ceiling: its `limit`, or legacy `baseline + slack`.
+
+    The base side of the diff can predate the `limit` migration, so a spec is read
+    under either schema and the two are compared on the same footing.
+    """
+    if "limit" in spec:
+        return int(spec["limit"])
+    return int(spec.get("baseline", 0)) + int(spec.get("slack", 0))
 
 
-def _caps(budget: dict) -> dict[str, int]:
-    """Map each rule to its ceiling (baseline + slack); skip malformed specs."""
+def _limits(budget: dict) -> dict[str, int]:
+    """Map each rule to its ceiling; skip malformed specs."""
     return {
-        rule: int(spec.get("baseline", 0)) + int(spec.get("slack", 0))
+        rule: _ceiling(spec)
         for rule, spec in budget.items()
         if isinstance(spec, dict)
     }
@@ -109,54 +108,32 @@ def _caps(budget: dict) -> dict[str, int]:
 
 def _regression_detail(
     rule: str,
-    base_caps: dict[str, int],
-    head_caps: dict[str, int],
-    base_baselines: dict[str, int],
-    head_baselines: dict[str, int],
+    base_limits: dict[str, int],
+    head_limits: dict[str, int],
 ) -> str | None:
     """Why `rule` regressed vs base, or None when it held flat or fell.
 
-    A dropped rule is terminal; otherwise a raised ceiling and a raised baseline are
-    independent loosenings (the latter catches a baseline bump masked by a slack cut),
-    so both reasons are reported when both apply.
+    A dropped rule is terminal; otherwise the only loosening left is a raised limit.
     """
-    base_cap = base_caps[rule]
-    if rule not in head_caps:
-        return f"rule dropped (ceiling {base_cap} -> removed)"
-    reasons = tuple(
-        message
-        for raised, message in (
-            (
-                head_caps[rule] > base_cap,
-                f"ceiling raised {base_cap} -> {head_caps[rule]}",
-            ),
-            (
-                head_baselines[rule] > base_baselines[rule],
-                f"baseline raised {base_baselines[rule]} -> {head_baselines[rule]}",
-            ),
-        )
-        if raised
-    )
-    return "; ".join(reasons) or None
+    base_limit = base_limits[rule]
+    if rule not in head_limits:
+        return f"rule dropped (limit {base_limit} -> removed)"
+    if head_limits[rule] > base_limit:
+        return f"limit raised {base_limit} -> {head_limits[rule]}"
+    return None
 
 
 def regressions_for(rel: str, base: dict | None, head: dict | None) -> list[Regression]:
     if base is None:
         return []  # new budget file: nothing to ratchet against yet
     if head is None:
-        return [Regression(rel, "*", "budget file was deleted (every ceiling removed)")]
+        return [Regression(rel, "*", "budget file was deleted (every limit removed)")]
 
-    base_caps, head_caps = _caps(base), _caps(head)
-    base_baselines, head_baselines = _baselines(base), _baselines(head)
+    base_limits, head_limits = _limits(base), _limits(head)
     return [
         Regression(rel, rule, detail)
-        for rule in sorted(base_caps)
-        if (
-            detail := _regression_detail(
-                rule, base_caps, head_caps, base_baselines, head_baselines
-            )
-        )
-        is not None
+        for rule in sorted(base_limits)
+        if (detail := _regression_detail(rule, base_limits, head_limits)) is not None
     ]
 
 
@@ -191,7 +168,7 @@ def main() -> int:
 
     if regressions:
         print(
-            f"FAIL: budget baseline(s)/ceiling(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
+            f"FAIL: budget limit(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
         )
         for reg in regressions:
             print(f"  {reg.budget}  {reg.rule}: {reg.detail}")
@@ -203,7 +180,7 @@ def main() -> int:
         return 1
 
     suffix = f" ({', '.join(checked)})" if checked else ""
-    print(f"OK: no budget ceiling increased vs base {args.base}{suffix}")
+    print(f"OK: no budget limit increased vs base {args.base}{suffix}")
     return 0
 
 

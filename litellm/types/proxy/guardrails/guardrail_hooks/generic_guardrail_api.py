@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import TYPE_CHECKING, TypedDict
+from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -57,6 +57,30 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
             "True (default) raises and blocks the request on error. "
             "False logs a critical error and allows the request to proceed, so only a valid "
             "guardrail response can block or modify it; broader than unreachable_fallback."
+        ),
+    )
+
+    streaming_end_of_stream_only: Optional[bool] = Field(
+        default=None,
+        description=(
+            "If False (default when unset), the guardrail runs on sampled chunks during "
+            "the stream at the cadence set by streaming_sampling_rate, and an in-flight "
+            "BLOCKED stops further chunks from streaming. If True, the guardrail runs "
+            "once at end of stream over the assembled response; lower cost and latency, "
+            "but flagged content has already streamed to the client before the terminal "
+            "block. Defaults are applied in GenericGuardrailAPI.__init__ when None so "
+            "unset optional_params does not shadow top-level litellm_params."
+        ),
+    )
+
+    streaming_sampling_rate: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description=(
+            "When streaming_end_of_stream_only is False, the guardrail runs every Nth "
+            "streamed chunk. Ignored when streaming_end_of_stream_only is True. "
+            "Must be >= 1 when set. Defaults to 5 in GenericGuardrailAPI.__init__ "
+            "when None so unset optional_params does not shadow top-level litellm_params."
         ),
     )
 

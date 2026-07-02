@@ -323,6 +323,28 @@ class TestMCPServerManager:
         assert cost_info["tool_name_to_cost_per_query"]["geocode"] == 1e-3
         assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method from config is carried onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+        config = {
+            "basic_provider": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "token_endpoint_auth_method": "client_secret_basic",
+            },
+            "default_provider": {
+                "url": "https://example.com/mcp2",
+                "transport": MCPTransport.http,
+            },
+        }
+
+        await manager.load_servers_from_config(config)
+
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+        assert by_name["basic_provider"].token_endpoint_auth_method == "client_secret_basic"
+        assert by_name["default_provider"].token_endpoint_auth_method is None
+
     def test_normalize_mcp_server_cost_info_preserves_float_values(self):
         mcp_info = {
             "server_name": "maps",
@@ -3177,6 +3199,250 @@ class TestMCPServerManager:
         mock_inner.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+        mock_inner.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicitly_scoped_key_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=["submitted-server"])
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            ),
+            "scoped-server": MCPServer(
+                server_id="scoped-server",
+                name="scoped",
+                transport=MCPTransport.http,
+            ),
+        }
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_scoped",
+            mcp_servers=["scoped-server"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_scoped",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", cache),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=[]),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["scoped-server"],
+            ),
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["scoped-server"]
+        cache.async_get_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_toolset_scope_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_context import (
+            _mcp_active_toolset_id,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=["submitted-server"])
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            ),
+            "toolset-server": MCPServer(
+                server_id="toolset-server",
+                name="toolset",
+                transport=MCPTransport.http,
+            ),
+        }
+        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+
+        token = _mcp_active_toolset_id.set("toolset-abc")
+        try:
+            with (
+                patch.object(proxy_server_module, "user_api_key_cache", cache),
+                patch.object(proxy_server_module, "prisma_client", None),
+                patch.object(
+                    manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+                ),
+                patch.object(
+                    MCPRequestHandler,
+                    "get_allowed_mcp_servers",
+                    new_callable=AsyncMock,
+                    return_value=["toolset-server"],
+                ),
+            ):
+                result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+        finally:
+            _mcp_active_toolset_id.reset(token)
+
+        assert result == ["toolset-server"]
+
+    @pytest.mark.asyncio
+    async def test_invalidate_byom_submitted_servers_cache_deletes_key(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+
+        cache = MagicMock()
+        cache.async_delete_cache = AsyncMock()
+        manager = MCPServerManager()
+
+        with patch.object(proxy_server_module, "user_api_key_cache", cache):
+            await manager.invalidate_byom_submitted_servers_cache("user-123")
+            await manager.invalidate_byom_submitted_servers_cache(None)
+
+        cache.async_delete_cache.assert_awaited_once_with(key="byom_submitted_servers:user-123")
+
+    @pytest.mark.asyncio
+    async def test_get_active_submitted_ids_cache_miss_queries_db_and_caches(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        cache.async_set_cache = AsyncMock()
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", cache),
+            patch.object(proxy_server_module, "prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_active_submitted_mcp_server_ids_for_user",
+                AsyncMock(return_value=["submitted-server", "unknown-server"]),
+            ),
+        ):
+            result = await manager._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+
+        assert result == ["submitted-server"]
+        cache.async_set_cache.assert_awaited_once_with(
+            key="byom_submitted_servers:user-123",
+            value=["submitted-server", "unknown-server"],
+            ttl=60,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_fallback_keeps_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                assert key == "byom_submitted_servers:user-123"
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("permission resolver failed"),
+            ),
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert set(result) == {"global-server", "submitted-server"}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
         """Anonymous delegated auth listing should only include oauth2 servers."""
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -3291,6 +3557,31 @@ class TestMCPServerTimestamps:
 
         assert mcp_server.created_at == created
         assert mcp_server.updated_at == updated
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method stored in the credentials JSON is loaded onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+
+        basic_record = LiteLLM_MCPServerTable(
+            server_id="basic-db-1",
+            server_name="basic_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={"token_endpoint_auth_method": "client_secret_basic"},
+        )
+        basic_server = await manager.build_mcp_server_from_table(basic_record, credentials_are_encrypted=False)
+        assert basic_server.token_endpoint_auth_method == "client_secret_basic"
+
+        default_record = LiteLLM_MCPServerTable(
+            server_id="default-db-1",
+            server_name="default_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={},
+        )
+        default_server = await manager.build_mcp_server_from_table(default_record, credentials_are_encrypted=False)
+        assert default_server.token_endpoint_auth_method is None
 
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""

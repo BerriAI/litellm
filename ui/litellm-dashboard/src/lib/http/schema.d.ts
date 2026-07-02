@@ -2487,6 +2487,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/migrate-encryption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Migrate Encryption Endpoint
+         * @description Re-encrypt all at-rest credentials into the AES-256-GCM (``v2:gcm:``) format.
+         *
+         *     Admin only. Requires ``general_settings.encryption_algorithm: aes-256-gcm``.
+         *     Idempotent and resumable — re-running skips already-migrated values. Pass
+         *     ``dry_run=true`` for a non-mutating scan (equivalent to ``--check``).
+         */
+        post: operations["migrate_encryption_endpoint_credentials_migrate_encryption_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/migrate-encryption/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check Encryption Endpoint
+         * @description Read-only residual scan for compliance attestation. Reports how many at-rest
+         *     values are still in the legacy format. ``residual_legacy == 0`` attests no
+         *     legacy ciphertext remains. Admin only; performs no writes.
+         */
+        get: operations["check_encryption_endpoint_credentials_migrate_encryption_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/{credential_name}": {
         parameters: {
             query?: never;
@@ -2994,8 +3040,8 @@ export interface paths {
         /**
          * Get Active Tasks Stats
          * @description Returns:
-         *       total_active_tasks: int
-         *       by_name: { coroutine_name: count }
+         *     total_active_tasks: int
+         *     by_name: { coroutine_name: count }
          */
         get: operations["get_active_tasks_stats_debug_asyncio_tasks_get"];
         put?: never;
@@ -20970,6 +21016,11 @@ export interface components {
             /** User Ids */
             user_ids: string[];
         };
+        /** BlockUsersResponse */
+        BlockUsersResponse: {
+            /** Blocked Users */
+            blocked_users: components["schemas"]["LiteLLM_EndUserTable"][];
+        };
         /**
          * BlockedWord
          * @description Represents a blocked word with its action and optional description
@@ -21889,7 +21940,7 @@ export interface components {
                 [key: string]: unknown;
             } | components["schemas"]["ChatCompletionCachedContent"] | null;
             /** Signature */
-            signature?: string;
+            signature?: string | null;
             /** Thinking */
             thinking?: string;
             /**
@@ -22618,10 +22669,10 @@ export interface components {
         /**
          * ContentFilterCategoryConfig
          * @description category: "harmful_self_harm"
-         *                   enabled: true
-         *                   action: "BLOCK"
-         *                   severity_threshold: "medium"
-         *                   category_file: "/path/to/custom_file.yaml"  # optional override
+         *     enabled: true
+         *     action: "BLOCK"
+         *     severity_threshold: "medium"
+         *     category_file: "/path/to/custom_file.yaml"  # optional override
          */
         ContentFilterCategoryConfig: {
             /**
@@ -22846,6 +22897,37 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * CustomerResponse
+         * @description Customer object returned by the /customer read+write endpoints.
+         *
+         *     Nests the full budget response model so server-managed budget fields
+         *     (budget_reset_at, created_at) survive response_model filtering, rather than
+         *     the narrow write-allowlist shape LiteLLM_EndUserTable carries for internal use.
+         */
+        CustomerResponse: {
+            /** Alias */
+            alias?: string | null;
+            /** Allowed Model Region */
+            allowed_model_region?: ("eu" | "us") | null;
+            /** Blocked */
+            blocked: boolean;
+            /** Budget Id */
+            budget_id?: string | null;
+            /** Default Model */
+            default_model?: string | null;
+            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /** User Id */
+            user_id: string;
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -23009,6 +23091,13 @@ export interface components {
         DeleteCustomerRequest: {
             /** User Ids */
             user_ids: string[];
+        };
+        /** DeleteCustomersResponse */
+        DeleteCustomersResponse: {
+            /** Deleted Customers */
+            deleted_customers: number;
+            /** Message */
+            message: string;
         };
         /**
          * DeleteEvalResponse
@@ -24767,6 +24856,8 @@ export interface components {
             allowed_model_region?: ("eu" | "us") | null;
             /** Blocked */
             blocked: boolean;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Default Model */
             default_model?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
@@ -25037,6 +25128,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Tool Search Enabled */
+            mcp_tool_search_enabled?: boolean | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /** Models */
@@ -25080,6 +25173,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Tool Search Enabled */
+            mcp_tool_search_enabled?: boolean | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
             /**
@@ -31474,6 +31569,14 @@ export interface components {
              */
             workers: components["schemas"]["WorkerRegistryEntry"][];
         };
+        /** UnblockUsersResponse */
+        UnblockUsersResponse: {
+            /**
+             * Blocked Users
+             * @description User IDs that remain blocked after this unblock call
+             */
+            blocked_users: string[];
+        };
         /**
          * UpdateCredentialItem
          * @description PATCH body for ``/credentials/{name}``.
@@ -37196,6 +37299,58 @@ export interface operations {
             };
         };
     };
+    migrate_encryption_endpoint_credentials_migrate_encryption_post: {
+        parameters: {
+            query?: {
+                /** @description If true, scan and report without writing any changes. */
+                dry_run?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_encryption_endpoint_credentials_migrate_encryption_check_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     delete_credential_credentials__credential_name__delete: {
         parameters: {
             query?: never;
@@ -37458,7 +37613,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["BlockUsersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37529,7 +37684,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteCustomersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37561,7 +37716,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_EndUserTable"];
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37590,7 +37745,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LiteLLM_EndUserTable"][];
+                    "application/json": components["schemas"]["CustomerResponse"][];
                 };
             };
         };
@@ -37614,7 +37769,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37647,7 +37802,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["UnblockUsersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -37680,7 +37835,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38106,7 +38261,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteCustomersResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38138,7 +38293,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38167,7 +38322,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"][];
                 };
             };
         };
@@ -38191,7 +38346,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */
@@ -38257,7 +38412,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["CustomerResponse"];
                 };
             };
             /** @description Validation Error */

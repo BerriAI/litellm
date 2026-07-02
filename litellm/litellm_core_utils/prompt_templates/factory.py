@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -2319,6 +2319,26 @@ def sanitize_messages_for_tool_calling(
     return sanitized_messages
 
 
+def _is_unsignable_thinking_block(block: object) -> bool:
+    """A `thinking` block that Anthropic cannot accept on input.
+
+    Anthropic verifies the thinking signature cryptographically, so a block whose
+    signature is null, empty, or missing (e.g. from an open-source reasoning model)
+    is rejected with a 400 and must be dropped rather than blanked or repaired.
+    `redacted_thinking` blocks carry no signature and are always kept.
+    """
+    if not isinstance(block, dict) or block.get("type") != "thinking":
+        return False
+    signature = block.get("signature")
+    return not (isinstance(signature, str) and len(signature) > 0)
+
+
+def _drop_unsignable_thinking_blocks(
+    thinking_blocks: list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]],
+) -> list[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]:
+    return [block for block in thinking_blocks if not _is_unsignable_thinking_block(block)]
+
+
 def anthropic_messages_pt(
     messages: List[AllMessageValues],
     model: str,
@@ -2507,7 +2527,10 @@ def anthropic_messages_pt(
                     # Add compaction blocks at the beginning of assistant content : https://platform.claude.com/docs/en/build-with-claude/compaction
                     assistant_content.extend(_compaction_blocks)  # type: ignore
 
-            thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+            _raw_thinking_blocks = assistant_content_block.get("thinking_blocks", None)
+            thinking_blocks = (
+                _drop_unsignable_thinking_blocks(_raw_thinking_blocks) if _raw_thinking_blocks is not None else None
+            )
 
             # Check if tool_calls contain server tool calls (web search, etc.)
             # If so, we need to interleave thinking blocks with tool call groups
@@ -2671,7 +2694,9 @@ def anthropic_messages_pt(
                         thinking_block = cast(str, m.get("thinking", ""))
                         text_block = cast(str, m.get("text", ""))
                         if (
-                            m.get("type", "") == "thinking" and len(thinking_block) > 0
+                            m.get("type", "") == "thinking"
+                            and len(thinking_block) > 0
+                            and not _is_unsignable_thinking_block(m)
                         ):  # don't pass empty text blocks. anthropic api raises errors.
                             anthropic_message: Union[
                                 ChatCompletionThinkingBlock,
@@ -5010,21 +5035,30 @@ def _bedrock_tools_pt(tools: List, model: Optional[str] = None) -> List[BedrockT
     ]
     """
     from litellm.llms.bedrock.common_utils import (
-        get_bedrock_base_model,
+        bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
     _valid_json_schema_root_types = frozenset(("array", "boolean", "integer", "null", "number", "object", "string"))
     # Only Claude on Bedrock honours strict tool schemas; other families
-    # (Nova, Llama, GPT-OSS) reject the strict field outright.
-    supports_strict_tools = bool(model and get_bedrock_base_model(model).startswith("anthropic"))
+    # (Nova, Llama, GPT-OSS) reject the strict field outright. Opus 4.7/4.8
+    # also reject `strict` on Bedrock Converse (see #31582) — their validator
+    # maps toolSpec to the native Anthropic tool shape, which has no strict
+    # field, even though Anthropic's native API accepts it as a top-level key.
+    supports_strict_tools = bool(model and bedrock_converse_supports_strict_tools(model))
     tool_block_list: List[BedrockToolBlock] = []
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
             # Already a BedrockToolBlock, pass it through
             tool_block_list.append(tool)  # type: ignore
+            continue
+
+        # Responses built-in tools (web_search, image_generation, namespace, tool_search,
+        # custom) carry neither an OpenAI "function" nor an Anthropic "input_schema" and have
+        # no Bedrock toolSpec equivalent; drop them instead of emitting an empty junk toolSpec.
+        if isinstance(tool, dict) and "function" not in tool and "input_schema" not in tool:
             continue
 
         # OpenAI function tools, or Anthropic Messages / Claude Code ({name, input_schema, type, ...})
@@ -5291,3 +5325,146 @@ def get_attribute_or_key(tool_or_function, attribute, default=None):
     if hasattr(tool_or_function, attribute):
         return getattr(tool_or_function, attribute)
     return tool_or_function.get(attribute, default)
+
+
+class NormalizedToolCall(TypedDict):
+    id: Optional[str]
+    name: Optional[str]
+    arguments: dict[str, Any]
+
+
+def _parse_tool_call_arguments(raw: Any, tool_name: Optional[str], context: str) -> dict[str, Any]:
+    # Anthropic's tool_use blocks already carry a parsed dict in "input";
+    # chat completions and the Responses API carry a JSON string that may be
+    # truncated by the model, so route those through the repair-aware parser.
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    try:
+        parsed = parse_tool_call_arguments(raw, tool_name=tool_name, context=context)
+    except ValueError as e:
+        verbose_logger.warning("Failed to parse tool call arguments: %s", e)
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _tool_calls_from_chat_completion_response(response: Any) -> list[NormalizedToolCall]:
+    choices = get_attribute_or_key(response, "choices", None)
+    if not (isinstance(choices, list) and choices):
+        return []
+    message = get_attribute_or_key(choices[0], "message", None)
+    tool_calls = get_attribute_or_key(message, "tool_calls", None) if message else None
+    if not isinstance(tool_calls, list):
+        return []
+    result: list[NormalizedToolCall] = []
+    for tc in tool_calls:
+        fn = get_attribute_or_key(tc, "function", None)
+        if fn is None:
+            continue
+        name = get_attribute_or_key(fn, "name")
+        result.append(
+            NormalizedToolCall(
+                id=get_attribute_or_key(tc, "id"),
+                name=name,
+                arguments=_parse_tool_call_arguments(
+                    get_attribute_or_key(fn, "arguments", "{}"),
+                    tool_name=name,
+                    context="chat completions",
+                ),
+            )
+        )
+    return result
+
+
+def _tool_calls_from_responses_api_response(response: Any) -> list[NormalizedToolCall]:
+    output = get_attribute_or_key(response, "output", None)
+    if not isinstance(output, list):
+        return []
+    result: list[NormalizedToolCall] = []
+    for item in output:
+        if get_attribute_or_key(item, "type") != "function_call":
+            continue
+        name = get_attribute_or_key(item, "name")
+        result.append(
+            NormalizedToolCall(
+                id=get_attribute_or_key(item, "call_id") or get_attribute_or_key(item, "id"),
+                name=name,
+                arguments=_parse_tool_call_arguments(
+                    get_attribute_or_key(item, "arguments", "{}"),
+                    tool_name=name,
+                    context="responses API",
+                ),
+            )
+        )
+    return result
+
+
+def _tool_calls_from_anthropic_messages_response(response: Any) -> list[NormalizedToolCall]:
+    content = get_attribute_or_key(response, "content", None)
+    if not isinstance(content, list):
+        return []
+    result: list[NormalizedToolCall] = []
+    for block in content:
+        if get_attribute_or_key(block, "type") != "tool_use":
+            continue
+        raw_input = get_attribute_or_key(block, "input", {})
+        result.append(
+            NormalizedToolCall(
+                id=get_attribute_or_key(block, "id"),
+                name=get_attribute_or_key(block, "name"),
+                arguments=raw_input if isinstance(raw_input, dict) else {},
+            )
+        )
+    return result
+
+
+def get_tool_calls_from_response(response: Any) -> list[NormalizedToolCall]:
+    """
+    Extract tool/function calls from a response object into a normalized
+    ``{"id", "name", "arguments"}`` shape, regardless of which API surface
+    produced it: chat completions (``choices[].message.tool_calls``),
+    the Responses API (``output`` items of type ``function_call``), or the
+    Anthropic Messages API (``content`` blocks of type ``tool_use``).
+
+    Callers that only care about a specific tool should filter the result by
+    ``name`` themselves -- this returns every tool call found.
+    """
+    for extractor in (
+        _tool_calls_from_chat_completion_response,
+        _tool_calls_from_responses_api_response,
+        _tool_calls_from_anthropic_messages_response,
+    ):
+        tool_calls = extractor(response)
+        if tool_calls:
+            return tool_calls
+    return []
+
+
+def has_tool_with_name(tools: Any, tool_name: str) -> bool:
+    """
+    Check whether a tools list (as sent to an LLM) includes a tool with the
+    given name, regardless of shape: OpenAI-style function tools
+    (``{"type": "function", "function": {"name": ...}}``) or Anthropic's
+    native tool shape (a top-level ``"name"``, e.g.
+    ``{"name": ..., "input_schema": ...}``). Anthropic's documented client
+    tool format doesn't require a ``"type"`` key at all -- ``"custom"`` is
+    only one of several possible values -- so any non-OpenAI-shaped tool is
+    matched on its top-level ``"name"``.
+    """
+    if not isinstance(tools, list):
+        return False
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if tool.get("type") == "function" and isinstance(function, dict):
+            if function.get("name") == tool_name:
+                return True
+        elif tool.get("name") == tool_name:
+            return True
+    return False
