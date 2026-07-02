@@ -2,8 +2,9 @@
 Translates from OpenAI's `/v1/chat/completions` to Xiaomi MiMo's `/v1/chat/completions`
 """
 
-from typing import List, Optional, Tuple
+from typing import Optional
 
+from litellm._logging import verbose_logger
 from litellm.secret_managers.main import get_secret_str
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
@@ -29,12 +30,12 @@ class XiaomiMiMoChatConfig(OpenAIGPTConfig):
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("XIAOMI_MIMO_API_BASE") or "https://api.xiaomimimo.com/v1"  # type: ignore
         dynamic_api_key = api_key or get_secret_str("XIAOMI_MIMO_API_KEY")
         return api_base, dynamic_api_key
 
-    def get_supported_openai_params(self, model: str) -> List:
+    def get_supported_openai_params(self, model: str) -> list:
         params = super().get_supported_openai_params(model)
         for reasoning_param in ("reasoning_effort", "thinking"):
             if reasoning_param not in params:
@@ -87,18 +88,34 @@ class XiaomiMiMoChatConfig(OpenAIGPTConfig):
             # `reasoning_effort` are sent, `thinking` wins (their coexistence is
             # not documented by MiMo, so only one is forwarded).
             self._merge_thinking_into_extra_body(optional_params, thinking)
-        elif reasoning_effort is not None:
-            if reasoning_effort == "none":
-                # MiMo rejects 'none' (400); its native disable is thinking={"type": "disabled"}.
-                self._merge_thinking_into_extra_body(optional_params, {"type": "disabled"})
-            elif reasoning_effort == "minimal":
-                # 'minimal' is rejected (500); clamp to the closest accepted literal.
-                optional_params["reasoning_effort"] = "low"
-            elif reasoning_effort in XIAOMI_MIMO_REASONING_EFFORTS:
-                optional_params["reasoning_effort"] = reasoning_effort
-            else:
-                # Out-of-set values (e.g. 'xhigh' seen in the wild) hard-fail at MiMo; clamp.
-                optional_params["reasoning_effort"] = "high"
+            return optional_params
+        if thinking is not None:
+            verbose_logger.warning(
+                "xiaomi_mimo: ignoring `thinking` of type %s; expected a dict like "
+                '{"type": "enabled"|"disabled"}',
+                type(thinking).__name__,
+            )
+        if reasoning_effort is None:
+            return optional_params
+        if reasoning_effort == "none":
+            # MiMo rejects 'none' (400); its native disable is thinking={"type": "disabled"}.
+            self._merge_thinking_into_extra_body(optional_params, {"type": "disabled"})
+        elif reasoning_effort == "minimal":
+            # 'minimal' is rejected (500); clamp to the closest accepted literal.
+            verbose_logger.debug(
+                "xiaomi_mimo: mapping reasoning_effort='minimal' to 'low' (MiMo accepts low|medium|high)"
+            )
+            optional_params["reasoning_effort"] = "low"
+        elif reasoning_effort in XIAOMI_MIMO_REASONING_EFFORTS:
+            optional_params["reasoning_effort"] = reasoning_effort
+        else:
+            # Out-of-set values (e.g. 'xhigh' seen in the wild) hard-fail at MiMo; clamp.
+            verbose_logger.warning(
+                "xiaomi_mimo: reasoning_effort=%r is not supported by MiMo "
+                "(accepts low|medium|high); clamping to 'high'",
+                reasoning_effort,
+            )
+            optional_params["reasoning_effort"] = "high"
         return optional_params
 
     def get_complete_url(

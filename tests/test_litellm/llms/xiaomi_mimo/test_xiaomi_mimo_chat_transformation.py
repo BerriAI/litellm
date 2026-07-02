@@ -208,6 +208,17 @@ class TestXiaomiMiMoReasoningParams:
         assert "extra_body" not in result
         assert "reasoning_effort" not in result
 
+    def test_non_dict_thinking_ignored_without_crashing(self):
+        """Only the dict shape is documented; other shapes are ignored (with a warning log)."""
+        result = self._map({"thinking": "off"})
+        assert "extra_body" not in result
+        assert "thinking" not in result
+
+    def test_non_dict_thinking_does_not_swallow_reasoning_effort(self):
+        """An ignored non-dict `thinking` must not suppress a valid reasoning_effort."""
+        result = self._map({"thinking": "off", "reasoning_effort": "low"})
+        assert result["reasoning_effort"] == "low"
+
 
 class TestXiaomiMiMoProviderRegistration:
     """xiaomi_mimo is a first-class provider (migrated off the openai_like JSON registry)."""
