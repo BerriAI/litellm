@@ -6220,6 +6220,68 @@ async def test_update_general_settings_store_model_in_db_none_keeps_current():
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_store_model_in_db_env_var_overrides_stale_db_false(
+    monkeypatch,
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/31968
+
+    When STORE_MODEL_IN_DB is explicitly set via env var, a stale
+    store_model_in_db=False value persisted in the DB's general_settings
+    must not silently disable the feature the next time the background
+    poller (add_deployment -> _update_general_settings) runs.
+    """
+    monkeypatch.setenv("STORE_MODEL_IN_DB", "True")
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with (
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": False}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is True
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_store_model_in_db_yaml_config_overrides_stale_db_false(
+    monkeypatch,
+):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/31968
+
+    When store_model_in_db=True comes from config.yaml's general_settings (no
+    STORE_MODEL_IN_DB env var set), a stale store_model_in_db=False value
+    persisted in the DB's general_settings must not silently disable the
+    feature the next time the background poller
+    (add_deployment -> _update_general_settings) runs.
+    """
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    with (
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        patch("litellm.proxy.proxy_server.general_settings", {"store_model_in_db": True}),
+        patch("litellm.proxy.proxy_server._store_model_in_db_enabled_via_config", True),
+    ):
+        await proxy_config._update_general_settings(
+            db_general_settings={"store_model_in_db": False}
+        )
+
+        import litellm.proxy.proxy_server as ps
+
+        assert ps.store_model_in_db is True
+
+
+@pytest.mark.asyncio
 async def test_store_model_in_db_db_override_when_config_false():
     """
     Verify the early DB check in initialize_scheduled_background_jobs

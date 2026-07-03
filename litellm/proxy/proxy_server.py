@@ -1919,6 +1919,9 @@ disable_spend_logs = False
 jwt_handler = JWTHandler()
 prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = None
 store_model_in_db: bool = False
+# Set when config.yaml's general_settings.store_model_in_db is True at startup, so a stale
+# `store_model_in_db=False` row in the DB can't silently disable the feature (litellm#31968).
+_store_model_in_db_enabled_via_config: bool = False
 open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
 proxy_logging_obj: ProxyLogging = ProxyLogging(user_api_key_cache=user_api_key_cache, premium_user=premium_user)
@@ -3995,6 +3998,7 @@ class ProxyConfig:
             prompt_injection_detection_obj, \
             redis_usage_cache, \
             store_model_in_db, \
+            _store_model_in_db_enabled_via_config, \
             premium_user, \
             open_telemetry_logger, \
             health_check_details, \
@@ -4400,6 +4404,7 @@ class ProxyConfig:
             if store_model_in_db is None:
                 store_model_in_db = False
             general_settings["store_model_in_db"] = store_model_in_db
+            _store_model_in_db_enabled_via_config = store_model_in_db is True
             ### CUSTOM API KEY AUTH ###
             ## pass filepath
             custom_auth = general_settings.get("custom_auth", None)
@@ -5515,7 +5520,15 @@ class ProxyConfig:
                 general_settings["store_prompts_in_spend_logs"] = bool(value)
 
         ## STORE MODEL IN DB ##
-        if "store_model_in_db" in _general_settings:
+        # A STORE_MODEL_IN_DB env var or config.yaml general_settings.store_model_in_db=True
+        # applied at startup is the operator's deliberate choice and must not be silently
+        # flipped back to False by a stale DB row on the next polling cycle (litellm#31968).
+        env_store_model_in_db = get_secret_bool("STORE_MODEL_IN_DB", None)
+        if (
+            "store_model_in_db" in _general_settings
+            and env_store_model_in_db is None
+            and not _store_model_in_db_enabled_via_config
+        ):
             value = _general_settings["store_model_in_db"]
             if value is None:
                 pass  # Don't change store_model_in_db to None; keep current value
