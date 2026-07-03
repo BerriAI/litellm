@@ -1381,7 +1381,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return arguments if isinstance(arguments, str) else None
 
     @staticmethod
-    def _with_tool_call_arguments(tool_call: dict[str, Any], arguments: str) -> dict[str, Any]:
+    def _with_tool_call_arguments(tool_call: Any, arguments: str) -> dict[str, Any]:
         """Return a copy of a dict-shaped tool call with its arguments replaced."""
         return {**tool_call, "function": {**tool_call["function"], "arguments": arguments}}
 
