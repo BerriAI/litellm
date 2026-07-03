@@ -83,8 +83,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   ];
 
   const hasNoMcpServersSelected = allowNoMcpServers && selectedValues.includes(NO_MCP_SERVERS_SENTINEL);
-  const hasAllProxyMcpServersSelected =
-    allowAllProxyMcpServers && selectedValues.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
+  const hasAllProxyMcpServersSelected = selectedValues.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
   // Handle selection
   const handleChange = (selected: string[]) => {
@@ -126,7 +125,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
           return searchText.toLowerCase().includes(input.toLowerCase());
         }}
       >
-        {allowAllProxyMcpServers && (
+        {(allowAllProxyMcpServers || hasAllProxyMcpServersSelected) && (
           <Select.Option
             key={ALL_PROXY_MCP_SERVERS_SENTINEL}
             value={ALL_PROXY_MCP_SERVERS_SENTINEL}
