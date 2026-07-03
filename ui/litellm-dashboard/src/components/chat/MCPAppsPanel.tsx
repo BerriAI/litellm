@@ -103,6 +103,8 @@ function getAvatarColor(name: string): string {
 
 type TabKey = "all" | "connected";
 
+const TOOLS_FETCH_CONCURRENCY = 5;
+
 const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -142,34 +144,32 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
     // 1. Load servers first — show the list immediately
     fetchMCPServers(accessToken)
-      .then((serverData) => {
+      .then(async (serverData) => {
         if (cancelled) return;
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
         setServers(list);
         setLoading(false);
 
-        // 2. Fetch tools per server in parallel — each resolves independently and updates counts one by one
+        // 2. Fetch tools per server, at most TOOLS_FETCH_CONCURRENCY at a time
         setLoadingCounts(true);
-        let remaining = list.length;
-        if (remaining === 0) {
-          setLoadingCounts(false);
-          return;
+        const chunks = Array.from({ length: Math.ceil(list.length / TOOLS_FETCH_CONCURRENCY) }, (_, i) =>
+          list.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
+        );
+        for (const chunk of chunks) {
+          if (cancelled) return;
+          await Promise.allSettled(
+            chunk.map((s) =>
+              listMCPTools(accessToken, s.server_id)
+                .then((toolsData) => {
+                  if (cancelled) return;
+                  const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
+                  setToolCounts((prev) => ({ ...prev, [nameOf(s)]: tools.length }));
+                })
+                .catch(() => {}),
+            ),
+          );
         }
-        list.forEach((s) => {
-          listMCPTools(accessToken, s.server_id)
-            .then((toolsData) => {
-              if (cancelled) return;
-              const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
-              const sname = nameOf(s);
-              setToolCounts((prev) => ({ ...prev, [sname]: tools.length }));
-            })
-            .catch(() => {})
-            .finally(() => {
-              if (cancelled) return;
-              remaining -= 1;
-              if (remaining === 0) setLoadingCounts(false);
-            });
-        });
+        if (!cancelled) setLoadingCounts(false);
 
         // 3. Check OAuth credential status for OAuth2 servers in parallel
         const oauthServers = list.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);

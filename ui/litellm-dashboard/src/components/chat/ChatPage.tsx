@@ -132,6 +132,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("id");
+  const hadActiveConversationOnMountRef = useRef(activeConversationId !== null);
   const { data: uiConfig } = useUIConfig();
   const uiRoot =
     uiConfig?.server_root_path && uiConfig.server_root_path !== "/"
@@ -206,7 +207,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             if (Array.isArray(parsed)) {
               const valid = (parsed as string[]).filter((m) => names.includes(m));
               if (valid.length > 0) {
-                setSelectedModels(valid);
+                setSelectedModels(hadActiveConversationOnMountRef.current ? [valid[0]] : valid);
                 return;
               }
             }
@@ -225,7 +226,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
   useEffect(() => {
     if (staleId) router.replace(getChatUrl(uiRoot));
-  }, [staleId, router]);
+  }, [staleId, router, uiRoot]);
 
   // Reset the responses session when switching between conversations so that
   // previous_response_id from conversation A is never sent for conversation B.
@@ -373,6 +374,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       router,
       isStreaming,
       responsesSessionId,
+      uiRoot,
     ],
   );
 
@@ -1044,7 +1046,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               conversations={conversations}
               activeConversationId={activeConversationId}
               onSelect={(id) => router.push(getChatUrl(uiRoot, id))}
-              onDelete={deleteConversation}
+              onDelete={(id) => {
+                deleteConversation(id);
+                if (id === activeConversationId) router.push(getChatUrl(uiRoot));
+              }}
               onNewChat={() => router.push(getChatUrl(uiRoot))}
               onRename={renameConversation}
             />
