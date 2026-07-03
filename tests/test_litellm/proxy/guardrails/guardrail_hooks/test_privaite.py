@@ -56,6 +56,7 @@ class _FakeEngine:
     """
 
     raise_oserror_until = 0
+    oserror_message = "[E050] Can't find model 'en_core_web_lg'."
     init_calls = 0
 
     def __init__(self, config):
@@ -64,7 +65,7 @@ class _FakeEngine:
     async def initialize(self):
         type(self).init_calls += 1
         if self.init_calls <= type(self).raise_oserror_until:
-            raise OSError("spaCy model missing")
+            raise OSError(type(self).oserror_message)
 
     def _scrub(self, content, mapping):
         if isinstance(content, str):
@@ -154,6 +155,7 @@ def _fake_privaite_package(monkeypatch):
     """Install a fake 'privaite' (and 'spacy') package tree so the guardrail's
     lazy imports resolve without the real packages installed, mirroring CI."""
     _FakeEngine.raise_oserror_until = 0
+    _FakeEngine.oserror_message = "[E050] Can't find model 'en_core_web_lg'."
     _FakeEngine.init_calls = 0
 
     def _module(name, **attrs):
@@ -307,6 +309,18 @@ async def test_engine_downloads_spacy_models_on_oserror():
 
 
 @pytest.mark.asyncio
+async def test_engine_does_not_retry_non_model_oserror():
+    # Only the missing-spaCy-model OSError may trigger the download retry;
+    # a disk/permission/network OSError must propagate untouched.
+    _FakeEngine.raise_oserror_until = 1
+    _FakeEngine.oserror_message = "disk full"
+    gr = _make_guardrail()
+    with pytest.raises(OSError, match="disk full"):
+        await gr._engine_for(["en"])
+    assert _FakeEngine.init_calls == 1  # no retry, no download
+
+
+@pytest.mark.asyncio
 async def test_pre_call_no_messages_is_passthrough():
     gr = _make_guardrail()
     data = {"messages": []}
@@ -450,6 +464,36 @@ async def test_streaming_restores_content():
 
     chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
     assert chunks[1].choices[0].delta.content == "Hi Marie Dupont"
+
+
+@pytest.mark.asyncio
+async def test_streaming_terminal_none_content_stays_none():
+    # A provider finish chunk commonly carries finish_reason with content=None;
+    # with nothing held back, restoration must not mutate that None into "".
+    gr = _make_guardrail()
+    request_data = {"metadata": {"privaite_map": _FAKES}}
+
+    async def _source():
+        yield types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    delta=types.SimpleNamespace(content="Hi <PERSON_1>"),
+                    finish_reason=None,
+                )
+            ]
+        )
+        yield types.SimpleNamespace(
+            choices=[
+                types.SimpleNamespace(
+                    delta=types.SimpleNamespace(content=None),
+                    finish_reason="stop",
+                )
+            ]
+        )
+
+    chunks = await _collect(gr.async_post_call_streaming_iterator_hook(None, _source(), request_data))
+    assert chunks[0].choices[0].delta.content == "Hi Marie Dupont"
+    assert chunks[1].choices[0].delta.content is None
 
 
 @pytest.mark.asyncio
