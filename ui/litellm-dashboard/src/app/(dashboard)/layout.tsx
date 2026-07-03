@@ -1,8 +1,10 @@
 "use client";
 
 import React, { Suspense, useEffect, useState } from "react";
+import { ConfigProvider } from "antd";
 import Navbar from "@/components/navbar";
-import { ThemeProvider } from "@/contexts/ThemeContext";
+import { ThemeProvider, useTheme } from "@/contexts/ThemeContext";
+import { getAntdTheme } from "@/config/antdTheme";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -38,6 +40,7 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
+  const { isDarkMode, toggleDarkMode } = useTheme();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const [page, setPage] = useState(() => {
     return searchParams.get("page") || "api-keys";
@@ -64,8 +67,8 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const toggleSidebar = () => setSidebarCollapsed((v) => !v);
 
   return (
-    <ThemeProvider accessToken={""}>
-      <div className="flex flex-col min-h-screen">
+    <ConfigProvider theme={getAntdTheme(isDarkMode)}>
+      <div className="flex flex-col min-h-screen bg-white dark:bg-[#0e0e0e]">
         <Navbar
           isPublicPage={false}
           sidebarCollapsed={sidebarCollapsed}
@@ -75,31 +78,29 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           userRole={userRole}
           premiumUser={premiumUser}
           proxySettings={undefined}
-          setProxySettings={() => { }}
+          setProxySettings={() => {}}
           accessToken={accessToken}
-          isDarkMode={false}
-          toggleDarkMode={() => { }}
+          isDarkMode={isDarkMode}
+          toggleDarkMode={toggleDarkMode}
         />
         <DebugWarningBanner accessToken={accessToken} />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
-            <SidebarProvider
-              setPage={handleSetPage}
-              defaultSelectedKey={page}
-              sidebarCollapsed={sidebarCollapsed}
-            />
+            <SidebarProvider setPage={handleSetPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
           </div>
-          <main className="flex-1">{children}</main>
+          <main className="flex-1 bg-gray-50 dark:bg-[#151515] text-gray-900 dark:text-gray-100">{children}</main>
         </div>
       </div>
-    </ThemeProvider>
+    </ConfigProvider>
   );
 }
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
-      <LayoutContent>{children}</LayoutContent>
+      <ThemeProvider accessToken={""}>
+        <LayoutContent>{children}</LayoutContent>
+      </ThemeProvider>
     </Suspense>
   );
 }
