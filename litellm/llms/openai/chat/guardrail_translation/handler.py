@@ -18,7 +18,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamTransformSink,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
@@ -405,6 +408,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[dict] = None,
+        stream_transform_sink: Optional[StreamTransformSink] = None,
     ) -> List["ModelResponseStream"]:
         """
         Process output streaming responses by applying guardrails to text content.
@@ -414,6 +418,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             guardrail_to_apply: The guardrail instance to apply
             litellm_logging_obj: Optional logging object
             user_api_key_dict: User API key metadata to pass to guardrails
+            stream_transform_sink: Optional out-parameter for the streaming text
+                transformation path. When provided, the guardrailed accumulated
+                text is written back into ``responses_so_far`` (so the caller can
+                diff it against what it has already emitted) and the per-choice
+                ``stream_holdback_chars`` returned by the guardrail is reported
+                back on the sink.
 
         Returns:
             Modified list of responses with guardrail applied to content
@@ -443,6 +453,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
             )
+
+            # process_output_response guardrails a throwaway assembled response;
+            # the streaming transform path needs that final guardrailed text
+            # back on the chunks so the caller can diff and flush it.
+            await self._write_back_assembled_text(stream_transform_sink, responses_so_far, model_response)
 
             return responses_so_far
 
@@ -513,12 +528,87 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 task_mappings=task_mappings,
             )
 
+            # Step 5: Report the guardrail's requested per-choice holdback back to
+            # the streaming transform caller (word-boundary safety).
+            self._populate_holdback_sink(
+                stream_transform_sink,
+                guardrailed_inputs.get("stream_holdback_chars"),
+                task_mappings,
+            )
+
         verbose_proxy_logger.debug(
             "OpenAI Chat Completions: Processed output streaming responses: %s",
             responses_so_far,
         )
 
         return responses_so_far
+
+    @classmethod
+    def _populate_holdback_sink(
+        cls,
+        sink: Optional[StreamTransformSink],
+        holdback: Optional[list[int]],
+        task_mappings: list[tuple[int, Optional[int]]],
+    ) -> None:
+        """Map the guardrail's ``stream_holdback_chars`` (indexed like ``texts``)
+        to a per-choice holdback and report it on the sink.
+
+        No-op when no sink was provided (non-transform streaming path). Only
+        string content (``content_idx is None``) participates in the incremental
+        transform path; list-content entries are ignored here.
+        """
+        if sink is None:
+            return
+        if not holdback:
+            sink.holdback_per_choice = {}
+            return
+        sink.holdback_per_choice = {
+            cast(int, task_mappings[idx][0]): int(value)
+            for idx, value in enumerate(holdback)
+            if idx < len(task_mappings) and task_mappings[idx][1] is None
+        }
+
+    async def _write_back_assembled_text(
+        self,
+        sink: Optional[StreamTransformSink],
+        responses_so_far: list["ModelResponseStream"],
+        model_response: "ModelResponse",
+    ) -> None:
+        """Write the guardrailed string content of an assembled ``ModelResponse``
+        back onto the streaming chunks so the transform caller can diff it.
+
+        No-op when no sink was provided (non-transform streaming path).
+        """
+        if sink is None:
+            return
+        guardrailed_texts: list[str] = []
+        task_mappings: list[tuple[int, Optional[int]]] = []
+        for choice_idx, choice in enumerate(model_response.choices):
+            typed_choice = cast(Choices, choice)
+            content = typed_choice.message.content
+            if isinstance(content, str):
+                guardrailed_texts.append(content)
+                task_mappings.append((choice_idx, None))
+        if guardrailed_texts:
+            await self._apply_guardrail_responses_to_output_streaming(
+                responses=responses_so_far,
+                guardrailed_texts=guardrailed_texts,
+                task_mappings=task_mappings,
+            )
+
+    def extract_accumulated_text_per_choice(self, responses_so_far: list["ModelResponseStream"]) -> dict[int, str]:
+        """Accumulated string-content text per choice index across all chunks.
+
+        Collapses the ``(choice_idx, content_idx)`` keys of
+        ``_combine_streaming_texts`` to the string-content path only
+        (``content_idx is None``), which is what the incremental transform
+        emission diffs against.
+        """
+        return {
+            choice_idx: text
+            for (choice_idx, content_idx), text in self._combine_streaming_texts(responses_so_far).items()
+            if content_idx is None
+        }
 
     def _combine_streaming_texts(
         self, responses_so_far: List["ModelResponseStream"]

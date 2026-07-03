@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -9,6 +10,24 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import AllMessageValues
+
+
+@dataclass(slots=True)
+class StreamTransformSink:
+    """Out-parameter used by ``process_output_streaming_response`` to hand the
+    per-choice streaming holdback back to the caller.
+
+    The return value of ``process_output_streaming_response`` is contractually
+    the (in-place mutated) ``responses_so_far`` list, so text transformations on
+    the streaming path need a side channel to report how many trailing chars the
+    guardrail asked to withhold from emission (``stream_holdback_chars`` on the
+    guardrail response). Only the OpenAI chat handler populates this today; the
+    hook passes a fresh sink per processing round and reads ``holdback_per_choice``
+    afterwards. A mutable dataclass is deliberate here: it is a write-once output
+    parameter for a single call, not shared state.
+    """
+
+    holdback_per_choice: dict[int, int] = field(default_factory=dict)
 
 
 class BaseTranslation(ABC):
@@ -93,9 +112,14 @@ class BaseTranslation(ABC):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: Optional[dict] = None,
+        stream_transform_sink: Optional[StreamTransformSink] = None,
     ) -> Any:
         """
         Process output streaming response with guardrails.
+
+        Optional to override in subclasses. ``stream_transform_sink`` is the
+        out-parameter used by handlers that support streaming text
+        transformations (see ``StreamTransformSink``); base handlers ignore it.
 
         Optional to override in subclasses.
         """

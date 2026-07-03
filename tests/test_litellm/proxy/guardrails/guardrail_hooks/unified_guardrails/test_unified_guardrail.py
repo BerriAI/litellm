@@ -1,6 +1,7 @@
 """Tests for unified guardrail."""
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
@@ -648,3 +649,238 @@ class TestUnifiedLLMGuardrails:
 
             # Response returned with pages intact
             assert result.pages[0].markdown == "Some text"
+
+
+class _StreamingTextGuardrail(CustomGuardrail):
+    """Guardrail whose apply_guardrail rewrites (uppercases) response text.
+
+    Optionally schedules a per-response-call ``stream_holdback_chars`` (indexed
+    like ``texts``) and can force the mutated text shorter than the input to
+    exercise the streaming underflow guard.
+    """
+
+    def __init__(self, *, holdback_schedule=None, shrink_to=None, shrink_after=0):
+        super().__init__(guardrail_name="streaming-text-guardrail")
+        self.streaming_transform_mode = "incremental_diff"
+        self.streaming_sampling_rate = 1
+        self.streaming_end_of_stream_only = False
+        self.guardrail_config = {}
+        self._holdback_schedule = list(holdback_schedule or [])
+        self._shrink_to = shrink_to
+        self._shrink_after = shrink_after
+        self.response_calls = 0
+
+    def should_run_guardrail(self, data, event_type):  # type: ignore[override]
+        return True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        texts = inputs.get("texts", [])
+        if input_type != "response":
+            return {"texts": [t.upper() for t in texts]}
+
+        idx = self.response_calls
+        self.response_calls += 1
+        if self._shrink_to is not None and idx >= self._shrink_after:
+            transformed = [self._shrink_to for _ in texts]
+        else:
+            transformed = [t.upper() for t in texts]
+        result = {"texts": transformed}
+        if idx < len(self._holdback_schedule):
+            result["stream_holdback_chars"] = [self._holdback_schedule[idx]] * len(texts)
+        return result
+
+
+def _stream_chunk(content, finish_reason=None, index=0):
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=index,
+                delta=Delta(content=content, role="assistant"),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+async def _drive_stream(handler, guardrail, chunks, request_route="/v1/chat/completions"):
+    async def _mock_stream():
+        for chunk in chunks:
+            yield chunk
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key", request_route=request_route)
+    request_data = {"guardrail_to_apply": guardrail, "model": "gpt-4"}
+    out = []
+    async for item in handler.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=_mock_stream(),
+        request_data=request_data,
+    ):
+        out.append(item)
+    return out
+
+
+def _delta_text(item):
+    if not getattr(item, "choices", None):
+        return ""
+    return item.choices[0].delta.content or ""
+
+
+class TestStreamingTransform:
+    """Streaming text-transformation (incremental_diff) path on the OpenAI chat
+    completions streaming surface."""
+
+    @pytest.fixture(autouse=True)
+    def _use_openai_handler_mapping(self):
+        unified_module.endpoint_guardrail_translation_mappings = {
+            CallTypes.acompletion: OpenAIChatCompletionsHandler,
+        }
+        yield
+        unified_module.endpoint_guardrail_translation_mappings = None
+
+    @pytest.mark.asyncio
+    async def test_block_only_drops_text_rewrites(self):
+        """Default block_only: the guardrail's uppercasing never reaches the
+        client; the original lowercase chunks are streamed verbatim."""
+        guardrail = _StreamingTextGuardrail()
+        guardrail.streaming_transform_mode = "block_only"
+
+        chunks = [
+            _stream_chunk("hello "),
+            _stream_chunk("world"),
+            _stream_chunk("", finish_reason="stop"),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        streamed = "".join(_delta_text(i) for i in out)
+
+        assert streamed == "hello world"
+        assert streamed != streamed.upper()
+
+    @pytest.mark.asyncio
+    async def test_incremental_diff_emits_uppercased_deltas(self):
+        """incremental_diff: the client receives uppercased deltas whose
+        concatenation equals uppercase(full)."""
+        guardrail = _StreamingTextGuardrail()
+
+        full = "hello world this is streaming"
+        words = ["hello ", "world ", "this ", "is ", "streaming"]
+        chunks = [_stream_chunk(w) for w in words]
+        chunks.append(_stream_chunk("", finish_reason="stop"))
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        streamed = "".join(_delta_text(i) for i in out)
+
+        assert streamed == full.upper()
+        # No raw lowercase content leaked onto the wire.
+        assert "hello" not in streamed
+
+    @pytest.mark.asyncio
+    async def test_incremental_diff_holdback_boundary(self):
+        """Holdback=5 on the first sample withholds the trailing chars until the
+        next round; the final concatenation matches with no loss or duplication."""
+        guardrail = _StreamingTextGuardrail(holdback_schedule=[5, 0])
+
+        # No finish_reason: every sample uses the combined-text branch so the
+        # scheduled holdback is applied on the first round.
+        chunks = [_stream_chunk("abcdef"), _stream_chunk("ghij")]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+        deltas = [_delta_text(i) for i in out]
+        streamed = "".join(deltas)
+
+        # First sample: "ABCDEF" with holdback 5 -> only "A" is emitted.
+        assert deltas[0] == "A"
+        assert streamed == "ABCDEFGHIJ"
+
+    @pytest.mark.asyncio
+    async def test_incremental_diff_underflow_raises(self):
+        """A transform shorter than what was already streamed cannot retract
+        bytes: it raises HTTPException(stream_transform_underflow)."""
+        # First sample emits "ABCDEF" (6 chars); second sample shrinks to 3.
+        guardrail = _StreamingTextGuardrail(shrink_to="ABC", shrink_after=1)
+
+        chunks = [_stream_chunk("abcdef"), _stream_chunk("ghij")]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "stream_transform_underflow"
+
+    @pytest.mark.asyncio
+    async def test_incremental_diff_final_chunk_preserves_finish_reason(self):
+        """The final synthetic chunk carries the finish_reason of the last raw
+        chunk."""
+        guardrail = _StreamingTextGuardrail()
+
+        chunks = [
+            _stream_chunk("hello "),
+            _stream_chunk("world"),
+            _stream_chunk("", finish_reason="stop"),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        assert out, "expected at least one synthetic chunk"
+        assert out[-1].choices[0].finish_reason == "stop"
+        assert "".join(_delta_text(i) for i in out) == "HELLO WORLD"
+
+    @pytest.mark.asyncio
+    async def test_end_of_stream_only_emits_single_final_chunk(self):
+        """incremental_diff + streaming_end_of_stream_only: a single post-stream
+        synthetic chunk carries the whole guardrailed text and the finish_reason."""
+        guardrail = _StreamingTextGuardrail()
+        guardrail.streaming_end_of_stream_only = True
+
+        chunks = [
+            _stream_chunk("hello "),
+            _stream_chunk("world"),
+            _stream_chunk("", finish_reason="stop"),
+        ]
+
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
+
+        non_empty = [i for i in out if _delta_text(i)]
+        assert len(non_empty) == 1
+        assert _delta_text(non_empty[0]) == "HELLO WORLD"
+        assert out[-1].choices[0].finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_unsupported_route_falls_back_to_block_only(self):
+        """A route that does not resolve to the OpenAI chat handler falls back to
+        block_only rather than transforming."""
+        guardrail = _StreamingTextGuardrail()
+
+        chunks = [_stream_chunk("hello "), _stream_chunk("world", finish_reason="stop")]
+
+        # request_route=None => no resolvable call type => block_only fallback.
+        out = await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks, request_route=None)
+        streamed = "".join(_delta_text(i) for i in out)
+
+        assert streamed == "hello world"
+
+    @pytest.mark.asyncio
+    async def test_emit_streaming_http_error_a2a_yields_jsonrpc_chunk(self):
+        """The shared streaming error helper emits an in-stream JSON-RPC error for
+        A2A call types instead of raising."""
+        import json
+
+        handler = UnifiedLLMGuardrails()
+        exc = HTTPException(
+            status_code=400,
+            detail={"error": "stream_transform_underflow", "message": "boom"},
+        )
+
+        emitted = []
+        async for item in handler._emit_streaming_http_error(
+            exc,
+            call_type=CallTypes.asend_message.value,
+            responses_so_far=[{"id": "req-1"}],
+            request_data={},
+        ):
+            emitted.append(item)
+
+        assert len(emitted) == 1
+        payload = json.loads(emitted[0])
+        assert payload["error"]["message"] == "stream_transform_underflow"
+        assert payload["id"] == "req-1"

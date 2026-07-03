@@ -21,7 +21,13 @@ from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_fo
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import CallTypes, CallTypesLiteral
+from litellm.types.utils import (
+    CallTypes,
+    CallTypesLiteral,
+    Delta,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     # Imported lazily at runtime (inside the streaming hook) to avoid a
@@ -32,6 +38,11 @@ if TYPE_CHECKING:
 A2A_CALL_TYPES = (CallTypes.asend_message, CallTypes.send_message)
 
 GUARDRAIL_NAME = "unified_llm_guardrails"
+
+
+class _StreamTerminated(Exception):
+    """Internal signal that the incremental transform stream has already emitted
+    its terminal chunks (block message or in-stream error) and must stop."""
 
 
 def _get_a2a_request_id(responses_so_far: List[Any], request_data: dict) -> Optional[str]:
@@ -292,6 +303,262 @@ class UnifiedLLMGuardrails(CustomLogger):
         for chunk in block_chunks:
             yield chunk
 
+    @staticmethod
+    def _resolve_transform_call_type(
+        user_api_key_dict: UserAPIKeyAuth,
+        mappings: dict,
+    ) -> Optional[str]:
+        """Resolve the call type for the incremental_diff path, or None if the
+        route is unresolvable / unsupported.
+
+        Incremental transformation needs a route we can resolve before the first
+        chunk and a handler that supports the streaming text-diff protocol (v1:
+        the OpenAI chat completions handler only). Returning None makes the caller
+        fall back to block_only.
+        """
+        from litellm.llms.openai.chat.guardrail_translation.handler import (
+            OpenAIChatCompletionsHandler,
+        )
+
+        if user_api_key_dict.request_route is None:
+            return None
+        call_types = get_call_types_for_route(user_api_key_dict.request_route)
+        if not call_types:
+            return None
+        call_type = call_types[0].value
+        try:
+            mapped = CallTypes(call_type)
+        except ValueError:
+            return None
+        handler_cls = mappings.get(mapped)
+        if handler_cls is None or not issubclass(handler_cls, OpenAIChatCompletionsHandler):
+            return None
+        return call_type
+
+    async def _emit_streaming_http_error(
+        self,
+        exc: HTTPException,
+        call_type: Optional[str],
+        responses_so_far: list[Any],
+        request_data: dict,
+    ) -> AsyncGenerator[Any, None]:
+        """Surface a mid-stream HTTPException. For A2A (NDJSON) call types the
+        response has already started, so emit an in-stream JSON-RPC error chunk;
+        otherwise re-raise so the proxy can report it.
+        """
+        if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
+            request_id = _get_a2a_request_id(responses_so_far, request_data)
+            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            error_chunk = (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32603,
+                            "message": detail.get("error", detail.get("message", str(exc.detail))),
+                            "data": {k: v for k, v in detail.items() if k not in ("error", "message")},
+                        },
+                    }
+                )
+                + "\n"
+            )
+            yield error_chunk
+            return
+        raise exc
+
+    def _build_transform_chunk(
+        self,
+        *,
+        reference_chunk: Any,
+        mutated_text_per_choice: dict[int, str],
+        emitted_char_count: dict[int, int],
+        holdback_per_choice: dict[int, int],
+        is_final: bool,
+    ) -> Optional[ModelResponseStream]:
+        """Build the synthetic chunk carrying the newly-guardrailed deltas.
+
+        For each choice, the new delta is the mutated accumulated text past what
+        has already been emitted, minus a trailing holdback (forced to 0 on the
+        final flush). Updates ``emitted_char_count`` in place. Returns None when
+        there is nothing to emit and this is not the final chunk.
+
+        Raises HTTPException(400, stream_transform_underflow) when the guardrail's
+        transformation is shorter than what has already been streamed, since
+        emitted bytes cannot be retracted.
+        """
+        deltas: dict[int, str] = {}
+        for choice_idx, text in mutated_text_per_choice.items():
+            already = emitted_char_count.get(choice_idx, 0)
+            if len(text) < already:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "stream_transform_underflow",
+                        "message": (
+                            f"Guardrail streaming transform for choice {choice_idx} produced text of "
+                            f"length {len(text)}, shorter than the {already} chars already streamed to "
+                            "the client; emitted bytes cannot be retracted."
+                        ),
+                    },
+                )
+            holdback = 0 if is_final else max(0, holdback_per_choice.get(choice_idx, 0))
+            end = max(already, len(text) - holdback)
+            deltas[choice_idx] = text[already:end]
+
+        if not is_final and not any(deltas.values()):
+            return None
+
+        finish_reason = None
+        if is_final and getattr(reference_chunk, "choices", None):
+            finish_reason = getattr(reference_chunk.choices[0], "finish_reason", None)
+
+        role = "assistant" if not any(emitted_char_count.values()) else None
+
+        synthetic_choices: list[StreamingChoices] = []
+        for choice in getattr(reference_chunk, "choices", []) or []:
+            idx = getattr(choice, "index", 0) or 0
+            reference_delta = getattr(choice, "delta", None)
+            synthetic_choices.append(
+                StreamingChoices(
+                    index=idx,
+                    delta=Delta(
+                        content=deltas.get(idx, ""),
+                        role=role,
+                        tool_calls=getattr(reference_delta, "tool_calls", None),
+                    ),
+                    finish_reason=finish_reason,
+                )
+            )
+
+        for choice_idx in mutated_text_per_choice:
+            emitted_char_count[choice_idx] = emitted_char_count.get(choice_idx, 0) + len(deltas[choice_idx])
+
+        return ModelResponseStream(
+            id=getattr(reference_chunk, "id", None),
+            created=getattr(reference_chunk, "created", None),
+            model=getattr(reference_chunk, "model", None),
+            choices=synthetic_choices,
+        )
+
+    async def _emit_transform_round(
+        self,
+        *,
+        endpoint_translation: Any,
+        guardrail_to_apply: CustomGuardrail,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+        reference_chunk: Any,
+        responses_so_far: list[Any],
+        responses_yielded: list[Any],
+        emitted_char_count: dict[int, int],
+        is_final: bool,
+    ) -> AsyncGenerator[Any, None]:
+        """Run one guardrail processing round and emit the resulting diff chunk.
+
+        Raises ``_StreamTerminated`` (after emitting the terminal block message or
+        in-stream error) when the guardrail blocks or an underflow occurs.
+        """
+        from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.llms.base_llm.guardrail_translation.base_translation import (
+            StreamTransformSink,
+        )
+
+        sink = StreamTransformSink()
+        try:
+            await endpoint_translation.process_output_streaming_response(
+                responses_so_far=responses_so_far,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=request_data.get("litellm_logging_obj"),
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                stream_transform_sink=sink,
+            )
+            mutated = endpoint_translation.extract_accumulated_text_per_choice(responses_so_far)
+            synthetic = self._build_transform_chunk(
+                reference_chunk=reference_chunk,
+                mutated_text_per_choice=mutated,
+                emitted_char_count=emitted_char_count,
+                holdback_per_choice=sink.holdback_per_choice,
+                is_final=is_final,
+            )
+        except ModifyResponseException as e:
+            if e.original_response is None:
+                e.original_response = responses_so_far
+            async for block_chunk in self._handle_streaming_block(
+                e,
+                endpoint_translation,
+                stream_started=bool(responses_yielded),
+                responses_so_far=responses_yielded,
+            ):
+                yield block_chunk
+            raise _StreamTerminated()
+        except HTTPException as e:
+            async for error_item in self._emit_streaming_http_error(e, call_type, responses_so_far, request_data):
+                yield error_item
+            raise _StreamTerminated()
+
+        if synthetic is not None:
+            responses_yielded.append(synthetic)
+            yield synthetic
+
+    async def _run_incremental_transform_stream(
+        self,
+        *,
+        guardrail_to_apply: CustomGuardrail,
+        response: Any,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: str,
+        sampling_rate: int,
+        end_of_stream_only: bool,
+        mappings: dict,
+    ) -> AsyncGenerator[Any, None]:
+        """Emit guardrail text transformations as new deltas on the stream.
+
+        Raw chunks are withheld and accumulated; on each sampled processing round
+        (and once at end of stream) the guardrailed accumulated text is diffed
+        against what has already been emitted and the new portion is sent as a
+        synthetic chunk. A BLOCK terminates the stream via the shared block
+        handler; an underflow surfaces as an HTTPException.
+        """
+        endpoint_translation = mappings[CallTypes(call_type)]()
+        responses_so_far: list[Any] = []
+        responses_yielded: list[Any] = []
+        emitted_char_count: dict[int, int] = {}
+        chunk_counter = 0
+        last_chunk: Optional[Any] = None
+
+        def _round(reference_chunk: Any, is_final: bool) -> AsyncGenerator[Any, None]:
+            return self._emit_transform_round(
+                endpoint_translation=endpoint_translation,
+                guardrail_to_apply=guardrail_to_apply,
+                request_data=request_data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                reference_chunk=reference_chunk,
+                responses_so_far=responses_so_far,
+                responses_yielded=responses_yielded,
+                emitted_char_count=emitted_char_count,
+                is_final=is_final,
+            )
+
+        try:
+            async for item in response:
+                chunk_counter += 1
+                responses_so_far.append(item)
+                last_chunk = item
+                if not end_of_stream_only and chunk_counter % sampling_rate == 0:
+                    async for out in _round(item, is_final=False):
+                        yield out
+
+            if last_chunk is not None:
+                async for out in _round(last_chunk, is_final=True):
+                    yield out
+        except _StreamTerminated:
+            return
+
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -334,6 +601,10 @@ class UnifiedLLMGuardrails(CustomLogger):
         sampling_rate = _streaming_flag("streaming_sampling_rate", 5)
         # Only apply the guardrail at end of stream (not per chunk).
         end_of_stream_only = _streaming_flag("streaming_end_of_stream_only", False)
+        # "block_only" (default) drops guardrail text rewrites on the streaming
+        # path; "incremental_diff" emits them as synthetic deltas (see
+        # _run_incremental_transform_stream).
+        streaming_transform_mode = _streaming_flag("streaming_transform_mode", "block_only")
         # Withhold every chunk until end-of-stream moderation passes, then
         # release the original chunks (clean) or only the block message
         # (blocked) -- moderating the whole response *before* any content
@@ -379,6 +650,35 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Initialize translation mappings if needed
         if endpoint_guardrail_translation_mappings is None:
             endpoint_guardrail_translation_mappings = load_guardrail_translation_mappings()
+
+        # Streaming text transformation (incremental_diff) diverges enough from the
+        # block_only path that it runs as its own iterator. It requires a route we
+        # can resolve up front to an OpenAI-chat handler (the only supported v1
+        # surface); anything else falls back to the block_only behavior below.
+        if streaming_transform_mode == "incremental_diff":
+            transform_call_type = self._resolve_transform_call_type(
+                user_api_key_dict=user_api_key_dict,
+                mappings=endpoint_guardrail_translation_mappings,
+            )
+            if transform_call_type is not None:
+                async for transformed_item in self._run_incremental_transform_stream(
+                    guardrail_to_apply=guardrail_to_apply,
+                    response=response,
+                    request_data=request_data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=transform_call_type,
+                    sampling_rate=sampling_rate,
+                    end_of_stream_only=end_of_stream_only,
+                    mappings=endpoint_guardrail_translation_mappings,
+                ):
+                    yield transformed_item
+                return
+            verbose_proxy_logger.warning(
+                "UnifiedLLMGuardrails: streaming_transform_mode=incremental_diff is only supported "
+                "for the OpenAI chat completions streaming path with a resolvable request route; "
+                "falling back to block_only for %s",
+                getattr(guardrail_to_apply, "guardrail_name", None),
+            )
 
         # Infer call type from first chunk
         call_type = None
