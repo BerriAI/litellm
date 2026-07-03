@@ -4,18 +4,118 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 import os
 import sys
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import litellm
+from litellm import utils
+from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+
+class _OpenAIChatCompletionResponse:
+    def model_dump(self):
+        return {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test-model",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+
+def test_custom_openai_drop_params_removes_openai_sdk_unsupported_params():
+    captured_data = {}
+    original_drop_params = litellm.drop_params
+    litellm.drop_params = True
+
+    def fake_get_openai_client(*args, **kwargs):
+        return SimpleNamespace(
+            api_key="test-key",
+            _base_url=SimpleNamespace(_uri_reference="http://example.com/v1"),
+        )
+
+    def fake_openai_chat_completion_request(self, openai_client, data, timeout, logging_obj):
+        captured_data.update(data)
+        return {}, _OpenAIChatCompletionResponse()
+
+    try:
+        with patch.object(OpenAIChatCompletion, "_get_openai_client", fake_get_openai_client), patch.object(
+            OpenAIChatCompletion,
+            "make_sync_openai_chat_completion_request",
+            fake_openai_chat_completion_request,
+        ):
+            litellm.completion(
+                model="custom_openai/test-model",
+                api_base="http://example.com/v1",
+                api_key="test-key",
+                messages=[{"role": "user", "content": "hi"}],
+                output_config={"effort": "high"},
+                context_management={"edits": "clear"},
+                thinking={"type": "enabled"},
+                extra_body={"kept": True},
+            )
+    finally:
+        litellm.drop_params = original_drop_params
+
+    assert "output_config" not in captured_data
+    assert "context_management" not in captured_data
+    assert "thinking" not in captured_data
+    assert captured_data["extra_body"] == {"kept": True}
+
+
+def test_custom_openai_sdk_param_filter_keeps_params_when_drop_disabled():
+    optional_params = {
+        "temperature": 0.2,
+        "thinking": {"type": "enabled"},
+    }
+    original_drop_params = litellm.drop_params
+    litellm.drop_params = False
+
+    try:
+        filtered_params = utils._drop_unsupported_openai_sdk_params(
+            optional_params=optional_params,
+            supported_params=["temperature"],
+            drop_params=False,
+        )
+    finally:
+        litellm.drop_params = original_drop_params
+
+    assert filtered_params == optional_params
+
+
+def test_custom_openai_sdk_param_filter_allows_missing_extra_body():
+    original_drop_params = litellm.drop_params
+    litellm.drop_params = True
+
+    try:
+        filtered_params = utils._drop_unsupported_openai_sdk_params(
+            optional_params={
+                "temperature": 0.2,
+                "thinking": {"type": "enabled"},
+            },
+            supported_params=["temperature"],
+            drop_params=True,
+        )
+    finally:
+        litellm.drop_params = original_drop_params
+
+    assert filtered_params == {"temperature": 0.2}
 
 
 class TestOpenAIGPTConfig:
