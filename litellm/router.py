@@ -83,6 +83,7 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.add_retry_fallback_headers import (
+    HiddenParamsAsyncIteratorWrapper,
     _HiddenParamsHost,
     _write_hidden_params,
     add_fallback_headers_to_response,
@@ -9018,7 +9019,14 @@ class Router:
 
         can_attach = isinstance(response, dict) or hasattr(response, "_hidden_params")
         if not can_attach:
-            return response
+            # Bare async generators/iterators (e.g. a provider's raw SSE stream,
+            # like the Anthropic /v1/messages bridge) can't hold attributes, so
+            # header attachment silently no-ops on them. Wrap them so streaming
+            # responses get the same rate-limit headers as object-based ones.
+            if hasattr(response, "__anext__"):
+                response = HiddenParamsAsyncIteratorWrapper(response)
+            else:
+                return response
 
         hidden_params = get_hidden_params_dict(
             response,

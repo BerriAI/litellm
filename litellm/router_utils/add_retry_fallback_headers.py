@@ -1,5 +1,5 @@
 import json
-from typing import Protocol, TypedDict, cast
+from typing import Any, Protocol, TypedDict, cast
 
 from pydantic import BaseModel
 
@@ -13,6 +13,31 @@ class FallbackErrorInfo(TypedDict):
 
 class _HiddenParamsHost(Protocol):
     _hidden_params: dict[str, object]
+
+
+class HiddenParamsAsyncIteratorWrapper:
+    """
+    Wraps a bare async generator/iterator (e.g. a provider's raw SSE
+    streaming response) that cannot itself hold a ``_hidden_params``
+    attribute, so router-derived headers (ITPM/OTPM, model-group, retry,
+    fallback) can attach to a streaming response the same way they attach
+    to object-based responses (e.g. ``CustomStreamWrapper``).
+    """
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self._hidden_params: dict[str, object] = {}
+
+    def __aiter__(self) -> "HiddenParamsAsyncIteratorWrapper":
+        return self
+
+    async def __anext__(self) -> object:
+        return await cast(Any, self._inner).__anext__()
+
+    async def aclose(self) -> None:
+        aclose = getattr(self._inner, "aclose", None)
+        if callable(aclose):
+            await aclose()
 
 
 def _normalize_hidden_params(hidden_params: object) -> dict[str, object]:

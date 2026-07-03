@@ -1252,6 +1252,42 @@ async def test_set_response_headers_dict_anthropic_messages_response(model_list)
     assert headers["x-ratelimit-remaining-output-tokens"] == 95
 
 
+@pytest.mark.asyncio
+async def test_set_response_headers_wraps_bare_async_generator(model_list):
+    """
+    Streaming responses that never go through Router.make_call's usual
+    object-based wrappers (e.g. the Anthropic /v1/messages -> Responses API
+    bridge, which yields a raw async generator with no `_hidden_params` slot)
+    must still get IO rate-limit headers attached via a thin wrapper.
+    """
+
+    async def _raw_generator():
+        yield {"type": "message_start"}
+        yield {"type": "message_stop"}
+
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-limit-input-tokens": 25,
+            "x-ratelimit-remaining-input-tokens": 20,
+        }
+    )
+
+    wrapped = await router.set_response_headers(response=_raw_generator(), model_group="io-itpm-strict")
+
+    assert hasattr(wrapped, "_hidden_params")
+    headers = wrapped._hidden_params["additional_headers"]
+    assert headers["x-litellm-model-group"] == "io-itpm-strict"
+    assert headers["x-ratelimit-limit-input-tokens"] == 25
+    assert headers["x-ratelimit-remaining-input-tokens"] == 20
+
+    from collections.abc import AsyncIterator
+
+    assert isinstance(wrapped, AsyncIterator)
+    chunks = [chunk async for chunk in wrapped]
+    assert chunks == [{"type": "message_start"}, {"type": "message_stop"}]
+
+
 def test_get_all_deployments(model_list):
     """Test if the 'get_all_deployments' function is working correctly"""
     router = Router(model_list=model_list)
