@@ -53,7 +53,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           style={{ width: "200px" }}
         />
         {version && (
-          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded font-medium">{version}</span>
+          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-sm font-medium">{version}</span>
         )}
         <Select
           value={environment}
@@ -66,7 +66,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
             { label: "Production", value: "production" },
           ]}
         />
-        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">Draft</span>
+        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-sm">Draft</span>
         <span className="text-xs text-gray-400">Unsaved changes</span>
       </div>
       <div className="flex items-center space-x-2">

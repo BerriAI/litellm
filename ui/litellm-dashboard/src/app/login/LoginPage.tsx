@@ -162,7 +162,7 @@ function LoginPageContent() {
                     environment variable:
                   </Paragraph>
                   <Paragraph className="text-sm">
-                    <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">DISABLE_ADMIN_UI=False</code>
+                    <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs">DISABLE_ADMIN_UI=False</code>
                   </Paragraph>
                 </>
               }
@@ -194,9 +194,9 @@ function LoginPageContent() {
               description={
                 <>
                   <Paragraph className="text-sm">
-                    By default, Username is <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">admin</code> and
-                    Password is your set LiteLLM Proxy
-                    <code className="bg-gray-100 px-1 py-0.5 rounded text-xs">MASTER_KEY</code>.
+                    By default, Username is <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs">admin</code>{" "}
+                    and Password is your set LiteLLM Proxy
+                    <code className="bg-gray-100 px-1 py-0.5 rounded-sm text-xs">MASTER_KEY</code>.
                   </Paragraph>
                   <Paragraph className="text-sm">
                     Need to set UI credentials or SSO?{" "}

@@ -11,8 +11,10 @@ import asyncio
 import fnmatch
 import re
 import secrets
+
+import orjson
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, NamedTuple, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterator, NamedTuple, List, Optional, Protocol, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -30,6 +32,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
+    _can_object_call_model,
     _check_end_user_budget,
     _delete_cache_key_object,
     _get_user_role,
@@ -73,6 +76,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
     _safe_get_request_query_params,
+    _safe_set_request_parsed_body,
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
@@ -169,6 +173,87 @@ def _get_model_names_for_budget_checks(
     if isinstance(model, str):
         return [model]
     return model
+
+
+class _KeyModelBudgetLimiter(Protocol):
+    async def is_key_within_model_budget(self, user_api_key_dict: UserAPIKeyAuth, model: str) -> bool: ...
+
+    async def get_fallback_model_within_budget(
+        self, user_api_key_dict: UserAPIKeyAuth, model: str
+    ) -> Optional[str]: ...
+
+
+async def _check_key_model_budget_with_fallback(
+    valid_token: UserAPIKeyAuth,
+    model_max_budget_limiter: _KeyModelBudgetLimiter,
+    model_name: str,
+    request_data: dict,
+    request: Request,
+    llm_model_list: Optional[list] = None,
+    llm_router: Optional[litellm.Router] = None,
+) -> None:
+    """
+    Enforce the key's per-model budget for `model_name`. If exceeded and the
+    key has a `budget_fallbacks` chain configured for `model_name`, reroute
+    the request to the first fallback model still within its own budget
+    instead of rejecting the request.
+
+    The selected fallback is validated against the key's model-access
+    allowlist and the team's model restrictions so that budget_fallbacks
+    cannot bypass model authorization. The rewrite is persisted to the
+    parsed-body cache, Starlette's JSON cache (``request._json``), and
+    path parameters so that downstream handlers see the final model
+    regardless of whether they consume ``_read_request_body()``,
+    ``request.json()``, or the path ``model`` parameter.
+
+    Fallback is only attempted when ``model_name`` matches the top-level
+    ``request_data["model"]``; models extracted from nested fields
+    (``session.model``, ``completion.model``, etc.) are not rewritable
+    and raise immediately.
+
+    Raises:
+        BudgetExceededError: if `model_name` is over budget and no configured
+            fallback is within budget either (or the fallback is not authorized).
+    """
+    try:
+        await model_max_budget_limiter.is_key_within_model_budget(
+            user_api_key_dict=valid_token,
+            model=model_name,
+        )
+    except litellm.BudgetExceededError as e:
+        if request_data.get("model") != model_name:
+            raise e
+        fallback_model = await model_max_budget_limiter.get_fallback_model_within_budget(
+            user_api_key_dict=valid_token,
+            model=model_name,
+        )
+        if fallback_model is None:
+            raise e
+        try:
+            await can_key_call_model(
+                model=fallback_model,
+                llm_model_list=llm_model_list,
+                valid_token=valid_token,
+                llm_router=llm_router,
+            )
+            if valid_token.team_models:
+                _can_object_call_model(
+                    model=fallback_model,
+                    llm_router=llm_router,
+                    models=valid_token.team_models,
+                    team_model_aliases=valid_token.team_model_aliases,
+                    team_id=valid_token.team_id,
+                    object_type="team",
+                )
+        except ProxyException:
+            raise e
+        request_data["model"] = fallback_model
+        _safe_set_request_parsed_body(request=request, parsed_body=request_data)
+        request._json = request_data  # type: ignore[attr-defined]
+        request._body = orjson.dumps(request_data)  # type: ignore[attr-defined]
+        path_params = request.scope.get("path_params")
+        if isinstance(path_params, dict) and "model" in path_params:
+            path_params["model"] = fallback_model
 
 
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
@@ -1779,10 +1864,25 @@ async def _user_api_key_auth_builder(
                     ):
                         ## GET THE SPEND FOR THIS MODEL
                         for model_name in current_models:
-                            await model_max_budget_limiter.is_key_within_model_budget(
-                                user_api_key_dict=valid_token,
-                                model=model_name,
+                            await _check_key_model_budget_with_fallback(
+                                valid_token=valid_token,
+                                model_max_budget_limiter=model_max_budget_limiter,
+                                model_name=model_name,
+                                request_data=request_data,
+                                request=request,
+                                llm_model_list=llm_model_list,
+                                llm_router=llm_router,
                             )
+
+                        # Recompute after a potential budget-fallback rewrite so
+                        # the end-user check below validates the final model
+                        current_model = _get_model_from_request_context(
+                            request_data=request_data,
+                            route=route,
+                            request=request,
+                            llm_router=llm_router,
+                        )
+                        current_models = _get_model_names_for_budget_checks(model=current_model)
 
                     # Check 5b. End-user model max budget
                     end_user_mmb = valid_token.end_user_model_max_budget
@@ -2676,7 +2776,11 @@ async def _enforce_key_and_fallback_model_access(
         model_list = config.get("model_list", [])
         new_model_list = model_list
         verbose_proxy_logger.debug(f"\n new llm router model list {new_model_list}")
-    elif isinstance(valid_token.models, list) and "all-team-models" in valid_token.models:
+    elif (
+        isinstance(valid_token.models, list)
+        and "all-team-models" in valid_token.models
+        and valid_token.team_id is not None
+    ):
         pass
     else:
         model = _get_model_from_request_context(
@@ -2834,10 +2938,25 @@ async def _run_post_custom_auth_checks(
         and valid_token.token is not None
     ):
         for model_name in current_models:
-            await model_max_budget_limiter.is_key_within_model_budget(
-                user_api_key_dict=valid_token,
-                model=model_name,
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=model_max_budget_limiter,
+                model_name=model_name,
+                request_data=request_data,
+                request=request,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
             )
+
+        # Recompute after a potential budget-fallback rewrite so
+        # the end-user check below validates the final model
+        current_model = _get_model_from_request_context(
+            request_data=request_data,
+            route=route,
+            request=request,
+            llm_router=llm_router,
+        )
+        current_models = _get_model_names_for_budget_checks(model=current_model)
 
     # 4. Check end-user model_max_budget
     end_user_mmb = valid_token.end_user_model_max_budget

@@ -20,6 +20,7 @@ import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
+import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
 import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
@@ -996,6 +997,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
+                <TokenEndpointAuthMethodField isEditing />
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">

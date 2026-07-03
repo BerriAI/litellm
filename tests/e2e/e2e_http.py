@@ -36,6 +36,16 @@ class NoBody(BaseModel):
     """Empty body/query for routes that take none."""
 
 
+class FileUploadForm(BaseModel):
+    """Multipart form fields for POST /v1/files. The file bytes are passed
+    separately; `model` is not here because the proxy reads it from the query
+    (?model=) not the form."""
+
+    purpose: str = "batch"
+    target_model_names: str | None = None
+    custom_llm_provider: str | None = None
+
+
 # ---------- Result types ----------
 
 R = TypeVar("R", bound=BaseModel)
@@ -304,3 +314,50 @@ def stream(
     """Streaming (SSE) call: consumes the stream counting events, and captures the
     x-litellm-call-id + content-type headers. Body is elided."""
     return send(url, headers=headers, json=json, stream=True, timeout=timeout)
+
+
+def upload[R: BaseModel](
+    url: URL,
+    *,
+    headers: BaseModel,
+    form: FileUploadForm,
+    filename: str,
+    content: bytes,
+    params: BaseModel | None = None,
+    response_type: type[R],
+    timeout: float = 60.0,
+) -> Result[R]:
+    """Multipart POST for file uploads (/v1/files). Form fields come from `form`,
+    the file bytes are sent as the `file` part, and `params` carries any query
+    routing (e.g. ?model=). requests sets the multipart Content-Type itself."""
+    dumped: dict[str, object] = form.model_dump(by_alias=True, exclude_none=True)
+    data = {key: str(value) for key, value in dumped.items()}
+    try:
+        resp = requests.post(
+            str(url),
+            headers=_headers(headers),
+            params=_params(params),
+            data=data,
+            files={"file": (filename, content, "application/jsonl")},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
+
+
+def download(
+    url: URL, *, headers: BaseModel, timeout: float = 60.0
+) -> StreamingResponse:
+    """Raw GET for file content (/v1/files/{id}/content): provider-native bytes, no
+    schema. Returns the decoded body and the x-litellm-call-id header."""
+    try:
+        resp = requests.get(str(url), headers=_headers(headers), timeout=timeout)
+    except requests.RequestException as exc:
+        return StreamingResponse(status_code=-1, body=str(exc))
+    return StreamingResponse(
+        status_code=resp.status_code,
+        call_id=_hdr(resp, "x-litellm-call-id"),
+        content_type=_hdr(resp, "content-type"),
+        body=resp.text,
+    )

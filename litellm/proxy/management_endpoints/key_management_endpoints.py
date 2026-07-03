@@ -530,26 +530,33 @@ def _check_allowed_routes_caller_permission(
     allowed_routes: Optional[list],
     user_api_key_dict: UserAPIKeyAuth,
     *,
+    allowed_routes_was_provided: bool = False,
     allow_safe_presets: bool = False,
 ) -> None:
     """
-    Only proxy admins may set `allowed_routes` on a key.
+    Require PROXY_ADMIN when `allowed_routes` is present in the request body,
+    unless the caller went through the `key_type` preset flow.
 
-    `allowed_routes` overrides the standard role-based route gate in
-    RouteChecks.non_proxy_admin_allowed_routes_check, so the field is
-    restricted to admins. Non-admins must instead use `key_type` to pick a
-    preset bucket — that path goes through `handle_key_type` and re-enters
-    this function with `allow_safe_presets=True`, which lets the derived
-    `llm_api_routes` / `info_routes` values through. Raw-body call sites
-    leave `allow_safe_presets=False` so non-admins can't write those values
-    directly.
+    Raw-body call sites pass
+    `allowed_routes_was_provided="allowed_routes" in data.model_fields_set` so a
+    caller that omits the field (model default flows through) is distinct from
+    one that sends any explicit value.
+
+    Post-`handle_key_type` call sites pass `allow_safe_presets=True` with the
+    values derived by `handle_key_type`; those values are not from the request
+    body, so `allowed_routes_was_provided` stays False and the safe-preset
+    carve-out below accepts any list of tokens in
+    `_NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS`.
     """
-    # Empty list is the default on GenerateKeyRequest — treat as "not set".
-    if not allowed_routes:
+    if not allowed_routes_was_provided and not allowed_routes:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
-    if allow_safe_presets and all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes):
+    if (
+        allow_safe_presets
+        and allowed_routes
+        and all(r in _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS for r in allowed_routes)
+    ):
         return
     raise HTTPException(
         status_code=403,
@@ -563,24 +570,24 @@ def _check_allowed_routes_caller_permission(
 
 
 def _check_permissions_caller_permission(
-    permissions: Optional[dict],
+    data: GenerateRequestBase,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
-    Only proxy admins may set the `permissions` dict on a key.
+    Require PROXY_ADMIN when `permissions` is present in the request body.
 
-    The field grants ambient capabilities (e.g. `get_spend_routes` exposes
-    `/global/spend/*`), so it must follow the same admin gate as
-    `allowed_routes`. Without this gate a non-admin can self-grant capabilities
-    they do not hold, including read access to global spend.
+    Presence is detected via `data.model_fields_set` so a caller that
+    omits the field (default flows through) is distinct from one that
+    sends any explicit value.
     """
-    if not permissions:
+    permissions_in_request = "permissions" in data.model_fields_set
+    if not permissions_in_request and not data.permissions:
         return
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
     raise HTTPException(
         status_code=403,
-        detail={"error": "Only proxy admins can set `permissions` on a key."},
+        detail={"error": "Only proxy admins can set `permissions`."},
     )
 
 
@@ -840,7 +847,7 @@ async def _common_key_generation_helper(
         team_table=team_table,
     )
     _check_permissions_caller_permission(
-        permissions=data.permissions,
+        data=data,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -964,6 +971,23 @@ async def _common_key_generation_helper(
         team_obj=team_table,
         is_proxy_admin=_is_proxy_admin_caller,
     )
+
+    # Merge default_key_generate_params.object_permission in *after* the team-scope
+    # checks above, so an admin-configured default (e.g. vector_stores, search_tools)
+    # is never mistaken for a caller-requested permission and rejected by those
+    # non-admin/no-team checks. Only fields the caller left unset are filled in.
+    _default_object_permission = (
+        litellm.default_key_generate_params.get("object_permission")
+        if litellm.default_key_generate_params is not None
+        else None
+    )
+    if isinstance(_default_object_permission, dict):
+        _caller_object_permission = data_json.get("object_permission")
+        if _caller_object_permission is None:
+            data_json["object_permission"] = dict(_default_object_permission)
+        elif isinstance(_caller_object_permission, dict):
+            for _op_field, _op_default_value in _default_object_permission.items():
+                _caller_object_permission.setdefault(_op_field, _op_default_value)
 
     data_json = await _set_object_permission(
         data_json=data_json,
@@ -1220,7 +1244,7 @@ async def _check_team_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_team_key_model_specific_limits(
@@ -1402,7 +1426,7 @@ async def _check_org_key_limits(
     )
     # Exclude the key being updated to avoid double-counting its limits.
     # data.key may be a raw key (sk-...) or a pre-hashed token_id.
-    if isinstance(data, UpdateKeyRequest):
+    if isinstance(data, UpdateKeyRequest) and data.key is not None:
         hashed_key = _hash_token_if_needed(data.key)
         keys = [key for key in keys if key.token != hashed_key]
     check_org_key_model_specific_limits(
@@ -1461,6 +1485,7 @@ async def generate_key_fn(
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -1549,6 +1574,7 @@ async def generate_key_fn(
         _check_allowed_routes_caller_permission(
             allowed_routes=data.allowed_routes,
             user_api_key_dict=user_api_key_dict,
+            allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
         )
         _check_passthrough_routes_caller_permission(
             data=data,
@@ -1666,6 +1692,7 @@ async def generate_service_account_key_fn(
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
     - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
@@ -1719,6 +1746,7 @@ async def generate_service_account_key_fn(
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
@@ -2043,6 +2071,11 @@ async def _process_single_key_update(
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
 
+    _check_permissions_caller_permission(
+        data=update_key_request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Get and validate existing key
     if existing_key_row is None:
         existing_key_row = await _get_and_validate_existing_key(
@@ -2214,8 +2247,13 @@ async def _validate_update_key_data(
     _check_allowed_routes_caller_permission(
         allowed_routes=data.allowed_routes,
         user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
+        data=data,
+        user_api_key_dict=user_api_key_dict,
+    )
+    _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
@@ -2450,6 +2488,7 @@ async def update_key_fn(
     - spend: Optional[float] - Amount spent by key
     - max_budget: Optional[float] - Max budget for key
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+    - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -3490,6 +3529,7 @@ async def generate_key_helper_fn(
     allowed_cache_controls: Optional[list] = [],
     permissions: Optional[dict] = {},
     model_max_budget: Optional[dict] = {},
+    budget_fallbacks: Optional[dict] = None,
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     mcp_rpm_limit: Optional[dict] = None,
@@ -3580,6 +3620,7 @@ async def generate_key_helper_fn(
     metadata_json = json.dumps(metadata)
     validate_model_max_budget(model_max_budget)
     model_max_budget_json = json.dumps(model_max_budget)
+    budget_fallbacks_json = json.dumps(budget_fallbacks or {})
     user_role = user_role
     tpm_limit = tpm_limit
     rpm_limit = rpm_limit
@@ -3632,6 +3673,7 @@ async def generate_key_helper_fn(
             "allowed_cache_controls": allowed_cache_controls,
             "permissions": permissions_json,
             "model_max_budget": model_max_budget_json,
+            "budget_fallbacks": budget_fallbacks_json,
             "organization_id": organization_id,
             "budget_id": budget_id,
             "blocked": blocked,
@@ -3982,6 +4024,7 @@ def _transform_verification_tokens_to_deleted_records(
             "metadata",
             "model_spend",
             "model_max_budget",
+            "budget_fallbacks",
             "router_settings",
         ]:
             if json_field in record and record[json_field] is not None:
@@ -4483,6 +4526,7 @@ async def regenerate_key_fn(
         - spend: Optional[float] - Amount spent by key
         - max_budget: Optional[float] - Max budget for key
         - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
+        - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
         - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
         - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
         - max_parallel_requests: Optional[int] - Rate limit for parallel requests
@@ -4530,8 +4574,13 @@ async def regenerate_key_fn(
             _check_allowed_routes_caller_permission(
                 allowed_routes=data.allowed_routes,
                 user_api_key_dict=user_api_key_dict,
+                allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
             )
             _check_passthrough_routes_caller_permission(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+            )
+            _check_permissions_caller_permission(
                 data=data,
                 user_api_key_dict=user_api_key_dict,
             )

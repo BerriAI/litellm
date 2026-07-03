@@ -10,8 +10,8 @@ import contextvars
 import hashlib
 import json
 import time
-import types
 import traceback
+import types
 import uuid
 from datetime import datetime
 from typing import (
@@ -37,13 +37,17 @@ from starlette.types import Message, Receive, Scope, Send
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
@@ -58,10 +62,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_name,
     get_server_prefix,
     iter_known_server_prefixes,
-)
-from litellm.llms.custom_httpx.http_handler import (
-    get_async_httpx_client,
-    httpxSpecialProvider,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -122,9 +122,12 @@ def _write_byok_cred_cache(user_id: str, server_id: str, credential: Optional[st
 # TODO: Make this a util function for litellm client usage
 MCP_AVAILABLE: bool = True
 try:
+    import weakref
+
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
     from mcp.server.lowlevel.helper_types import ReadResourceContents
+    from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
         GetPromptResult,
@@ -132,8 +135,6 @@ try:
         TextResourceContents,
         Tool,
     )
-    from mcp.server.session import ServerSession as _McpServerSession
-    import weakref
 
     # Robust auth lookup keyed by session_object.
     _session_obj_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = weakref.WeakKeyDictionary()
@@ -303,14 +304,14 @@ def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
 
 if MCP_AVAILABLE:
     from mcp.server import Server
-    from mcp.server.lowlevel.server import NotificationOptions
-    from mcp.server.models import InitializationOptions
 
     # Import auth context variables and middleware
     from mcp.server.auth.middleware.auth_context import (
         AuthContextMiddleware,
         auth_context_var,
     )
+    from mcp.server.lowlevel.server import NotificationOptions
+    from mcp.server.models import InitializationOptions
 
     try:
         from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -664,6 +665,19 @@ if MCP_AVAILABLE:
             verbose_logger.debug(
                 f"MCP list_tools - MCP server auth headers: {list(mcp_server_auth_headers.keys()) if mcp_server_auth_headers else None}"
             )
+            if getattr(
+                getattr(user_api_key_auth, "object_permission", None),
+                "mcp_tool_search_enabled",
+                False,
+            ):
+                from mcp.types import Tool
+
+                from litellm.proxy._experimental.mcp_server.tool_search import (
+                    get_virtual_tool_definitions,
+                )
+
+                return [Tool(**d) for d in get_virtual_tool_definitions()]
+
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
             tools = await _list_mcp_tools(
@@ -688,6 +702,150 @@ if MCP_AVAILABLE:
             if _session_reset_token is not None:
                 active_mcp_session_var.reset(_session_reset_token)
 
+    def _capture_host_progress_callback(host_server) -> Optional[Callable]:
+        """Return a progress-forwarding callback bound to the host MCP session.
+
+        Returns ``None`` when the host did not supply a progress token.
+        """
+        try:
+            host_ctx = host_server.request_context
+        except Exception as e:
+            verbose_logger.warning(f"Could not capture host progress context: {e}")
+            return None
+
+        if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
+            return None
+        host_token = getattr(host_ctx.meta, "progressToken", None)
+        if not (host_token and hasattr(host_ctx, "session") and host_ctx.session):
+            return None
+        host_session = host_ctx.session
+
+        async def forward_progress(progress: float, total: Optional[float]):
+            """Forward progress notifications from external MCP to Host"""
+            try:
+                await host_session.send_progress_notification(
+                    progress_token=host_token,
+                    progress=progress,
+                    total=total,
+                )
+                verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+            except Exception as e:
+                verbose_logger.error(f"Failed to forward progress to Host: {e}")
+
+        verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        return forward_progress
+
+    async def _build_virtual_call_logging_obj(
+        name: str,
+        arguments: dict[str, Any],
+        user_api_key_auth: UserAPIKeyAuth,
+    ) -> Optional[LiteLLMLoggingObj]:
+        """Run the pre-call pipeline (guardrails + logging setup) for a virtual
+        mcp_tool_call so the SSE path spend-logs like the REST path."""
+        from fastapi import Request
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.proxy_server import (
+            general_settings,
+            proxy_config,
+            proxy_logging_obj,
+        )
+
+        request = Request(
+            scope={
+                "type": "http",
+                "method": "POST",
+                "path": "/mcp/tools/call",
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        _, virtual_logging_obj = await ProxyBaseLLMRequestProcessing(
+            data={"name": name, "arguments": arguments}
+        ).common_processing_pre_call_logic(
+            request=request,
+            user_api_key_dict=user_api_key_auth,
+            proxy_config=proxy_config,
+            route_type=CallTypes.call_mcp_tool.value,
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings=general_settings,
+        )
+        return virtual_logging_obj
+
+    async def _dispatch_virtual_mcp_tool(
+        name: str,
+        arguments: Optional[dict[str, Any]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        client_ip: Optional[str],
+        mcp_servers: Optional[list[str]] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_server_auth_headers: Optional[dict[str, dict[str, str]]] = None,
+        oauth2_headers: Optional[dict[str, str]] = None,
+        raw_headers: Optional[dict[str, str]] = None,
+    ) -> Optional[CallToolResult]:
+        """Handle the mcp_tool_search / mcp_tool_call virtual tools.
+
+        Returns a CallToolResult when ``name`` is a virtual tool, else ``None`` so
+        the caller falls through to normal tool routing.
+        """
+        from litellm.proxy._experimental.mcp_server.tool_search import (
+            MCP_TOOL_CALL_TOOL_NAME,
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            coerce_top_k,
+            handle_mcp_tool_call,
+            handle_mcp_tool_search,
+        )
+
+        if name not in (MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME):
+            return None
+
+        if not getattr(
+            getattr(user_api_key_auth, "object_permission", None),
+            "mcp_tool_search_enabled",
+            False,
+        ):
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=f"Tool {name} requires mcp_tool_search_enabled on the key",
+                    )
+                ],
+                isError=True,
+            )
+
+        args = arguments or {}
+        if name == MCP_TOOL_SEARCH_TOOL_NAME:
+            return await handle_mcp_tool_search(
+                query=args.get("query", ""),
+                top_k=coerce_top_k(args.get("top_k", 5)),
+                user_api_key_dict=user_api_key_auth,
+                client_ip=client_ip,
+                mcp_servers=mcp_servers,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+
+        assert user_api_key_auth is not None  # guaranteed by the flag check above
+        virtual_logging_obj = await _build_virtual_call_logging_obj(
+            name=name, arguments=args, user_api_key_auth=user_api_key_auth
+        )
+        return await handle_mcp_tool_call(
+            tool_name=args.get("tool_name", ""),
+            arguments=args.get("arguments") or {},
+            user_api_key_dict=user_api_key_auth,
+            client_ip=client_ip,
+            mcp_servers=mcp_servers,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            litellm_logging_obj=virtual_logging_obj,
+        )
+
     @server.call_tool()
     async def mcp_server_tool_call(name: str, arguments: Dict[str, Any] | None) -> CallToolResult:
         """
@@ -701,11 +859,12 @@ if MCP_AVAILABLE:
             HTTPException: If tool not found or arguments missing
         """
         from fastapi import Request
+        from mcp.server.lowlevel.server import request_ctx
+        from mcp.types import CallToolResult
+
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
-        from mcp.types import CallToolResult
-        from mcp.server.lowlevel.server import request_ctx
 
         req_ctx = request_ctx.get(None)
         _session_reset_token = None
@@ -730,31 +889,25 @@ if MCP_AVAILABLE:
             )
 
             verbose_logger.debug(f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}")
-            host_progress_callback = None
-            try:
-                host_ctx = server.request_context
-                if host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta:
-                    host_token = getattr(host_ctx.meta, "progressToken", None)
-                    if host_token and hasattr(host_ctx, "session") and host_ctx.session:
-                        host_session = host_ctx.session
 
-                        async def forward_progress(progress: float, total: Optional[float]):
-                            """Forward progress notifications from external MCP to Host"""
-                            try:
-                                await host_session.send_progress_notification(
-                                    progress_token=host_token,
-                                    progress=progress,
-                                    total=total,
-                                )
-                                verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
-                            except Exception as e:
-                                verbose_logger.error(f"Failed to forward progress to Host: {e}")
-
-                        host_progress_callback = forward_progress
-                        verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
-            except Exception as e:
-                verbose_logger.warning(f"Could not capture host progress context: {e}")
             try:
+                # Inside this try so virtual-tool errors convert to isError
+                # CallToolResult instead of raising out of the protocol handler.
+                virtual_tool_result = await _dispatch_virtual_mcp_tool(
+                    name=name,
+                    arguments=arguments,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=_client_ip,
+                    mcp_servers=mcp_servers,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                )
+                if virtual_tool_result is not None:
+                    return virtual_tool_result
+
+                host_progress_callback = _capture_host_progress_callback(server)
                 # Create a body date for logging
                 body_data = {"name": name, "arguments": arguments}
                 # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
@@ -1528,6 +1681,8 @@ if MCP_AVAILABLE:
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
         litellm_trace_id: Optional[str] = None,
+        request_tags: Optional[list[str]] = None,
+        client_ip: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -1570,6 +1725,7 @@ if MCP_AVAILABLE:
                 "litellm_trace_id": effective_litellm_trace_id,
                 "metadata": {
                     "spend_logs_metadata": spend_logs_metadata,
+                    **({"tags": request_tags} if request_tags else {}),
                 },
                 # Provide a small input payload for standard logging
                 "input": [
@@ -1615,6 +1771,7 @@ if MCP_AVAILABLE:
             allowed_mcp_servers = await _get_allowed_mcp_servers(
                 user_api_key_auth=user_api_key_auth,
                 mcp_servers=mcp_servers,
+                client_ip=client_ip,
             )
 
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
@@ -1744,7 +1901,9 @@ if MCP_AVAILABLE:
                 end_time = datetime.now()
                 try:
                     await litellm_logging_obj.async_success_handler(
-                        result=all_tools,
+                        result=[
+                            tool.model_dump(mode="json") if isinstance(tool, MCPTool) else tool for tool in all_tools
+                        ],
                         start_time=list_tools_start_time,
                         end_time=end_time,
                     )
@@ -2024,6 +2183,7 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         log_list_tools_to_spendlogs: bool = False,
         list_tools_log_source: Optional[str] = None,
+        client_ip: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         List all available MCP tools.
@@ -2033,6 +2193,7 @@ if MCP_AVAILABLE:
             mcp_auth_header: Optional auth header for MCP server (deprecated)
             mcp_servers: Optional list of server names/aliases to filter by
             mcp_server_auth_headers: Optional dict of server-specific auth headers {server_alias: auth_value}
+            client_ip: Client IP for IP-based server access control
 
         Returns:
             List[MCPTool]: Combined list of tools from all accessible servers
@@ -2056,6 +2217,7 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
                 list_tools_log_source=list_tools_log_source,
+                client_ip=client_ip,
             )
             verbose_logger.debug(f"Successfully fetched {len(managed_tools)} tools from managed MCP servers")
         except Exception as e:
@@ -2583,6 +2745,22 @@ if MCP_AVAILABLE:
 
         return response
 
+    async def _fire_mcp_success_logging(
+        logging_obj: LiteLLMLoggingObj,
+        result: Any,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> None:
+        logging_obj.post_call(original_response=result)
+        await logging_obj.async_post_mcp_tool_call_hook(
+            kwargs=logging_obj.model_call_details,
+            response_obj=result,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        logging_obj.call_type = CallTypes.call_mcp_tool.value
+        await logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
+
     @client
     async def call_mcp_tool(
         name: str,
@@ -2654,16 +2832,7 @@ if MCP_AVAILABLE:
             raise
 
         if litellm_logging_obj:
-            litellm_logging_obj.post_call(original_response=response)
-            end_time = datetime.now()
-            await litellm_logging_obj.async_post_mcp_tool_call_hook(
-                kwargs=litellm_logging_obj.model_call_details,
-                response_obj=response,
-                start_time=start_time,
-                end_time=end_time,
-            )
-            litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
-            await litellm_logging_obj.async_success_handler(result=response, start_time=start_time, end_time=end_time)
+            await _fire_mcp_success_logging(litellm_logging_obj, response, start_time, datetime.now())
         return response
 
     async def mcp_get_prompt(

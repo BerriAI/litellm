@@ -201,9 +201,9 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
             )}
             {record.loading && <Spin indicator={<LoadingOutlined spin />} size="small" />}
           </div>
-          {record.error && <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">⚠️ {record.error}</div>}
+          {record.error && <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded-sm">⚠️ {record.error}</div>}
           {record.hasZeroCost && !record.error && (
-            <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
+            <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded-sm">
               ⚠️ No pricing data found for this model. Set base_model in config.
             </div>
           )}
@@ -295,7 +295,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       </div>
 
       {/* Combined Totals - Always show when there are results */}
-      <Card size="small" className="bg-gradient-to-r from-slate-50 to-blue-50 border-slate-200">
+      <Card size="small" className="bg-linear-to-r from-slate-50 to-blue-50 border-slate-200">
         <Row gutter={[16, 8]}>
           <Col xs={24} sm={12}>
             <Statistic

@@ -1010,7 +1010,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
               <button
                 type="button"
                 onClick={handleBack}
-                className="text-sm text-gray-600 border border-gray-300 rounded px-4 py-2 hover:bg-gray-50"
+                className="text-sm text-gray-600 border border-gray-300 rounded-sm px-4 py-2 hover:bg-gray-50"
               >
                 ← Back
               </button>

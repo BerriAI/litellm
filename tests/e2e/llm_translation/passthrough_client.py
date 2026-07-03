@@ -48,6 +48,16 @@ class AnthropicHeaders(Headers):
     tags: str | None = None
 
 
+class VertexHeaders(Headers):
+    # Only the litellm virtual key; the /vertex_ai passthrough mints the Vertex token
+    # from the proxy's own service account (the deployment marked use_in_pass_through),
+    # so no upstream Authorization bearer is sent from the client.
+    x_litellm_api_key: str = Field(serialization_alias="x-litellm-api-key")
+    content_type: str = Field(
+        default="application/json", serialization_alias="Content-Type"
+    )
+
+
 class AltSseParams(BaseModel):
     alt: str = "sse"
 
@@ -130,6 +140,23 @@ class PassthroughClient:
             ),
             params=AltSseParams(),
             stream=True,
+        )
+
+    # ---- Vertex AI native passthrough (/vertex_ai/v1/projects/...) -------
+
+    def vertex_generate(
+        self, key: str, project: str, location: str, model: str, text: str
+    ) -> StreamingResponse:
+        path = (
+            f"/vertex_ai/v1/projects/{project}/locations/{location}"
+            f"/publishers/google/models/{model}:generateContent"
+        )
+        return self.gateway.transport.send(
+            path,
+            headers=VertexHeaders(x_litellm_api_key=key),
+            json=GeminiGenerateBody(
+                contents=[GeminiContent(parts=[GeminiPart(text=text)])]
+            ),
         )
 
     # ---- Anthropic native passthrough (/anthropic/v1/messages) ----------

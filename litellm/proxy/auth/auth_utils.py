@@ -278,6 +278,12 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # NVIDIA Riva fields consumed by the audio-transcription handler
+    # via ``optional_params``. Banned for the same reason as the
+    # provider-specific entries above: a caller-supplied value retargets
+    # the request away from the admin's pinned configuration.
+    "nvcf_function_id",
+    "use_ssl",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     # Observability credentials, hosts, and project identifiers: derived
@@ -369,6 +375,16 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+    litellm_params = _coerce_metadata_to_dict(request_body.get("litellm_params"))
+    if litellm_params is not None:
+        litellm_params_metadata = _coerce_metadata_to_dict(litellm_params.get("metadata"))
+        if litellm_params_metadata is not None:
+            _check_banned_params(
+                litellm_params_metadata,
+                general_settings,
+                llm_router,
+                model,
+            )
     return True
 
 

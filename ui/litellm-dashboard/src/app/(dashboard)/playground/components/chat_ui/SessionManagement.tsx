@@ -87,7 +87,7 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
               title={
                 <div className="text-xs">
                   <div className="mb-1">Copy response ID to continue session:</div>
-                  <div className="bg-gray-800 text-gray-100 p-2 rounded font-mono text-xs whitespace-pre-wrap">
+                  <div className="bg-gray-800 text-gray-100 p-2 rounded-sm font-mono text-xs whitespace-pre-wrap">
                     {`curl -X POST "your-proxy-url/v1/responses" \\
   -H "Authorization: Bearer your-api-key" \\
   -H "Content-Type: application/json" \\
@@ -102,7 +102,10 @@ const SessionManagement: React.FC<SessionManagementProps> = ({
               }
               overlayStyle={{ maxWidth: "500px" }}
             >
-              <button onClick={handleCopySessionId} className="ml-2 p-1 hover:bg-green-100 rounded transition-colors">
+              <button
+                onClick={handleCopySessionId}
+                className="ml-2 p-1 hover:bg-green-100 rounded-sm transition-colors"
+              >
                 <CopyOutlined style={{ fontSize: "12px" }} />
               </button>
             </Tooltip>

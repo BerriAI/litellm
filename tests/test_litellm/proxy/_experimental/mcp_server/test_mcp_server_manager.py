@@ -3199,6 +3199,250 @@ class TestMCPServerManager:
         mock_inner.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_no_mcp_servers_sentinel_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_no_mcp",
+            mcp_servers=["no-mcp-servers"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_no_mcp",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["leaked-server"],
+            ) as mock_inner,
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == []
+        mock_inner.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicitly_scoped_key_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=["submitted-server"])
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            ),
+            "scoped-server": MCPServer(
+                server_id="scoped-server",
+                name="scoped",
+                transport=MCPTransport.http,
+            ),
+        }
+        object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm_scoped",
+            mcp_servers=["scoped-server"],
+            mcp_access_groups=[],
+        )
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+            object_permission=object_permission,
+            object_permission_id="perm_scoped",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", cache),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(manager, "get_allow_all_keys_server_ids", return_value=[]),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=["scoped-server"],
+            ),
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert result == ["scoped-server"]
+        cache.async_get_cache.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_toolset_scope_excludes_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_context import (
+            _mcp_active_toolset_id,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=["submitted-server"])
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            ),
+            "toolset-server": MCPServer(
+                server_id="toolset-server",
+                name="toolset",
+                transport=MCPTransport.http,
+            ),
+        }
+        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+
+        token = _mcp_active_toolset_id.set("toolset-abc")
+        try:
+            with (
+                patch.object(proxy_server_module, "user_api_key_cache", cache),
+                patch.object(proxy_server_module, "prisma_client", None),
+                patch.object(
+                    manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+                ),
+                patch.object(
+                    MCPRequestHandler,
+                    "get_allowed_mcp_servers",
+                    new_callable=AsyncMock,
+                    return_value=["toolset-server"],
+                ),
+            ):
+                result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+        finally:
+            _mcp_active_toolset_id.reset(token)
+
+        assert result == ["toolset-server"]
+
+    @pytest.mark.asyncio
+    async def test_invalidate_byom_submitted_servers_cache_deletes_key(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+
+        cache = MagicMock()
+        cache.async_delete_cache = AsyncMock()
+        manager = MCPServerManager()
+
+        with patch.object(proxy_server_module, "user_api_key_cache", cache):
+            await manager.invalidate_byom_submitted_servers_cache("user-123")
+            await manager.invalidate_byom_submitted_servers_cache(None)
+
+        cache.async_delete_cache.assert_awaited_once_with(key="byom_submitted_servers:user-123")
+
+    @pytest.mark.asyncio
+    async def test_get_active_submitted_ids_cache_miss_queries_db_and_caches(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        cache = MagicMock()
+        cache.async_get_cache = AsyncMock(return_value=None)
+        cache.async_set_cache = AsyncMock()
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", cache),
+            patch.object(proxy_server_module, "prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.get_active_submitted_mcp_server_ids_for_user",
+                AsyncMock(return_value=["submitted-server", "unknown-server"]),
+            ),
+        ):
+            result = await manager._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+
+        assert result == ["submitted-server"]
+        cache.async_set_cache.assert_awaited_once_with(
+            key="byom_submitted_servers:user-123",
+            value=["submitted-server", "unknown-server"],
+            ttl=60,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_allowed_mcp_servers_fallback_keeps_submitted_byom_servers(self):
+        from litellm.proxy import proxy_server as proxy_server_module
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        class _Cache:
+            async def async_get_cache(self, key: str):
+                assert key == "byom_submitted_servers:user-123"
+                return ["submitted-server"]
+
+        manager = MCPServerManager()
+        manager.registry = {
+            "submitted-server": MCPServer(
+                server_id="submitted-server",
+                name="submitted",
+                transport=MCPTransport.http,
+            )
+        }
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id="user-123",
+        )
+
+        with (
+            patch.object(proxy_server_module, "user_api_key_cache", _Cache()),
+            patch.object(proxy_server_module, "prisma_client", None),
+            patch.object(
+                manager, "get_allow_all_keys_server_ids", return_value=["global-server"]
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("permission resolver failed"),
+            ),
+        ):
+            result = await manager.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert set(result) == {"global-server", "submitted-server"}
+
+    @pytest.mark.asyncio
     async def test_get_allowed_mcp_servers_anonymous_delegate_requires_oauth2(self):
         """Anonymous delegated auth listing should only include oauth2 servers."""
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -4982,6 +5226,140 @@ class TestCreateMcpClientV2Graft:
 
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
+
+
+def _upstream_status_error(status_code: int, challenge: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://upstream.example/mcp")
+    response = httpx.Response(
+        status_code,
+        headers={"WWW-Authenticate": challenge},
+        request=request,
+    )
+    return httpx.HTTPStatusError(
+        "upstream rejected token", request=request, response=response
+    )
+
+
+class TestMCPToolsListAuthSurfacing:
+    """Regression: MCP tools/list 401 auth failures must surface as MCPUpstreamAuthError.
+
+    Previously a missing/expired per-user OAuth token, or an upstream 401 for any
+    non-carveout auth_type, was swallowed to an empty tool list, so a single-server
+    client saw a 200 with no tools instead of a 401 challenge. The listing helpers
+    now raise MCPUpstreamAuthError on a 401 regardless of auth_type; the single-server
+    routes turn it into a 401 + WWW-Authenticate while the aggregator absorbs it to an
+    empty list. Only a 401 challenges; a 403 (forbidden) degrades like any other error.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_surfaces_upstream_401(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        manager = MCPServerManager()
+        challenge = 'Bearer resource_metadata="https://upstream.example/.well-known/oauth-protected-resource"'
+        client = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_status_error(401, challenge))
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._fetch_tools_with_timeout(client, "static-key-server")
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == challenge
+        assert exc_info.value.server_name == "static-key-server"
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_absorbs_upstream_403(self):
+        """Only a 401 drives the re-auth challenge. A 403 (authenticated but
+        forbidden, e.g. insufficient scope) is not a re-auth signal, so even
+        with a WWW-Authenticate header it degrades to an empty list rather than
+        surfacing a challenge."""
+        manager = MCPServerManager()
+        challenge = 'Bearer error="insufficient_scope", scope="read:tools"'
+        client = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_status_error(403, challenge))
+
+        assert await manager._fetch_tools_with_timeout(client, "forbidden-server") == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_returns_empty_on_non_auth_error(self):
+        manager = MCPServerManager()
+        client = MagicMock()
+        client.list_tools = AsyncMock(side_effect=RuntimeError("upstream 500"))
+
+        assert await manager._fetch_tools_with_timeout(client, "srv") == []
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_surfaces_unusable_user_token(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv", name="oauth-srv", transport=MCPTransport.http
+        )
+        challenge = 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/oauth-srv"'
+        manager._create_mcp_client = AsyncMock(
+            side_effect=HTTPException(
+                status_code=401,
+                detail="Unauthorized",
+                headers={"WWW-Authenticate": challenge},
+            )
+        )
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._get_tools_from_server(server)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == challenge
+        assert exc_info.value.server_name == "oauth-srv"
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_absorbs_non_challenge_http_error(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http
+        )
+        manager._create_mcp_client = AsyncMock(
+            side_effect=HTTPException(
+                status_code=403,
+                detail="MCP stdio command 'foo' is not in the allowlist",
+            )
+        )
+
+        assert await manager._get_tools_from_server(server) == []
+
+    @pytest.mark.asyncio
+    async def test_aggregate_list_tools_absorbs_unauthenticated_server(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        manager = MCPServerManager()
+        good = MCPServer(server_id="good", name="good", transport=MCPTransport.http)
+        bad = MCPServer(server_id="bad", name="bad", transport=MCPTransport.http)
+        manager.get_allowed_mcp_servers = AsyncMock(return_value=["good", "bad"])
+        manager.get_mcp_server_by_id = MagicMock(
+            side_effect=lambda server_id: {"good": good, "bad": bad}.get(server_id)
+        )
+        good_tool = MCPTool(name="good-do_thing", description="do thing", inputSchema={})
+
+        async def fake_get_tools(server, **kwargs):
+            if server.server_id == "bad":
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate='Bearer realm="x"',
+                    server_name="bad",
+                )
+            return [good_tool]
+
+        manager._get_tools_from_server = fake_get_tools
+
+        result = await manager.list_tools()
+
+        assert [t.name for t in result] == ["good-do_thing"]
 
 
 if __name__ == "__main__":

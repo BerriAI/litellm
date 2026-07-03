@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "../networking";
 import { setToken } from "@/utils/mcpTokenStore";
 import CreateMCPServer from "./create_mcp_server";
+import { selectAntOption } from "./testUtils";
 
 vi.mock("../networking", () => ({
   createMCPServer: vi.fn(),
+  fetchOpenAPIRegistry: vi.fn().mockResolvedValue({ apis: [] }),
   registerMCPServer: vi.fn(),
   storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
@@ -16,15 +18,26 @@ vi.mock("@/utils/mcpTokenStore", () => ({
   setToken: vi.fn(),
 }));
 
+vi.mock("./OpenAPIQuickPicker", () => ({
+  default: () => null,
+}));
+
 // Mutable holder so individual tests can simulate "Authorize & Fetch" having
 // produced a token before submit, and inspect the reset wiring.
 const oauthHook = vi.hoisted(() => ({
   tokenResponse: null as Record<string, unknown> | null,
   reset: vi.fn(),
-  onTokenReceived: null as ((token: Record<string, unknown> | null) => void) | null,
+  onTokenReceived: null as
+    | ((token: Record<string, unknown> | null, registeredClient?: { clientId?: string; clientSecret?: string }) => void)
+    | null,
 }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
-  useMcpOAuthFlow: (opts: { onTokenReceived: (token: Record<string, unknown> | null) => void }) => {
+  useMcpOAuthFlow: (opts: {
+    onTokenReceived: (
+      token: Record<string, unknown> | null,
+      registeredClient?: { clientId?: string; clientSecret?: string },
+    ) => void;
+  }) => {
     oauthHook.onTokenReceived = opts.onTokenReceived;
     return {
       startOAuthFlow: vi.fn(),
@@ -87,45 +100,6 @@ const defaultProps = {
 
 /** Helper: get the server_name input by its Ant Form id */
 const getServerNameInput = () => document.getElementById("server_name") as HTMLInputElement;
-
-/** Helper: select a dropdown option by opening a select near a label and clicking an option */
-async function selectAntOption(labelText: string, optionText: string) {
-  const label = screen.getByText(labelText);
-  // First try to find a .ant-form-item ancestor (standard form fields)
-  let select: Element | null = null;
-  const formItem = label.closest(".ant-form-item");
-  if (formItem) {
-    select = formItem.querySelector(".ant-select");
-  }
-  // If not found, try .ant-collapse-content ancestor (auth type is inside a Collapse panel)
-  if (!select) {
-    const collapseContent = label.closest(".ant-collapse-item");
-    if (collapseContent) {
-      select = collapseContent.querySelector(".ant-select");
-    }
-  }
-  // Fallback: look for a sibling or nearby select
-  if (!select) {
-    const parent = label.closest("div");
-    select = parent?.querySelector(".ant-select") ?? null;
-  }
-  act(() => {
-    fireEvent.mouseDown(select!.querySelector(".ant-select-selector")!);
-  });
-
-  await waitFor(() => {
-    const options = document.querySelectorAll(".ant-select-item-option");
-    expect(options.length).toBeGreaterThan(0);
-  });
-
-  const option = Array.from(document.querySelectorAll(".ant-select-item-option")).find((el) =>
-    el.textContent?.includes(optionText),
-  );
-  expect(option).toBeTruthy();
-  act(() => {
-    fireEvent.click(option!);
-  });
-}
 
 describe("CreateMCPServer", () => {
   beforeEach(() => {
@@ -495,6 +469,170 @@ describe("CreateMCPServer", () => {
       expect(payload.token_validation).toEqual({ organization: "my-org", "team.id": "42" });
     });
 
+    it("invalidates the DCR client and OAuth flow when the MCP URL changes after Authorize & Fetch", async () => {
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "Url_Change_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://a.example.com/mcp" } });
+      });
+
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://b.example.com/mcp" } });
+      });
+
+      await waitFor(() => expect(oauthHook.reset).toHaveBeenCalled());
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "Url_Change_Server",
+        alias: "Url_Change_Server",
+        url: "https://b.example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials?.client_id).toBeUndefined();
+      expect(payload.credentials?.client_secret).toBeUndefined();
+    });
+
+    it("invalidates the DCR client and OAuth flow when the OpenAPI spec URL changes after Authorize & Fetch", async () => {
+      render(<CreateMCPServer {...defaultProps} />);
+      await selectAntOption("Transport Type", "OpenAPI Spec");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json")).toBeInTheDocument();
+      });
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OpenAPI_Server" } });
+      });
+      const specInput = screen.getByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json");
+      await act(async () => {
+        fireEvent.change(specInput, { target: { value: "https://a.example.com/openapi.json" } });
+      });
+
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      await act(async () => {
+        fireEvent.change(specInput, { target: { value: "https://b.example.com/openapi.json" } });
+      });
+
+      await waitFor(() => expect(oauthHook.reset).toHaveBeenCalled());
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-openapi-server",
+        server_name: "OpenAPI_Server",
+        alias: "OpenAPI_Server",
+        url: "https://b.example.com/openapi.json",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.spec_path).toBe("https://b.example.com/openapi.json");
+      expect(payload.credentials?.client_id).toBeUndefined();
+      expect(payload.credentials?.client_secret).toBeUndefined();
+    });
+
+    it("invalidates the DCR client and OAuth flow when the transport changes after Authorize & Fetch", async () => {
+      render(<CreateMCPServer {...defaultProps} />);
+      await selectAntOption("Transport Type", "OpenAPI Spec");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json")).toBeInTheDocument();
+      });
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "Transport_Change_Server" } });
+      });
+      const specInput = screen.getByPlaceholderText("https://petstore3.swagger.io/api/v3/openapi.json");
+      await act(async () => {
+        fireEvent.change(specInput, { target: { value: "https://same.example.com/spec-or-mcp" } });
+      });
+
+      act(() => {
+        oauthHook.onTokenReceived?.({ access_token: "tok-a" }, { clientId: "client-a", clientSecret: "secret-a" });
+      });
+      oauthHook.reset.mockClear();
+
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://same.example.com/spec-or-mcp" } });
+      });
+
+      await waitFor(() => expect(oauthHook.reset).toHaveBeenCalled());
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-transport-server",
+        server_name: "Transport_Change_Server",
+        alias: "Transport_Change_Server",
+        url: "https://same.example.com/spec-or-mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => expect(networking.createMCPServer).toHaveBeenCalledTimes(1));
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.url).toBe("https://same.example.com/spec-or-mcp");
+      expect(payload.credentials?.client_id).toBeUndefined();
+      expect(payload.credentials?.client_secret).toBeUndefined();
+    });
+
     it("omits token_validation from payload when token_validation_json is empty", async () => {
       vi.mocked(networking.createMCPServer).mockResolvedValue({
         server_id: "new-server-oauth",
@@ -532,6 +670,84 @@ describe("CreateMCPServer", () => {
 
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.token_validation).toBeUndefined();
+    });
+
+    it("includes credentials.token_endpoint_auth_method in payload when client_secret_basic is selected", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      await selectAntOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials?.token_endpoint_auth_method).toBe("client_secret_basic");
+    });
+
+    it("omits token_endpoint_auth_method from credentials when left blank", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.credentials?.token_endpoint_auth_method).toBeUndefined();
     });
 
     it("persists access + refresh token to the DB on submit for OBO mode", async () => {
@@ -667,11 +883,13 @@ describe("CreateMCPServer", () => {
       // Reopen for a brand-new server and enter a different URL without re-authorizing.
       rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
       const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      oauthHook.reset.mockClear();
       await act(async () => {
         fireEvent.change(reopenedUrlInput, { target: { value: "https://server-b.example.com/mcp" } });
       });
 
       // The previous server's token must never be replayed for the new session.
+      expect(oauthHook.reset).not.toHaveBeenCalled();
       expect(usedToken("stale-token-A")).toBe(false);
     });
 

@@ -137,7 +137,7 @@ export const columns = (
           }}
         >
           <div className="flex items-start space-x-2 min-w-0 w-full cursor-pointer">
-            <div className="flex-shrink-0 mt-0.5">
+            <div className="shrink-0 mt-0.5">
               {model.provider ? (
                 <ProviderLogo provider={model.provider} />
               ) : (
@@ -180,14 +180,14 @@ export const columns = (
         <div className="flex items-center space-x-2 min-w-0 w-full">
           {isReusable ? (
             <>
-              <SyncOutlined className="flex-shrink-0" style={{ color: "#1890ff", fontSize: 14 }} />
+              <SyncOutlined className="shrink-0" style={{ color: "#1890ff", fontSize: 14 }} />
               <span className="text-xs truncate text-blue-600" title={credentialName}>
                 {credentialName}
               </span>
             </>
           ) : (
             <>
-              <EditOutlined className="flex-shrink-0" style={{ color: "#8c8c8c", fontSize: 14 }} />
+              <EditOutlined className="shrink-0" style={{ color: "#8c8c8c", fontSize: 14 }} />
               <span className="text-xs text-gray-500">Manual</span>
             </>
           )}
@@ -332,7 +332,7 @@ export const columns = (
 
       return (
         <div className="flex items-center gap-1 overflow-hidden w-full">
-          <Badge size="xs" color="blue" className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0">
+          <Badge size="xs" color="blue" className="text-xs px-1.5 py-0.5 h-5 leading-tight shrink-0">
             {accessGroups[0]}
           </Badge>
 
@@ -342,7 +342,7 @@ export const columns = (
                 key={index + 1}
                 size="xs"
                 color="blue"
-                className="text-xs px-1.5 py-0.5 h-5 leading-tight flex-shrink-0"
+                className="text-xs px-1.5 py-0.5 h-5 leading-tight shrink-0"
               >
                 {group}
               </Badge>
@@ -354,7 +354,7 @@ export const columns = (
                 e.stopPropagation();
                 toggleExpanded();
               }}
-              className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded hover:bg-blue-50 h-5 leading-tight flex-shrink-0 whitespace-nowrap"
+              className="text-xs text-blue-600 hover:text-blue-800 px-1 py-0.5 rounded-sm hover:bg-blue-50 h-5 leading-tight shrink-0 whitespace-nowrap"
             >
               {isExpanded ? "−" : `+${accessGroups.length - 1}`}
             </button>

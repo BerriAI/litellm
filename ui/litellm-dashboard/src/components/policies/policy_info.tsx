@@ -97,7 +97,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
 
         <Descriptions bordered column={1}>
           <Descriptions.Item label="Policy ID">
-            <code className="text-xs bg-gray-100 px-2 py-1 rounded">{policy.policy_id}</code>
+            <code className="text-xs bg-gray-100 px-2 py-1 rounded-sm">{policy.policy_id}</code>
           </Descriptions.Item>
           <Descriptions.Item label="Description">
             {policy.description || <Text type="secondary">No description</Text>}

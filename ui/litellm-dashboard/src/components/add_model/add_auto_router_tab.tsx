@@ -364,9 +364,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
           )}
 
           <div className="flex items-center my-4">
-            <div className="flex-grow border-t border-gray-200"></div>
+            <div className="grow border-t border-gray-200"></div>
             <span className="px-4 text-gray-500 text-sm">Additional Settings</span>
-            <div className="flex-grow border-t border-gray-200"></div>
+            <div className="grow border-t border-gray-200"></div>
           </div>
 
           {/* Model Access Groups - Admin only */}

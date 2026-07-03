@@ -152,6 +152,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_output_config: Optional[bool]
     supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[Literal["low", "medium", "high", "max", "xhigh"]]
+    bedrock_converse_supports_strict_tools: Optional[bool]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -3062,6 +3063,7 @@ agentic_loop_internal_litellm_params = [
     "max_agentic_loops",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
+    "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
 ]
 
@@ -3309,6 +3311,7 @@ class LlmProviders(str, Enum):
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
+    TENCENT = "tencent"
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
@@ -3368,6 +3371,7 @@ class LlmProviders(str, Enum):
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
+    GDC = "gdc"
 
 
 # Create a set of all provider values for quick lookup

@@ -66,11 +66,11 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
     >
       <div className="flex items-center gap-1">
         {isMcp ? (
-          <Wrench size={12} className="text-slate-500 flex-shrink-0" />
+          <Wrench size={12} className="text-slate-500 shrink-0" />
         ) : isAgent ? (
-          <Bot size={12} className="text-slate-500 flex-shrink-0" />
+          <Bot size={12} className="text-slate-500 shrink-0" />
         ) : (
-          <Sparkles size={12} className="text-slate-500 flex-shrink-0" />
+          <Sparkles size={12} className="text-slate-500 shrink-0" />
         )}
         <span className="text-xs font-medium text-slate-900 truncate">
           {getEventDisplayName(row.call_type, row.model)}
@@ -317,7 +317,7 @@ export function LogDetailsDrawer({
             size="small"
             icon={<LeftOutlined />}
             onClick={() => setIsSidebarCollapsed(true)}
-            className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+            className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
             aria-label="Collapse trace sidebar"
           />
         ) : (
@@ -326,7 +326,7 @@ export function LogDetailsDrawer({
             size="small"
             icon={<RightOutlined />}
             onClick={() => setIsSidebarCollapsed(false)}
-            className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+            className="absolute top-2 left-2 z-20 bg-white! border! border-slate-200! rounded-md!"
             aria-label="Expand trace sidebar"
           />
         )}

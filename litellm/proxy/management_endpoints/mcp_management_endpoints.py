@@ -132,6 +132,7 @@ if MCP_AVAILABLE:
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _raise_if_not_oauth2,
         authorize_with_server,
         exchange_token_with_server,
         get_request_base_url,
@@ -148,7 +149,6 @@ if MCP_AVAILABLE:
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
-        MCPEnvVarScope,
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
@@ -460,18 +460,6 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
 
-    def _redact_global_env_var_values(mcp_server: LiteLLM_MCPServerTable) -> None:
-        """Blank admin-supplied ``scope="global"`` env var secrets in place.
-
-        Global entries hold the admin's plaintext credential (API key,
-        password, ...) and must never reach non-admin callers. Per-user
-        entries only carry a placeholder the user fills in themselves, so
-        their value is left intact.
-        """
-        for env_var in mcp_server.env_vars or []:
-            if env_var.scope == MCPEnvVarScope.global_:
-                env_var.value = ""
-
     def _user_is_full_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """True only for ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` returns False.
 
@@ -666,6 +654,7 @@ if MCP_AVAILABLE:
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
             timeout=payload.timeout,
+            max_concurrent_requests=payload.max_concurrent_requests,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -1114,9 +1103,9 @@ if MCP_AVAILABLE:
         prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
         submissions = await get_mcp_submissions(prisma_client)
+        submissions.items = _redact_mcp_credentials_list(submissions.items)
         if not _user_is_full_admin(user_api_key_dict):
-            for item in submissions.items:
-                _redact_global_env_var_values(item)
+            submissions.items = _sanitize_mcp_server_list_for_non_admin(submissions.items)
         return submissions
 
     @router.put(
@@ -1158,6 +1147,7 @@ if MCP_AVAILABLE:
             server_id,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         )
+        await global_mcp_server_manager.invalidate_byom_submitted_servers_cache(approved.submitted_by)
         await global_mcp_server_manager.reload_servers_from_database()
 
         return _redact_mcp_credentials(approved)
@@ -1623,6 +1613,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = None,
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
+        _raise_if_not_oauth2(mcp_server)
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
@@ -1667,6 +1658,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = Form(None),
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
+        _raise_if_not_oauth2(mcp_server)
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
             raise HTTPException(
@@ -1714,6 +1706,7 @@ if MCP_AVAILABLE:
             response_types=data.get("response_types", []),
             token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
             fallback_client_id=server_id,
+            persist_credentials=_user_is_full_admin(user_api_key_dict),
         )
 
     @router.delete(

@@ -356,6 +356,58 @@ async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
 
 
 @pytest.mark.asyncio
+async def test_enforce_key_access_teamless_all_team_models_denied():
+    """_enforce_key_and_fallback_model_access must not skip key-level
+    model checks for a teamless key that carries all-team-models."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.user_api_key_auth import (
+        _enforce_key_and_fallback_model_access,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan-key",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _enforce_key_and_fallback_model_access(
+            valid_token=valid_token,
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            request=None,
+            llm_model_list=None,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_resolved_model_teamless_all_team_models_denied():
+    """can_key_call_resolved_model must not skip key-level model checks
+    for a teamless key that carries all-team-models."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan-key",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_resolved_model(
+            model="gpt-4o",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
 async def test_can_team_access_model_all_team_models_expands_router_models():
     from litellm import Router
     from litellm.proxy._types import SpecialModelNames

@@ -93,6 +93,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     has_user_credential: Optional[bool] = None
     source_url: Optional[str] = None
     timeout: Optional[float] = None
+    max_concurrent_requests: Optional[int] = None
     approval_status: Optional[str] = Field(
         default="active",
         description="Approval status: 'pending_review', 'active', 'rejected'",

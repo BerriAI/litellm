@@ -102,6 +102,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
+    is_sensitive_callback_key,
     normalize_callback_names,
     process_callback,
 )
@@ -425,7 +426,10 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.management_helpers.audit_logs import (
+    create_audit_log_for_update,
+    create_object_audit_log,
+)
 from litellm.proxy.memory.memory_endpoints import router as memory_router
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
@@ -1435,31 +1439,6 @@ def _get_cors_config(
 origins, allow_cors_credentials = _get_cors_config()
 
 
-def _restructure_ui_html_files(ui_root: str) -> None:
-    """Ensure each exported HTML route is available as <route>/index.html."""
-
-    for current_root, _, files in os.walk(ui_root):
-        rel_root = os.path.relpath(current_root, ui_root)
-        first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
-
-        if first_segment in {"_next", "litellm-asset-prefix"}:
-            continue
-
-        for filename in files:
-            if not filename.endswith(".html") or filename == "index.html":
-                continue
-
-            file_path = os.path.join(current_root, filename)
-            target_dir = os.path.splitext(file_path)[0]
-            target_path = os.path.join(target_dir, "index.html")
-
-            os.makedirs(target_dir, exist_ok=True)
-            try:
-                os.replace(file_path, target_path)
-            except FileNotFoundError:
-                continue
-
-
 # get current directory
 try:
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1694,17 +1673,43 @@ try:
     # # Mount the _next directory at the root level
     app.mount(
         "/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next"), check_dir=False),
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
         name="next_static",
     )
     app.mount(
         f"{litellm_asset_prefix}/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next"), check_dir=False),
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
         name="next_static",
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True, check_dir=False), name="ui")
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+
+    def _restructure_ui_html_files(ui_root: str) -> None:
+        """Ensure each exported HTML route is available as <route>/index.html."""
+
+        for current_root, _, files in os.walk(ui_root):
+            rel_root = os.path.relpath(current_root, ui_root)
+            first_segment = "" if rel_root == "." else rel_root.split(os.sep)[0]
+
+            # Ignore Next.js asset directories
+            if first_segment in {"_next", "litellm-asset-prefix"}:
+                continue
+
+            for filename in files:
+                if not filename.endswith(".html") or filename == "index.html":
+                    continue
+
+                file_path = os.path.join(current_root, filename)
+                target_dir = os.path.splitext(file_path)[0]
+                target_path = os.path.join(target_dir, "index.html")
+
+                os.makedirs(target_dir, exist_ok=True)
+                try:
+                    os.replace(file_path, target_path)
+                except FileNotFoundError:
+                    # Another process may have already moved this file.
+                    continue
 
     # Handle HTML file restructuring
     # Only restructure if:
@@ -6311,6 +6316,10 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(str(e))
             )
 
+    async def init_mcp_servers_from_db(self) -> None:
+        if self._should_load_db_object(object_type="mcp"):
+            await self._init_mcp_servers_in_db()
+
     async def _init_agents_in_db(self, prisma_client: PrismaClient):
         from litellm.proxy.agent_endpoints.agent_registry import (
             global_agent_registry as AGENT_REGISTRY,
@@ -7558,6 +7567,9 @@ class ProxyStartupEvent:
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
 
+        if store_model_in_db is not True:
+            await proxy_config.init_mcp_servers_from_db()
+
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
             general_settings=general_settings,
@@ -7615,6 +7627,7 @@ class ProxyStartupEvent:
                     proxy_logging_obj=proxy_logging_obj,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
+                    track_unmanaged_vertex_batch_cost=general_settings.get("track_unmanaged_vertex_batch_cost", False),
                 )
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
@@ -8348,6 +8361,22 @@ async def model_info(
     )
 
 
+def _blocked_response_usage(original_response: Optional[Any]) -> "litellm.Usage":
+    """
+    Token usage for a synthetic guardrail-blocked response.
+
+    A post-call block replaces the LLM's response with the violation message,
+    but the upstream call already consumed tokens -- report that real usage
+    (carried on ``ModifyResponseException.original_response``) rather than
+    discarding it. Pre-call blocks never invoked the LLM (no original_response),
+    so usage is zero.
+    """
+    usage = getattr(original_response, "usage", None) if original_response is not None else None
+    if isinstance(usage, litellm.Usage):
+        return usage
+    return litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -8454,6 +8483,9 @@ async def chat_completion(
         _chat_response.model = e.model  # type: ignore
         _chat_response.choices[0].message.content = e.message  # type: ignore
         _chat_response.choices[0].finish_reason = "content_filter"  # type: ignore
+        # Report the blocked LLM response's real usage (set before the stream
+        # branch so both paths carry it); zero for pre-call blocks.
+        _chat_response.usage = _blocked_response_usage(e.original_response)  # type: ignore
 
         if data.get("stream", None) is not None and data["stream"] is True:
             _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
@@ -8475,8 +8507,6 @@ async def chat_completion(
                 media_type="text/event-stream",
                 status_code=200,  # Return 200 for passthrough mode
             )
-        _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
-        _chat_response.usage = _usage  # type: ignore
         return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
@@ -8605,11 +8635,7 @@ async def completion(
             # Set text attribute dynamically for text completion format
             setattr(_text_response.choices[0], "text", e.message)
             _text_response.model = e.model  # type: ignore[assignment]
-            _usage = litellm.Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
+            _usage = _blocked_response_usage(e.original_response)
             # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
             setattr(_text_response, "usage", _usage)
             _iterator = litellm.utils.ModelResponseIterator(model_response=_text_response, convert_to_delta=True)
@@ -8634,11 +8660,7 @@ async def completion(
             _response = litellm.TextCompletionResponse()
             _response.choices[0].text = e.message
             _response.model = e.model  # type: ignore
-            _usage = litellm.Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
+            _usage = _blocked_response_usage(e.original_response)
             _response.usage = _usage  # type: ignore
             return _response
     except RejectedRequestError as e:
@@ -13626,9 +13648,7 @@ async def get_favicon():
     )
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    built_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
-    bundled_favicon = os.path.join(current_dir, "swagger", "favicon.ico")
-    default_favicon = built_favicon if os.path.exists(built_favicon) else bundled_favicon
+    default_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
 
     favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
 
@@ -13959,6 +13979,7 @@ async def update_config(
         # effect of auto-enabling slack alerting.
         if config_info.general_settings is not None:
             existing = await _read_section("general_settings")
+            before_general_settings = copy.deepcopy(existing)
             updates = config_info.general_settings.dict(exclude_none=True)
             for k, v in updates.items():
                 if k == "alert_to_webhook_url":
@@ -13968,6 +13989,11 @@ async def update_config(
                         existing["alerting"].append("slack")
                 existing[k] = v
             await _upsert_section("general_settings", existing)
+            asyncio.create_task(
+                create_config_audit_log(
+                    "general_settings", "updated", before_general_settings, existing, user_api_key_dict
+                )
+            )
 
         # environment_variables: idempotently encrypt the request values
         # (plaintext on first write, OR ciphertext the UI read back via
@@ -13976,10 +14002,16 @@ async def update_config(
         # their stored ciphertext byte-for-byte.
         if config_info.environment_variables is not None:
             existing = await _read_section("environment_variables")
+            before_environment_variables = copy.deepcopy(existing)
             existing.update(
                 proxy_config._encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
             )
             await _upsert_section("environment_variables", existing)
+            asyncio.create_task(
+                create_config_audit_log(
+                    "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
+                )
+            )
 
         # litellm_settings: merge existing + request, request wins (matching
         # router_settings semantics — the caller's value for any given key is
@@ -13991,6 +14023,7 @@ async def update_config(
         # entries that delete_callback (lowercase lookup) cannot find.
         if config_info.litellm_settings is not None:
             existing = await _read_section("litellm_settings")
+            before_litellm_settings = copy.deepcopy(existing)
             updated_litellm_settings = dict(config_info.litellm_settings)
 
             incoming_cb = updated_litellm_settings.get("success_callback")
@@ -14012,12 +14045,24 @@ async def update_config(
                     merged["success_callback"] = list(set(incoming_cb))
 
             await _upsert_section("litellm_settings", merged)
+            asyncio.create_task(
+                create_config_audit_log(
+                    "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
+                )
+            )
 
         # router_settings: merge existing + request, request wins.
         if config_info.router_settings is not None:
             existing = await _read_section("router_settings")
+            before_router_settings = copy.deepcopy(existing)
             updates = config_info.router_settings.dict(exclude_none=True)
-            await _upsert_section("router_settings", {**existing, **updates})
+            new_router_settings = {**existing, **updates}
+            await _upsert_section("router_settings", new_router_settings)
+            asyncio.create_task(
+                create_config_audit_log(
+                    "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
+                )
+            )
 
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
@@ -14149,6 +14194,8 @@ async def update_config_general_settings(
     else:
         general_settings = dict(db_general_settings.param_value)
 
+    before_general_settings = copy.deepcopy(general_settings)
+
     ## update db
 
     field_value = data.field_value
@@ -14168,6 +14215,11 @@ async def update_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
+    asyncio.create_task(
+        create_config_audit_log(
+            "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
+        )
+    )
 
     if data.field_name == "plugins":
         register_plugins_from_config(general_settings)
@@ -14226,6 +14278,91 @@ def _redact_general_setting_value(field_name: str, value: JsonValue, is_full_adm
     if isinstance(value, (dict, list)):
         return _redact_secret_values_in_obj(value)
     return value
+
+
+def _dump_redacted_config(value: Optional[JsonValue], *, redact_all_values: bool = False) -> Optional[str]:
+    # `default=str` matches the sibling audit-log serializers in
+    # team_endpoints.py and the LiteLLM_AuditLogs validator, so a YAML-loaded
+    # value with a non-JSON-native leaf (datetime, custom object) cannot turn
+    # an audit write into a 500.
+    if value is None:
+        return None
+    if redact_all_values and isinstance(value, dict):
+        return json.dumps({key: "REDACTED" for key in value}, default=str)
+    return json.dumps(_redact_secret_values_in_obj(value), default=str)
+
+
+async def create_config_audit_log(
+    param_name: str,
+    action: AUDIT_ACTIONS,
+    before_value: Optional[JsonValue],
+    after_value: Optional[JsonValue],
+    user_api_key_dict: UserAPIKeyAuth,
+    table_name: LitellmTableNames = LitellmTableNames.CONFIG_TABLE_NAME,
+) -> None:
+    """Record a system-wide settings change in LiteLLM_AuditLog.
+
+    Secret leaves are redacted before the row is written. environment_variables
+    hold arbitrary credentials under non-secret-looking uppercase keys (e.g.
+    DATABASE_URL), so every value in that section is redacted rather than
+    relying on key-name matching; other sections reuse the same matcher
+    /config/field/info applies for non-admins.
+    """
+    redact_all_values = param_name == "environment_variables"
+    await create_object_audit_log(
+        object_id=param_name,
+        action=action,
+        table_name=table_name,
+        before_value=_dump_redacted_config(before_value, redact_all_values=redact_all_values),
+        after_value=_dump_redacted_config(after_value, redact_all_values=redact_all_values),
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=None,
+        litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+    )
+
+
+_EXTRA_SECRET_CALLBACK_ENV_VARS = frozenset(
+    {
+        "GALILEO_USERNAME",
+        "GENERIC_LOGGER_HEADERS",
+        "OTEL_HEADERS",
+        "SLACK_WEBHOOK_URL",
+        "SMTP_USERNAME",
+    }
+)
+
+
+def _redact_callback_env_vars(env_vars: dict[str, Optional[str]]) -> dict[str, Optional[str]]:
+    """Return a copy of ``env_vars`` with values for keys classified as
+    sensitive by ``is_sensitive_callback_key`` replaced with ``"REDACTED"``.
+    ``None`` values pass through unchanged.
+    """
+    return {
+        key: (
+            "REDACTED"
+            if value is not None and is_sensitive_callback_key(key, extra=_EXTRA_SECRET_CALLBACK_ENV_VARS)
+            else value
+        )
+        for key, value in env_vars.items()
+    }
+
+
+def _apply_callback_role_gate(entries: list, is_full_admin: bool) -> list:
+    if is_full_admin:
+        return entries
+    return [{**entry, "variables": _redact_callback_env_vars(entry.get("variables") or {})} for entry in entries]
+
+
+def _apply_alerting_env_role_gate(env_vars: dict, is_full_admin: bool) -> dict:
+    if is_full_admin:
+        return mask_sensitive_keys(env_vars, _ALERTING_SENSITIVE_VARS)
+    return _redact_callback_env_vars(env_vars)
+
+
+def _apply_webhook_role_gate(webhook_map, is_full_admin: bool):
+    if is_full_admin or not isinstance(webhook_map, dict):
+        return webhook_map
+    return {alert_type: "REDACTED" for alert_type in webhook_map}
 
 
 @router.get(
@@ -14511,6 +14648,8 @@ async def delete_config_general_settings(
     else:
         general_settings = dict(db_general_settings.param_value)
 
+    before_general_settings = copy.deepcopy(general_settings)
+
     ## update db
 
     general_settings.pop(data.field_name, None)
@@ -14526,6 +14665,11 @@ async def delete_config_general_settings(
         },
     )
     await invalidate_config_param("general_settings")
+    asyncio.create_task(
+        create_config_audit_log(
+            "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
+        )
+    )
 
     return response
 
@@ -14583,12 +14727,24 @@ async def delete_callback(
                 detail={"error": f"Callback '{callback_name}' not found in active configuration"},
             )
 
+        before_success_callbacks = list(success_callbacks)
+
         # Remove callback from success_callback list
         success_callbacks.remove(callback_name)
         config.setdefault("litellm_settings", {})["success_callback"] = success_callbacks
 
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
+
+        asyncio.create_task(
+            create_config_audit_log(
+                "litellm_settings",
+                "deleted",
+                {"success_callback": before_success_callbacks},
+                {"success_callback": success_callbacks},
+                user_api_key_dict,
+            )
+        )
 
         # Restart the proxy to apply changes
         await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
@@ -14619,7 +14775,9 @@ async def delete_callback(
     include_in_schema=False,
     dependencies=[Depends(user_api_key_auth)],
 )
-async def get_config():
+async def get_config(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     For Admin UI - allows admin to view config via UI
     # return the callbacks and the env variables for the callback
@@ -14633,6 +14791,8 @@ async def get_config():
         _litellm_settings = config_data.get("litellm_settings", {})
         _general_settings = config_data.get("general_settings", {})
         environment_variables = config_data.get("environment_variables", {})
+
+        is_full_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
@@ -14675,6 +14835,8 @@ async def get_config():
         for _callback in _success_and_failure_callbacks:
             _data_to_return.append(process_callback(_callback, "success_and_failure", environment_variables))
 
+        _data_to_return = _apply_callback_role_gate(_data_to_return, is_full_admin)
+
         # Check if slack alerting is on
         _alerting = _general_settings.get("alerting", [])
         alerting_data = []
@@ -14686,11 +14848,13 @@ async def get_config():
                 _var: (value if (value := environment_variables.get(_var)) is not None else os.getenv(_var))
                 for _var in _slack_vars
             }
-            _slack_env_vars = mask_sensitive_keys(_slack_env_vars, _ALERTING_SENSITIVE_VARS)
+            _slack_env_vars = _apply_alerting_env_role_gate(_slack_env_vars, is_full_admin)
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = proxy_logging_obj.slack_alerting_instance._all_possible_alert_types()
-            _alerts_to_webhook = proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url
+            _alerts_to_webhook = _apply_webhook_role_gate(
+                proxy_logging_obj.slack_alerting_instance.alert_to_webhook_url, is_full_admin
+            )
             alerting_data.append(
                 {
                     "name": "slack",
@@ -14710,8 +14874,9 @@ async def get_config():
             "EMAIL_LOGO_URL",
             "EMAIL_SUPPORT_CONTACT",
         ]
-        _email_env_vars = {_var: environment_variables.get(_var) for _var in _email_vars}
-        _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
+        _email_env_vars = _apply_alerting_env_role_gate(
+            {_var: environment_variables.get(_var) for _var in _email_vars}, is_full_admin
+        )
 
         alerting_data.append(
             {
@@ -15465,9 +15630,10 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(batches_router)
+app.include_router(openai_files_router)
 app.include_router(llm_passthrough_router)
 app.include_router(pass_through_router)
-app.include_router(batches_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
@@ -15482,7 +15648,6 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
-app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)

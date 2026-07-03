@@ -580,7 +580,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
               Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
                 <Card className="mt-6">
                   <Text className="mb-4 text-lg font-semibold">PII Entity Configuration</Text>
-                  <div className="border rounded-lg overflow-hidden shadow-sm">
+                  <div className="border rounded-lg overflow-hidden shadow-xs">
                     <div className="bg-gray-50 px-5 py-3 border-b flex">
                       <Text className="flex-1 font-semibold text-gray-700">Entity Type</Text>
                       <Text className="flex-1 font-semibold text-gray-700">Configuration</Text>
