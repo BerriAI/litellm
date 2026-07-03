@@ -128,6 +128,23 @@ async def test_exchange_maps_idp_rejection_to_unauthorized():
 
 
 @pytest.mark.asyncio
+async def test_exchange_maps_gateway_fault_to_misconfigured():
+    """A gateway-fault RFC 6749 code (invalid_client / invalid_target / ..., surfaced as
+    TokenExchangeClientError) is the gateway's problem, not the caller's, so it maps to misconfigured
+    (500) rather than the retryable 503 or the 401 OBO challenge the caller can't act on."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+        TokenExchangeClientError,
+    )
+
+    async def _client_error_post(url, form, headers):
+        raise TokenExchangeClientError("invalid_client")
+
+    result = await Rfc8693TokenExchanger(_client_error_post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
+@pytest.mark.asyncio
 async def test_exchange_maps_transport_failure_to_upstream_unavailable():
     """A post returning None (5xx / network / timeout / malformed body) stays retryable: 503."""
     result = await Rfc8693TokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)

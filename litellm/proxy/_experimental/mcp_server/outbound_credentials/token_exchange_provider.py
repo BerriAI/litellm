@@ -24,7 +24,31 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_sto
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
     Rfc8693TokenExchanger,
     SubjectTokenRejected,
+    TokenExchangeClientError,
 )
+
+# RFC 6749 5.2 error codes that mean the gateway's own request/credentials are wrong (not the
+# caller's subject token), so they surface as a 500 the caller can't fix by re-authenticating.
+_GATEWAY_FAULT_OAUTH_ERRORS = frozenset(
+    {"invalid_client", "unauthorized_client", "unsupported_grant_type", "invalid_target", "invalid_scope"}
+)
+
+
+def _oauth_error_code(response: httpx.Response) -> str | None:
+    """Read the RFC 6749 5.2 ``error`` code from a token-endpoint error body, or None if absent.
+
+    The ``error_description`` is deliberately not read: it can carry IdP internals and must never
+    reach the caller. Only the standard machine code drives classification.
+    """
+    try:
+        body: object = response.json()
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(body, dict):
+        code = body.get("error")
+        if isinstance(code, str):
+            return code
+    return None
 
 
 async def _post_exchange_endpoint(
@@ -48,7 +72,16 @@ async def _post_exchange_endpoint(
     except httpx.HTTPStatusError as status_err:
         status_code = status_err.response.status_code
         if 400 <= status_code < 500:
-            raise SubjectTokenRejected(f"IdP rejected the token exchange (HTTP {status_code})") from status_err
+            oauth_error = _oauth_error_code(status_err.response)
+            if oauth_error in _GATEWAY_FAULT_OAUTH_ERRORS:
+                verbose_logger.warning(
+                    "MCP token exchange rejected as %s (HTTP %d); check the gateway client credentials, "
+                    "audience, and scope for this server",
+                    oauth_error,
+                    status_code,
+                )
+                raise TokenExchangeClientError(oauth_error) from status_err
+            raise SubjectTokenRejected(f"IdP rejected the subject token (HTTP {status_code})") from status_err
         verbose_logger.warning("MCP token exchange request failed: %s", status_err)
         return None
     except Exception as exc:  # noqa: BLE001

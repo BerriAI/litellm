@@ -80,6 +80,17 @@ class SubjectTokenRejected(Exception):
     """
 
 
+class TokenExchangeClientError(Exception):
+    """The IdP rejected the exchange for a reason that is the gateway's fault, not the caller's.
+
+    RFC 6749 5.2 codes such as ``invalid_client`` (the gateway's own STS credentials are wrong),
+    ``unauthorized_client`` / ``unsupported_grant_type`` (the gateway is not permitted to exchange),
+    ``invalid_target`` / ``invalid_scope`` (the gateway's audience/scope config for this server is
+    wrong). The caller cannot fix these by re-authenticating, so the arm surfaces them as a 500
+    (``misconfigured``), not the 401 OBO challenge. The IdP ``error_description`` is never carried.
+    """
+
+
 class TokenExchanger(Protocol):
     """Exchanges a caller token for an upstream-bound one, per the server's token_exchange config."""
 
@@ -237,6 +248,16 @@ class Rfc8693TokenExchanger:
             # The IdP rejected the subject token (4xx). This is non-retryable: the caller must
             # re-authenticate with the IdP, so it surfaces as a 401 (the OBO challenge), not a 503.
             return Error(CredError.of_unauthorized(str(rejected) or "subject token rejected by the IdP"))
+        except TokenExchangeClientError:
+            # RFC 6749 5.2 gateway-fault code (invalid_client / invalid_target / ...): the caller can't
+            # fix it by re-authenticating, so surface a 500 rather than the OBO 401 challenge. The
+            # specific code is logged at the edge; the user-facing summary stays generic.
+            return Error(
+                CredError.of_misconfigured(
+                    "token exchange configuration error: the gateway's credentials, audience, or scope "
+                    "for this server were not accepted by the IdP"
+                )
+            )
         if token is None:
             return Error(CredError.of_upstream_unavailable("token exchange did not return a usable access token"))
         return Ok(token)
