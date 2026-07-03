@@ -2,6 +2,31 @@
 
 Operational guide for the Bitovi LiteLLM fork (`bitovi/litellm`) and the proxy it feeds (`bitovi/claude-usage-proxy`).
 
+## Before the first publish (required)
+
+### 1. ECR repository must exist
+
+The target repo is `claude-usage-proxy-litellm` in `us-west-2`. Create it by merging `terraform/ecr.tf` in `claude-usage-proxy` and applying Terraform, or create it manually in the AWS console.
+
+### 2. GitHub secrets on `bitovi/litellm`
+
+The publish workflow uses **IAM access keys** (same pattern as other Bitovi deploy workflows), not OIDC:
+
+| Secret | Required | Purpose |
+|--------|----------|---------|
+| `AWS_ACCESS_KEY_ID` | Yes | IAM user access key with ECR push permissions |
+| `AWS_SECRET_ACCESS_KEY` | Yes | Matching secret key |
+| `PROXY_REPO_DISPATCH_TOKEN` | No | PAT to trigger ECS redeploy in claude-usage-proxy after publish |
+| `LITELLM_ECR_REPOSITORY` (var) | No | Defaults to `claude-usage-proxy-litellm` |
+
+`AWS_REGION` is set in the workflow to `us-west-2` (proxy infra region).
+
+The IAM user needs at minimum: `ecr:GetAuthorizationToken` on `*` and push permissions on `arn:aws:ecr:us-west-2:<account-id>:repository/claude-usage-proxy-litellm`.
+
+### 3. Publish
+
+Run **Publish Bitovi Proxy Image** (or push to `litellm_internal_staging`). ECS cutover to ECR is a **later** step in claude-usage-proxy.
+
 ## Overview
 
 Two repos share one AWS account:
@@ -63,12 +88,12 @@ terraform output ecr_litellm_repository_url
 
 | Secret / var | Required | Purpose |
 |--------------|----------|---------|
-| `AWS_ROLE_ARN` | Yes | OIDC role from `claude-usage-proxy` Terraform; IAM trust must include `bitovi/litellm` |
-| `AWS_REGION` | Yes | `us-west-2` |
+| `AWS_ACCESS_KEY_ID` | Yes | IAM user with ECR push to `claude-usage-proxy-litellm` |
+| `AWS_SECRET_ACCESS_KEY` | Yes | Matching secret key |
 | `PROXY_REPO_DISPATCH_TOKEN` | No | PAT to trigger **Redeploy ECS** in `claude-usage-proxy` after publish |
 | `LITELLM_ECR_REPOSITORY` (var) | No | Defaults to `claude-usage-proxy-litellm` |
 
-Workflow: **Publish Bitovi Proxy Image** on push to `litellm_internal_staging` (or manual dispatch).
+Region is `us-west-2` (hardcoded in the workflow).
 
 ### `bitovi/claude-usage-proxy`
 
@@ -127,7 +152,7 @@ terraform apply -var='litellm_image=ghcr.io/berriai/litellm:latest'
 
 ### Phase B — publish fork image (no ECS switch)
 
-1. Set `AWS_ROLE_ARN` and `AWS_REGION` on this repo
+1. Set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` on this repo
 2. Run **Publish Bitovi Proxy Image** (or push to `litellm_internal_staging`)
 3. Confirm tags in ECR:
 
@@ -275,7 +300,7 @@ Edit `terraform/` → merge to `main` → review Terraform plan on the PR.
 | `InvalidClientTokenId` locally | Wrong/missing `AWS_PROFILE` or stale `AWS_*` env vars | `export AWS_PROFILE=Bitovi-ai` after `aws sso login` |
 | `terraform output` empty locally | No `terraform init` against remote state | `terraform init` in `claude-usage-proxy/terraform` |
 | ECS `CannotPullContainerError` | ECR empty or wrong tag | Publish image first; pin valid SHA |
-| Publish workflow AssumeRole failed | OIDC trust missing `bitovi/litellm` | Apply `iam.tf` Phase A in claude-usage-proxy |
+| ECR push denied | Missing ECR repo or IAM user lacks push permissions | Apply `ecr.tf` or create repo; fix IAM policy |
 | New image up but old behavior | ECS not redeployed | Force redeploy in claude-usage-proxy |
 
 ---
