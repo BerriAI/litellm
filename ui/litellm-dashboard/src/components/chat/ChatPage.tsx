@@ -60,9 +60,7 @@ function getChatUrl(root: string, id?: string): string {
 
 // Build the dashboard root URL (e.g. /api/v1/ui/)
 function getDashboardUrl(root: string): string {
-  const base = process.env.NEXT_PUBLIC_BASE_URL ?? "";
-  const trimmed = base.replace(/^\/+|\/+$/g, "");
-  return trimmed ? `${root}/${trimmed}/` : `${root}/`;
+  return `${root}/ui/`;
 }
 
 // Extract provider from model name for logo lookup.
