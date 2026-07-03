@@ -8221,20 +8221,24 @@ class ProviderConfigManager:
         return litellm.OpenAITextCompletionConfig()
 
     @staticmethod
+    def _openai_family_model_info(provider: LlmProviders) -> BaseLLMModelInfo:
+        if provider == LlmProviders.CUSTOM_OPENAI:
+            from litellm.llms.openai_like.chat.transformation import (
+                CustomOpenAIChatConfig,
+            )
+
+            return CustomOpenAIChatConfig()
+        return litellm.OpenAIGPTConfig()
+
+    @staticmethod
     def get_provider_model_info(
         model: Optional[str],
         provider: LlmProviders,
     ) -> Optional[BaseLLMModelInfo]:
         if LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIConfig()
-        elif LlmProviders.OPENAI == provider:
-            return litellm.OpenAIGPTConfig()
-        elif LlmProviders.CUSTOM_OPENAI == provider:
-            from litellm.llms.openai_like.chat.transformation import (
-                CustomOpenAIChatConfig,
-            )
-
-            return CustomOpenAIChatConfig()
+        elif provider in (LlmProviders.OPENAI, LlmProviders.CUSTOM_OPENAI):
+            return ProviderConfigManager._openai_family_model_info(provider)
         elif LlmProviders.GEMINI == provider:
             return litellm.GeminiModelInfo()
         elif LlmProviders.VERTEX_AI == provider:
