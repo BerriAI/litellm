@@ -3359,7 +3359,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 # fallback. See #32019.
                 verbose_logger.error(
                     "standard_logging_object build failed for streaming call_id=%s call_type=%s; "
-                    "rebuilding a degraded payload so success loggers still fire",
+                    "retrying with an empty response object",
                     self.litellm_call_id,
                     self.call_type,
                 )
@@ -3367,6 +3367,13 @@ class Logging(LiteLLMLoggingBaseClass):
                     self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
                         {}, start_time, end_time
                     )
+                    if self.model_call_details["standard_logging_object"] is None:
+                        verbose_logger.error(
+                            "standard_logging_object rebuild failed for streaming call_id=%s call_type=%s; "
+                            "loggers gated on standard_logging_object will skip this request",
+                            self.litellm_call_id,
+                            self.call_type,
+                        )
                 except Exception:  # noqa: BLE001  # same rule as above: never block later callbacks
                     verbose_logger.exception(
                         "LiteLLM.LoggingError: [Non-Blocking] Exception rebuilding the degraded standard "
