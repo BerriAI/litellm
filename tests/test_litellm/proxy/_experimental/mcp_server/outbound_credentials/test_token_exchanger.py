@@ -45,9 +45,11 @@ class _RecordingPost:
     def __init__(self, body: dict[str, object] | None) -> None:
         self._body = body
         self.calls: list[tuple[str, dict[str, str]]] = []
+        self.headers: list[dict[str, str]] = []
 
-    async def __call__(self, url: str, form: dict[str, str]) -> dict[str, object] | None:
+    async def __call__(self, url: str, form: dict[str, str], headers: dict[str, str]) -> dict[str, object] | None:
         self.calls.append((url, dict(form)))
+        self.headers.append(dict(headers))
         return self._body
 
 
@@ -72,6 +74,41 @@ async def test_exchange_emits_token_and_sends_rfc8693_form():
         "audience": "https://up.example.com",
         "scope": "s1 s2",
     }
+    # client_secret_post is the default: creds in the body, no client-auth header
+    assert post.headers[0] == {}
+
+
+@pytest.mark.asyncio
+async def test_client_secret_basic_sends_authorization_header_and_omits_body_creds():
+    import base64
+
+    config = TokenExchangeConfig(
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret=SecretStr("csec"),
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    assert isinstance(result, Ok)
+    _, form = post.calls[0]
+    assert "client_id" not in form and "client_secret" not in form
+    assert post.headers[0]["Authorization"] == "Basic " + base64.b64encode(b"cid:csec").decode()
+
+
+@pytest.mark.asyncio
+async def test_client_secret_post_keeps_creds_in_body_with_no_auth_header():
+    config = TokenExchangeConfig(
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret=SecretStr("csec"),
+        token_endpoint_auth_method="client_secret_post",
+    )
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    _, form = post.calls[0]
+    assert form["client_id"] == "cid" and form["client_secret"] == "csec"
+    assert "Authorization" not in post.headers[0]
 
 
 @pytest.mark.asyncio
@@ -116,7 +153,7 @@ async def test_concurrent_callers_single_flight_one_exchange():
         def __init__(self) -> None:
             self.calls = 0
 
-        async def __call__(self, url, form):
+        async def __call__(self, url, form, headers):
             self.calls += 1
             await release.wait()
             return {"access_token": "x", "expires_in": 3600}

@@ -7,7 +7,7 @@ typed ``CredError`` - never a raise (the HTTP edge is the injected ``ExchangeHtt
 contains the I/O). The exchanged token is cached and single-flighted per ``(subject_token, server)`` so
 a repeated caller token skips the IdP round-trip and concurrent calls collapse to one exchange, reusing
 the shared in-process cache + coordinator foundation. A rotated caller token hashes to a new key and
-re-exchanges. Pure v2: no imports from v1.
+re-exchanges. Pure v2 apart from the shared RFC 6749 client-auth helper, which carries no v1 state.
 
 A missing/expired exchange is an error, never a fall-through to a weaker source (§1.5): the caller
 presenting no token is the resolver arm's 401, and an IdP that does not return a usable token is an
@@ -33,6 +33,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    build_token_endpoint_client_auth,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     ServerSpec,
@@ -49,8 +52,10 @@ _EXPIRY_BUFFER_SECONDS = 60.0
 _GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
 
 # The IdP returns an opaque JSON object; the post adapter hands it over untyped and the exchanger
-# validates each field, so no Any leaks past this seam (None == any transport/HTTP failure).
-ExchangeHttpPost = Callable[[str, "dict[str, str]"], Awaitable["dict[str, object] | None"]]
+# validates each field, so no Any leaks past this seam (None == any transport/HTTP failure). The
+# second dict is the form body; the third is the client-auth headers (HTTP Basic for
+# client_secret_basic, empty for client_secret_post).
+ExchangeHttpPost = Callable[[str, "dict[str, str]", "dict[str, str]"], Awaitable["dict[str, object] | None"]]
 
 
 class TokenExchanger(Protocol):
@@ -100,8 +105,6 @@ def _build_exchange_form(
     *,
     subject_token: str,
     subject_token_type: str,
-    client_id: str,
-    client_secret: str,
     audience: str | None,
     scopes: tuple[str, ...],
 ) -> dict[str, str]:
@@ -109,8 +112,6 @@ def _build_exchange_form(
         "grant_type": _GRANT_TYPE,
         "subject_token": subject_token,
         "subject_token_type": subject_token_type,
-        "client_id": client_id,
-        "client_secret": client_secret,
         **({"audience": audience} if audience else {}),
         **({"scope": " ".join(scopes)} if scopes else {}),
     }
@@ -163,20 +164,26 @@ class Rfc8693TokenExchanger:
         if cached is not None:
             return Ok(cached)
 
-        form = _build_exchange_form(
-            subject_token=subject_token,
-            subject_token_type=config.subject_token_type,
+        client_auth = build_token_endpoint_client_auth(
+            auth_method=config.token_endpoint_auth_method,
             client_id=client_id,
             client_secret=client_secret.get_secret_value(),
-            audience=config.audience,
-            scopes=config.scopes,
         )
+        form = {
+            **_build_exchange_form(
+                subject_token=subject_token,
+                subject_token_type=config.subject_token_type,
+                audience=config.audience,
+                scopes=config.scopes,
+            ),
+            **client_auth.body,
+        }
 
         async def run_exchange() -> OAuthToken | None:
             fresh = await self._cache.get(cache_key, server_id)
             if fresh is not None:
                 return fresh
-            body = await self._http_post(endpoint, form)
+            body = await self._http_post(endpoint, form, client_auth.headers)
             if body is None:
                 return None
             token = self._token_from_body(body)

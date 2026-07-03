@@ -24,7 +24,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger
 )
 
 
-async def _post_exchange_endpoint(url: str, form: dict[str, str]) -> dict[str, object] | None:
+async def _post_exchange_endpoint(
+    url: str, form: dict[str, str], client_auth_headers: dict[str, str]
+) -> dict[str, object] | None:
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
         get_async_httpx_client,  # pyright: ignore
     )
@@ -33,7 +35,7 @@ async def _post_exchange_endpoint(url: str, form: dict[str, str]) -> dict[str, o
     # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
     # object and the exchanger validates each field, so the untyped boundary is contained here.
     # A failed exchange is a miss, not a 500 (matches v1), so any error becomes None.
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", **client_auth_headers}
     try:
         client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
         response = await client.post(url, headers=headers, data=form)  # pyright: ignore

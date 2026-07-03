@@ -121,6 +121,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpe
             audience=server.audience,
             client_id=server.client_id,
             client_secret=SecretStr(server.client_secret),
+            token_endpoint_auth_method=server.token_endpoint_auth_method,
             scopes=tuple(server.scopes or ()),
         ),
     )

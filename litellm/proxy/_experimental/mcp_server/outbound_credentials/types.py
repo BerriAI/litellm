@@ -199,6 +199,7 @@ class TokenExchangeConfig(BaseModel):
     audience: str | None = None
     client_id: str | None = None
     client_secret: SecretStr | None = None
+    token_endpoint_auth_method: Literal["client_secret_basic", "client_secret_post"] | None = None
     scopes: tuple[str, ...] = ()
 
 

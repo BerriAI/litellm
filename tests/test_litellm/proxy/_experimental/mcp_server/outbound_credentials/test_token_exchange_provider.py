@@ -31,7 +31,7 @@ def test_build_gives_each_caller_an_independent_cache():
 @pytest.mark.asyncio
 async def test_post_returns_none_on_transport_error():
     with patch(_HTTP_CLIENT, side_effect=RuntimeError("boom")):
-        result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"})
+        result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
     assert result is None
 
 
@@ -49,7 +49,7 @@ async def test_post_parses_json_body_on_success():
             return _Resp()
 
     with patch(_HTTP_CLIENT, return_value=_Client()):
-        result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"})
+        result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
     assert result == {"access_token": "x", "expires_in": 60}
 
 
@@ -69,5 +69,5 @@ async def test_post_returns_none_on_non_object_json(payload):
             return _Resp()
 
     with patch(_HTTP_CLIENT, return_value=_Client()):
-        result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"})
+        result = await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
     assert result is None
