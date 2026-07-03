@@ -1,10 +1,11 @@
 import asyncio
+import concurrent.futures
 import contextlib
 import os
 import ssl
 import typing
 import urllib.request
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, ClassVar, Dict, Optional, Union
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -155,6 +156,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
     Credit to: https://github.com/karpetrosyan/httpx-aiohttp for this implementation
     """
 
+    # Strong references to scheduled session-close tasks. A bare
+    # asyncio.create_task() result may be garbage-collected before it runs,
+    # leaving the recycled session unclosed ("Unclosed client session").
+    _background_close_tasks: ClassVar[set["asyncio.Task[None]"]] = set()
+
     def __init__(
         self,
         client: Union[ClientSession, Callable[[], ClientSession]],
@@ -167,6 +173,90 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         if callable(client):
             self._client_factory = client
+
+    @classmethod
+    def _on_close_task_done(cls, task: "asyncio.Task[None]") -> None:
+        cls._background_close_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            verbose_logger.debug("Error closing recycled aiohttp session: %s", exc)
+
+    @staticmethod
+    def _on_threadsafe_close_done(future: "concurrent.futures.Future[None]") -> None:
+        exc = future.exception()
+        if exc is not None:
+            verbose_logger.debug("Error closing recycled aiohttp session on its own loop: %s", exc)
+
+    @staticmethod
+    def _mark_connector_closed(session: ClientSession) -> None:
+        """Synchronously dispose a session whose event loop is gone.
+
+        An async close can no longer run on a closed loop. BaseConnector._close
+        is the same synchronous teardown aiohttp's own finalizer (__del__)
+        uses: it is guarded for closed loops, releases pooled connections, and
+        flips the flags that ClientSession.closed / BaseConnector.closed read -
+        so no "Unclosed client session" / "Unclosed connector" warnings reach
+        the event-loop exception handler at garbage collection.
+        """
+        connector = getattr(session, "_connector", None)
+        close_sync = getattr(connector, "_close", None)
+        if not callable(close_sync):
+            return
+        try:
+            close_sync()
+        except (RuntimeError, AttributeError, OSError) as e:
+            verbose_logger.debug("Best-effort connector close failed: %s", e)
+
+    def _close_recycled_session(self, session: ClientSession) -> None:
+        """Deterministically dispose a ClientSession this transport is replacing.
+
+        Covers the three lifecycles a recycled session can be in:
+        - its loop is the current running loop: schedule an async close and keep
+          a strong reference to the task until it completes;
+        - its loop is still running elsewhere (e.g. another thread): hand the
+          close to that loop thread-safely;
+        - its loop is stopped or closed, or there is no running loop: fall
+          back to the synchronous finalizer-safe teardown.
+        """
+        if session.closed:
+            return
+
+        session_loop = getattr(session, "_loop", None)
+        try:
+            current_loop: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if session_loop is not None and session_loop is not current_loop:
+            if not session_loop.is_closed() and session_loop.is_running():
+                # The session's loop is running somewhere else (e.g. another
+                # thread): closing from here would touch that loop's internals
+                # unsafely; hand the close to its own loop.
+                try:
+                    future = asyncio.run_coroutine_threadsafe(session.close(), session_loop)
+                except RuntimeError as e:  # loop shut down between the checks
+                    verbose_logger.debug("Threadsafe session close failed: %s", e)
+                    self._mark_connector_closed(session)
+                else:
+                    future.add_done_callback(self._on_threadsafe_close_done)
+                return
+
+            # Foreign loop that is stopped or closed: an async close can no
+            # longer run there, and running it on the current loop would touch
+            # another loop's internals. Dispose synchronously instead.
+            self._mark_connector_closed(session)
+            return
+
+        if current_loop is None:
+            self._mark_connector_closed(session)
+            return
+
+        task = current_loop.create_task(session.close())
+        cls = type(self)
+        cls._background_close_tasks.add(task)
+        task.add_done_callback(cls._on_close_task_done)
 
     def _get_valid_client_session(self) -> ClientSession:
         """
@@ -205,12 +295,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Close old session to prevent leaks
                 old_session = self.client
                 try:
-                    if not old_session.closed:
-                        try:
-                            asyncio.create_task(old_session.close())
-                        except RuntimeError:
-                            # Different event loop - can't schedule task, rely on GC
-                            verbose_logger.debug("Old session from different loop, relying on GC")
+                    self._close_recycled_session(old_session)
                 except Exception as e:
                     verbose_logger.debug(f"Error closing old session: {e}")
 
@@ -220,12 +305,19 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 else:
                     self.client = ClientSession()
 
-        except (RuntimeError, AttributeError):
-            # If we can't check the loop or session is invalid, recreate it
+        except (RuntimeError, AttributeError) as e:
+            # If we can't check the loop or session is invalid, recreate it,
+            # but still dispose of the session being replaced.
+            old_session = self.client
+            try:
+                self._close_recycled_session(old_session)
+            except (RuntimeError, AttributeError, OSError) as close_error:
+                verbose_logger.debug(f"Error closing old session: {close_error}")
             if hasattr(self, "_client_factory") and callable(self._client_factory):
                 self.client = self._client_factory()
             else:
                 self.client = ClientSession()
+            verbose_logger.debug(f"Error checking session loop, created new session: {e}")
 
         return self.client
 
@@ -319,7 +411,13 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             # Handle the case where session was closed between our check and actual use
             if "Session is closed" in str(e):
                 verbose_logger.debug(f"Session closed during request, retrying with new session: {e}")
-                # Force creation of a new session
+                # Dispose of the session that actually faulted. Do NOT read
+                # self.client here: a concurrent task may already have
+                # replaced it with a healthy session that must stay open.
+                # Guarded by isinstance: factory-injected sessions may be
+                # duck-typed test doubles without a close() coroutine.
+                if isinstance(client_session, ClientSession):
+                    self._close_recycled_session(client_session)
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
                 else:
