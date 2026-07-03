@@ -17,6 +17,7 @@ const { mockUseAuthorized, mockUseUISettings, mockUseUIConfig, mockReplace, stat
       userRole: state.userRole,
       userId: "user-1",
       userEmail: "user@example.com",
+      premiumUser: false,
     })),
     mockUseUISettings: vi.fn(() => ({
       data: { values: { enable_chat_ui: state.enableChatUI } },
