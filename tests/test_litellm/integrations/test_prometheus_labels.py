@@ -85,6 +85,120 @@ def test_api_provider_in_spend_and_requests_metrics():
         print(f"✅ {metric_name} contains api_provider label")
 
 
+def test_api_provider_in_token_latency_and_request_metrics():
+    """
+    Regression test for LIT-4178.
+
+    These metrics are all emitted from the same call site (async_log_success_event
+    / async_post_call_failure_hook) as litellm_spend_metric and
+    litellm_requests_metric, which already carry api_provider. They were the odd
+    ones out with no way to break down tokens, latency, request counts or cache
+    hits by upstream provider, even though the provider is available on the
+    payload as custom_llm_provider.
+    """
+    api_provider_label = UserAPIKeyLabelNames.API_PROVIDER.value
+
+    metrics_with_api_provider = [
+        "litellm_llm_api_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_request_queue_time_seconds",
+        "litellm_proxy_total_requests_metric",
+        "litellm_proxy_failed_requests_metric",
+        "litellm_input_tokens_metric",
+        "litellm_total_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_cache_hits_metric",
+        "litellm_cache_misses_metric",
+    ]
+
+    for metric_name in metrics_with_api_provider:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            api_provider_label in labels
+        ), f"Metric {metric_name} should contain api_provider label"
+
+
+def test_api_provider_value_flows_through_label_factory():
+    """
+    The label being in the allow-list is necessary but not sufficient: the
+    factory must also carry the value from the enum through to the emitted
+    label. This would fail if the label were dropped from the metric's list or
+    if the value plumbing regressed, which the allow-list assertion above cannot
+    catch on its own.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        UserAPIKeyLabelValues,
+        prometheus_label_factory,
+    )
+
+    prometheus_logger = MagicMock()
+    prometheus_logger._cached_metric_labels = {}
+    prometheus_logger.label_filters = {}
+    prometheus_logger.get_labels_for_metric = (
+        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
+    )
+
+    enum_values = UserAPIKeyLabelValues(
+        api_provider="anthropic",
+        litellm_model_name="claude-sonnet-4",
+        requested_model="claude",
+        status_code="200",
+    )
+
+    for metric_name in [
+        "litellm_input_tokens_metric",
+        "litellm_total_tokens_metric",
+        "litellm_output_tokens_metric",
+        "litellm_llm_api_latency_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_proxy_total_requests_metric",
+        "litellm_cache_hits_metric",
+    ]:
+        labels = prometheus_label_factory(
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(
+                metric_name=metric_name
+            ),
+            enum_values=enum_values,
+        )
+        assert (
+            labels.get("api_provider") == "anthropic"
+        ), f"{metric_name} should emit api_provider=anthropic, got {labels.get('api_provider')!r}"
+
+
+def test_extract_api_provider_from_request_data_failure_path():
+    """
+    On the client-side failure path the provider is not always known. Prefer the
+    resolved custom_llm_provider on litellm_params, fall back to a partial
+    standard_logging_object (e.g. a stream that broke mid-flight), and return
+    None when neither is present so the label emits empty rather than a guess.
+    """
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    extract = PrometheusLogger._extract_api_provider_from_request_data
+
+    assert extract({"litellm_params": {"custom_llm_provider": "bedrock"}}) == "bedrock"
+    assert (
+        extract({"standard_logging_object": {"custom_llm_provider": "vertex_ai"}})
+        == "vertex_ai"
+    )
+    # litellm_params wins over standard_logging_object when both are present
+    assert (
+        extract(
+            {
+                "litellm_params": {"custom_llm_provider": "openai"},
+                "standard_logging_object": {"custom_llm_provider": "azure"},
+            }
+        )
+        == "openai"
+    )
+    assert extract({}) is None
+    assert extract({"litellm_params": {"custom_llm_provider": ""}}) is None
+
+
 def test_user_email_label_exists():
     """Test that the USER_EMAIL label is properly defined"""
     assert UserAPIKeyLabelNames.USER_EMAIL.value == "user_email"
