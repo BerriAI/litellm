@@ -263,3 +263,33 @@ def test_bundled_bedrock_opus_model_info_declares_output_config_effort_ceiling(
     model_info = GetModelCostMap.load_local_model_cost_map()[model]
 
     assert model_info["bedrock_output_config_effort_ceiling"] == expected_ceiling
+
+
+def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_field(
+    monkeypatch,
+):
+    """
+    Regression test: a regional model_cost entry without the capability field
+    must not shadow a base entry that has it (`get(model) or get(base)` used to
+    short-circuit on the truthy regional dict and drop the capability).
+    """
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_supports_parallel_tool_use_config,
+        is_claude_4_5_on_bedrock,
+    )
+
+    base = "anthropic.claude-fallback-test"
+    regional = f"eu.{base}"
+    monkeypatch.setitem(litellm.model_cost, regional, {"input_cost_per_token": 1e-06})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        base,
+        {
+            "cache_creation_input_token_cost_above_1hr": 1e-05,
+            "supports_parallel_tool_use_config": True,
+        },
+    )
+
+    assert is_claude_4_5_on_bedrock(regional) is True
+    assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
