@@ -748,6 +748,21 @@ export default function KeyInfoView({
                     </Text>
                   </div>
 
+                  {currentKeyData.budget_fallbacks && Object.keys(currentKeyData.budget_fallbacks).length > 0 && (
+                    <div>
+                      <Text className="font-medium">Budget Fallbacks</Text>
+                      <div className="mt-1 space-y-1">
+                        {Object.entries(currentKeyData.budget_fallbacks).map(([model, fallbacks]) => (
+                          <div key={model} className="text-xs text-gray-600">
+                            <span className="font-medium">{model}</span>
+                            <span className="mx-1 text-gray-400">-&gt;</span>
+                            {fallbacks.join(", ")}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <Text className="font-medium">Tags</Text>
                     <div className="flex flex-wrap gap-2 mt-1">
