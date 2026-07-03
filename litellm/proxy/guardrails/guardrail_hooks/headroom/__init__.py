@@ -34,6 +34,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         guardrail_name=guardrail["guardrail_name"],
         event_hook=_coerce_event_hook(litellm_params.mode),
         default_on=litellm_params.default_on or False,
+        unreachable_fallback=litellm_params.unreachable_fallback,
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]
         _callback
