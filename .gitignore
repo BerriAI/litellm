@@ -130,3 +130,5 @@ crash.*.log
 
 # pytest coverage data
 .coverage
+
+ui/litellm-dashboard/out/

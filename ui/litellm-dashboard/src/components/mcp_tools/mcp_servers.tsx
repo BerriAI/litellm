@@ -458,13 +458,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         </div>
         <div className="flex items-center gap-2">
           {isAdminRole(userRole) && (
-            <Button className="flex-shrink-0" onClick={() => setDiscoveryVisible(true)}>
+            <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
               + Add New MCP Server
             </Button>
           )}
           {!isAdminRole(userRole) && (
             <Button
-              className="flex-shrink-0"
+              className="shrink-0"
               onClick={() => {
                 setPrefillData(null);
                 setModalVisible(true);

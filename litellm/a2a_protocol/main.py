@@ -129,6 +129,33 @@ def _set_agent_id_on_logging_obj(
         litellm_logging_obj.model_call_details["agent_id"] = agent_id
 
 
+_A2A_COST_PARAM_KEYS = ("cost_per_query", "input_cost_per_token", "output_cost_per_token")
+
+
+def _set_litellm_params_on_logging_obj(
+    kwargs: dict[str, Any],
+    litellm_params: dict[str, Any],
+) -> None:
+    """
+    Merge the agent's pricing params into model_call_details["litellm_params"]
+    so A2ACostCalculator can read them.
+
+    The non-streaming path reuses the proxy-built logging object, whose
+    litellm_params already carries metadata / proxy_server_request / user-key
+    context, so merge the pricing keys in rather than replacing the dict.
+    """
+    logging_obj = kwargs.get("litellm_logging_obj")
+    if logging_obj is None:
+        return
+
+    cost_params = {key: litellm_params[key] for key in _A2A_COST_PARAM_KEYS if litellm_params.get(key) is not None}
+    if not cost_params:
+        return
+
+    existing = logging_obj.model_call_details.get("litellm_params") or {}
+    logging_obj.model_call_details["litellm_params"] = {**existing, **cost_params}
+
+
 def _get_a2a_model_info(a2a_client: Any, kwargs: Dict[str, Any]) -> str:
     """
     Extract agent info and set model/custom_llm_provider for cost tracking.
@@ -476,6 +503,9 @@ async def asend_message(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
+
+    # Merge agent pricing params into the logging obj so cost is calculated
+    _set_litellm_params_on_logging_obj(kwargs=kwargs, litellm_params=litellm_params)
 
     # Set agent_id on logging obj for SpendLogs tracking
     _set_agent_id_on_logging_obj(kwargs=kwargs, agent_id=agent_id)
