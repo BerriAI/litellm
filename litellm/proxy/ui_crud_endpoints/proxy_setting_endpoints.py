@@ -177,6 +177,11 @@ class UISettings(BaseModel):
         description="If true, org admins cannot generate API keys via /key/generate.",
     )
 
+    enable_chat_ui: bool = Field(
+        default=False,
+        description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -200,6 +205,7 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "scope_user_search_to_org",
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
+    "enable_chat_ui",
 }
 
 # Flags that must be synced from the persisted UISettings into
