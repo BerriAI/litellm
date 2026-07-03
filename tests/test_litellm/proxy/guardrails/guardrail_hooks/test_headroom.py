@@ -6,8 +6,9 @@ Tests cover:
 - x-headroom-bypass: true header causes guardrail to skip compression
 - missing or empty messages are passed through unchanged
 - response-type input is passed through unchanged
-- /v1/compress HTTP error raises HTTPException
+- /v1/compress HTTP error raises HTTPException (fail_closed, the default)
 - /v1/compress returning malformed JSON raises HTTPException
+- unreachable_fallback="fail_open" forwards the request uncompressed instead of raising
 - CCR: headroom_retrieve tool injected when compressed messages contain hashes
 - CCR: async_should_run_agentic_loop returns True when response has headroom_retrieve tool calls
 - CCR: async_build_agentic_loop_plan calls retrieve endpoint and builds follow-up messages
@@ -807,6 +808,56 @@ async def test_apply_guardrail_transport_error_raises():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_transport_error_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ConnectError("Connection refused"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_http_error_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    mock_response = _make_compress_response([], status=500)
+    mock_response.text = "Internal Server Error"
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_missing_messages_key_raises():
     guardrail = _make_guardrail()
     mock_response = MagicMock()
@@ -873,6 +924,16 @@ async def test_apply_guardrail_empty_compressed_messages_raises():
 def test_init_raises_without_api_base():
     with pytest.raises(ValueError, match="API base URL"):
         HeadroomGuardrail(api_base=None)
+
+
+def test_init_defaults_to_fail_closed():
+    guardrail = _make_guardrail()
+    assert guardrail.unreachable_fallback == "fail_closed"
+
+
+def test_init_rejects_invalid_unreachable_fallback_value():
+    guardrail = _make_guardrail(unreachable_fallback="not-a-real-mode")
+    assert guardrail.unreachable_fallback == "fail_closed"
 
 
 def test_bypass_header_case_insensitive():

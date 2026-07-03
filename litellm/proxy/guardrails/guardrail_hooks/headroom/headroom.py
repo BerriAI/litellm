@@ -214,6 +214,7 @@ class HeadroomGuardrail(CustomGuardrail):
         guardrail_name: str | None = None,
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
+        unreachable_fallback: str | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -223,6 +224,9 @@ class HeadroomGuardrail(CustomGuardrail):
             )
         self.headroom_api_key = api_key or get_secret_str("HEADROOM_API_KEY")
         self.headroom_model = model
+        self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
+            "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
+        )
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -257,6 +261,21 @@ class HeadroomGuardrail(CustomGuardrail):
             if expiry > now
         }
 
+    def _handle_compress_failure(
+        self,
+        messages: list[dict[str, object]],
+        error: str,
+        detail: dict[str, object],
+    ) -> list[dict[str, object]]:
+        if self.unreachable_fallback == "fail_open":
+            verbose_proxy_logger.critical(
+                "Headroom: %s; fail_open configured, forwarding request uncompressed. detail=%s",
+                error,
+                detail,
+            )
+            return messages
+        raise HTTPException(status_code=502, detail={"error": error, **detail})
+
     async def _call_compress(
         self,
         messages: list[dict[str, object]],
@@ -273,67 +292,55 @@ class HeadroomGuardrail(CustomGuardrail):
                 headers=self._request_headers(),
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "Headroom compression service unreachable",
-                    "detail": str(e),
-                },
-            ) from e
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service unreachable",
+                {"detail": str(e)},
+            )
         if raw_response is None:
-            raise HTTPException(
-                status_code=502,
-                detail={"error": "Headroom compression service returned no response"},
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service returned no response",
+                {},
             )
         response: HttpxResponse = raw_response
 
         if response.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "Headroom compression service returned an error",
-                    "status_code": response.status_code,
-                    "body": response.text,
-                },
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service returned an error",
+                {"status_code": response.status_code, "body": response.text},
             )
 
         try:
             body: object = response.json()
         except ValueError:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "Headroom compression service returned non-JSON response",
-                    "body": response.text[:500],
-                },
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service returned non-JSON response",
+                {"body": response.text[:500]},
             )
         if not _is_str_object_dict(body):
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "Headroom compression service returned unexpected response shape",
-                    "body": response.text[:500],
-                },
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service returned unexpected response shape",
+                {"body": response.text[:500]},
             )
 
         compressed_messages = body.get("messages")
         if not _is_object_list(compressed_messages):
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "Headroom compression service response missing 'messages'",
-                    "body": response.text,
-                },
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service response missing 'messages'",
+                {"body": response.text},
             )
 
         filtered = [item for item in compressed_messages if _is_str_object_dict(item)]
         if not filtered:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "Headroom compression service returned empty message list",
-                    "body": response.text,
-                },
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service returned empty message list",
+                {"body": response.text},
             )
 
         verbose_proxy_logger.debug(
