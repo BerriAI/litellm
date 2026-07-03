@@ -151,7 +151,7 @@ class SpendClient:
         )
         match result:
             case Success(data=data):
-                return data.spend_per_tag or []
+                return data.root
             case _:
                 return []
 
