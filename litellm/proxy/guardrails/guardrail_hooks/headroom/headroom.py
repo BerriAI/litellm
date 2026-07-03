@@ -291,6 +291,12 @@ class HeadroomGuardrail(CustomGuardrail):
                 json=payload,
                 headers=self._request_headers(),
             )
+        except httpx.HTTPStatusError as e:
+            return self._handle_compress_failure(
+                messages,
+                "Headroom compression service returned an error",
+                {"status_code": e.response.status_code, "body": e.response.text},
+            )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
             return self._handle_compress_failure(
                 messages,

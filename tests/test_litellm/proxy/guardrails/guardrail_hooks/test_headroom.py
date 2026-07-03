@@ -8,6 +8,8 @@ Tests cover:
 - response-type input is passed through unchanged
 - /v1/compress HTTP error raises HTTPException (fail_closed, the default)
 - /v1/compress returning malformed JSON raises HTTPException
+- /v1/compress non-2xx surfaces as httpx.HTTPStatusError (raise_for_status),
+  not a status_code check on the returned response -- both are handled
 - unreachable_fallback="fail_open" forwards the request uncompressed instead of raising
 - CCR: headroom_retrieve tool injected when compressed messages contain hashes
 - CCR: async_should_run_agentic_loop returns True when response has headroom_retrieve tool calls
@@ -805,6 +807,71 @@ async def test_apply_guardrail_transport_error_raises():
 
     assert exc_info.value.status_code == 502
     assert "unreachable" in str(exc_info.value.detail)
+
+
+def _make_http_status_error(status: int, body: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", f"{FAKE_API_BASE}/v1/compress")
+    response = httpx.Response(status, request=request, text=body)
+    return httpx.HTTPStatusError(
+        f"Server error '{status}' for url",
+        request=request,
+        response=response,
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_http_status_error_raises():
+    """Regression test: litellm's async httpx client calls raise_for_status()
+    internally, so a non-2xx /v1/compress response surfaces as
+    httpx.HTTPStatusError, not as a returned MagicMock with status_code set.
+    A prior version of _call_compress only checked response.status_code and
+    never caught this exception, so it went unhandled instead of blocking
+    the request per fail_closed policy."""
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(500, "headroom internal error"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_http_status_error_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=_make_http_status_error(500, "headroom internal error"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
 
 
 @pytest.mark.asyncio
