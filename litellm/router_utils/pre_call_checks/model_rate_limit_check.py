@@ -6,9 +6,8 @@ When enabled via router_settings.optional_pre_call_checks: ["enforce_model_rate_
 - tpm/rpm: combined TPM + optional RPM (legacy)
 - itpm/otpm: separate input/output tokens per minute
 
-itpm/otpm and tpm/rpm are mutually exclusive per deployment: when a deployment
-sets itpm/otpm, those take precedence and its tpm/rpm limits are not enforced.
-A warning is logged the first time such a conflicting deployment is seen.
+When a deployment sets both itpm/otpm and tpm/rpm, both are enforced. A warning
+is logged the first time such a deployment is seen.
 """
 
 import contextlib
@@ -25,6 +24,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
     deployment_has_io_token_limits,
+    get_io_token_rate_limit_request_kwargs,
     io_token_pre_call_check,
     io_token_reconcile_success,
     io_token_refund_failure,
@@ -59,11 +59,11 @@ class ModelRateLimitingCheck(CustomLogger):
 
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
-        # model_ids already warned about conflicting itpm/otpm + tpm/rpm config,
+        # model_ids already warned about itpm/otpm + tpm/rpm on the same deployment,
         # so the warning is logged once per deployment rather than per request.
         self._io_token_conflict_warned_ids: set[str] = set()
 
-    def _warn_io_token_supersedes_tpm_rpm_once(self, deployment: dict) -> None:
+    def _warn_io_token_and_tpm_rpm_coexist_once(self, deployment: dict) -> None:
         tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
         if tpm_limit is None and rpm_limit is None:
             return
@@ -76,8 +76,25 @@ class ModelRateLimitingCheck(CustomLogger):
             self._io_token_conflict_warned_ids.add(str(model_id))
         verbose_router_logger.warning(
             f"Deployment '{model_id}' configures itpm/otpm alongside tpm/rpm; "
-            "itpm/otpm take precedence and the tpm/rpm limits on this deployment are not enforced"
+            "both limit types are enforced on this deployment"
         )
+
+    def _refund_io_token_reservation_if_any(self) -> None:
+        request_kwargs = get_io_token_rate_limit_request_kwargs()
+        if request_kwargs is not None:
+            io_token_refund_failure(self.dual_cache, request_kwargs)
+
+    async def _async_refund_io_token_reservation_if_any(
+        self,
+        parent_otel_span: Optional[Span] = None,
+    ) -> None:
+        request_kwargs = get_io_token_rate_limit_request_kwargs()
+        if request_kwargs is not None:
+            await async_io_token_refund_failure(
+                self.dual_cache,
+                request_kwargs,
+                parent_otel_span=parent_otel_span,
+            )
 
     def _get_deployment_limits(self, deployment: Dict) -> tuple[Optional[int], Optional[int]]:
         """
@@ -126,12 +143,14 @@ class ModelRateLimitingCheck(CustomLogger):
         Raises RateLimitError if deployment exceeds TPM/RPM limits.
         """
         try:
+            io_reservation_made = False
             if deployment_has_io_token_limits(deployment):
-                self._warn_io_token_supersedes_tpm_rpm_once(deployment)
-                return io_token_pre_call_check(
+                self._warn_io_token_and_tpm_rpm_coexist_once(deployment)
+                io_token_pre_call_check(
                     self.dual_cache,
                     deployment,
                 )
+                io_reservation_made = True
 
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
@@ -189,6 +208,8 @@ class ModelRateLimitingCheck(CustomLogger):
             return deployment
 
         except litellm.RateLimitError:
+            if io_reservation_made:
+                self._refund_io_token_reservation_if_any()
             raise
         except Exception as e:
             verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.pre_call_check: {str(e)}")
@@ -202,13 +223,15 @@ class ModelRateLimitingCheck(CustomLogger):
         Raises RateLimitError if deployment exceeds TPM/RPM or ITPM/OTPM limits.
         """
         try:
+            io_reservation_made = False
             if deployment_has_io_token_limits(deployment):
-                self._warn_io_token_supersedes_tpm_rpm_once(deployment)
-                return await async_io_token_pre_call_check(
+                self._warn_io_token_and_tpm_rpm_coexist_once(deployment)
+                await async_io_token_pre_call_check(
                     self.dual_cache,
                     deployment,
                     parent_otel_span=parent_otel_span,
                 )
+                io_reservation_made = True
 
             tpm_limit, rpm_limit = self._get_deployment_limits(deployment)
 
@@ -273,6 +296,8 @@ class ModelRateLimitingCheck(CustomLogger):
             return deployment
 
         except litellm.RateLimitError:
+            if io_reservation_made:
+                await self._async_refund_io_token_reservation_if_any(parent_otel_span=parent_otel_span)
             raise
         except Exception as e:
             verbose_router_logger.debug(f"Error in ModelRateLimitingCheck.async_pre_call_check: {str(e)}")

@@ -537,10 +537,10 @@ class TestModelRateLimitingCheckIOTokens:
             "model_info": {},
         }
         with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
-            check._warn_io_token_supersedes_tpm_rpm_once(deployment)
-            check._warn_io_token_supersedes_tpm_rpm_once(deployment)
+            check._warn_io_token_and_tpm_rpm_coexist_once(deployment)
+            check._warn_io_token_and_tpm_rpm_coexist_once(deployment)
 
-        warnings = [r for r in caplog.records if "take precedence" in r.message]
+        warnings = [r for r in caplog.records if "both limit types are enforced" in r.message]
         # id-less deployments are not collapsed onto a single dedup key.
         assert len(warnings) == 2
 
@@ -655,7 +655,7 @@ class TestModelRateLimitingCheckIOTokens:
         assert dual_cache.get_cache(key=otpm_key) == 2
 
     @pytest.mark.asyncio
-    async def test_io_limits_supersede_tpm_rpm_with_warning(self, caplog):
+    async def test_io_and_tpm_rpm_limits_both_enforced_with_warning(self, caplog):
         import logging
 
         from litellm.utils import get_utc_datetime
@@ -674,28 +674,26 @@ class TestModelRateLimitingCheckIOTokens:
             "model_name": "opus",
         }
 
-        # rpm counter is already over the rpm=1 limit; the legacy path would
-        # atomically increment and raise, the io path must never touch it.
         minute = get_utc_datetime().strftime("%H-%M")
         rpm_key = f"{model_id}:{deployment_name}:rpm:{minute}"
+        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
         await dual_cache.async_increment_cache(key=rpm_key, value=5, ttl=60)
 
-        set_io_token_rate_limit_request_kwargs(
-            {
-                "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 5,
-                "metadata": {},
-            }
-        )
+        request_kwargs = {
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5,
+            "metadata": {},
+        }
+        set_io_token_rate_limit_request_kwargs(request_kwargs)
 
         with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
-            result = await check.async_pre_call_check(deployment)
+            with pytest.raises(litellm.RateLimitError):
+                await check.async_pre_call_check(deployment)
 
-        # io path taken, rpm limit not enforced.
-        assert result is deployment
-        assert await dual_cache.async_get_cache(key=rpm_key) == 5
-        # the conflict is surfaced, not silent.
-        assert any("take precedence" in record.message for record in caplog.records)
+        assert await dual_cache.async_get_cache(key=rpm_key) == 6
+        assert (await dual_cache.async_get_cache(key=itpm_key) or 0) == 0
+        assert ITPM_RESERVED_KEY not in request_kwargs["metadata"]
+        assert any("both limit types are enforced" in record.message for record in caplog.records)
 
     @pytest.mark.asyncio
     async def test_failure_refunds_itpm_reservation(self):
