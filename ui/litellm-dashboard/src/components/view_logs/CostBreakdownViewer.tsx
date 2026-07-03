@@ -1,6 +1,7 @@
 import React from "react";
 import { Collapse } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { deriveRate, splitPromptTokens } from "./cacheCostBreakdown";
 
 export interface CostBreakdown {
   input_cost?: number;
@@ -27,11 +28,22 @@ interface CostBreakdownViewerProps {
   rawInputTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  providerCacheReadTokens?: number;
 }
 
 const formatCost = (cost: number | undefined): string => {
   if (cost === undefined || cost === null) return "-";
   return `$${formatNumberWithCommas(cost, 8)}`;
+};
+
+const formatRate = (rate: number | undefined): string => {
+  if (rate === undefined || rate === null || !Number.isFinite(rate)) return "-";
+  // Per-token rates are tiny (e.g. 5.9e-7). Show up to 12 significant digits and
+  // trim trailing zeros so 0.00000059 renders as "$0.00000059", not "$0.00000059000".
+  return `$${Number(rate.toPrecision(12)).toLocaleString("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 20,
+  })}`;
 };
 
 const formatPercent = (percent: number | undefined): string => {
@@ -48,6 +60,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   rawInputTokens,
   cacheReadTokens,
   cacheCreationTokens,
+  providerCacheReadTokens,
 }) => {
   const isCached = cacheHit?.toLowerCase() === "true";
   const hasTokenCounts = promptTokens !== undefined || completionTokens !== undefined;
@@ -87,6 +100,17 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   const outputCost = isCached ? 0 : costBreakdown?.output_cost;
   const originalCost = isCached ? 0 : costBreakdown?.original_cost;
   const totalCost = isCached ? 0 : costBreakdown?.total_cost ?? totalSpend;
+
+  // Provider prompt-cache formula breakdown (issue #32045). Only shown when the
+  // provider reported cache-hit prompt tokens, and never when the LiteLLM response
+  // cache served the request (isCached) since costs are $0 there.
+  const tokenSplit = splitPromptTokens(promptTokens ?? 0, providerCacheReadTokens ?? 0);
+  const showProviderCacheFormula = !isCached && tokenSplit.cacheHitTokens > 0;
+  const cacheReadCost = costBreakdown?.cache_read_cost;
+  const cacheMissInputCost = inputCost !== undefined ? inputCost - (cacheReadCost ?? 0) : undefined;
+  const cacheMissRate = deriveRate(cacheMissInputCost, tokenSplit.cacheMissTokens);
+  const cacheReadRate = deriveRate(cacheReadCost, tokenSplit.cacheHitTokens);
+  const outputRate = deriveRate(outputCost, completionTokens);
 
   return (
     <div className="bg-white rounded-lg shadow-sm w-full max-w-full overflow-hidden mb-6">
@@ -177,6 +201,18 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                       </div>
                     );
                   })()}
+                  {showProviderCacheFormula && (
+                    <div className="pl-1 text-xs text-gray-500 font-mono space-y-0.5">
+                      <div>
+                        = {formatNumberWithCommas(tokenSplit.cacheMissTokens)} cache miss tokens *{" "}
+                        {formatRate(cacheMissRate)}
+                      </div>
+                      <div>
+                        + {formatNumberWithCommas(tokenSplit.cacheHitTokens)} cache hit tokens *{" "}
+                        {formatRate(cacheReadRate)}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex text-sm">
                     <span className="text-gray-600 font-medium w-1/3">Output Cost:</span>
                     <span className="text-gray-900">
@@ -188,6 +224,11 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                       )}
                     </span>
                   </div>
+                  {showProviderCacheFormula && outputRate !== undefined && (
+                    <div className="pl-1 text-xs text-gray-500 font-mono">
+                      = {formatNumberWithCommas(completionTokens ?? 0)} completion tokens * {formatRate(outputRate)}
+                    </div>
+                  )}
                   {costBreakdown?.tool_usage_cost !== undefined && costBreakdown.tool_usage_cost > 0 && (
                     <div className="flex text-sm">
                       <span className="text-gray-600 font-medium w-1/3">Tool Usage Cost:</span>
@@ -212,6 +253,11 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                       <span className="text-gray-900 w-1/3">Original LLM Cost:</span>
                       <span className="text-gray-900">{formatCost(originalCost)}</span>
                     </div>
+                    {showProviderCacheFormula && inputCost !== undefined && outputCost !== undefined && (
+                      <div className="pl-1 mt-0.5 text-xs text-gray-500 font-mono">
+                        = {formatCost(inputCost)} input cost + {formatCost(outputCost)} output cost
+                      </div>
+                    )}
                   </div>
                 )}
 

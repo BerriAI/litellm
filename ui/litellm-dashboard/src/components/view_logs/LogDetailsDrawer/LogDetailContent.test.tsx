@@ -142,6 +142,68 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText(/prompt tokens \+ .* completion tokens/)).not.toBeInTheDocument();
   });
 
+  describe("provider prompt cache (issue #32045)", () => {
+    it("renames the response-cache field and adds a Provider Prompt Cache Hit field", () => {
+      render(
+        <LogDetailContent
+          logEntry={createLogEntry({
+            cache_hit: "false",
+            prompt_tokens: 430798,
+            completion_tokens: 47,
+            total_tokens: 430845,
+            metadata: {
+              status: "success",
+              usage_object: { prompt_tokens_details: { cached_tokens: 430464 } },
+            },
+          })}
+        />,
+      );
+
+      expect(screen.getByText("LiteLLM Response Cache Hit")).toBeInTheDocument();
+      expect(screen.queryByText(/^Cache Hit$/)).not.toBeInTheDocument();
+      expect(screen.getByText("Provider Prompt Cache Hit")).toBeInTheDocument();
+    });
+
+    it("splits the token summary into cache-miss, cache-hit and completion", () => {
+      render(
+        <LogDetailContent
+          logEntry={createLogEntry({
+            cache_hit: "false",
+            prompt_tokens: 430798,
+            completion_tokens: 47,
+            total_tokens: 430845,
+            metadata: {
+              status: "success",
+              usage_object: { prompt_tokens_details: { cached_tokens: 430464 } },
+            },
+          })}
+        />,
+      );
+
+      expect(
+        screen.getByText(
+          /430,845 \[334 cache miss prompt tokens \+ 430,464 cache hit prompt tokens \+ 47 completion tokens\]/,
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("does not show a Provider Prompt Cache Hit field for a plain uncached request", () => {
+      render(
+        <LogDetailContent
+          logEntry={createLogEntry({
+            cache_hit: "false",
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            total_tokens: 150,
+            metadata: { status: "success" },
+          })}
+        />,
+      );
+
+      expect(screen.queryByText("Provider Prompt Cache Hit")).not.toBeInTheDocument();
+    });
+  });
+
   it("should display ConfigInfoMessage when no messages, response, or error and not loading", () => {
     render(
       <LogDetailContent
@@ -271,7 +333,7 @@ describe("LogDetailContent", () => {
       />,
     );
 
-    expect(screen.getByText("Cache Hit")).toBeInTheDocument();
+    expect(screen.getByText("LiteLLM Response Cache Hit")).toBeInTheDocument();
     expect(screen.getByText("true")).toBeInTheDocument();
     expect(screen.getByText("Cache Read Tokens")).toBeInTheDocument();
     expect(screen.getByText("100")).toBeInTheDocument();

@@ -216,4 +216,85 @@ describe("CostBreakdownViewer", () => {
     expect(screen.getByText(/Margin \(15\.00%\)/)).toBeInTheDocument();
     expect(screen.getByText("Final Calculated Cost:")).toBeInTheDocument();
   });
+
+  describe("provider prompt-cache formula breakdown (issue #32045)", () => {
+    // Numbers taken directly from the issue.
+    const issueBreakdown: CostBreakdown = {
+      input_cost: 0.06476666,
+      cache_read_cost: 0.0645696,
+      output_cost: 0.00009729,
+      original_cost: 0.06486395,
+    };
+
+    it("splits the input cost into cache-miss and cache-hit token formulas", async () => {
+      renderWithProviders(
+        <CostBreakdownViewer
+          costBreakdown={issueBreakdown}
+          totalSpend={0.06486395}
+          promptTokens={430798}
+          completionTokens={47}
+          providerCacheReadTokens={430464}
+        />,
+      );
+
+      await expandCostBreakdown();
+
+      // Assert the full formula incl. the derived per-token rate, trimmed of trailing
+      // zeros and float noise, so 5.9e-7 shows as $0.00000059 (not $0.00000059000).
+      expect(screen.getByText(/334 cache miss tokens \* \$0\.00000059/)).toBeInTheDocument();
+      expect(screen.getByText(/430,464 cache hit tokens \* \$0\.00000015/)).toBeInTheDocument();
+    });
+
+    it("shows the output cost and original LLM cost formulas", async () => {
+      renderWithProviders(
+        <CostBreakdownViewer
+          costBreakdown={issueBreakdown}
+          totalSpend={0.06486395}
+          promptTokens={430798}
+          completionTokens={47}
+          providerCacheReadTokens={430464}
+        />,
+      );
+
+      await expandCostBreakdown();
+
+      expect(screen.getByText(/47 completion tokens \* \$0\.00000207/)).toBeInTheDocument();
+      expect(screen.getByText(/\$0\.06476666 input cost \+ \$0\.00009729 output cost/)).toBeInTheDocument();
+    });
+
+    it("does NOT show the formula when there is no provider prompt cache hit", async () => {
+      renderWithProviders(
+        <CostBreakdownViewer
+          costBreakdown={{ input_cost: 0.001, output_cost: 0.002, original_cost: 0.003 }}
+          totalSpend={0.003}
+          promptTokens={100}
+          completionTokens={200}
+          providerCacheReadTokens={0}
+        />,
+      );
+
+      await expandCostBreakdown();
+
+      expect(screen.queryByText(/cache miss tokens \*/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/cache hit tokens \*/)).not.toBeInTheDocument();
+    });
+
+    it("does NOT show the formula for a LiteLLM response-cache hit (costs are $0)", async () => {
+      renderWithProviders(
+        <CostBreakdownViewer
+          costBreakdown={issueBreakdown}
+          totalSpend={0}
+          promptTokens={430798}
+          completionTokens={47}
+          providerCacheReadTokens={430464}
+          cacheHit="true"
+        />,
+      );
+
+      await expandCostBreakdown();
+
+      // Response-cache hit forces $0 and must not print a per-token cache formula.
+      expect(screen.queryByText(/cache miss tokens \*/)).not.toBeInTheDocument();
+    });
+  });
 });

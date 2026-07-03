@@ -33,6 +33,7 @@ import {
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 import { PrettyMessagesView } from "./PrettyMessagesView";
+import { getProviderCacheReadTokens, splitPromptTokens } from "../cacheCostBreakdown";
 
 const { Text } = Typography;
 
@@ -149,6 +150,7 @@ export function LogDetailContent({ logEntry, isLoadingDetails = false, accessTok
         rawInputTokens={metadata?.additional_usage_values?.prompt_tokens_details?.text_tokens}
         cacheReadTokens={metadata?.additional_usage_values?.cache_read_input_tokens}
         cacheCreationTokens={metadata?.additional_usage_values?.cache_creation_input_tokens}
+        providerCacheReadTokens={getProviderCacheReadTokens(metadata)}
       />
 
       {/* Tools */}
@@ -285,14 +287,16 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       ? new Date(completionStartTime).getTime() - new Date(logEntry.startTime).getTime()
       : null;
 
-  const hasCacheActivity =
-    logEntry.cache_hit ||
-    (metadata?.additional_usage_values?.cache_read_input_tokens &&
-      metadata.additional_usage_values.cache_read_input_tokens > 0);
+  const providerCacheReadTokens = getProviderCacheReadTokens(metadata);
+  const hasProviderPromptCacheHit = providerCacheReadTokens > 0;
+
+  const hasCacheActivity = Boolean(logEntry.cache_hit) || hasProviderPromptCacheHit;
 
   const cacheHitValue = String(logEntry.cache_hit ?? "None");
   const cacheHitColor =
     cacheHitValue.toLowerCase() === "true" ? "green" : cacheHitValue.toLowerCase() === "false" ? "red" : "default";
+
+  const tokenSplit = splitPromptTokens(logEntry.prompt_tokens ?? 0, providerCacheReadTokens);
 
   const uncachedInputTokens = getUncachedInputTextTokens(metadata);
   const showAnthropicMessagesInputOutput =
@@ -309,6 +313,14 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
                 {formatNumberWithCommas(logEntry.completion_tokens)}
               </Descriptions.Item>
             </>
+          ) : hasProviderPromptCacheHit ? (
+            <Descriptions.Item label="Tokens">
+              <Text>
+                {formatNumberWithCommas(logEntry.total_tokens)} [{formatNumberWithCommas(tokenSplit.cacheMissTokens)}{" "}
+                cache miss prompt tokens + {formatNumberWithCommas(tokenSplit.cacheHitTokens)} cache hit prompt tokens +{" "}
+                {formatNumberWithCommas(logEntry.completion_tokens)} completion tokens]
+              </Text>
+            </Descriptions.Item>
           ) : (
             <Descriptions.Item label="Tokens">
               <TokenFlow
@@ -328,9 +340,14 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
 
           {hasCacheActivity && (
             <>
-              <Descriptions.Item label="Cache Hit">
+              <Descriptions.Item label="LiteLLM Response Cache Hit">
                 <Tag color={cacheHitColor}>{cacheHitValue}</Tag>
               </Descriptions.Item>
+              {hasProviderPromptCacheHit && (
+                <Descriptions.Item label="Provider Prompt Cache Hit">
+                  <Tag color="green">True</Tag>
+                </Descriptions.Item>
+              )}
               {metadata?.additional_usage_values?.cache_read_input_tokens > 0 && (
                 <Descriptions.Item label="Cache Read Tokens">
                   {formatNumberWithCommas(metadata.additional_usage_values.cache_read_input_tokens)}
