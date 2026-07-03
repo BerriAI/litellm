@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     ProxyException,
     SpecialHeaders,
+    SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
@@ -1040,6 +1041,9 @@ class MCPRequestHandler:
             object_permissions = team_obj.object_permission
             if object_permissions is None:
                 return list(set(team_access_group_servers))
+
+            if SpecialMCPServerName.all_proxy_servers.value in (object_permissions.mcp_servers or []):
+                return list(global_mcp_server_manager.get_registry().keys())
 
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
 
