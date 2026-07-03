@@ -213,6 +213,41 @@ async def test_absent_token_type_defaults_to_bearer():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "issued_token_type",
+    [
+        "urn:ietf:params:oauth:token-type:refresh_token",
+        "urn:ietf:params:oauth:token-type:id_token",
+        "urn:ietf:params:oauth:token-type:saml2",
+    ],
+)
+async def test_non_access_issued_token_type_is_refused_even_when_bearer(issued_token_type):
+    # A malformed STS could mint a refresh/id/saml token but label it Bearer; issued_token_type must
+    # still fail it closed rather than forward a non-access token as an upstream access credential.
+    post = _RecordingPost(
+        {"access_token": "x", "token_type": "Bearer", "issued_token_type": issued_token_type, "expires_in": 3600}
+    )
+    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "issued_token_type",
+    ["urn:ietf:params:oauth:token-type:access_token", "urn:ietf:params:oauth:token-type:jwt", "custom-unknown", None],
+)
+async def test_access_or_unknown_issued_token_type_is_accepted(issued_token_type):
+    # access_token / jwt are usable; an absent or unrecognized type is accepted (lenient), so real
+    # IdPs that omit issued_token_type or use a custom URN keep working.
+    body: dict[str, object] = {"access_token": "x", "token_type": "Bearer", "expires_in": 3600}
+    if issued_token_type is not None:
+        body["issued_token_type"] = issued_token_type
+    result = await Rfc8693TokenExchanger(_RecordingPost(body), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Ok) and result.ok.access_token == "x"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "config",
     [
         TokenExchangeConfig(client_id="c", client_secret=SecretStr("s")),

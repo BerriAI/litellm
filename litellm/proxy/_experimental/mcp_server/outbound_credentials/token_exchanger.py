@@ -51,6 +51,18 @@ _EXPIRY_BUFFER_SECONDS = 60.0
 
 _GRANT_TYPE = "urn:ietf:params:oauth:grant-type:token-exchange"
 
+# RFC 8693 3 token-type URNs that are not usable as an upstream Bearer access token. token_type
+# already rejects the common non-access case (N_A); this catches a malformed STS that mints one of
+# these but still labels it Bearer. An access_token / jwt / absent / unknown type is accepted (lenient).
+_NON_ACCESS_ISSUED_TOKEN_TYPES = frozenset(
+    {
+        "urn:ietf:params:oauth:token-type:refresh_token",
+        "urn:ietf:params:oauth:token-type:id_token",
+        "urn:ietf:params:oauth:token-type:saml1",
+        "urn:ietf:params:oauth:token-type:saml2",
+    }
+)
+
 # The IdP returns an opaque JSON object; the post adapter hands it over untyped and the exchanger
 # validates each field, so no Any leaks past this seam (None == any transport/HTTP failure). The
 # second dict is the form body; the third is the client-auth headers (HTTP Basic for
@@ -208,6 +220,11 @@ class Rfc8693TokenExchanger:
         # must fail closed rather than be minted as a bogus Bearer; an absent type defaults to Bearer.
         token_type = body.get("token_type")
         if isinstance(token_type, str) and token_type.strip().lower() != "bearer":
+            return None
+        # issued_token_type says what representation was minted; reject a clearly-non-access type
+        # (refresh/id/saml) even if token_type claimed Bearer. access_token / jwt / absent / unknown pass.
+        issued_token_type = body.get("issued_token_type")
+        if isinstance(issued_token_type, str) and issued_token_type in _NON_ACCESS_ISSUED_TOKEN_TYPES:
             return None
         expires_in = _parse_expires_in(body.get("expires_in"))
         expires_at = self._clock() + expires_in if expires_in is not None else None
