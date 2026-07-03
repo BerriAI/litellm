@@ -429,6 +429,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
+    @staticmethod
+    def _is_numbered_token_of_type(token: str, prefix: str) -> bool:
+        """True if ``token`` is a ``<{ENTITY}_{n}>`` token for exactly ``prefix``.
+
+        ``prefix`` is ``<{entity_type}_``. A plain ``startswith(prefix)`` check
+        would falsely match a token whose entity type merely begins with this
+        one (e.g. prefix ``<PHONE_`` matching ``<PHONE_NUMBER_1>``), so the
+        suffix between the prefix and the closing ``>`` must be all digits.
+        """
+        if not token.startswith(prefix) or not token.endswith(">"):
+            return False
+        number = token[len(prefix) : -1]
+        return number.isdigit()
+
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -463,7 +477,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # corrupting unmasking (issue #31959).
             prefix = f"<{entity_type}_"
             for existing_token, existing_value in pii_tokens.items():
-                if existing_value == original_value and existing_token.startswith(prefix):
+                if existing_value == original_value and self._is_numbered_token_of_type(existing_token, prefix):
                     return existing_token
             new_token = f"{prefix}{len(pii_tokens) + 1}>"
             pii_tokens[new_token] = original_value

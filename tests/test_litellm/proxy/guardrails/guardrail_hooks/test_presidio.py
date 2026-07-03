@@ -2782,6 +2782,72 @@ async def test_numbered_tokens_stable_across_messages_in_one_request():
         assert _OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, pii_tokens) == original
 
 
+def test_is_numbered_token_of_type_rejects_prefix_collision():
+    """Regression for #31978 review: an entity type that is a prefix of another
+    type's token must NOT match. Only ``<{ENTITY}_{digits}>`` counts."""
+    is_token = _OPTIONAL_PresidioPIIMasking._is_numbered_token_of_type
+
+    # exact numbered token of this type
+    assert is_token("<PHONE_1>", "<PHONE_") is True
+    assert is_token("<PHONE_42>", "<PHONE_") is True
+
+    # a longer entity type whose token merely starts with this prefix
+    assert is_token("<PHONE_NUMBER_1>", "<PHONE_") is False
+    # non-numeric suffix / malformed tokens
+    assert is_token("<PHONE_A>", "<PHONE_") is False
+    assert is_token("<PHONE_1", "<PHONE_") is False
+    assert is_token("<PERSON_1>", "<PHONE_") is False
+
+
+@pytest.mark.asyncio
+async def test_numbered_tokens_do_not_collide_across_prefixed_entity_types():
+    """Regression for #31978 review.
+
+    When one entity type name is a prefix of another (e.g. PHONE vs
+    PHONE_NUMBER) the same value must NOT reuse the longer type's token:
+    each type keeps its own numbered token and unmasking is exact.
+    """
+    text = "Call 555-0100 or fax 555-0100 - same digits, different entity types"
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        mock_testing=False,
+        output_parse_pii=True,
+    )
+
+    # Same literal value classified once as PHONE_NUMBER and once as PHONE.
+    first = text.find("555-0100")
+    second = text.find("555-0100", first + 1)
+    analyze_results = [
+        {"start": first, "end": first + 8, "entity_type": "PHONE_NUMBER", "score": 0.9},
+        {"start": second, "end": second + 8, "entity_type": "PHONE", "score": 0.9},
+    ]
+
+    mock_iterator = _make_mock_session_iterator(
+        json_response={"text": "ignored", "items": []},
+    )
+
+    request_data = {"metadata": {}}
+    with patch.object(guardrail, "_get_session_iterator", mock_iterator):
+        masked = await guardrail.anonymize_text(
+            text=text,
+            analyze_results=analyze_results,
+            output_parse_pii=True,
+            masked_entity_count={},
+            request_data=request_data,
+        )
+
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    # Each entity type gets its own token - no cross-type reuse.
+    assert pii_tokens == {
+        "<PHONE_NUMBER_1>": "555-0100",
+        "<PHONE_2>": "555-0100",
+    }
+    assert "<PHONE_NUMBER_1>" in masked and "<PHONE_2>" in masked
+    assert _OPTIONAL_PresidioPIIMasking._unmask_pii_text(masked, pii_tokens) == text
+
+
 def test_unmask_sse_bytes_chunk_replaces_text_delta():
     import json
 
