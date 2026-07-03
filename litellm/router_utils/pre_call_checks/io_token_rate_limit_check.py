@@ -145,21 +145,79 @@ def _resolve_max_tokens(request_kwargs: Optional[dict[str, Any]], deployment: di
 def _get_usage_tokens(usage: Any) -> tuple[int, int, int]:
     if usage is None:
         return 0, 0, 0
-    if hasattr(usage, "prompt_tokens"):
-        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
-        completion = int(getattr(usage, "completion_tokens", 0) or 0)
+    if hasattr(usage, "prompt_tokens") or hasattr(usage, "input_tokens"):
+        prompt = int(getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", 0) or 0)
+        completion = int(getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", 0) or 0)
         cached = 0
         details = getattr(usage, "prompt_tokens_details", None)
         if details is not None:
             cached = int(getattr(details, "cached_tokens", 0) or 0)
+        if not cached:
+            cached = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
         return prompt, completion, cached
     if isinstance(usage, dict):
-        prompt = int(usage.get("prompt_tokens", 0) or 0)
-        completion = int(usage.get("completion_tokens", 0) or 0)
+        prompt = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
         details = usage.get("prompt_tokens_details") or {}
         cached = int(details.get("cached_tokens", 0) or 0) if isinstance(details, dict) else 0
+        if not cached:
+            cached = int(usage.get("cache_read_input_tokens") or 0)
         return prompt, completion, cached
     return 0, 0, 0
+
+
+def _extract_response_usage(response_obj: Any) -> Any:
+    if isinstance(response_obj, dict):
+        return response_obj.get("usage")
+    return getattr(response_obj, "usage", None)
+
+
+def _usage_is_present(usage: Any) -> bool:
+    if usage is None:
+        return False
+    if isinstance(usage, dict):
+        return any(
+            key in usage
+            for key in (
+                "prompt_tokens",
+                "completion_tokens",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+            )
+        )
+    return True
+
+
+def _resolve_reconcile_usage_tokens(
+    kwargs: Any,
+    response_obj: Any,
+) -> tuple[int, int, bool]:
+    """
+    Resolve billable input and output tokens for post-call reconcile.
+
+    Prefer the response usage object; fall back to standard_logging_object token
+    fields. When usage cannot be resolved, return ``usage_resolved=False`` so
+    callers keep the pre-call reservation instead of refunding it as zero usage.
+    """
+    usage = _extract_response_usage(response_obj)
+    if _usage_is_present(usage):
+        prompt_tokens, completion_tokens, cached_tokens = _get_usage_tokens(usage)
+        return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+
+    if isinstance(kwargs, dict):
+        standard_logging_object = kwargs.get("standard_logging_object")
+        if isinstance(standard_logging_object, dict):
+            prompt_tokens = int(standard_logging_object.get("prompt_tokens") or 0)
+            completion_tokens = int(standard_logging_object.get("completion_tokens") or 0)
+            cached_tokens = 0
+            metadata = standard_logging_object.get("metadata")
+            if isinstance(metadata, dict):
+                cached_tokens = int(metadata.get("cache_read_input_tokens") or 0)
+            if prompt_tokens or completion_tokens or int(standard_logging_object.get("total_tokens") or 0):
+                return max(0, prompt_tokens - cached_tokens), completion_tokens, True
+
+    return 0, 0, False
 
 
 def _stash_reservation_in_metadata(
@@ -451,35 +509,39 @@ def io_token_reconcile_success(
     if itpm_key is None and otpm_key is None:
         return
 
-    usage = getattr(response_obj, "usage", None)
-    prompt_tokens, completion_tokens, cached_tokens = _get_usage_tokens(usage)
-    billable_input = max(0, prompt_tokens - cached_tokens)
+    billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(kwargs, response_obj)
 
     try:
-        if itpm_key is not None:
-            itpm_delta = billable_input - itpm_reserved
-            if itpm_delta != 0:
-                dual_cache.increment_cache(
-                    key=itpm_key,
-                    value=itpm_delta,
-                    ttl=RoutingArgsTTL,
-                )
+        if usage_resolved:
+            if itpm_key is not None:
+                itpm_delta = billable_input - itpm_reserved
+                if itpm_delta != 0:
+                    dual_cache.increment_cache(
+                        key=itpm_key,
+                        value=itpm_delta,
+                        ttl=RoutingArgsTTL,
+                    )
 
-        if otpm_key is not None:
-            otpm_delta = completion_tokens - otpm_reserved
-            if otpm_delta != 0:
-                dual_cache.increment_cache(
-                    key=otpm_key,
-                    value=otpm_delta,
-                    ttl=RoutingArgsTTL,
-                )
+            if otpm_key is not None:
+                otpm_delta = completion_tokens - otpm_reserved
+                if otpm_delta != 0:
+                    dual_cache.increment_cache(
+                        key=otpm_key,
+                        value=otpm_delta,
+                        ttl=RoutingArgsTTL,
+                    )
+        else:
+            verbose_router_logger.debug(
+                "[IO TOKEN LIMIT] usage missing; keeping reservation "
+                f"(itpm_reserved={itpm_reserved}, otpm_reserved={otpm_reserved})"
+            )
     finally:
         _clear_reservation_from_kwargs(kwargs)
 
     verbose_router_logger.debug(
         f"[IO TOKEN LIMIT] reconciled "
-        f"(itpm_reserved={itpm_reserved}, billable_input={billable_input}, "
-        f"otpm_reserved={otpm_reserved}, output={completion_tokens})"
+        f"(usage_resolved={usage_resolved}, itpm_reserved={itpm_reserved}, "
+        f"billable_input={billable_input}, otpm_reserved={otpm_reserved}, output={completion_tokens})"
     )
 
 
@@ -494,9 +556,7 @@ async def async_io_token_reconcile_success(
     if itpm_key is None and otpm_key is None:
         return
 
-    usage = getattr(response_obj, "usage", None)
-    prompt_tokens, completion_tokens, cached_tokens = _get_usage_tokens(usage)
-    billable_input = max(0, prompt_tokens - cached_tokens)
+    billable_input, completion_tokens, usage_resolved = _resolve_reconcile_usage_tokens(kwargs, response_obj)
 
     # Reconcile against the exact key that held the reservation (which encodes
     # the reservation's minute), not a key recomputed at response time. This
@@ -505,32 +565,38 @@ async def async_io_token_reconcile_success(
     # clear the stash afterwards (even if an increment throws) so a retry or a
     # duplicate success event can't re-process it.
     try:
-        if itpm_key is not None:
-            itpm_delta = billable_input - itpm_reserved
-            if itpm_delta != 0:
-                await dual_cache.async_increment_cache(
-                    key=itpm_key,
-                    value=itpm_delta,
-                    ttl=RoutingArgsTTL,
-                    parent_otel_span=parent_otel_span,
-                )
+        if usage_resolved:
+            if itpm_key is not None:
+                itpm_delta = billable_input - itpm_reserved
+                if itpm_delta != 0:
+                    await dual_cache.async_increment_cache(
+                        key=itpm_key,
+                        value=itpm_delta,
+                        ttl=RoutingArgsTTL,
+                        parent_otel_span=parent_otel_span,
+                    )
 
-        if otpm_key is not None:
-            otpm_delta = completion_tokens - otpm_reserved
-            if otpm_delta != 0:
-                await dual_cache.async_increment_cache(
-                    key=otpm_key,
-                    value=otpm_delta,
-                    ttl=RoutingArgsTTL,
-                    parent_otel_span=parent_otel_span,
-                )
+            if otpm_key is not None:
+                otpm_delta = completion_tokens - otpm_reserved
+                if otpm_delta != 0:
+                    await dual_cache.async_increment_cache(
+                        key=otpm_key,
+                        value=otpm_delta,
+                        ttl=RoutingArgsTTL,
+                        parent_otel_span=parent_otel_span,
+                    )
+        else:
+            verbose_router_logger.debug(
+                "[IO TOKEN LIMIT] usage missing; keeping reservation "
+                f"(itpm_reserved={itpm_reserved}, otpm_reserved={otpm_reserved})"
+            )
     finally:
         _clear_reservation_from_kwargs(kwargs)
 
     verbose_router_logger.debug(
         f"[IO TOKEN LIMIT] reconciled "
-        f"(itpm_reserved={itpm_reserved}, billable_input={billable_input}, "
-        f"otpm_reserved={otpm_reserved}, output={completion_tokens})"
+        f"(usage_resolved={usage_resolved}, itpm_reserved={itpm_reserved}, "
+        f"billable_input={billable_input}, otpm_reserved={otpm_reserved}, output={completion_tokens})"
     )
 
 

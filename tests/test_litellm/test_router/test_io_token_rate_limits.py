@@ -20,6 +20,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
     get_io_token_rate_limit_request_kwargs,
+    io_token_reconcile_success,
     set_io_token_rate_limit_request_kwargs,
 )
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
@@ -581,6 +582,77 @@ class TestModelRateLimitingCheckIOTokens:
         await async_io_token_reconcile_success(dual_cache, kwargs, response)
 
         assert await dual_cache.async_get_cache(key=itpm_key) == 4
+
+    @pytest.mark.asyncio
+    async def test_reconcile_missing_usage_keeps_reservation(self):
+        dual_cache = DualCache()
+        itpm_key = "global_router:io-missing-usage:bedrock_mantle/test:itpm:00-00"
+        otpm_key = "global_router:io-missing-usage:bedrock_mantle/test:otpm:00-00"
+        await dual_cache.async_increment_cache(key=itpm_key, value=8, ttl=60)
+        await dual_cache.async_increment_cache(key=otpm_key, value=5, ttl=60)
+
+        kwargs = {
+            "metadata": {
+                ITPM_RESERVED_KEY: 8,
+                OTPM_RESERVED_KEY: 5,
+                ITPM_CACHE_KEY: itpm_key,
+                OTPM_CACHE_KEY: otpm_key,
+            }
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "ok"}, "index": 0, "finish_reason": "stop"}],
+        )
+
+        await async_io_token_reconcile_success(dual_cache, kwargs, response)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 8
+        assert await dual_cache.async_get_cache(key=otpm_key) == 5
+        assert ITPM_RESERVED_KEY not in kwargs["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_reconcile_falls_back_to_standard_logging_object(self):
+        dual_cache = DualCache()
+        itpm_key = "global_router:io-slo-fallback:bedrock_mantle/test:itpm:00-00"
+        await dual_cache.async_increment_cache(key=itpm_key, value=10, ttl=60)
+
+        kwargs = {
+            "metadata": {ITPM_RESERVED_KEY: 10, ITPM_CACHE_KEY: itpm_key},
+            "standard_logging_object": {
+                "prompt_tokens": 4,
+                "completion_tokens": 0,
+                "total_tokens": 4,
+            },
+        }
+        response = {"type": "message", "role": "assistant", "content": []}
+
+        await async_io_token_reconcile_success(dual_cache, kwargs, response)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 4
+
+    def test_sync_reconcile_anthropic_dict_usage(self):
+        dual_cache = DualCache()
+        itpm_key = "global_router:io-anthropic:bedrock_mantle/test:itpm:00-00"
+        otpm_key = "global_router:io-anthropic:bedrock_mantle/test:otpm:00-00"
+        dual_cache.set_cache(key=itpm_key, value=6, ttl=60)
+        dual_cache.set_cache(key=otpm_key, value=4, ttl=60)
+
+        kwargs = {
+            "metadata": {
+                ITPM_RESERVED_KEY: 6,
+                OTPM_RESERVED_KEY: 4,
+                ITPM_CACHE_KEY: itpm_key,
+                OTPM_CACHE_KEY: otpm_key,
+            }
+        }
+        response = {
+            "type": "message",
+            "usage": {"input_tokens": 3, "output_tokens": 2, "cache_read_input_tokens": 1},
+        }
+
+        io_token_reconcile_success(dual_cache, kwargs, response)
+
+        assert dual_cache.get_cache(key=itpm_key) == 2
+        assert dual_cache.get_cache(key=otpm_key) == 2
 
     @pytest.mark.asyncio
     async def test_io_limits_supersede_tpm_rpm_with_warning(self, caplog):
