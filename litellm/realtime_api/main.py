@@ -40,6 +40,24 @@ vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
+def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
+    updated = {**session}
+    if "model" in updated:
+        updated["model"] = model_name
+    flat_transcription = updated.get("input_audio_transcription")
+    if isinstance(flat_transcription, dict) and "model" in flat_transcription:
+        updated["input_audio_transcription"] = {**flat_transcription, "model": model_name}
+    audio = updated.get("audio")
+    audio_input = audio.get("input") if isinstance(audio, dict) else None
+    transcription = audio_input.get("transcription") if isinstance(audio_input, dict) else None
+    if isinstance(transcription, dict) and "model" in transcription:
+        updated["audio"] = {
+            **audio,
+            "input": {**audio_input, "transcription": {**transcription, "model": model_name}},
+        }
+    return updated
+
+
 def _build_litellm_metadata(kwargs: dict) -> dict:
     """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
     metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
@@ -102,7 +120,7 @@ async def acreate_realtime_client_secret(
         session=RealtimeSessionConfig(**session) if session else None,
         expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
-    model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
+    model_name = req.model or (req.session.model if req.session is not None else None) or "gpt-4o-realtime-preview"
     litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_params = GenericLiteLLMParams(**kwargs)
 
@@ -134,6 +152,8 @@ async def acreate_realtime_client_secret(
         custom_llm_provider=custom_llm_provider,
     )
     request_data = req.model_dump(exclude_none=True, exclude={"model"})
+    if isinstance(request_data.get("session"), dict):
+        request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
     return await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
@@ -249,6 +269,8 @@ async def arealtime_calls(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
+    if session is not None:
+        session = _with_resolved_session_model(session, model_name)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,
