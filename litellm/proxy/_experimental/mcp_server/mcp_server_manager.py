@@ -99,7 +99,6 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPTransport,
     MCPTransportType,
-    SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
@@ -3935,8 +3934,6 @@ class MCPServerManager:
         if not identifiers:
             return []
         registry = self.get_registry()
-        if SpecialMCPServerName.all_proxy_servers.value in identifiers:
-            return list(registry.keys())
         expanded: set[str] = set()
         for identifier in identifiers:
             if identifier in registry:
