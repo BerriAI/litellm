@@ -2776,11 +2776,7 @@ async def _enforce_key_and_fallback_model_access(
         model_list = config.get("model_list", [])
         new_model_list = model_list
         verbose_proxy_logger.debug(f"\n new llm router model list {new_model_list}")
-    elif (
-        isinstance(valid_token.models, list)
-        and "all-team-models" in valid_token.models
-        and valid_token.team_id is not None
-    ):
+    elif isinstance(valid_token.models, list) and "all-team-models" in valid_token.models:
         pass
     else:
         model = _get_model_from_request_context(
