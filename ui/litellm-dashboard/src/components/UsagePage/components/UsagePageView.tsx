@@ -81,8 +81,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: customers = [] } = useCustomers();
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
-  console.log(`currentUser: ${JSON.stringify(currentUser)}`);
-  console.log(`currentUser max budget: ${currentUser?.max_budget}`);
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
 
