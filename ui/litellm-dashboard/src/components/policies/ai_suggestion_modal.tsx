@@ -414,8 +414,8 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
               key={suggestion.template_id}
               className={`rounded-xl border-2 transition-all ${
                 isSelected
-                  ? "border-blue-400 bg-blue-50/60 shadow-sm"
-                  : "border-gray-200 hover:border-gray-300 hover:shadow-sm"
+                  ? "border-blue-400 bg-blue-50/60 shadow-xs"
+                  : "border-gray-200 hover:border-gray-300 hover:shadow-xs"
               }`}
             >
               <div className="p-4 cursor-pointer" onClick={() => toggleTemplate(suggestion.template_id)}>
@@ -461,7 +461,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                         template.guardrails.slice(0, 4).map((g: string) => (
                           <span
                             key={g}
-                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600"
+                            className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-gray-100 text-gray-600"
                           >
                             {g}
                           </span>
@@ -471,7 +471,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                       )}
                     </div>
                     <div className="mt-2 flex items-start gap-1.5">
-                      <InfoCircleOutlined className="text-blue-500 mt-0.5 text-xs flex-shrink-0" />
+                      <InfoCircleOutlined className="text-blue-500 mt-0.5 text-xs shrink-0" />
                       <p className="text-xs text-blue-600 leading-relaxed">{suggestion.reason}</p>
                     </div>
                   </div>
@@ -552,7 +552,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
               {hasEnrichedGuardrails ? (
                 <CheckCircleOutlined className="text-green-600" />
               ) : (
-                <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <svg className="w-4 h-4 text-amber-600 shrink-0" fill="currentColor" viewBox="0 0 20 20">
                   <path
                     fillRule="evenodd"
                     d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
@@ -585,7 +585,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
             </div>
 
             {isEnriching && enrichStatusMessage && (
-              <div className="flex items-center gap-2 p-2 bg-blue-50 rounded border border-blue-100">
+              <div className="flex items-center gap-2 p-2 bg-blue-50 rounded-sm border border-blue-100">
                 <Spin size="small" />
                 <span className="text-xs text-blue-700">{enrichStatusMessage}</span>
               </div>
@@ -642,7 +642,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
             />
             <div className="mt-1">
               <Text className="text-xs text-gray-500">
-                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded text-xs">Enter</kbd> to
+                Press <kbd className="px-1 py-0.5 bg-gray-100 border border-gray-300 rounded-sm text-xs">Enter</kbd> to
                 submit
               </Text>
             </div>
@@ -710,7 +710,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                   return (
                     <Card
                       key={result.guardrail_name}
-                      className={`!p-3 ${
+                      className={`p-3! ${
                         isBlocked
                           ? "bg-red-50 border-red-200"
                           : isMasked
@@ -768,15 +768,15 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                         {!isCollapsed && (
                           <>
                             {isMasked && result.output_text && (
-                              <div className="bg-white border border-amber-200 rounded p-2">
+                              <div className="bg-white border border-amber-200 rounded-sm p-2">
                                 <label className="text-[10px] font-medium text-gray-600 mb-1 block">Output Text</label>
-                                <div className="font-mono text-xs text-gray-900 whitespace-pre-wrap break-words">
+                                <div className="font-mono text-xs text-gray-900 whitespace-pre-wrap wrap-break-word">
                                   {result.output_text}
                                 </div>
                               </div>
                             )}
                             {isBlocked && result.details && (
-                              <div className="bg-white border border-red-200 rounded p-2">
+                              <div className="bg-white border border-red-200 rounded-sm p-2">
                                 <label className="text-[10px] font-medium text-gray-600 mb-1 block">Details</label>
                                 <p className="text-xs text-red-700">{result.details}</p>
                               </div>
@@ -919,7 +919,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
 
           {/* Info box */}
           <div className="flex items-start gap-3 p-3.5 bg-blue-50 rounded-lg border border-blue-100">
-            <svg className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+            <svg className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
               <path
                 fillRule="evenodd"
                 d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"

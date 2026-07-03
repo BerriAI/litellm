@@ -499,7 +499,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
           <h3 className="text-sm font-medium">Request</h3>
           <button
             onClick={() => copyToClipboard(requestStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-gray-200 rounded-sm"
             title="Copy request"
           >
             <svg
@@ -518,7 +518,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{requestStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap wrap-break-word">{requestStr}</pre>
       </div>
 
       <div className="rounded-lg border border-gray-200 bg-gray-50">
@@ -526,7 +526,7 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
           <h3 className="text-sm font-medium">Response</h3>
           <button
             onClick={() => copyToClipboard(responseStr)}
-            className="p-1 hover:bg-gray-200 rounded"
+            className="p-1 hover:bg-gray-200 rounded-sm"
             title="Copy response"
           >
             <svg
@@ -545,7 +545,9 @@ export const RequestResponsePanel = ({ request, response }: { request: any; resp
             </svg>
           </button>
         </div>
-        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap break-words">{responseStr}</pre>
+        <pre className="p-4 overflow-auto text-xs font-mono h-64 whitespace-pre-wrap wrap-break-word">
+          {responseStr}
+        </pre>
       </div>
     </div>
   );
@@ -566,7 +568,7 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
         {isExpanded ? "Hide JSON" : "Show JSON"} ({Object.keys(jsonData).length} fields)
       </button>
       {isExpanded && (
-        <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>
+        <pre className="mt-2 p-2 bg-gray-50 border rounded-sm text-xs overflow-auto max-h-60">{jsonString}</pre>
       )}
     </div>
   );
@@ -610,7 +612,7 @@ export const auditLogColumns: ColumnDef<AuditLogEntry>[] = [
             onClick={toggleHandler}
             style={{ cursor: "pointer" }}
             aria-label={localExpanded ? "Collapse row" : "Expand row"}
-            className="w-6 h-6 flex items-center justify-center focus:outline-none"
+            className="w-6 h-6 flex items-center justify-center focus:outline-hidden"
           >
             <svg
               className={`w-4 h-4 transform transition-transform ${localExpanded ? "rotate-90" : ""}`}

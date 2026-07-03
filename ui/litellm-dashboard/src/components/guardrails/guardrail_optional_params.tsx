@@ -147,7 +147,7 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
     }
 
     return (
-      <div key={fullFieldKey} className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-sm">
+      <div key={fullFieldKey} className="mb-8 p-6 bg-white rounded-lg border border-gray-200 shadow-xs">
         <Form.Item
           name={[parentFieldKey, fieldKey]}
           label={
