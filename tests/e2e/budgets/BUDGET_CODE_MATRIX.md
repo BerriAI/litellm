@@ -54,7 +54,9 @@ Notes / flags from the code:
 | Read-time enforcement | Auth-time check of current spend vs `max_budget` | `auth_checks.common_checks` + per-entity `_*_max_budget_check` |
 | Soft budget / alerts | At `soft_budget` (or 80% of max) fire Slack/email alert, do not block | `_virtual_key_soft_budget_check`, `_team_soft_budget_check`, `budget_alerts` |
 | Multi-window budgets | `budget_limits` list of `{budget_duration, max_budget}`; each window enforced + reset independently | `_virtual_key_multi_budget_check`, `reset_budget_windows` |
-| Model-level budgets | `model_max_budget` dict (per model: `budget_limit` + `time_period`) on key/user/end_user | `hooks/model_max_budget_limiter.py` |
+| Model-level budgets | `model_max_budget` dict (per model: `budget_limit` + `time_period`) on key/user/team/member/end_user | `hooks/model_max_budget_limiter.py` |
+
+Per-model spend pooling (user keys vs service accounts): see `claude-usage-proxy` repo → `docs/model-max-budget-enforcement.md`.
 | Reset by duration | Job zeros `spend`, recomputes `budget_reset_at = now + duration_in_seconds(budget_duration)`, invalidates redis counters | `common_utils/reset_budget_job.py`, `duration_parser.duration_in_seconds` |
 | Zero-cost bypass | Models with no configured price bypass budget reservation | `budget_reservation` zero-cost path |
 

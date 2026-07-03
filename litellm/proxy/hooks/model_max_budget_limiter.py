@@ -353,6 +353,19 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             return
 
+        if scope in ("team_member", "team") and virtual_key is not None:
+            spend_key = (
+                f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{virtual_key}:{model}:{budget_config.budget_duration}"
+            )
+            start_time_key = f"virtual_key_budget_start_time:{virtual_key}"
+            await self._increment_spend_for_key(
+                budget_config=budget_config,
+                spend_key=spend_key,
+                start_time_key=start_time_key,
+                response_cost=response_cost,
+            )
+            return
+
         if end_user_id is not None:
             spend_key = (
                 f"{END_USER_SPEND_CACHE_KEY_PREFIX}:{end_user_id}:{model}:{budget_config.budget_duration}"

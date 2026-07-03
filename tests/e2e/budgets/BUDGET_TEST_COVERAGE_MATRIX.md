@@ -29,6 +29,8 @@ on the shared lifecycle (every entity it creates is deleted on teardown).
 | Organization | `test_organization_budget_enforcement.py` (flagged weak) | - | `test_organization_budget_blocks` | **covered (new)** |
 | Tag (proxy-level) | - | router only | `test_tag_budget_e2e::test_tag_budget_blocks_tagged_requests` | **covered (new)** |
 | Model-level (`model_max_budget`) | `test_unit_test_max_model_budget_limiter.py` | - | `test_model_max_budget_e2e` (key / team / member isolation + team update persistence) | **covered (new)** |
+
+See also `claude-usage-proxy` repo → `docs/model-max-budget-enforcement.md` for how user vs service-account keys share (or isolate) per-model spend.
 | Provider (router) | `test_budget_limiter_hotpath.py` | `test_router_budget_limiter.py` | - | **covered** (router) |
 | Global proxy (`litellm.max_budget`) | unit | - | - | **gap** (needs a config-level cap; not key-settable) |
 

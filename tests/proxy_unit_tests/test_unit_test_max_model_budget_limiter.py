@@ -133,6 +133,66 @@ async def test_is_key_within_model_budget_uses_team_member_spend_for_team_layer(
 
 
 @pytest.mark.asyncio
+async def test_is_key_within_model_budget_uses_per_key_spend_for_service_account_team_default(budget_limiter):
+    service_account_key = UserAPIKeyAuth(
+        token="sa-key-hash",
+        key_alias="ci-bot",
+        team_id="team-1",
+        user_id=None,
+        model_max_budget={},
+    )
+    team_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", return_value=10.0
+    ) as virtual_key_spend_mock:
+        assert (
+            await budget_limiter.is_key_within_model_budget(
+                service_account_key,
+                "claude-sonnet-4-6",
+                team_model_max_budget=team_budget,
+            )
+            is True
+        )
+        virtual_key_spend_mock.assert_awaited_once()
+
+    with patch.object(
+        budget_limiter, "_get_team_member_model_spend_for_model", return_value=0.0
+    ) as team_member_spend_mock:
+        await budget_limiter.is_key_within_model_budget(
+            service_account_key,
+            "claude-sonnet-4-6",
+            team_model_max_budget=team_budget,
+        )
+        team_member_spend_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_increment_model_budget_spend_tracks_per_key_for_service_account_team_default(budget_limiter):
+    from litellm.proxy.hooks.model_max_budget_limiter import VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX
+
+    budget_config = GenericBudgetInfo(budget_limit=20.0, time_period="1d")
+    with patch.object(
+        budget_limiter, "_increment_spend_for_key", new_callable=AsyncMock
+    ) as increment_mock:
+        await budget_limiter._increment_model_budget_spend(
+            response_cost=0.5,
+            model="claude-sonnet-4-6",
+            budget_config=budget_config,
+            scope="team",
+            virtual_key="sa-key-hash",
+            team_id="team-1",
+            user_id=None,
+            end_user_id=None,
+        )
+        increment_mock.assert_awaited_once()
+        spend_key = increment_mock.call_args.kwargs["spend_key"]
+        assert spend_key == f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:sa-key-hash:claude-sonnet-4-6:1d"
+
+
+@pytest.mark.asyncio
 async def test_is_key_within_model_budget(budget_limiter):
     # Mock user API key dict
     user_api_key = UserAPIKeyAuth(
