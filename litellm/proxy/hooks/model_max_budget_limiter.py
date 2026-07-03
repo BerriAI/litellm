@@ -21,6 +21,72 @@ TEAM_MEMBER_MODEL_SPEND_CACHE_KEY_PREFIX = "team_member_model_spend"
 ModelBudgetSpendScope = Literal["key", "team_member", "team"]
 
 
+async def build_effective_model_max_budget_usage(
+    limiter: "_PROXY_VirtualKeyModelMaxBudgetLimiter",
+    *,
+    api_key_hash: str,
+    team_id: Optional[str],
+    user_id: Optional[str],
+    key_model_max_budget: Optional[dict],
+    team_model_max_budget: Optional[dict],
+    team_member_model_max_budget: Optional[dict],
+) -> dict[str, dict[str, object]]:
+    model_names: set[str] = set()
+    for budget_map in (key_model_max_budget, team_member_model_max_budget, team_model_max_budget):
+        if isinstance(budget_map, dict):
+            model_names.update(budget_map.keys())
+
+    if not model_names:
+        return {}
+
+    result: dict[str, dict[str, object]] = {}
+    for model in sorted(model_names):
+        budget_config, scope = limiter._resolve_model_budget_config_for_scope(
+            model=model,
+            key_model_max_budget=key_model_max_budget if isinstance(key_model_max_budget, dict) else None,
+            team_member_model_max_budget=(
+                team_member_model_max_budget if isinstance(team_member_model_max_budget, dict) else None
+            ),
+            team_model_max_budget=team_model_max_budget if isinstance(team_model_max_budget, dict) else None,
+        )
+        if budget_config is None or budget_config.max_budget is None or budget_config.max_budget <= 0:
+            continue
+
+        display_scope = scope or "key"
+        if scope == "key":
+            current_spend = await limiter._get_virtual_key_spend_for_model(
+                user_api_key_hash=api_key_hash,
+                model=model,
+                key_budget_config=budget_config,
+            )
+        elif scope in ("team_member", "team") and team_id is not None and user_id is not None:
+            current_spend = await limiter._get_team_member_model_spend_for_model(
+                team_id=team_id,
+                user_id=user_id,
+                model=model,
+                key_budget_config=budget_config,
+            )
+        else:
+            current_spend = await limiter._get_virtual_key_spend_for_model(
+                user_api_key_hash=api_key_hash,
+                model=model,
+                key_budget_config=budget_config,
+            )
+            display_scope = "key"
+
+        budget_limit = float(budget_config.max_budget)
+        spend_value = float(current_spend or 0.0)
+        percent_used = min(round((spend_value / budget_limit) * 100, 1), 999.9) if budget_limit > 0 else 0.0
+        result[model] = {
+            "current_spend": round(spend_value, 4),
+            "budget_limit": budget_limit,
+            "time_period": budget_config.budget_duration,
+            "scope": display_scope,
+            "percent_used": percent_used,
+        }
+    return result
+
+
 def resolve_effective_model_max_budget(
     key_model_max_budget: Optional[dict],
     team_model_max_budget: Optional[dict] = None,

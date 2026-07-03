@@ -15,6 +15,7 @@ import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { ModelMaxBudgetUsageOverview } from "../key_team_helpers/ModelMaxBudgetUsageOverview";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
 import { getPolicyInfoWithGuardrails, keyDeleteCall, keyUpdateCall } from "../networking";
@@ -530,6 +531,13 @@ export default function KeyInfoView({
                 <div className="mt-2">
                   <Title>${formatNumberWithCommas(currentKeyData.spend, 4)}</Title>
                   <Text>of {budgetDisplay}</Text>
+                </div>
+              </Card>
+
+              <Card>
+                <Text>Per-Model Budget Usage</Text>
+                <div className="mt-2">
+                  <ModelMaxBudgetUsageOverview usage={currentKeyData.model_max_budget_usage} />
                 </div>
               </Card>
 

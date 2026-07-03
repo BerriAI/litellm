@@ -1,8 +1,43 @@
 import pytest
+from unittest.mock import AsyncMock, patch
 
+from litellm.caching.caching import DualCache
 from litellm.proxy._types import UpdateTeamRequest
-from litellm.proxy.hooks.model_max_budget_limiter import resolve_effective_model_max_budget
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    build_effective_model_max_budget_usage,
+    resolve_effective_model_max_budget,
+)
 from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+
+@pytest.fixture
+def budget_limiter():
+    return _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+
+@pytest.mark.asyncio
+async def test_build_effective_model_max_budget_usage_uses_team_member_spend_for_user(budget_limiter):
+    team_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+
+    with patch.object(
+        budget_limiter, "_get_team_member_model_spend_for_model", new_callable=AsyncMock, return_value=15.0
+    ):
+        usage = await build_effective_model_max_budget_usage(
+            budget_limiter,
+            api_key_hash="key-hash",
+            team_id="team-1",
+            user_id="user-1",
+            key_model_max_budget={},
+            team_model_max_budget=team_budget,
+            team_member_model_max_budget=None,
+        )
+
+    assert usage["claude-sonnet-4-6"]["current_spend"] == 15.0
+    assert usage["claude-sonnet-4-6"]["percent_used"] == 75.0
+    assert usage["claude-sonnet-4-6"]["scope"] == "team"
 
 
 def test_update_team_request_accepts_model_max_budget() -> None:

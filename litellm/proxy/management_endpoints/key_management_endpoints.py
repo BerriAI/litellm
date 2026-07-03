@@ -3294,6 +3294,76 @@ async def _build_model_max_budget_usage(
     return result
 
 
+async def _attach_model_max_budget_usage_to_key_info(
+    key_info: dict[str, object],
+    *,
+    api_key_hash: str,
+    user_api_key_cache: UserApiKeyCache | None,
+) -> None:
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget, get_team_membership
+    from litellm.proxy.hooks.model_max_budget_limiter import build_effective_model_max_budget_usage
+    from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
+
+    if user_api_key_cache is None or model_max_budget_limiter is None or not api_key_hash:
+        return
+
+    key_model_max_budget = key_info.get("model_max_budget") or {}
+    budget_table = key_info.get("litellm_budget_table") or {}
+    if not key_model_max_budget and isinstance(budget_table, dict):
+        key_model_max_budget = budget_table.get("model_max_budget") or {}
+
+    team_model_max_budget: Optional[dict] = None
+    team_member_model_max_budget: Optional[dict] = None
+    team_id = key_info.get("team_id")
+    user_id = key_info.get("user_id")
+
+    if team_id and prisma_client is not None:
+        team_table = await get_team_object(
+            team_id=str(team_id),
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
+        if team_table is not None and isinstance(team_table.model_max_budget, dict):
+            team_model_max_budget = team_table.model_max_budget
+
+        if user_id is not None:
+            membership = await get_team_membership(
+                user_id=str(user_id),
+                team_id=str(team_id),
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if membership is not None and membership.litellm_budget_table is not None:
+                membership_budget = membership.litellm_budget_table.model_max_budget
+                if isinstance(membership_budget, dict) and len(membership_budget) > 0:
+                    team_member_model_max_budget = membership_budget
+
+            team_metadata = team_table.metadata if team_table is not None else None
+            if team_member_model_max_budget is None and isinstance(team_metadata, dict):
+                default_budget_id = team_metadata.get("team_member_budget_id")
+                if isinstance(default_budget_id, str):
+                    default_budget = await get_team_member_default_budget(
+                        budget_id=default_budget_id,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                    )
+                    if default_budget is not None and isinstance(default_budget.model_max_budget, dict):
+                        if len(default_budget.model_max_budget) > 0:
+                            team_member_model_max_budget = default_budget.model_max_budget
+
+    usage = await build_effective_model_max_budget_usage(
+        model_max_budget_limiter,
+        api_key_hash=api_key_hash,
+        team_id=str(team_id) if team_id is not None else None,
+        user_id=str(user_id) if user_id is not None else None,
+        key_model_max_budget=key_model_max_budget if isinstance(key_model_max_budget, dict) else None,
+        team_model_max_budget=team_model_max_budget,
+        team_member_model_max_budget=team_member_model_max_budget,
+    )
+    if usage:
+        key_info["model_max_budget_usage"] = usage
+
+
 @router.post(
     "/v2/key/info",
     tags=["key management"],
@@ -3365,14 +3435,10 @@ async def info_key_fn_v2(
                 k_dict = k.dict()
             k_token_hash = k_dict.pop("token", None)
 
-            model_max_budget = k_dict.get("model_max_budget") or {}
-            budget_table = k_dict.get("litellm_budget_table") or {}
-            if not model_max_budget and isinstance(budget_table, dict):
-                model_max_budget = budget_table.get("model_max_budget") or {}
-            if model_max_budget and k_token_hash:
-                k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
+            if k_token_hash:
+                await _attach_model_max_budget_usage_to_key_info(
+                    k_dict,
                     api_key_hash=k_token_hash,
-                    model_max_budget=model_max_budget,
                     user_api_key_cache=user_api_key_cache,
                 )
 
@@ -3456,16 +3522,11 @@ async def info_key_fn(
             key_info = key_info.dict()
         key_token_hash = key_info.pop("token")
 
-        model_max_budget = key_info.get("model_max_budget") or {}
-        budget_table = key_info.get("litellm_budget_table") or {}
-        if not model_max_budget and isinstance(budget_table, dict):
-            model_max_budget = budget_table.get("model_max_budget") or {}
-        if model_max_budget and key_token_hash:
-            key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
-                api_key_hash=key_token_hash,
-                model_max_budget=model_max_budget,
-                user_api_key_cache=user_api_key_cache,
-            )
+        await _attach_model_max_budget_usage_to_key_info(
+            key_info,
+            api_key_hash=key_token_hash,
+            user_api_key_cache=user_api_key_cache,
+        )
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
