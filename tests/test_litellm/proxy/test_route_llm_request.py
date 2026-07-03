@@ -544,3 +544,84 @@ async def test_route_request_realtime_unresolvable_model_raises_not_found(
             await _invoke_realtime_route({"model": "nonexistent-realtime-model"}, router)
 
     mock_handler.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_calls_resolves_api_base(monkeypatch):
+    """
+    /realtime/calls must resolve the deployment's api_base through the router so a
+    non-default (self-hosted / proxied) OpenAI endpoint is honored, instead of
+    defaulting to https://api.openai.com.
+    """
+    import httpx
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-realtime",
+                "litellm_params": {
+                    "model": "openai/gpt-realtime",
+                    "api_key": "calls-key",
+                    "api_base": "https://custom-realtime.example.com/v1",
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_calls_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        mock_handler.return_value = httpx.Response(200, content=b"v=0\r\n")
+        await _invoke_realtime_route(
+            {
+                "model": "my-realtime",
+                "openai_ephemeral_key": "ek_test",
+                "sdp_body": b"v=0\r\n",
+            },
+            router,
+            route_type="arealtime_calls",
+        )
+
+    assert mock_handler.call_args.kwargs["api_base"] == "https://custom-realtime.example.com/v1"
+
+
+@pytest.mark.asyncio
+async def test_route_request_realtime_transcription_session_resolves_credentials(monkeypatch):
+    """
+    /realtime/transcription_sessions must resolve credentials through the router
+    (wildcard deployment) rather than falling back to an empty OPENAI_API_KEY.
+    """
+    import httpx
+    import litellm
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "transcription-key",
+                },
+            }
+        ]
+    )
+    with patch(
+        "litellm.realtime_api.main.base_llm_http_handler.async_realtime_transcription_session_handler",
+        new_callable=AsyncMock,
+    ) as mock_handler:
+        mock_handler.return_value = httpx.Response(200, json={"client_secret": {"value": "ephemeral"}})
+        await _invoke_realtime_route(
+            {"model": "openai/gpt-realtime"},
+            router,
+            route_type="acreate_realtime_transcription_session",
+        )
+
+    assert mock_handler.call_args.kwargs["api_key"] == "transcription-key"
