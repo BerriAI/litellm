@@ -3540,12 +3540,12 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     def _build_resumable_request(
-        httpx_client: Union[httpx.Client, httpx.AsyncClient],
+        httpx_client: httpx.Client | httpx.AsyncClient,
         method: str,
         url: str,
-        headers: Dict[str, str],
+        headers: dict[str, str],
         content: bytes,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Request:
         # Passing timeout=None to httpx means "no timeout"; use the client-default
         # sentinel instead so an unset caller timeout keeps the client's default.
@@ -3557,16 +3557,16 @@ class BaseLLMHTTPHandler:
         *,
         client: HTTPHandler,
         initiate_url: str,
-        base_headers: Dict[str, str],
+        base_headers: dict[str, str],
         config: ResumableChunkedUploadConfig,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         """Open a GCS resumable session, then PUT the body in bounded chunks so a
         large upload is never held in memory in full."""
         stream = cast(BaseFileUploadStream, config["body_stream"])
         chunk_size = config.get("chunk_size", self._RESUMABLE_CHUNK_SIZE)
         session_url_header = config.get("session_url_header", "location")
-        initiate_headers: Dict[str, str] = config.get("initiate_headers") or {}
+        initiate_headers: dict[str, str] = config.get("initiate_headers") or {}
         httpx_client = client.client
 
         init_headers = {**base_headers, **initiate_headers}
@@ -3583,7 +3583,7 @@ class BaseLLMHTTPHandler:
             raise ValueError(f"resumable upload: no session URL in '{session_url_header}' header")
 
         offset = 0
-        pending: Optional[bytes] = None
+        pending: bytes | None = None
         for chunk in self._iter_resumable_chunks(stream.iter_bytes(), chunk_size):
             if pending is not None:
                 self._send_resumable_chunk(
@@ -3611,12 +3611,12 @@ class BaseLLMHTTPHandler:
         self,
         httpx_client: httpx.Client,
         url: str,
-        base_headers: Dict[str, str],
+        base_headers: dict[str, str],
         data: bytes,
         offset: int,
         *,
         is_final: bool,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         headers = {
             **base_headers,
@@ -3637,14 +3637,14 @@ class BaseLLMHTTPHandler:
         *,
         client: AsyncHTTPHandler,
         initiate_url: str,
-        base_headers: Dict[str, str],
+        base_headers: dict[str, str],
         config: ResumableChunkedUploadConfig,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         stream = cast(BaseFileUploadStream, config["body_stream"])
         chunk_size = config.get("chunk_size", self._RESUMABLE_CHUNK_SIZE)
         session_url_header = config.get("session_url_header", "location")
-        initiate_headers: Dict[str, str] = config.get("initiate_headers") or {}
+        initiate_headers: dict[str, str] = config.get("initiate_headers") or {}
         httpx_client = client.client
 
         init_headers = {**base_headers, **initiate_headers}
@@ -3666,7 +3666,7 @@ class BaseLLMHTTPHandler:
         chunk_iter = iter(self._iter_resumable_chunks(stream.iter_bytes(), chunk_size))
         done = object()
         offset = 0
-        pending: Optional[bytes] = None
+        pending: bytes | None = None
         while True:
             chunk = await asyncio.to_thread(next, chunk_iter, done)
             if chunk is done:
@@ -3697,12 +3697,12 @@ class BaseLLMHTTPHandler:
         self,
         httpx_client: httpx.AsyncClient,
         url: str,
-        base_headers: Dict[str, str],
+        base_headers: dict[str, str],
         data: bytes,
         offset: int,
         *,
         is_final: bool,
-        timeout: Optional[Union[float, httpx.Timeout]],
+        timeout: float | httpx.Timeout | None,
     ) -> httpx.Response:
         headers = {
             **base_headers,

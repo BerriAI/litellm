@@ -338,4 +338,4 @@ class ResumableChunkedUploadConfig(TypedDict, total=False):
     body_stream: Required[Any]
     chunk_size: int
     session_url_header: str
-    initiate_headers: Dict[str, str]
+    initiate_headers: dict[str, str]
