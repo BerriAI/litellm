@@ -34,6 +34,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -193,14 +194,22 @@ def load_cached_counts(path: Path) -> dict[str, int] | None:
     return counts
 
 
+def scratch_path(path: Path) -> Path:
+    """In-flight scratch for the tmp+rename write. Dot-prefixed so the prune
+    glob in `store_counts` can never match it (a concurrent run would otherwise
+    unlink it between write and rename), and pid-suffixed so two concurrent
+    writers of the same entry never share a scratch."""
+    return path.with_name(f".{path.name}.{os.getpid()}.tmp")
+
+
 def store_counts(
     directory: Path, path: Path, base_point: str, counts: Mapping[str, int]
 ) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    for stale in directory.glob(f"{CACHE_FILE_PREFIX}*"):
+    for stale in directory.glob(f"{CACHE_FILE_PREFIX}*.json"):
         if stale != path:
             stale.unlink(missing_ok=True)
-    scratch = path.with_name(path.name + ".tmp")
+    scratch = scratch_path(path)
     scratch.write_text(
         json.dumps(
             {"base_point": base_point, "counts": dict(sorted(counts.items()))},

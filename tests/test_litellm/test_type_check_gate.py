@@ -225,6 +225,23 @@ def test_missing_corrupt_or_misshapen_cache_reads_as_none(tmp_path):
     assert gate.load_cached_counts(path) is None
 
 
+def test_scratch_is_invisible_to_the_prune_glob():
+    import fnmatch
+
+    scratch = gate.scratch_path(gate.cache_path(Path("/c"), "abc", ("f",)))
+    assert not fnmatch.fnmatch(scratch.name, f"{gate.CACHE_FILE_PREFIX}*")
+
+
+def test_store_prune_spares_a_concurrent_runs_in_flight_scratch(tmp_path):
+    foreign = gate.scratch_path(gate.cache_path(tmp_path, "other", ("f",)))
+    foreign.parent.mkdir(parents=True, exist_ok=True)
+    foreign.write_text("{}")
+    mine = gate.cache_path(tmp_path, "mine", ("f",))
+    gate.store_counts(tmp_path, mine, "mine", {"reportAny": 1})
+    assert foreign.exists()
+    assert gate.load_cached_counts(mine) == {"reportAny": 1}
+
+
 def test_store_prunes_entries_for_other_branch_points(tmp_path):
     old = gate.cache_path(tmp_path, "old", ("f",))
     gate.store_counts(tmp_path, old, "old", {"reportAny": 1})
