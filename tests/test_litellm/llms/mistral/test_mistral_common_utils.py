@@ -9,6 +9,12 @@ def add_mistral_api_key_to_env(monkeypatch):
     monkeypatch.setenv("MISTRAL_API_KEY", "fake-mistral-api-key-12345")
 
 
+@pytest.fixture
+def local_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
 @pytest.mark.parametrize(
     "optional_params, expected",
     [
@@ -27,15 +33,16 @@ def test_is_web_search_request(optional_params, expected):
 class TestMistralModelInfo:
     """Capability reporting and environment resolution for Mistral models."""
 
-    def test_get_provider_info_advertises_web_search(self):
-        assert MistralModelInfo().get_provider_info("mistral-medium-latest") == {"supports_web_search": True}
-
     @pytest.mark.parametrize(
         "model",
         ["mistral/mistral-medium-latest", "mistral/mistral-large-latest", "mistral/mistral-small-latest"],
     )
-    def test_supports_web_search_true(self, model):
+    def test_supports_web_search_true_for_chat_models(self, model, local_cost_map):
         assert litellm.supports_web_search(model) is True
+
+    @pytest.mark.parametrize("model", ["mistral/mistral-embed", "mistral/mistral-ocr-latest"])
+    def test_no_web_search_for_non_chat_models(self, model, local_cost_map):
+        assert litellm.supports_web_search(model) is False
 
     def test_get_api_base_default_arg_and_env(self, monkeypatch):
         monkeypatch.delenv("MISTRAL_API_BASE", raising=False)
