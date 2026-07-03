@@ -16,6 +16,7 @@ import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSel
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
 import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata } from "../key_info_utils";
+import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -107,6 +108,9 @@ export function KeyEditView({
   const [isKeySaving, setIsKeySaving] = useState(false);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>(
     Array.isArray(keyData.budget_limits) ? keyData.budget_limits : [],
+  );
+  const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>(
+    keyData.budget_fallbacks && typeof keyData.budget_fallbacks === "object" ? keyData.budget_fallbacks : {},
   );
   const { data: organizations, isLoading: isOrganizationsLoading } = useOrganizations();
   const { data: projects } = useProjects();
@@ -304,6 +308,13 @@ export function KeyEditView({
         values.budget_limits = [];
       }
 
+      const hadExistingFallbacks = keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
+      if (Object.keys(budgetFallbacks).length > 0) {
+        values.budget_fallbacks = budgetFallbacks;
+      } else if (hadExistingFallbacks) {
+        values.budget_fallbacks = {};
+      }
+
       await onSubmit(values);
     } finally {
       setIsKeySaving(false);
@@ -470,6 +481,23 @@ export function KeyEditView({
         }
       >
         <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
+      </Form.Item>
+
+      <Form.Item
+        label={
+          <span>
+            Budget Fallbacks{" "}
+            <Tooltip title="When a model exceeds its per-model budget, requests automatically reroute to fallback models instead of failing">
+              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+            </Tooltip>
+          </span>
+        }
+      >
+        <BudgetFallbacksEditor
+          value={budgetFallbacks}
+          onChange={setBudgetFallbacks}
+          availableModels={availableModels}
+        />
       </Form.Item>
 
       <Form.Item label="TPM Limit" name="tpm_limit">

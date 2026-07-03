@@ -97,6 +97,7 @@ export interface KeyResponse {
     agent_access_groups?: string[];
   };
   access_group_ids?: string[];
+  budget_fallbacks?: Record<string, string[]>;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
