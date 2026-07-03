@@ -18,7 +18,7 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
         default=None,
         description="Model name forwarded to the headroom /v1/compress endpoint.",
     )
-    unreachable_fallback: Optional[Literal["fail_closed", "fail_open"]] = Field(
+    unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
         default="fail_closed",
         description=(
             "Behavior when the headroom compression service is unreachable or errors. "
