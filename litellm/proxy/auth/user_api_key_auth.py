@@ -204,6 +204,11 @@ async def _check_key_model_budget_with_fallback(
     regardless of whether they consume ``_read_request_body()``,
     ``request.json()``, or the path ``model`` parameter.
 
+    Fallback is only attempted when ``model_name`` matches the top-level
+    ``request_data["model"]``; models extracted from nested fields
+    (``session.model``, ``completion.model``, etc.) are not rewritable
+    and raise immediately.
+
     Raises:
         BudgetExceededError: if `model_name` is over budget and no configured
             fallback is within budget either (or the fallback is not authorized).
@@ -214,6 +219,8 @@ async def _check_key_model_budget_with_fallback(
             model=model_name,
         )
     except litellm.BudgetExceededError as e:
+        if request_data.get("model") != model_name:
+            raise e
         fallback_model = await model_max_budget_limiter.get_fallback_model_within_budget(
             user_api_key_dict=valid_token,
             model=model_name,

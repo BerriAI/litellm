@@ -4319,3 +4319,31 @@ class TestCheckKeyModelBudgetWithFallback:
 
         assert request_data["model"] == "gpt-4o-mini"
         assert request.scope["path_params"]["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_model_from_nested_field(self):
+        """Budget fallback must not attempt rewrite when the checked model
+        came from a nested field (e.g. session.model) rather than the
+        top-level request_data['model']."""
+        valid_token = UserAPIKeyAuth(
+            token="test-key",
+            models=["gpt-4o", "gpt-4o-mini"],
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        )
+        limiter = AsyncMock()
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+        limiter.is_key_within_model_budget.side_effect = original_error
+        request_data = {"session": {"model": "gpt-4o"}}
+        request = self._make_request()
+
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_key_model_budget_with_fallback(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                model_name="gpt-4o",
+                request_data=request_data,
+                request=request,
+            )
+
+        assert exc_info.value is original_error
+        assert "model" not in request_data
