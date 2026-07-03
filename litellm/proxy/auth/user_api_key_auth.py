@@ -186,6 +186,8 @@ async def _check_key_model_budget_with_fallback(
     model_name: str,
     request_data: dict,
     request: Request,
+    llm_model_list: Optional[list] = None,
+    llm_router: Optional[Any] = None,
 ) -> None:
     """
     Enforce the key's per-model budget for `model_name`. If exceeded and the
@@ -193,9 +195,12 @@ async def _check_key_model_budget_with_fallback(
     the request to the first fallback model still within its own budget
     instead of rejecting the request.
 
+    The selected fallback is also validated against the key's model-access
+    allowlist so that budget_fallbacks cannot bypass model authorization.
+
     Raises:
         BudgetExceededError: if `model_name` is over budget and no configured
-            fallback is within budget either.
+            fallback is within budget either (or the fallback is not authorized).
     """
     try:
         await model_max_budget_limiter.is_key_within_model_budget(
@@ -208,6 +213,15 @@ async def _check_key_model_budget_with_fallback(
             model=model_name,
         )
         if fallback_model is None:
+            raise e
+        try:
+            await can_key_call_model(
+                model=fallback_model,
+                llm_model_list=llm_model_list,
+                valid_token=valid_token,
+                llm_router=llm_router,
+            )
+        except Exception:
             raise e
         request_data["model"] = fallback_model
         _safe_set_request_parsed_body(request=request, parsed_body=request_data)
@@ -1827,7 +1841,19 @@ async def _user_api_key_auth_builder(
                                 model_name=model_name,
                                 request_data=request_data,
                                 request=request,
+                                llm_model_list=llm_model_list,
+                                llm_router=llm_router,
                             )
+
+                        # Recompute after a potential budget-fallback rewrite so
+                        # the end-user check below validates the final model
+                        current_model = _get_model_from_request_context(
+                            request_data=request_data,
+                            route=route,
+                            request=request,
+                            llm_router=llm_router,
+                        )
+                        current_models = _get_model_names_for_budget_checks(model=current_model)
 
                     # Check 5b. End-user model max budget
                     end_user_mmb = valid_token.end_user_model_max_budget
@@ -2885,7 +2911,19 @@ async def _run_post_custom_auth_checks(
                 model_name=model_name,
                 request_data=request_data,
                 request=request,
+                llm_model_list=llm_model_list,
+                llm_router=llm_router,
             )
+
+        # Recompute after a potential budget-fallback rewrite so
+        # the end-user check below validates the final model
+        current_model = _get_model_from_request_context(
+            request_data=request_data,
+            route=route,
+            request=request,
+            llm_router=llm_router,
+        )
+        current_models = _get_model_names_for_budget_checks(model=current_model)
 
     # 4. Check end-user model_max_budget
     end_user_mmb = valid_token.end_user_model_max_budget
