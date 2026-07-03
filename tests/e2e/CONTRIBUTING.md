@@ -126,7 +126,17 @@ Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure cover
 
 Before you push
 
-- Run basedpyright over your changes; the harness is fully typed and new code must not add `Any` or widen the budgets
-- Bring the stack up with docker-compose from this directory and run your suite locally against it, so you exercise the same skip-vs-fail path CI does
-- If your feature needs a model, pricing override, guardrail, or other proxy setting declared up front, add the deployment to the inline config in `docker-compose.yml` and read it back in the test rather than hardcoding values
-- Capture screenshots of the tests passing and attach them to the PR as proof of fix
+1. Run basedpyright over your changes; the harness is fully typed and new code must not add `Any` or widen the budgets
+
+2. Add the models your test needs to the inline config in `docker-compose.yml`
+
+3. Bring the stack up and run your suite against it:
+
+   ```bash
+   docker compose up -d
+   uv run pytest tests/e2e/<your_suite>/ -v
+   ```
+
+4. Capture screenshots of the test run and attach them to the PR as proof
+
+5. If a test fails because it surfaced a real issue in the product, flag that explicitly in the PR rather than reworking the test until it passes
