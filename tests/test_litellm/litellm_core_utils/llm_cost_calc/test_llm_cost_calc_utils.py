@@ -2038,3 +2038,43 @@ def test_token_type_cost_breakdown_applies_regional_uplift():
     text_input_cost = 600 * model_info["input_cost_per_token"] * uplift
     assert text_output_cost + eu.reasoning_cost == pytest.approx(completion_cost)
     assert text_input_cost + eu.cache_read_cost == pytest.approx(prompt_cost)
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,expected_cache_read_rate",
+    [
+        ("deepseek-chat", "deepseek", 2.8e-08),
+        ("deepseek/deepseek-r1", "deepseek", 1.4e-07),
+        ("deepseek/deepseek-v3.2", "deepseek", 2.8e-08),
+        ("deepseek/deepseek-coder", "deepseek", 1.4e-08),
+    ],
+)
+def test_deepseek_cache_read_cost_in_breakdown(
+    model, custom_llm_provider, expected_cache_read_rate
+):
+    """
+    DeepSeek models report cached tokens via prompt_cache_hit_tokens. The
+    cost breakdown must produce a non-zero cache_read_cost matching the
+    model's cache_read_input_token_cost rate.
+
+    Regression for https://github.com/BerriAI/litellm/issues/31594
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    cache_hit_tokens = 64
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_cache_hit_tokens=cache_hit_tokens,
+        prompt_cache_miss_tokens=36,
+    )
+
+    breakdown = get_token_type_cost_breakdown(
+        model=model, custom_llm_provider=custom_llm_provider, usage=usage
+    )
+
+    assert breakdown.cache_read_cost == pytest.approx(
+        cache_hit_tokens * expected_cache_read_rate
+    )

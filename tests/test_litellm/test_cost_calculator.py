@@ -3176,3 +3176,79 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown():
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,cache_read_rate",
+    [
+        ("deepseek-chat", "deepseek", 2.8e-08),
+        ("deepseek/deepseek-r1", "deepseek", 1.4e-07),
+        ("deepseek/deepseek-v3.2", "deepseek", 2.8e-08),
+        ("deepseek/deepseek-coder", "deepseek", 1.4e-08),
+    ],
+)
+def test_deepseek_cost_breakdown_includes_cache_read_cost(
+    model, custom_llm_provider, cache_read_rate
+):
+    """
+    DeepSeek reports cached tokens via prompt_cache_hit_tokens. The cost
+    breakdown must surface cache_read_cost so spend logs show where cache
+    savings come from, not just a lower total.
+
+    Regression for https://github.com/BerriAI/litellm/issues/31594
+    """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.types.utils import Choices, Message
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    cache_hit_tokens = 64
+
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="deepseek-cache-breakdown",
+        function_id="f",
+    )
+
+    response = ModelResponse(
+        id="x",
+        created=1,
+        model=model,
+        object="chat.completion",
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content="hi"),
+                finish_reason="stop",
+            )
+        ],
+        usage=Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_cache_hit_tokens=cache_hit_tokens,
+            prompt_cache_miss_tokens=36,
+        ),
+    )
+
+    litellm.completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.cost_breakdown is not None
+    assert "cache_read_cost" in logging_obj.cost_breakdown, (
+        f"cache_read_cost missing from cost_breakdown for {model}"
+    )
+    assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(
+        cache_hit_tokens * cache_read_rate
+    )
