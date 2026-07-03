@@ -326,7 +326,9 @@ class ModelRateLimitingCheck(CustomLogger):
                     response_obj,
                     parent_otel_span=_get_parent_otel_span_from_kwargs(kwargs),
                 )
-                return
+                # Fall through: a deployment can also configure tpm/rpm alongside
+                # itpm/otpm, and that path's pre-call check reads the tpm_key
+                # counter tracked below, so it must still be incremented here.
 
             if standard_logging_object is None:
                 return
@@ -388,7 +390,9 @@ class ModelRateLimitingCheck(CustomLogger):
                     kwargs,
                     response_obj,
                 )
-                return
+                # Fall through: a deployment can also configure tpm/rpm alongside
+                # itpm/otpm, and that path's pre-call check reads the tpm_key
+                # counter tracked below, so it must still be incremented here.
 
             if standard_logging_object is None:
                 return

@@ -696,6 +696,74 @@ class TestModelRateLimitingCheckIOTokens:
         assert any("both limit types are enforced" in record.message for record in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_io_success_still_tracks_tpm_for_mixed_deployment(self):
+        """
+        A deployment with itpm/otpm AND tpm/rpm must have BOTH counters updated on
+        success, otherwise the tpm_key the pre-call check reads is never written
+        and the tpm_limit can never be enforced.
+        """
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        model_id = "io-tpm-mixed-id"
+        deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
+        tpm_key = f"{model_id}:{deployment_name}:tpm:{minute}"
+        await dual_cache.async_increment_cache(key=itpm_key, value=5, ttl=60)
+
+        kwargs = {
+            "metadata": {ITPM_RESERVED_KEY: 5, ITPM_CACHE_KEY: itpm_key},
+            "standard_logging_object": {
+                "model_id": model_id,
+                "total_tokens": 7,
+                "hidden_params": {"litellm_model_name": deployment_name},
+            },
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3),
+        )
+
+        await check.async_log_success_event(kwargs, response, None, None)
+
+        # ITPM reconciled down from the 5-token reservation to actual usage (3).
+        assert await dual_cache.async_get_cache(key=itpm_key) == 3
+        # TPM tracking must still run so the tpm/rpm pre-call path can enforce it.
+        assert await dual_cache.async_get_cache(key=tpm_key) == 7
+
+    def test_io_success_still_tracks_tpm_for_mixed_deployment_sync(self):
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        model_id = "io-tpm-mixed-sync-id"
+        deployment_name = "bedrock_mantle/anthropic.claude-opus-4-7"
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key = f"global_router:{model_id}:{deployment_name}:itpm:{minute}"
+        tpm_key = f"{model_id}:{deployment_name}:tpm:{minute}"
+        dual_cache.set_cache(key=itpm_key, value=5, ttl=60)
+
+        kwargs = {
+            "metadata": {ITPM_RESERVED_KEY: 5, ITPM_CACHE_KEY: itpm_key},
+            "standard_logging_object": {
+                "model_id": model_id,
+                "total_tokens": 7,
+                "hidden_params": {"litellm_model_name": deployment_name},
+            },
+        }
+        response = ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "hi"}, "index": 0, "finish_reason": "stop"}],
+            usage=Usage(prompt_tokens=3, completion_tokens=0, total_tokens=3),
+        )
+
+        check.log_success_event(kwargs, response, None, None)
+
+        assert dual_cache.get_cache(key=itpm_key) == 3
+        assert dual_cache.get_cache(key=tpm_key) == 7
+
+    @pytest.mark.asyncio
     async def test_failure_refunds_itpm_reservation(self):
         from litellm.utils import get_utc_datetime
 
