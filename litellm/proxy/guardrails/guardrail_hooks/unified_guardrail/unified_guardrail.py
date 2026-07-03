@@ -409,16 +409,15 @@ class UnifiedLLMGuardrails(CustomLogger):
         if not is_final and not any(deltas.values()):
             return None
 
-        finish_reason = None
-        if is_final and getattr(reference_chunk, "choices", None):
-            finish_reason = getattr(reference_chunk.choices[0], "finish_reason", None)
-
         role = "assistant" if not any(emitted_char_count.values()) else None
 
         synthetic_choices: list[StreamingChoices] = []
         for choice in getattr(reference_chunk, "choices", []) or []:
             idx = getattr(choice, "index", 0) or 0
             reference_delta = getattr(choice, "delta", None)
+            # Preserve each choice's own finish_reason on the flush (n > 1 can
+            # finish choices independently, e.g. "stop" vs "length").
+            finish_reason = getattr(choice, "finish_reason", None) if is_final else None
             synthetic_choices.append(
                 StreamingChoices(
                     index=idx,

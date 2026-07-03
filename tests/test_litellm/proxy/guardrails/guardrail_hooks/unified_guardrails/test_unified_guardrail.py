@@ -1,7 +1,6 @@
 """Tests for unified guardrail."""
 
 import pytest
-from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
@@ -801,7 +800,7 @@ class TestStreamingTransform:
 
         chunks = [_stream_chunk("abcdef"), _stream_chunk("ghij")]
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises(unified_module.HTTPException) as exc_info:
             await _drive_stream(UnifiedLLMGuardrails(), guardrail, chunks)
 
         assert exc_info.value.status_code == 400
@@ -866,7 +865,7 @@ class TestStreamingTransform:
         import json
 
         handler = UnifiedLLMGuardrails()
-        exc = HTTPException(
+        exc = unified_module.HTTPException(
             status_code=400,
             detail={"error": "stream_transform_underflow", "message": "boom"},
         )
@@ -884,3 +883,27 @@ class TestStreamingTransform:
         payload = json.loads(emitted[0])
         assert payload["error"]["message"] == "stream_transform_underflow"
         assert payload["id"] == "req-1"
+
+    def test_final_chunk_preserves_per_choice_finish_reason(self):
+        """The final flush must carry each choice's own finish_reason, not
+        choices[0]'s, for n > 1 (e.g. "stop" vs "length")."""
+        reference_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(index=0, delta=Delta(content="a"), finish_reason="stop"),
+                StreamingChoices(index=1, delta=Delta(content="b"), finish_reason="length"),
+            ],
+        )
+
+        synthetic = UnifiedLLMGuardrails()._build_transform_chunk(
+            reference_chunk=reference_chunk,
+            mutated_text_per_choice={0: "A", 1: "B"},
+            emitted_char_count={},
+            holdback_per_choice={},
+            is_final=True,
+        )
+
+        by_index = {c.index: c for c in synthetic.choices}
+        assert by_index[0].finish_reason == "stop"
+        assert by_index[1].finish_reason == "length"
+        assert by_index[0].delta.content == "A"
+        assert by_index[1].delta.content == "B"

@@ -120,8 +120,6 @@ class BaseTranslation(ABC):
         Optional to override in subclasses. ``stream_transform_sink`` is the
         out-parameter used by handlers that support streaming text
         transformations (see ``StreamTransformSink``); base handlers ignore it.
-
-        Optional to override in subclasses.
         """
         return responses_so_far
 
