@@ -3311,6 +3311,7 @@ class LlmProviders(str, Enum):
     CUSTOM = "custom"
     LITELLM_PROXY = "litellm_proxy"
     HOSTED_VLLM = "hosted_vllm"
+    TENCENT = "tencent"
     LLAMAFILE = "llamafile"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
