@@ -204,6 +204,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [budgetLimits, setBudgetLimits] = useState<BudgetWindowEntry[]>([]);
   const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
+  const [budgetFallbacksKey, setBudgetFallbacksKey] = useState<number>(0);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const [agentsList, setAgentsList] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -223,6 +224,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedProjectId(null);
     setBudgetLimits([]);
     setBudgetFallbacks({});
+    setBudgetFallbacksKey((k) => k + 1);
   };
 
   const handleCancel = () => {
@@ -243,6 +245,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setSelectedProjectId(null);
     setBudgetLimits([]);
     setBudgetFallbacks({});
+    setBudgetFallbacksKey((k) => k + 1);
   };
 
   useEffect(() => {
@@ -567,6 +570,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       form.resetFields();
       setBudgetLimits([]);
       setBudgetFallbacks({});
+      setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
@@ -1097,6 +1101,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     }
                   >
                     <BudgetFallbacksEditor
+                      key={budgetFallbacksKey}
                       value={budgetFallbacks}
                       onChange={setBudgetFallbacks}
                       availableModels={modelsToPick}
