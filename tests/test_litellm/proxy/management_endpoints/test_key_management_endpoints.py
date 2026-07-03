@@ -12340,28 +12340,62 @@ async def test_regenerate_user_id_rebind_guard(
 
 
 @pytest.mark.asyncio
-async def test_regenerate_premium_gate_requires_actual_master_key():
-    # ``regenerate_key_fn``'s decorator wraps the underlying ValueError
-    # into a ProxyException with empty ``message``. The exception type
-    # alone confirms the premium gate fired.
+async def test_regenerate_virtual_key_without_enterprise_license():
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        _patch_regenerate_side_effects(),
+    ):
+        result = await _execute_virtual_key_regeneration(
+            prisma_client=_make_regenerate_mock_prisma(),
+            key_in_db=existing_key,
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert result.key == "sk-newtoken1234ab12"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_fake_new_master_key_does_not_rotate_master():
     from litellm.proxy._types import RegenerateKeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         regenerate_key_fn,
     )
 
     data = RegenerateKeyRequest(key="sk-not-master", new_master_key="anything")
+    mock_prisma = AsyncMock()
+    mock_prisma.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
 
     with (
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.master_key", "sk-the-real-master-key"),
-        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
-        pytest.raises((ValueError, HTTPException, ProxyException)),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._rotate_master_key",
+            new_callable=AsyncMock,
+        ) as mock_rotate_master_key,
+        pytest.raises(HTTPException) as exc_info,
     ):
         await regenerate_key_fn(
             key="sk-not-master",
             data=data,
             user_api_key_dict=_non_admin_user_api_key_dict(),
         )
+
+    assert exc_info.value.status_code == 404
+    mock_rotate_master_key.assert_not_called()
 
 
 @pytest.mark.asyncio

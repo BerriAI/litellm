@@ -22,12 +22,30 @@ const TIME_PERIOD_OPTIONS = [
   { value: "30d", label: "Monthly" },
 ];
 
-function normalizeConfig(config: ModelMaxBudgetConfig | Record<string, unknown>): ModelMaxBudgetConfig {
+const TIME_PERIOD_LABELS: Record<string, string> = {
+  "1h": "hour",
+  "24h": "day",
+  "1d": "day",
+  "7d": "week",
+  "30d": "month",
+};
+
+export function normalizeModelMaxBudgetConfig(
+  config: ModelMaxBudgetConfig | Record<string, unknown>,
+): ModelMaxBudgetConfig {
   const raw = config as Record<string, unknown>;
   return {
     budget_limit: Number(raw.budget_limit ?? raw.max_budget ?? 0),
     time_period: String(raw.time_period ?? raw.budget_duration ?? "1d"),
   };
+}
+
+export function formatModelMaxBudgetTimePeriod(timePeriod: string): string {
+  return TIME_PERIOD_LABELS[timePeriod] ?? timePeriod;
+}
+
+function normalizeConfig(config: ModelMaxBudgetConfig | Record<string, unknown>): ModelMaxBudgetConfig {
+  return normalizeModelMaxBudgetConfig(config);
 }
 
 export function modelMaxBudgetEntriesFromValue(
@@ -76,8 +94,9 @@ export function ModelMaxBudgetEditor({ value, onChange, modelOptions }: ModelMax
   };
 
   const addEntry = () => {
-    const unusedModel = modelOptions.find((model) => !entries.some((entry) => entry.model === model)) ?? "";
-    updateEntries([...entries, { model: unusedModel, budget_limit: null, time_period: "1d" }]);
+    const unusedModel =
+      modelOptions.find((model) => !entries.some((entry) => entry.model === model)) ?? modelOptions[0] ?? "";
+    updateEntries([...entries, { model: unusedModel, budget_limit: 1, time_period: "1d" }]);
   };
 
   const removeEntry = (index: number) => {
@@ -123,7 +142,12 @@ export function ModelMaxBudgetEditor({ value, onChange, modelOptions }: ModelMax
           </Button>
         </div>
       ))}
-      <Button size="small" onClick={addEntry} disabled={modelOptions.length === 0}>
+      <Button
+        size="small"
+        onClick={addEntry}
+        disabled={modelOptions.length === 0}
+        data-testid="add-model-budget-button"
+      >
         + Add Model Budget
       </Button>
     </div>

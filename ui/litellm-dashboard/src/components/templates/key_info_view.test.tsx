@@ -147,6 +147,26 @@ describe("KeyInfoView", () => {
     showSSOBanner: false,
   };
 
+  it("should enable Regenerate Key without enterprise license when user can modify key", async () => {
+    vi.mocked(useAuthorized).mockReturnValue({
+      ...baseUseAuthorizedMock,
+      premiumUser: false,
+      userId: "owner-user-id",
+      userRole: "internal_user",
+    });
+
+    const keyData = { ...MOCK_KEY_DATA, user_id: "owner-user-id" };
+    renderWithProviders(
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
+    );
+
+    await waitFor(() => {
+      const regenerateButton = screen.getByRole("button", { name: /regenerate key/i });
+      expect(regenerateButton).toBeInTheDocument();
+      expect(regenerateButton).not.toBeDisabled();
+    });
+  });
+
   it("should render tags", async () => {
     vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
 

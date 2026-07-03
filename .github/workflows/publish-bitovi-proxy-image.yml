@@ -52,12 +52,3 @@ jobs:
             .
           docker push "$IMAGE_BASE:latest"
           docker push "$IMAGE_BASE:$IMAGE_SHA"
-
-      - name: Trigger claude-usage-proxy redeploy
-        continue-on-error: true
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.PROXY_REPO_DISPATCH_TOKEN }}
-          repository: bitovi/claude-usage-proxy
-          event-type: litellm-image-published
-          client-payload: '{"image_tag":"${{ github.sha }}"}'

@@ -449,10 +449,6 @@ export default function KeyInfoView({
         onResetSpend={canResetSpend ? () => setIsResetSpendModalOpen(true) : undefined}
         canModifyKey={canModifyKey}
         backButtonText={backButtonText}
-        regenerateDisabled={!premiumUser}
-        regenerateTooltip={
-          !premiumUser ? "This is a LiteLLM Enterprise feature, and requires a valid key to use." : undefined
-        }
       />
 
       {/* Add RegenerateKeyModal */}

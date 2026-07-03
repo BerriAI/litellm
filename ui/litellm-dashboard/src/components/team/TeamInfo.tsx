@@ -38,7 +38,10 @@ import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+import {
+  resolveModelBudgetOptions,
+  unfurlWildcardModelsInList,
+} from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -54,6 +57,7 @@ import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
 import { ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
+import { ModelMaxBudgetOverview } from "../key_team_helpers/ModelMaxBudgetOverview";
 import MemberPermissions from "./member_permissions";
 import MyUserTab from "./MyUserTab";
 import {
@@ -226,13 +230,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // rate limit dropdown to models this team actually has access to.
   const selectedModelsInForm = Form.useWatch("models", form) as string[] | undefined;
   const killSwitchOn = Form.useWatch("disable_global_guardrails", form) as boolean | undefined;
-  const availableRateLimitModels = useMemo(() => {
-    const selected = selectedModelsInForm ?? teamData?.team_info?.models ?? [];
-    if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
-      return userModels;
-    }
-    return unfurlWildcardModelsInList(selected, userModels);
-  }, [selectedModelsInForm, teamData, userModels]);
+  const availableRateLimitModels = useMemo(
+    () => resolveModelBudgetOptions(selectedModelsInForm ?? teamData?.team_info?.models, userModels),
+    [selectedModelsInForm, teamData, userModels],
+  );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam;
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
@@ -784,6 +785,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </Card>
 
                 <Card>
+                  <Text>Per-Model Budgets</Text>
+                  <ModelMaxBudgetOverview
+                    teamModelMaxBudget={info.model_max_budget}
+                    memberships={teamData.team_memberships}
+                    keys={teamData.keys}
+                    variant="card"
+                  />
+                </Card>
+
+                <Card>
                   <Text>Models</Text>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {info.models.length === 0 || info.models.includes("all-proxy-models") ? (
@@ -1044,14 +1055,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           </Tooltip>
                         </span>
                       }
-                      name="model_max_budget"
                     >
-                      <Form.Item noStyle shouldUpdate={(prev, cur) => prev.models !== cur.models}>
-                        {({ getFieldValue }) => (
-                          <ModelMaxBudgetEditor
-                            modelOptions={getFieldValue("models") || info.models || []}
-                          />
-                        )}
+                      <Form.Item name="model_max_budget" noStyle>
+                        <ModelMaxBudgetEditor modelOptions={availableRateLimitModels} />
                       </Form.Item>
                     </Form.Item>
 
@@ -1584,6 +1590,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           <div>Soft Budget Alerting Emails: {info.metadata.soft_budget_alerting_emails.join(", ")}</div>
                         )}
                     </div>
+                    <ModelMaxBudgetOverview
+                      teamModelMaxBudget={info.model_max_budget}
+                      memberships={teamData.team_memberships}
+                      keys={teamData.keys}
+                      variant="inline"
+                    />
                     <div>
                       <Text className="font-medium">
                         Team Member Settings{" "}
@@ -1782,7 +1794,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 </span>
               ),
               type: "model-max-budget" as const,
-              modelOptions: info.models || [],
+              modelOptions: resolveModelBudgetOptions(info.models, userModels),
             },
           ],
         }}
