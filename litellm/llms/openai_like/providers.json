@@ -176,5 +176,17 @@
       "max_completion_tokens": "max_tokens"
     },
     "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+  },
+  "ofox": {
+    "base_url": "https://api.ofox.ai/v1",
+    "api_key_env": "OFOX_API_KEY",
+    "api_base_env": "OFOX_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   }
 }
