@@ -110,7 +110,7 @@ const RoutingGroupSnippet: React.FC<RoutingGroupSnippetProps> = ({ group, baseUr
     key,
     label,
     children: (
-      <Paragraph code className="!mb-0" style={SNIPPET_BLOCK_STYLE}>
+      <Paragraph code className="mb-0!" style={SNIPPET_BLOCK_STYLE}>
         {snippets[key as SnippetKey]}
       </Paragraph>
     ),
@@ -123,7 +123,7 @@ const RoutingGroupSnippet: React.FC<RoutingGroupSnippetProps> = ({ group, baseUr
       onChange={(k) => setActiveKey(k as SnippetKey)}
       items={items}
       tabBarExtraContent={
-        <Paragraph copyable={{ text: snippets[activeKey], tooltips: ["Copy", "Copied"] }} className="!mb-0" />
+        <Paragraph copyable={{ text: snippets[activeKey], tooltips: ["Copy", "Copied"] }} className="mb-0!" />
       }
     />
   );

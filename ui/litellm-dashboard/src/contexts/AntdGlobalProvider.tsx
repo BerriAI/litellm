@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { notification, message } from "antd";
+import { ConfigProvider, notification, message } from "antd";
+import { StyleProvider } from "@ant-design/cssinjs";
 import { setNotificationInstance } from "@/components/molecules/notifications_manager";
 import { setMessageInstance } from "@/components/molecules/message_manager";
 
@@ -19,10 +20,12 @@ export default function AntdGlobalProvider({ children }: { children: React.React
   }, [notificationApi, messageApi]);
 
   return (
-    <>
-      {notificationContextHolder}
-      {messageContextHolder}
-      {children}
-    </>
+    <StyleProvider layer>
+      <ConfigProvider theme={{ cssVar: true }}>
+        {notificationContextHolder}
+        {messageContextHolder}
+        {children}
+      </ConfigProvider>
+    </StyleProvider>
   );
 }

@@ -309,7 +309,7 @@ const MCPToolsViewer = ({
                               });
                             }}
                             prefix={<KeyOutlined className="text-gray-400" />}
-                            className="rounded"
+                            className="rounded-sm"
                           />
                         </div>
                       ))}
@@ -478,7 +478,7 @@ const MCPToolsViewer = ({
                             {filteredTools.map((tool: MCPTool) => (
                               <div
                                 key={tool.name}
-                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
+                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-xs ${
                                   selectedTool?.name === tool.name
                                     ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
                                     : "border-gray-200 bg-white hover:border-gray-300"
@@ -494,7 +494,7 @@ const MCPToolsViewer = ({
                                     <img
                                       src={resolveLogoSrc(tool.mcp_info.logo_url)}
                                       alt={`${tool.mcp_info.server_name} logo`}
-                                      className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
+                                      className="w-4 h-4 object-contain shrink-0 mt-0.5"
                                     />
                                   )}
                                   <div className="flex-1 min-w-0">

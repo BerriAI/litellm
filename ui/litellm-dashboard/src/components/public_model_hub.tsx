@@ -623,12 +623,12 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             {providers.map((provider) => {
               const { logo } = getProviderLogoAndName(provider);
               return (
-                <div key={provider} className="flex items-center space-x-1 px-2 py-1 bg-gray-100 rounded text-xs">
+                <div key={provider} className="flex items-center space-x-1 px-2 py-1 bg-gray-100 rounded-sm text-xs">
                   {logo && (
                     <img
                       src={logo}
                       alt={provider}
-                      className="w-3 h-3 flex-shrink-0 object-contain"
+                      className="w-3 h-3 shrink-0 object-contain"
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = "none";
                       }}
@@ -973,7 +973,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* About Section - only shown when not embedded */}
           {!isEmbedded && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">About</Title>
               <p className="text-gray-700 mb-6 text-base leading-relaxed">
                 {customDocsDescription ? customDocsDescription : "Proxy Server to call 100+ LLMs in the OpenAI format."}
@@ -989,7 +989,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* Useful Links - only shown when not embedded */}
           {usefulLinks && Object.keys(usefulLinks).length > 0 && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {Object.entries(usefulLinks || {})
@@ -1016,7 +1016,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
           {/* Health and Endpoint Status - only shown when not embedded */}
           {!isEmbedded && (
-            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+            <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Health and Endpoint Status</Title>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <Text className="text-green-600 font-medium text-sm">Service status: {serviceStatus}</Text>
@@ -1025,7 +1025,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           )}
 
           {/* Tabs for Models and Agents */}
-          <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
+          <Card className="p-8 bg-white border border-gray-200 rounded-lg shadow-xs">
             <Tabs activeKey={activeTab} onChange={setActiveTab} size="large" className="public-hub-tabs">
               {/* Models Tab */}
               <TabPane tab="Model Hub" key="models">
@@ -1052,7 +1052,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         placeholder="Search model names... (smart search enabled)"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                        className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                       />
                     </div>
                   </div>
@@ -1074,7 +1074,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                               <img
                                 src={logo}
                                 alt={option.label as string}
-                                className="w-5 h-5 flex-shrink-0 object-contain"
+                                className="w-5 h-5 shrink-0 object-contain"
                                 onError={(e) => {
                                   (e.target as HTMLImageElement).style.display = "none";
                                 }}
@@ -1173,7 +1173,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           placeholder="Search agent names or descriptions..."
                           value={agentSearchTerm}
                           onChange={(e) => setAgentSearchTerm(e.target.value)}
-                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                         />
                       </div>
                     </div>
@@ -1237,7 +1237,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           placeholder="Search MCP server names or descriptions..."
                           value={mcpSearchTerm}
                           onChange={(e) => setMcpSearchTerm(e.target.value)}
-                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                          className="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                         />
                       </div>
                     </div>
@@ -1333,7 +1333,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                                 <img
                                   src={logo}
                                   alt={provider}
-                                  className="w-3 h-3 flex-shrink-0 object-contain"
+                                  className="w-3 h-3 shrink-0 object-contain"
                                   onError={(e) => {
                                     (e.target as HTMLImageElement).style.display = "none";
                                   }}
@@ -1352,18 +1352,20 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 {selectedModel.model_group.includes("*") && (
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
                     <div className="flex items-start space-x-2">
-                      <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                      <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
                       <div>
                         <Text className="font-medium text-blue-900 mb-2">Wildcard Routing</Text>
                         <Text className="text-sm text-blue-800 mb-2">
                           This model uses wildcard routing. You can pass any value where you see the{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">*</code> symbol.
+                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">*</code> symbol.
                         </Text>
                         <Text className="text-sm text-blue-800">
                           For example, with{" "}
-                          <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">{selectedModel.model_group}</code>,
-                          you can use any string (
-                          <code className="bg-blue-100 px-1 py-0.5 rounded text-xs">
+                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
+                            {selectedModel.model_group}
+                          </code>
+                          , you can use any string (
+                          <code className="bg-blue-100 px-1 py-0.5 rounded-sm text-xs">
                             {selectedModel.model_group.replaceAll("*", "my-custom-value")}
                           </code>
                           ) that matches this pattern.

@@ -583,7 +583,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
               </TabList>
               <TabPanels>
                 <TabPanel>
-                  <Grid numItems={2} className="gap-2 h-[100vh] w-full">
+                  <Grid numItems={2} className="gap-2 h-screen w-full">
                     <Col numColSpan={2}>
                       <Text className="text-tremor-default text-tremor-content dark:text-dark-tremor-content mb-2 mt-2 text-lg">
                         Project Spend {new Date().toLocaleString("default", { month: "long" })} 1 -{" "}

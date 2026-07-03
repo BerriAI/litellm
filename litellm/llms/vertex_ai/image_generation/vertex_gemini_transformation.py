@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_logger
 
@@ -175,7 +175,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
@@ -217,10 +217,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
 
         # Prepare generation config
-        generation_config: Dict[str, Any] = {"responseModalities": ["IMAGE"]}
+        generation_config: dict[str, Any] = {"responseModalities": ["IMAGE"]}
 
         # Seed from user-supplied imageConfig dict; flat params are overlaid for backward compat.
-        image_config: Dict[str, Any] = dict(optional_params.get("imageConfig") or {})
+        image_config: dict[str, Any] = dict(optional_params.get("imageConfig") or {})
 
         if "aspectRatio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspectRatio"]
@@ -241,7 +241,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         elif "n" in optional_params:
             generation_config["candidateCount"] = optional_params["n"]
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "contents": contents,
             "generationConfig": generation_config,
         }

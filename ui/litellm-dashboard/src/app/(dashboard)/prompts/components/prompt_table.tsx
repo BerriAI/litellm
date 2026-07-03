@@ -123,7 +123,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
           <Tooltip title={model}>
             <div className="flex items-center space-x-2">
               {/* Provider Icon */}
-              <div className="flex-shrink-0">
+              <div className="shrink-0">
                 {provider && logo ? (
                   <img
                     src={logo}
@@ -195,7 +195,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
           development: "text-green-600 bg-green-50",
         };
         return (
-          <span className={`text-xs px-2 py-0.5 rounded ${colorMap[env] || "text-gray-600 bg-gray-50"}`}>{env}</span>
+          <span className={`text-xs px-2 py-0.5 rounded-sm ${colorMap[env] || "text-gray-600 bg-gray-50"}`}>{env}</span>
         );
       },
     },

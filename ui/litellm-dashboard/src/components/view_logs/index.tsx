@@ -262,7 +262,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
                 />
-                <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
+                <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
                   <LogsTableToolbar
                     searchTerm={searchTerm}
                     onSearchChange={setSearchTerm}

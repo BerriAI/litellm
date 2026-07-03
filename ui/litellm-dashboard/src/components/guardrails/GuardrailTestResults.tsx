@@ -118,9 +118,9 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                 </div>
                 {!isCollapsed && (
                   <>
-                    <div className="bg-white border border-green-200 rounded p-3">
+                    <div className="bg-white border border-green-200 rounded-sm p-3">
                       <label className="text-xs font-medium text-gray-600 mb-2 block">Output Text</label>
-                      <div className="font-mono text-sm text-gray-900 whitespace-pre-wrap break-words">
+                      <div className="font-mono text-sm text-gray-900 whitespace-pre-wrap wrap-break-word">
                         {result.response_text}
                       </div>
                     </div>

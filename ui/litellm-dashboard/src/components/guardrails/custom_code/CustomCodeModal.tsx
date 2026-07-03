@@ -565,13 +565,13 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         {/* Main Content */}
         <div className="flex flex-1 overflow-hidden mt-4 gap-6">
           {/* Code Editor */}
-          <div className="flex-[2] flex flex-col min-w-0 overflow-y-auto">
-            <div className="flex items-center justify-between mb-2 flex-shrink-0">
+          <div className="flex-2 flex flex-col min-w-0 overflow-y-auto">
+            <div className="flex items-center justify-between mb-2 shrink-0">
               <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Python Logic</span>
               <span className="text-xs text-gray-400">Restricted environment (no imports)</span>
             </div>
             <div
-              className="relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e] flex-shrink-0"
+              className="relative rounded-lg overflow-hidden border border-gray-700 bg-[#1e1e1e] shrink-0"
               style={{ minHeight: "300px", maxHeight: "400px" }}
             >
               {/* Line numbers */}
@@ -596,7 +596,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                 onChange={(e) => setCode(e.target.value)}
                 onKeyDown={handleKeyDown}
                 spellCheck={false}
-                className="w-full h-full pl-14 pr-4 pt-3 pb-3 resize-none focus:outline-none bg-transparent text-gray-200"
+                className="w-full h-full pl-14 pr-4 pt-3 pb-3 resize-none focus:outline-hidden bg-transparent text-gray-200"
                 style={{
                   fontFamily: "'Fira Code', 'Monaco', 'Consolas', monospace",
                   fontSize: "14px",
@@ -610,7 +610,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             <Collapse
               activeKey={testExpanded ? ["test"] : []}
               onChange={(keys) => setTestExpanded(keys.includes("test"))}
-              className="mt-3 bg-white border border-gray-200 rounded-lg flex-shrink-0"
+              className="mt-3 bg-white border border-gray-200 rounded-lg shrink-0"
               expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
             >
               <Panel
@@ -631,27 +631,27 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100 transition-colors"
                         >
                           Pre-call
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.pre_mcp_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-purple-200 bg-purple-50 text-purple-700 hover:bg-purple-100 transition-colors"
                         >
                           Pre MCP
                         </button>
                         <button
                           type="button"
                           onClick={() => setTestInput(JSON.stringify(TEST_INPUT_EXAMPLES.post_call.data, null, 2))}
-                          className="px-2 py-1 text-xs rounded border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                          className="px-2 py-1 text-xs rounded-sm border border-green-200 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
                         >
                           Post-call
                         </button>
                       </div>
                     </div>
-                    <div className="mb-2 p-2 bg-gray-50 rounded text-xs text-gray-600 border border-gray-200">
+                    <div className="mb-2 p-2 bg-gray-50 rounded-sm text-xs text-gray-600 border border-gray-200">
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         <div>
                           <strong>texts</strong>: Message content (always)
@@ -738,7 +738,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               </Panel>
             </Collapse>
             {/* Contribution CTA Banner */}
-            <div className="mt-3 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg flex items-center justify-between flex-shrink-0">
+            <div className="mt-3 p-4 bg-linear-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
                 <div className="bg-blue-100 rounded-full p-2">
                   <UsergroupAddOutlined className="text-blue-600 text-lg" />
@@ -760,7 +760,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
           </div>
 
           {/* Primitives Panel */}
-          <div className="w-[300px] flex-shrink-0 overflow-auto border-l border-gray-200 pl-6">
+          <div className="w-[300px] shrink-0 overflow-auto border-l border-gray-200 pl-6">
             <div className="flex items-center gap-2 mb-3">
               <CodeOutlined className="text-blue-500" />
               <span className="font-semibold text-gray-700">Available Primitives</span>
