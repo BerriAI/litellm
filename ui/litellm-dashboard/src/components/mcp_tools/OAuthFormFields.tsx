@@ -3,6 +3,7 @@ import { Form, Input, InputNumber, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { OAUTH_FLOW } from "./types";
+import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
 
 interface OAuthFlowStatus {
   startOAuthFlow: () => void;
@@ -101,6 +102,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           >
             <TextInput placeholder="https://auth.example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
+          <TokenEndpointAuthMethodField isEditing={isEditing} />
           <Form.Item
             label={
               <FieldLabel
@@ -182,6 +184,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           >
             <TextInput placeholder="https://example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
+          <TokenEndpointAuthMethodField isEditing={isEditing} />
           <Form.Item
             label={
               <FieldLabel
