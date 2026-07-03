@@ -2844,7 +2844,9 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
 async def test_get_config_callbacks_environment_variables(client_no_auth):
     """
     Test that /get/config/callbacks correctly includes environment variables
-    for each callback type. Values are returned as-is from the config (no decryption).
+    for each callback type. Under ``client_no_auth`` the resolved role is
+    not ``PROXY_ADMIN``, so values matched by the redaction helper come back
+    as ``"REDACTED"`` and other values pass through verbatim.
     """
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -2886,12 +2888,11 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_callback["type"] == "success"
         assert "variables" in langfuse_callback
 
-        # Verify langfuse env vars are present (values returned as-is, no decryption)
         langfuse_vars = langfuse_callback["variables"]
         assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "test-public-key"
+        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "REDACTED"
         assert "LANGFUSE_SECRET_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
+        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "REDACTED"
         assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
 
@@ -2901,14 +2902,13 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert otel_callback["type"] == "success_and_failure"
         assert "variables" in otel_callback
 
-        # Verify otel env vars are present
         otel_vars = otel_callback["variables"]
         assert "OTEL_EXPORTER" in otel_vars
         assert otel_vars["OTEL_EXPORTER"] == "otlp"
         assert "OTEL_ENDPOINT" in otel_vars
         assert otel_vars["OTEL_ENDPOINT"] == "http://localhost:4317"
         assert "OTEL_HEADERS" in otel_vars
-        assert otel_vars["OTEL_HEADERS"] == "key=value"
+        assert otel_vars["OTEL_HEADERS"] == "REDACTED"
 
 
 @pytest.mark.asyncio

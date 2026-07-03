@@ -3,7 +3,7 @@ import { Select, SelectItem } from "@tremor/react";
 
 interface RedisTypeSelectorProps {
   redisType: string;
-  redisTypeDescriptions: { [key: string]: string };
+  redisTypeDescriptions: Readonly<Record<string, string>>;
   onTypeChange: (type: string) => void;
 }
 

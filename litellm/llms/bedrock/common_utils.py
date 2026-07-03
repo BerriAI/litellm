@@ -4,9 +4,11 @@ from __future__ import annotations
 Common utilities used across bedrock chat/embedding/image generation
 """
 
+import contextlib
 import functools
 import json
 import os
+import re
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -683,39 +685,72 @@ def get_bedrock_base_model(model: str) -> str:
     return model
 
 
+def bedrock_converse_supports_parallel_tool_use_config(model: str) -> bool:
+    return any(
+        (litellm.model_cost.get(candidate) or {}).get("supports_parallel_tool_use_config") is True
+        for candidate in (model, get_bedrock_base_model(model))
+    )
+
+
 def is_claude_4_5_on_bedrock(model: str) -> bool:
     """
-    Check if the model is a Claude 4.5 model on Bedrock.
-    Claude 4.5 models support prompt caching with '5m' and '1h' TTL on Bedrock.
+    Check if the model supports Bedrock prompt caching with an extended '1h' TTL
+    (in addition to the default 5m TTL).
+
+    Backed by the ``cache_creation_input_token_cost_above_1hr`` field in
+    ``model_prices_and_context_window.json`` instead of a hardcoded list of
+    model-name patterns, so newly released models pick up support as soon as
+    their pricing entry ships, with no code change required here.
     """
-    model_lower = model.lower()
-    claude_4_5_patterns = [
-        "sonnet-4.5",
-        "sonnet_4.5",
-        "sonnet-4-5",
-        "sonnet_4_5",
-        "haiku-4.5",
-        "haiku_4.5",
-        "haiku-4-5",
-        "haiku_4_5",
-        "opus-4.5",
-        "opus_4.5",
-        "opus-4-5",
-        "opus_4_5",
-        "sonnet-4.6",
-        "sonnet_4.6",
-        "sonnet-4-6",
-        "sonnet_4_6",
-        "opus-4.6",
-        "opus_4.6",
-        "opus-4-6",
-        "opus_4_6",
-        "opus-4.7",
-        "opus_4.7",
-        "opus-4-7",
-        "opus_4_7",
-    ]
-    return any(pattern in model_lower for pattern in claude_4_5_patterns)
+    return any(
+        (litellm.model_cost.get(candidate) or {}).get("cache_creation_input_token_cost_above_1hr") is not None
+        for candidate in (model, get_bedrock_base_model(model))
+    )
+
+
+_BEDROCK_MODEL_VERSION_SUFFIX_RE = re.compile(r"-v\d+(?::\d+)?$")
+
+
+def bedrock_converse_supports_strict_tools(model: str) -> bool:
+    """
+    Whether ``toolSpec.strict`` can be forwarded to Bedrock Converse for ``model``.
+
+    Non-Anthropic Bedrock families (Nova, Llama, GPT-OSS) reject the field
+    outright. Anthropic models forward it unless their entry in
+    ``model_prices_and_context_window.json`` sets
+    ``bedrock_converse_supports_strict_tools: false`` — Bedrock routes those
+    (Opus 4.7/4.8, see #31582) through a stricter validator that rejects the
+    ``strict`` key on ``toolSpec`` even though Anthropic's native API accepts
+    it as a top-level tool field.
+    """
+    base = get_bedrock_base_model(model)
+    if not base.startswith("anthropic"):
+        return False
+    flag = _get_bedrock_converse_strict_tools_flag(base)
+    return flag if flag is not None else True
+
+
+def _get_bedrock_converse_strict_tools_flag(base_model: str) -> Optional[bool]:
+    candidates = dict.fromkeys((base_model, _BEDROCK_MODEL_VERSION_SUFFIX_RE.sub("", base_model)))
+    for candidate in candidates:
+        with contextlib.suppress(Exception):
+            model_info = get_cached_model_info()(
+                model=candidate,
+                custom_llm_provider="bedrock",
+            )
+
+            flag = model_info.get("bedrock_converse_supports_strict_tools")
+            if isinstance(flag, bool):
+                return flag
+
+            model_cost_key = model_info.get("key")
+            if isinstance(model_cost_key, str):
+                local_flag = (
+                    _get_local_model_cost_map().get(model_cost_key, {}).get("bedrock_converse_supports_strict_tools")
+                )
+                if isinstance(local_flag, bool):
+                    return local_flag
+    return None
 
 
 def normalize_bedrock_opus_output_config_effort(model: str, output_config: Any) -> None:
