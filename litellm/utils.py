@@ -8286,6 +8286,10 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.common_utils import VertexAIModelInfo
 
             return VertexAIModelInfo()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.common_utils import MistralModelInfo
+
+            return MistralModelInfo()
         elif LlmProviders.OLLAMA == provider or LlmProviders.OLLAMA_CHAT == provider:
             # Dynamic model listing for Ollama server
             from litellm.llms.ollama.common_utils import OllamaModelInfo

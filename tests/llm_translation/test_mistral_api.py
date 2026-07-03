@@ -37,3 +37,31 @@ class TestMistralCompletion(BaseLLMChatTest):
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
+
+    def test_web_search(self):
+        """Web search is routed to the Conversations API for models that support it"""
+        from litellm.utils import supports_web_search
+
+        if not os.getenv("MISTRAL_API_KEY"):
+            pytest.skip("MISTRAL_API_KEY not set")
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        model = "mistral/mistral-medium-latest"
+
+        if not supports_web_search(model, None):
+            pytest.skip("Model does not support web search")
+
+        response = litellm.completion(
+            model=model,
+            messages=[
+                {"role": "user", "content": "What's the weather like in Boston today?"}
+            ],
+            web_search_options={},
+            max_tokens=100,
+        )
+
+        assert response is not None
