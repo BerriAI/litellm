@@ -99,4 +99,10 @@ describe("deriveRate", () => {
   it("returns undefined when cost is missing", () => {
     expect(deriveRate(undefined, 100)).toBeUndefined();
   });
+
+  it("returns undefined for a negative cost so no negative rate is shown", () => {
+    // Guards against inconsistent backend costs where read+write cost exceeds
+    // input cost, which would otherwise render a negative per-token rate.
+    expect(deriveRate(-0.0001, 100)).toBeUndefined();
+  });
 });

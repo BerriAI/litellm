@@ -68,7 +68,7 @@ export function splitPromptTokens(promptTokens: number, cacheReadTokens: number)
  * the formula rather than print `Infinity` or `NaN`.
  */
 export function deriveRate(cost: number | undefined, tokens: number | undefined): number | undefined {
-  if (cost === undefined || cost === null) return undefined;
+  if (cost === undefined || cost === null || cost < 0) return undefined;
   if (tokens === undefined || tokens === null || tokens <= 0) return undefined;
   const rate = cost / tokens;
   return Number.isFinite(rate) ? rate : undefined;
