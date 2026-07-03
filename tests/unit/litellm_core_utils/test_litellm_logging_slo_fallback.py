@@ -8,6 +8,7 @@ exception and returns ``None``, spend tracking still succeeds via the
 ``response_cost`` fallback, and no error surfaces to the caller.
 """
 
+import logging
 from datetime import datetime
 
 import pytest
@@ -92,3 +93,41 @@ async def test_streaming_slo_build_success_does_not_rebuild(monkeypatch):
 
     assert logging_obj.model_call_details["standard_logging_object"] == healthy_payload
     assert len(build_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_slo_double_build_failure_is_logged(monkeypatch, caplog):
+    """If the empty-response rebuild also fails, the persistent failure must be
+    surfaced with a second error log instead of silently leaving the payload None."""
+    logging_obj = Logging(
+        model="claude-3-5-sonnet-20240620",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime.now(),
+        litellm_call_id="test-32019-double",
+        function_id="test-32019-double",
+    )
+    build_calls = []
+
+    def fake_build(self, init_response_obj, start_time, end_time):
+        build_calls.append(init_response_obj)
+        return None  # both the primary build and the empty-response retry fail
+
+    monkeypatch.setattr(Logging, "_build_standard_logging_payload", fake_build)
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+
+    result = ModelResponse(model="claude-3-5-sonnet-20240620")
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await logging_obj.async_success_handler(
+            result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=False,
+        )
+
+    assert logging_obj.model_call_details["standard_logging_object"] is None
+    assert build_calls == [result, {}]
+    assert "rebuild failed" in caplog.text
