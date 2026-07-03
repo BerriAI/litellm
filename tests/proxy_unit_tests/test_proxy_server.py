@@ -2937,7 +2937,8 @@ async def test_update_config_success_callback_normalization():
         return None
 
     async def fake_upsert(where=None, data=None):
-        upserted[where["param_name"]] = json.loads(data["update"]["param_value"])
+        value = data["update"]["param_value"]
+        upserted[where["param_name"]] = json.loads(value) if isinstance(value, str) else value
 
     class MockPrisma:
         def __init__(self):

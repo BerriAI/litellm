@@ -122,6 +122,22 @@ from litellm.utils import (
     load_credentials_from_list,
 )
 
+
+def _normalize_config_param_value(value: Any) -> Any:
+    """
+    LiteLLM_Config.param_value is a Json column. Some existing rows may contain
+    JSON object strings; normalize those rows back to objects when reading while
+    preserving non-object strings.
+    """
+    if isinstance(value, str):
+        try:
+            parsed_value = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+        return parsed_value if isinstance(parsed_value, dict) else value
+    return value
+
+
 if TYPE_CHECKING:
     from aiohttp import ClientSession
     from opentelemetry.trace import Span as _Span
@@ -5313,6 +5329,11 @@ class ProxyConfig:
             db_router_settings = await ConfigRepository(prisma_client).table.find_first(
                 where={"param_name": "router_settings"}
             )
+            db_router_settings_value = (
+                _normalize_config_param_value(db_router_settings.param_value)
+                if db_router_settings is not None
+                else None
+            )
 
             config_router_settings = config_data.get("router_settings", {})
 
@@ -5321,15 +5342,15 @@ class ProxyConfig:
                 config_router_settings is not None
                 and isinstance(config_router_settings, dict)
                 and db_router_settings is not None
-                and isinstance(db_router_settings.param_value, dict)
+                and isinstance(db_router_settings_value, dict)
             ):
                 from litellm.utils import _update_dictionary
 
-                combined_router_settings = _update_dictionary(config_router_settings, db_router_settings.param_value)
+                combined_router_settings = _update_dictionary(config_router_settings, db_router_settings_value)
             elif config_router_settings is not None and isinstance(config_router_settings, dict):
                 combined_router_settings = config_router_settings
-            elif db_router_settings is not None and isinstance(db_router_settings.param_value, dict):
-                combined_router_settings = db_router_settings.param_value
+            elif db_router_settings is not None and isinstance(db_router_settings_value, dict):
+                combined_router_settings = db_router_settings_value
 
             if combined_router_settings:
                 llm_router.update_settings(**combined_router_settings)
@@ -5645,7 +5666,7 @@ class ProxyConfig:
                 continue
 
             param_name = getattr(response, "param_name", None)
-            param_value = getattr(response, "param_value", None)
+            param_value = _normalize_config_param_value(getattr(response, "param_value", None))
             verbose_proxy_logger.debug(f"param_name={param_name}, param_value={param_value}")
 
             if param_name is not None and param_value is not None:
@@ -13960,15 +13981,15 @@ async def update_config(
             row = await ConfigRepository(prisma_client).table.find_first(where={"param_name": param_name})
             if row is None or row.param_value is None:
                 return {}
-            return dict(row.param_value)
+            value = _normalize_config_param_value(row.param_value)
+            return dict(value) if isinstance(value, dict) else {}
 
         async def _upsert_section(param_name: str, value: dict) -> None:
-            serialized = json.dumps(value)
             await ConfigRepository(prisma_client).table.upsert(
                 where={"param_name": param_name},
                 data={
-                    "create": {"param_name": param_name, "param_value": serialized},
-                    "update": {"param_value": serialized},
+                    "create": {"param_name": param_name, "param_value": value},
+                    "update": {"param_value": value},
                 },
             )
             # invalidate the DualCache entry so the next reader (this process
