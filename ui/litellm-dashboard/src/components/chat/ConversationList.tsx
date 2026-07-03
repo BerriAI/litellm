@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Pencil, Trash2, Plus, Search, User, MessageSquare } from "lucide-react";
+import { Pencil, Trash2, Plus, Search, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -338,15 +338,6 @@ const ConversationList: React.FC<Props> = ({
             ))
           )}
         </ScrollArea>
-
-        <div className="px-3 py-2.5 border-t flex items-center gap-2">
-          <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center shrink-0">
-            <User className="h-3.5 w-3.5 text-muted-foreground" />
-          </div>
-          <span className="text-[13px] text-muted-foreground overflow-hidden whitespace-nowrap text-ellipsis">
-            My Account
-          </span>
-        </div>
       </div>
 
       <SearchModal

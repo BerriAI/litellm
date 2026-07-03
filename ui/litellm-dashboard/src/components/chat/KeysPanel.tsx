@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import MessageManager from "@/components/molecules/message_manager";
@@ -170,8 +171,43 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="rounded-lg border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/50">
+                <TableHead className="text-xs font-semibold uppercase tracking-wide">Key</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wide">Spend</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wide">Expires</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wide">Created</TableHead>
+                {premiumUser && (
+                  <TableHead className="text-xs font-semibold uppercase tracking-wide text-right w-[80px]" />
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {[...Array(5)].map((_, i) => (
+                <TableRow key={i}>
+                  <TableCell>
+                    <Skeleton className="h-4 w-32" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-16" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-20" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-24" />
+                  </TableCell>
+                  {premiumUser && (
+                    <TableCell className="text-right">
+                      <Skeleton className="h-4 w-16 ml-auto" />
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       ) : keys.length === 0 ? (
         <div className="text-center text-muted-foreground text-sm py-12 border border-dashed rounded-lg">
@@ -221,15 +257,10 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
                     </TableCell>
                     {premiumUser && (
                       <TableCell className="text-right">
-                        <button
-                          onClick={() => openRotateModal(record)}
-                          title="Rotate key"
-                          className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                          style={{ background: "none" }}
-                        >
+                        <Button variant="outline" size="xs" onClick={() => openRotateModal(record)} title="Rotate key">
                           <RefreshCw className="h-3 w-3" />
                           Rotate
-                        </button>
+                        </Button>
                       </TableCell>
                     )}
                   </TableRow>
