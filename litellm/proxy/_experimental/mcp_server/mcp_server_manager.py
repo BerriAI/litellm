@@ -2223,12 +2223,16 @@ class MCPServerManager:
             # aggregator catches this explicitly to keep absorbing.
             raise
         except HTTPException as e:
-            headers = e.headers or {}
-            www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
-            if e.status_code == 401 and www_authenticate is not None:
+            # A v2 resolver auth challenge (token_exchange's RFC 9728 401, authorization_code's
+            # browser-OAuth 401, or a 403) is raised at client-build time, inside this try. Route it
+            # through the same MCPUpstreamAuthError channel as pass-through so single-server routes
+            # surface the challenge (the client re-authenticates) while the aggregator keeps absorbing.
+            # Non-auth HTTP errors stay absorbed so one misconfigured server can't blank the listing.
+            if e.status_code in (401, 403):
+                headers = e.headers or {}
                 raise MCPUpstreamAuthError(
-                    status_code=401,
-                    www_authenticate=www_authenticate,
+                    status_code=e.status_code,
+                    www_authenticate=headers.get("WWW-Authenticate") or headers.get("www-authenticate"),
                     server_name=server.name,
                 ) from e
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
