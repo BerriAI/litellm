@@ -17,6 +17,7 @@ from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
 from litellm.llms.bedrock.messages.mantle_transformation import (
     AmazonMantleMessagesConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 def _anthropic_response(url: str) -> httpx.Response:
@@ -347,3 +348,106 @@ async def test_mantle_anthropic_messages_routes_to_vpc_api_base():
     assert len(urls) == 1
     assert urls[0] == f"{_VPC_ENDPOINT}/anthropic/v1/messages"
     assert "api.aws" not in urls[0]
+
+
+_NATIVE_SSE_BODY = (
+    b"event: message_start\n"
+    b'data: {"type":"message_start","message":{"id":"msg_test","type":"message",'
+    b'"role":"assistant","model":"anthropic.claude-mythos-preview","content":[],'
+    b'"stop_reason":null,"usage":{"input_tokens":5,"output_tokens":1}}}\n\n'
+    b"event: content_block_start\n"
+    b'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n'
+    b"event: content_block_delta\n"
+    b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}\n\n'
+    b"event: content_block_stop\n"
+    b'data: {"type":"content_block_stop","index":0}\n\n'
+    b"event: message_delta\n"
+    b'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
+    b'"usage":{"input_tokens":5,"output_tokens":3}}\n\n'
+    b"event: message_stop\n"
+    b'data: {"type":"message_stop"}\n\n'
+)
+
+
+class _NativeSSEStream(httpx.AsyncByteStream):
+    def __init__(self, body: bytes, chunk_size: int = 64):
+        self._chunks = tuple(body[i : i + chunk_size] for i in range(0, len(body), chunk_size))
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _native_sse_response(url: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        stream=_NativeSSEStream(_NATIVE_SSE_BODY),
+        request=httpx.Request("POST", url),
+    )
+
+
+def test_mantle_messages_transform_keeps_stream_in_body():
+    config = AmazonMantleMessagesConfig()
+    request = config.transform_anthropic_messages_request(
+        model="mantle/anthropic.claude-mythos-preview",
+        messages=[{"role": "user", "content": "hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 10, "stream": True},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["stream"] is True
+    assert request["model"] == "anthropic.claude-mythos-preview"
+
+
+def test_mantle_messages_transform_omits_stream_for_non_streaming():
+    config = AmazonMantleMessagesConfig()
+    request = config.transform_anthropic_messages_request(
+        model="mantle/anthropic.claude-mythos-preview",
+        messages=[{"role": "user", "content": "hello"}],
+        anthropic_messages_optional_request_params={"max_tokens": 10},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert "stream" not in request
+
+
+@pytest.mark.asyncio
+async def test_mantle_anthropic_messages_streaming_relays_native_sse():
+    import litellm
+
+    requests = []
+
+    async def mock_post(self, url, data=None, headers=None, **kwargs):
+        requests.append(_capture_request(url=str(url), headers=headers or {}, data=data))
+        return _native_sse_response(str(url))
+
+    collected = b""
+    try:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new=mock_post,
+        ):
+            response = await litellm.anthropic_messages(
+                model="bedrock/mantle/anthropic.claude-mythos-preview",
+                messages=[{"role": "user", "content": "hello"}],
+                max_tokens=10,
+                stream=True,
+                aws_bedrock_project_id="proj_abc123def456",
+                aws_access_key_id="fake-key",
+                aws_secret_access_key="fake-secret",
+                aws_region_name="us-east-1",
+            )
+            async for chunk in response:
+                collected += chunk if isinstance(chunk, bytes) else str(chunk).encode()
+    finally:
+        await litellm.close_litellm_async_clients()
+
+    assert len(requests) == 1
+    assert requests[0]["body"]["stream"] is True
+    assert b"event: message_start" in collected
+    assert b'"text":"hello"' in collected
+    assert b"event: message_stop" in collected

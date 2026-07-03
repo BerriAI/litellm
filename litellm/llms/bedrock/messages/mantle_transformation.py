@@ -2,11 +2,16 @@
 Transformation for Bedrock Mantle (Claude Mythos Preview) - /messages endpoint
 
 Inherits all Messages API request/response transformations from
-AmazonAnthropicClaudeMessagesConfig. Overrides only the URL and model-prefix
-stripping that are specific to the bedrock-mantle endpoint.
+AmazonAnthropicClaudeMessagesConfig. Overrides the URL, the model-prefix
+stripping, and the streaming behavior that are specific to the bedrock-mantle
+endpoint: mantle speaks the native Anthropic Messages protocol, so `stream`
+must stay in the request body and responses arrive as native SSE rather than
+the AWS binary event-stream that Bedrock Invoke emits.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tuple
+
+import httpx
 
 from litellm.llms.bedrock.common_utils import build_mantle_messages_url
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
@@ -93,4 +98,34 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         # body (Bedrock Invoke puts model in the URL). The mantle endpoint
         # (Messages API) requires "model" in the request body.
         request["model"] = model_id
+
+        if anthropic_messages_optional_request_params.get("stream") is True:
+            request["stream"] = True
+
         return request
+
+    def get_async_streaming_response_iterator(
+        self,
+        model: str,
+        httpx_response: httpx.Response,
+        request_body: dict,
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> AsyncIterator:
+        """
+        Mantle streams native Anthropic SSE; the parent's iterator decodes the
+        AWS binary event-stream and raises botocore ChecksumMismatch on SSE
+        text. Pass the SSE through like the native Anthropic route does.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            BaseAnthropicMessagesStreamingIterator,
+        )
+
+        handler = BaseAnthropicMessagesStreamingIterator(
+            litellm_logging_obj=litellm_logging_obj,
+            request_body=request_body,
+        )
+        return handler.get_async_streaming_response_iterator(
+            httpx_response=httpx_response,
+            request_body=request_body,
+            litellm_logging_obj=litellm_logging_obj,
+        )
