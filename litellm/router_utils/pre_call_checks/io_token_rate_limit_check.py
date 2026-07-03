@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
@@ -26,7 +26,7 @@ from litellm.utils import get_utc_datetime
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
