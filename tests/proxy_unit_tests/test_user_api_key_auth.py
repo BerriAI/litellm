@@ -219,8 +219,8 @@ async def test_aaauser_personal_budgets(key_ownership):
     """
     Set a personal budget on a user
 
-    - have it only apply when key belongs to user -> raises BudgetExceededError
-    - if key belongs to team, have key respect team budget -> allows call to go through
+    User budget is enforced regardless of key ownership (personal or team).
+    Both cases should raise BudgetExceededError when the user is over budget.
     """
     import asyncio
     import time
@@ -273,14 +273,8 @@ async def test_aaauser_personal_budgets(key_ownership):
         == valid_token
     )
 
-    try:
+    with pytest.raises(Exception):
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
-
-        if key_ownership == "user_key":
-            pytest.fail("Expected this call to fail. User is over limit.")
-    except Exception:
-        if key_ownership == "team_key":
-            pytest.fail("Expected this call to work. Key is below team budget.")
 
 
 @pytest.mark.asyncio
