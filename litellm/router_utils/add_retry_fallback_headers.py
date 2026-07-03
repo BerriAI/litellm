@@ -60,9 +60,7 @@ def get_hidden_params_dict(
             response["_hidden_params"] = hidden_params
         return hidden_params
 
-    hidden_params = _normalize_hidden_params(
-        cast(object, getattr(response, "_hidden_params", None))
-    )
+    hidden_params = _normalize_hidden_params(cast(object, getattr(response, "_hidden_params", None)))
     return hidden_params
 
 
