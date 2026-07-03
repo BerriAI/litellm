@@ -8,6 +8,17 @@ import {
   parseModelMaxBudgetValue,
 } from "./ModelMaxBudgetOverview";
 
+const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
+  ({
+    token: "sk-test",
+    token_id: "key-1",
+    key_alias: "test-key",
+    key_name: "sk-...test",
+    spend: 0,
+    max_budget: 100,
+    ...overrides,
+  }) as KeyResponse;
+
 describe("parseModelMaxBudgetValue", () => {
   it("parses budget config objects", () => {
     expect(
@@ -23,6 +34,22 @@ describe("parseModelMaxBudgetValue", () => {
     expect(parseModelMaxBudgetValue({ "claude-sonnet-4-6": 20 })).toEqual({
       "claude-sonnet-4-6": { budget_limit: 20, time_period: "1d" },
     });
+  });
+
+  it("parses legacy numeric key budgets from KeyResponse shape", () => {
+    const rows = collectModelMaxBudgetOverrides(
+      [],
+      [
+        createMockKey({
+          token_id: "key-1",
+          key_alias: "legacy-key",
+          model_max_budget: { "claude-opus-4-8": 15 },
+        }),
+      ],
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.entries[0]?.model).toBe("claude-opus-4-8");
   });
 });
 
@@ -40,13 +67,13 @@ describe("collectModelMaxBudgetOverrides", () => {
         },
       ],
       [
-        {
+        createMockKey({
           token_id: "key-1",
           key_alias: "dev-key",
           model_max_budget: {
             "claude-sonnet-4-6": { budget_limit: 10, time_period: "1d" },
-          },
-        } as KeyResponse,
+          } as unknown as KeyResponse["model_max_budget"],
+        }),
       ],
     );
 
@@ -74,13 +101,13 @@ describe("ModelMaxBudgetOverview", () => {
           },
         ]}
         keys={[
-          {
+          createMockKey({
             token_id: "key-1",
             key_alias: "local-dev",
             model_max_budget: {
               "claude-sonnet-4-6": { budget_limit: 5, time_period: "1d" },
-            },
-          } as KeyResponse,
+            } as unknown as KeyResponse["model_max_budget"],
+          }),
         ]}
       />,
     );

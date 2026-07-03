@@ -26,7 +26,7 @@ export type ModelMaxBudgetOverrideRow = {
 };
 
 export function parseModelMaxBudgetValue(
-  raw: ModelMaxBudgetValue | Record<string, unknown> | null | undefined,
+  raw: ModelMaxBudgetValue | Record<string, number> | Record<string, unknown> | null | undefined,
 ): ModelMaxBudgetValue | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -70,7 +70,7 @@ export function collectModelMaxBudgetOverrides(
   });
 
   const keyOverrides = keys.flatMap((key) => {
-    const parsed = parseModelMaxBudgetValue(key.model_max_budget as ModelMaxBudgetValue);
+    const parsed = parseModelMaxBudgetValue(key.model_max_budget);
     const entries = modelMaxBudgetEntriesFromValue(parsed);
     if (entries.length === 0) {
       return [];
