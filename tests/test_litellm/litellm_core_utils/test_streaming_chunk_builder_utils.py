@@ -412,6 +412,72 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     assert prompt_cost != pytest.approx(buggy)
 
 
+def test_streaming_keeps_cache_creation_breakdown_from_final_chunk():
+    """When the final usage chunk itself carries the cache-creation breakdown,
+    aggregation must keep that breakdown instead of re-attaching a stale one
+    captured from an earlier chunk."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    config = AnthropicConfig()
+    message_start_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 7,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 1,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 7,
+                "ephemeral_1h_input_tokens": 0,
+            },
+        },
+        reasoning_content=None,
+    )
+    message_delta_usage = config.calculate_usage(
+        usage_object={
+            "input_tokens": 3,
+            "cache_creation_input_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 31,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 50,
+            },
+        },
+        reasoning_content=None,
+    )
+
+    def _usage_chunk(usage, finish_reason):
+        return ModelResponseStream(
+            id="chatcmpl-final-breakdown",
+            created=1745513206,
+            model="claude-sonnet-4-6",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=finish_reason,
+                    index=0,
+                    delta=Delta(content="" if finish_reason is None else None),
+                )
+            ],
+            stream_options={"include_usage": True},
+            usage=usage,
+        )
+
+    chunks = [
+        _usage_chunk(message_start_usage, None),
+        _usage_chunk(message_delta_usage, "stop"),
+    ]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="claude-sonnet-4-6", completion_output="hi"
+    )
+
+    breakdown = getattr(usage.prompt_tokens_details, "cache_creation_token_details", None)
+    assert breakdown is not None
+    assert breakdown.ephemeral_1h_input_tokens == 50
+    assert breakdown.ephemeral_5m_input_tokens == 0
+    assert usage.cache_creation_input_tokens == 50
+
+
 def test_cache_read_input_tokens_retained_genericstreamingchunk():
     chunk1 = GenericStreamingChunk(
         text="Test1",
