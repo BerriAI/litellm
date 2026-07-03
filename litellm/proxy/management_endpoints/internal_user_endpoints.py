@@ -1859,8 +1859,8 @@ async def get_users(
             - internal_user_viewer
         user_ids: Optional[str]
             Get list of users by user_ids. Comma separated list of user_ids.
-        sso_ids: Optional[str]
-            Get list of users by sso_ids. Comma separated list of sso_ids.
+        sso_user_ids: Optional[str]
+            Get list of users by sso_user_ids. Comma separated list of sso_user_ids.
         user_email: Optional[str]
             Filter users by partial email match
         team: Optional[str]

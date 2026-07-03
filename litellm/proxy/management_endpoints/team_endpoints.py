@@ -4473,14 +4473,14 @@ async def ui_view_teams(
     [PROXY-ADMIN ONLY] Filter teams based on partial match of team_id or team_alias with pagination.
 
     Args:
-        user_id (Optional[str]): Partial user ID to search for
-        user_email (Optional[str]): Partial email to search for
+        team_id (Optional[str]): Partial team ID to search for
+        team_alias (Optional[str]): Partial team alias to search for
         page (int): Page number for pagination (starts at 1)
         page_size (int): Number of items per page (max 100)
         user_api_key_dict (UserAPIKeyAuth): User authentication information
 
     Returns:
-        List[LiteLLM_SpendLogs]: Paginated list of matching user records
+        List[LiteLLM_TeamTable]: Paginated list of matching team records
     """
     from litellm.proxy.proxy_server import prisma_client
 

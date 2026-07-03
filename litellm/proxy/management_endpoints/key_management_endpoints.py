@@ -3902,7 +3902,9 @@ async def delete_verification_tokens(
 
     Args:
         tokens: List of tokens to delete
-        user_id: Optional user_id to filter by
+        user_api_key_cache: In-memory key cache to invalidate deleted tokens from
+        user_api_key_dict: User authentication information
+        litellm_changed_by: Optional username of the admin performing the change, for audit logs
 
     Returns:
         Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
