@@ -44074,7 +44074,7 @@
         ]
     },
     "ofox/anthropic/claude-haiku-4.5": {
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 1e-06,
@@ -44083,10 +44083,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1e-07
+        "cache_read_input_token_cost": 1e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/anthropic/claude-opus-4.5": {
-        "max_tokens": 200000,
+        "max_tokens": 64000,
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 5e-06,
@@ -44095,10 +44098,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-07
+        "cache_read_input_token_cost": 5e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/anthropic/claude-opus-4.6": {
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5e-06,
@@ -44107,10 +44113,14 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-07
+        "cache_read_input_token_cost": 5e-07,
+        "supports_adaptive_thinking": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/anthropic/claude-opus-4.7": {
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5e-06,
@@ -44119,10 +44129,14 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-07
+        "cache_read_input_token_cost": 5e-07,
+        "supports_adaptive_thinking": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/anthropic/claude-opus-4.8": {
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5e-06,
@@ -44131,10 +44145,14 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-07
+        "cache_read_input_token_cost": 5e-07,
+        "supports_adaptive_thinking": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/anthropic/claude-sonnet-4.5": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 3e-06,
@@ -44143,10 +44161,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 3e-07
+        "cache_read_input_token_cost": 3e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/anthropic/claude-sonnet-4.6": {
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 3e-06,
@@ -44155,10 +44176,14 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 3e-07
+        "cache_read_input_token_cost": 3e-07,
+        "supports_adaptive_thinking": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/anthropic/claude-sonnet-5": {
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2e-06,
@@ -44167,10 +44192,14 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2e-07
+        "cache_read_input_token_cost": 2e-07,
+        "supports_adaptive_thinking": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/bailian/qwen-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 32000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 2.2e-08,
@@ -44182,7 +44211,7 @@
         "cache_read_input_token_cost": 4.3e-09
     },
     "ofox/bailian/qwen-max": {
-        "max_tokens": 32000,
+        "max_tokens": 8000,
         "max_input_tokens": 32000,
         "max_output_tokens": 8000,
         "input_cost_per_token": 3.5e-07,
@@ -44194,7 +44223,7 @@
         "cache_read_input_token_cost": 6.9e-08
     },
     "ofox/bailian/qwen-plus": {
-        "max_tokens": 1000000,
+        "max_tokens": 32000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 1.2e-07,
@@ -44206,7 +44235,7 @@
         "cache_read_input_token_cost": 2.3e-08
     },
     "ofox/bailian/qwen-turbo": {
-        "max_tokens": 128000,
+        "max_tokens": 16000,
         "max_input_tokens": 128000,
         "max_output_tokens": 16000,
         "input_cost_per_token": 5e-08,
@@ -44218,7 +44247,7 @@
         "cache_read_input_token_cost": 8.6e-09
     },
     "ofox/bailian/qwen-vl-max": {
-        "max_tokens": 128000,
+        "max_tokens": 8000,
         "max_input_tokens": 128000,
         "max_output_tokens": 8000,
         "input_cost_per_token": 2.3e-07,
@@ -44230,7 +44259,7 @@
         "cache_read_input_token_cost": 4.6e-08
     },
     "ofox/bailian/qwen3-coder-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 5e-07,
@@ -44242,7 +44271,7 @@
         "cache_read_input_token_cost": 6e-08
     },
     "ofox/bailian/qwen3-coder-next": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2e-07,
@@ -44253,7 +44282,7 @@
         "supports_vision": false
     },
     "ofox/bailian/qwen3-coder-plus": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 1.8e-06,
@@ -44265,7 +44294,7 @@
         "cache_read_input_token_cost": 2e-07
     },
     "ofox/bailian/qwen3-max": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 3.6e-07,
@@ -44277,7 +44306,7 @@
         "cache_read_input_token_cost": 7.2e-08
     },
     "ofox/bailian/qwen3.5-122b-a10b": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2.9e-07,
@@ -44289,7 +44318,7 @@
         "cache_read_input_token_cost": 2.9e-07
     },
     "ofox/bailian/qwen3.5-27b": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2.9e-07,
@@ -44301,7 +44330,7 @@
         "cache_read_input_token_cost": 2.9e-07
     },
     "ofox/bailian/qwen3.5-35b-a3b": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2.9e-07,
@@ -44313,7 +44342,7 @@
         "cache_read_input_token_cost": 2.9e-07
     },
     "ofox/bailian/qwen3.5-397b-a17b": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 5.5e-07,
@@ -44325,7 +44354,7 @@
         "cache_read_input_token_cost": 5.5e-07
     },
     "ofox/bailian/qwen3.5-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 1e-07,
@@ -44337,7 +44366,7 @@
         "cache_read_input_token_cost": 1e-08
     },
     "ofox/bailian/qwen3.5-plus": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 4e-07,
@@ -44349,7 +44378,7 @@
         "cache_read_input_token_cost": 4e-08
     },
     "ofox/bailian/qwen3.6-27b": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 6e-07,
@@ -44360,7 +44389,7 @@
         "supports_vision": true
     },
     "ofox/bailian/qwen3.6-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2.5e-07,
@@ -44372,7 +44401,7 @@
         "cache_read_input_token_cost": 2.5e-08
     },
     "ofox/bailian/qwen3.6-max-preview": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2e-06,
@@ -44384,7 +44413,7 @@
         "cache_read_input_token_cost": 2e-07
     },
     "ofox/bailian/qwen3.6-plus": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 5e-07,
@@ -44396,7 +44425,7 @@
         "cache_read_input_token_cost": 5e-08
     },
     "ofox/bailian/qwen3.7-max": {
-        "max_tokens": 1064000,
+        "max_tokens": 64000,
         "max_input_tokens": 1064000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2.5e-06,
@@ -44408,7 +44437,7 @@
         "cache_read_input_token_cost": 2.5e-07
     },
     "ofox/bailian/qwen3.7-plus": {
-        "max_tokens": 1064000,
+        "max_tokens": 64000,
         "max_input_tokens": 1064000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 4e-07,
@@ -44420,7 +44449,7 @@
         "cache_read_input_token_cost": 8e-08
     },
     "ofox/deepseek/deepseek-v3.2": {
-        "max_tokens": 128000,
+        "max_tokens": 32000,
         "max_input_tokens": 128000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 2.9e-07,
@@ -44432,7 +44461,7 @@
         "cache_read_input_token_cost": 6e-08
     },
     "ofox/deepseek/deepseek-v4-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 384000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "input_cost_per_token": 1.4e-07,
@@ -44441,10 +44470,12 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 2.8e-09
+        "cache_read_input_token_cost": 2.8e-09,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/deepseek/deepseek-v4-pro": {
-        "max_tokens": 1000000,
+        "max_tokens": 384000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "input_cost_per_token": 4.5e-07,
@@ -44453,10 +44484,12 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 3.7e-09
+        "cache_read_input_token_cost": 3.7e-09,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-2.5-flash": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "input_cost_per_token": 3e-07,
@@ -44465,7 +44498,10 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-2.5-flash-image": {
         "max_tokens": 32000,
@@ -44476,10 +44512,12 @@
         "litellm_provider": "ofox",
         "mode": "chat",
         "supports_function_calling": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-2.5-flash-lite": {
-        "max_tokens": 1048576,
+        "max_tokens": 65535,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
         "input_cost_per_token": 1e-07,
@@ -44488,10 +44526,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2.5e-08
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-2.5-pro": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "input_cost_per_token": 1.25e-06,
@@ -44500,10 +44541,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.25e-07
+        "cache_read_input_token_cost": 1.25e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3-flash-preview": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "input_cost_per_token": 5e-07,
@@ -44512,10 +44556,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-08
+        "cache_read_input_token_cost": 5e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3-pro-image": {
-        "max_tokens": 66000,
+        "max_tokens": 32000,
         "max_input_tokens": 66000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 2e-06,
@@ -44523,10 +44570,12 @@
         "litellm_provider": "ofox",
         "mode": "chat",
         "supports_function_calling": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3-pro-image-preview": {
-        "max_tokens": 64000,
+        "max_tokens": 32000,
         "max_input_tokens": 64000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 2e-06,
@@ -44534,10 +44583,12 @@
         "litellm_provider": "ofox",
         "mode": "chat",
         "supports_function_calling": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3.1-flash-image": {
-        "max_tokens": 131000,
+        "max_tokens": 64000,
         "max_input_tokens": 131000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 5e-07,
@@ -44545,7 +44596,9 @@
         "litellm_provider": "ofox",
         "mode": "chat",
         "supports_function_calling": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3.1-flash-image-preview": {
         "max_tokens": 64000,
@@ -44556,10 +44609,12 @@
         "litellm_provider": "ofox",
         "mode": "chat",
         "supports_function_calling": false,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3.1-flash-lite": {
-        "max_tokens": 1000000,
+        "max_tokens": 64000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2.5e-07,
@@ -44568,10 +44623,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2.5e-08
+        "cache_read_input_token_cost": 2.5e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3.1-flash-lite-image": {
-        "max_tokens": 66000,
+        "max_tokens": 64000,
         "max_input_tokens": 66000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 2.5e-07,
@@ -44582,7 +44640,7 @@
         "supports_vision": true
     },
     "ofox/google/gemini-3.1-pro-preview": {
-        "max_tokens": 1048576,
+        "max_tokens": 65536,
         "max_input_tokens": 1048576,
         "max_output_tokens": 65536,
         "input_cost_per_token": 2e-06,
@@ -44591,10 +44649,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2e-07
+        "cache_read_input_token_cost": 2e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/google/gemini-3.5-flash": {
-        "max_tokens": 1000000,
+        "max_tokens": 65536,
         "max_input_tokens": 1000000,
         "max_output_tokens": 65536,
         "input_cost_per_token": 1.5e-06,
@@ -44603,10 +44664,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.5e-07
+        "cache_read_input_token_cost": 1.5e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/minimax/m2-her": {
-        "max_tokens": 200000,
+        "max_tokens": 131000,
         "max_input_tokens": 200000,
         "max_output_tokens": 131000,
         "input_cost_per_token": 3e-07,
@@ -44617,7 +44681,7 @@
         "supports_vision": false
     },
     "ofox/minimax/minimax-m2": {
-        "max_tokens": 204800,
+        "max_tokens": 131000,
         "max_input_tokens": 204800,
         "max_output_tokens": 131000,
         "input_cost_per_token": 3e-07,
@@ -44629,7 +44693,7 @@
         "cache_read_input_token_cost": 3e-08
     },
     "ofox/minimax/minimax-m2.1": {
-        "max_tokens": 204800,
+        "max_tokens": 131000,
         "max_input_tokens": 204800,
         "max_output_tokens": 131000,
         "input_cost_per_token": 3e-07,
@@ -44641,7 +44705,7 @@
         "cache_read_input_token_cost": 3e-08
     },
     "ofox/minimax/minimax-m2.1-lightning": {
-        "max_tokens": 204800,
+        "max_tokens": 131000,
         "max_input_tokens": 204800,
         "max_output_tokens": 131000,
         "input_cost_per_token": 3e-07,
@@ -44653,7 +44717,7 @@
         "cache_read_input_token_cost": 3e-08
     },
     "ofox/minimax/minimax-m2.5": {
-        "max_tokens": 200000,
+        "max_tokens": 131000,
         "max_input_tokens": 200000,
         "max_output_tokens": 131000,
         "input_cost_per_token": 3e-07,
@@ -44665,7 +44729,7 @@
         "cache_read_input_token_cost": 3e-08
     },
     "ofox/minimax/minimax-m2.5-lightning": {
-        "max_tokens": 200000,
+        "max_tokens": 131000,
         "max_input_tokens": 200000,
         "max_output_tokens": 131000,
         "input_cost_per_token": 3e-07,
@@ -44677,7 +44741,7 @@
         "cache_read_input_token_cost": 3e-08
     },
     "ofox/minimax/minimax-m2.7": {
-        "max_tokens": 200000,
+        "max_tokens": 131000,
         "max_input_tokens": 200000,
         "max_output_tokens": 131000,
         "input_cost_per_token": 3e-07,
@@ -44689,7 +44753,7 @@
         "cache_read_input_token_cost": 6e-08
     },
     "ofox/minimax/minimax-m2.7-highspeed": {
-        "max_tokens": 200000,
+        "max_tokens": 131000,
         "max_input_tokens": 200000,
         "max_output_tokens": 131000,
         "input_cost_per_token": 6e-07,
@@ -44701,7 +44765,7 @@
         "cache_read_input_token_cost": 6e-08
     },
     "ofox/minimax/minimax-m3": {
-        "max_tokens": 1131000,
+        "max_tokens": 131000,
         "max_input_tokens": 1131000,
         "max_output_tokens": 131000,
         "input_cost_per_token": 6e-07,
@@ -44761,7 +44825,7 @@
         "cache_read_input_token_cost": 1.9e-07
     },
     "ofox/openai/gpt-4.1": {
-        "max_tokens": 1047576,
+        "max_tokens": 32768,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 2e-06,
@@ -44770,10 +44834,12 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-07
+        "cache_read_input_token_cost": 5e-07,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-4.1-mini": {
-        "max_tokens": 1047576,
+        "max_tokens": 32768,
         "max_input_tokens": 1047576,
         "max_output_tokens": 32768,
         "input_cost_per_token": 4e-07,
@@ -44782,10 +44848,12 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1e-07
+        "cache_read_input_token_cost": 1e-07,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-4o": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 2.5e-06,
@@ -44794,10 +44862,12 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.25e-06
+        "cache_read_input_token_cost": 1.25e-06,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-4o-mini": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 1.5e-07,
@@ -44806,10 +44876,12 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 7.5e-08
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5": {
-        "max_tokens": 256000,
+        "max_tokens": 65536,
         "max_input_tokens": 256000,
         "max_output_tokens": 65536,
         "input_cost_per_token": 1.25e-06,
@@ -44818,10 +44890,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.3e-07
+        "cache_read_input_token_cost": 1.3e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5-mini": {
-        "max_tokens": 256000,
+        "max_tokens": 32768,
         "max_input_tokens": 256000,
         "max_output_tokens": 32768,
         "input_cost_per_token": 2.5e-07,
@@ -44830,10 +44905,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5-nano": {
-        "max_tokens": 128000,
+        "max_tokens": 16384,
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "input_cost_per_token": 5e-08,
@@ -44842,10 +44920,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": false,
-        "cache_read_input_token_cost": 1e-08
+        "cache_read_input_token_cost": 1e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.1": {
-        "max_tokens": 256000,
+        "max_tokens": 128000,
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
@@ -44854,10 +44935,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.3e-07
+        "cache_read_input_token_cost": 1.3e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.1-codex-max": {
-        "max_tokens": 256000,
+        "max_tokens": 128000,
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
@@ -44866,10 +44950,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.3e-07
+        "cache_read_input_token_cost": 1.3e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.1-codex-mini": {
-        "max_tokens": 256000,
+        "max_tokens": 65536,
         "max_input_tokens": 256000,
         "max_output_tokens": 65536,
         "input_cost_per_token": 2.5e-07,
@@ -44878,10 +44965,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 3e-08
+        "cache_read_input_token_cost": 3e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.2": {
-        "max_tokens": 512000,
+        "max_tokens": 128000,
         "max_input_tokens": 512000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.75e-06,
@@ -44890,10 +44980,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.8e-07
+        "cache_read_input_token_cost": 1.8e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.2-codex": {
-        "max_tokens": 512000,
+        "max_tokens": 128000,
         "max_input_tokens": 512000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.75e-06,
@@ -44902,10 +44995,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.8e-07
+        "cache_read_input_token_cost": 1.8e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.3-codex": {
-        "max_tokens": 512000,
+        "max_tokens": 128000,
         "max_input_tokens": 512000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.75e-06,
@@ -44914,10 +45010,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 1.8e-07
+        "cache_read_input_token_cost": 1.8e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.4": {
-        "max_tokens": 1050000,
+        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2.5e-06,
@@ -44926,10 +45025,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2.5e-07
+        "cache_read_input_token_cost": 2.5e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.4-mini": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 7.5e-07,
@@ -44938,10 +45040,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 7.5e-08
+        "cache_read_input_token_cost": 7.5e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.4-nano": {
-        "max_tokens": 400000,
+        "max_tokens": 128000,
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 2e-07,
@@ -44950,10 +45055,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 2e-08
+        "cache_read_input_token_cost": 2e-08,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/openai/gpt-5.4-pro": {
-        "max_tokens": 1050000,
+        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 3e-05,
@@ -44961,10 +45069,12 @@
         "litellm_provider": "ofox",
         "mode": "chat",
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true
     },
     "ofox/openai/gpt-5.5": {
-        "max_tokens": 1050000,
+        "max_tokens": 128000,
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 5e-06,
@@ -44973,10 +45083,13 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_vision": true,
-        "cache_read_input_token_cost": 5e-07
+        "cache_read_input_token_cost": 5e-07,
+        "supports_reasoning": true,
+        "supports_prompt_caching": true,
+        "supports_response_schema": true
     },
     "ofox/volcengine/doubao-seed-1-6": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 1.2e-07,
@@ -44988,7 +45101,7 @@
         "cache_read_input_token_cost": 2.3e-08
     },
     "ofox/volcengine/doubao-seed-1-6-flash": {
-        "max_tokens": 256000,
+        "max_tokens": 32000,
         "max_input_tokens": 256000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 3e-08,
@@ -45000,7 +45113,7 @@
         "cache_read_input_token_cost": 4.3e-09
     },
     "ofox/volcengine/doubao-seed-1-6-vision": {
-        "max_tokens": 256000,
+        "max_tokens": 32000,
         "max_input_tokens": 256000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 1.2e-07,
@@ -45012,7 +45125,7 @@
         "cache_read_input_token_cost": 2.3e-08
     },
     "ofox/volcengine/doubao-seed-1-8": {
-        "max_tokens": 256000,
+        "max_tokens": 64000,
         "max_input_tokens": 256000,
         "max_output_tokens": 64000,
         "input_cost_per_token": 1.2e-07,
@@ -45024,7 +45137,7 @@
         "cache_read_input_token_cost": 2.3e-08
     },
     "ofox/volcengine/doubao-seed-2.0-code": {
-        "max_tokens": 256000,
+        "max_tokens": 128000,
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 6.7e-07,
@@ -45036,7 +45149,7 @@
         "cache_read_input_token_cost": 1.4e-07
     },
     "ofox/volcengine/doubao-seed-2.0-lite": {
-        "max_tokens": 256000,
+        "max_tokens": 32000,
         "max_input_tokens": 256000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 1.3e-07,
@@ -45048,7 +45161,7 @@
         "cache_read_input_token_cost": 3e-08
     },
     "ofox/volcengine/doubao-seed-2.0-mini": {
-        "max_tokens": 256000,
+        "max_tokens": 32000,
         "max_input_tokens": 256000,
         "max_output_tokens": 32000,
         "input_cost_per_token": 6e-08,
@@ -45060,7 +45173,7 @@
         "cache_read_input_token_cost": 2e-08
     },
     "ofox/volcengine/doubao-seed-2.0-pro": {
-        "max_tokens": 256000,
+        "max_tokens": 128000,
         "max_input_tokens": 256000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 6.7e-07,
@@ -45120,7 +45233,7 @@
         "cache_read_input_token_cost": 1.77e-07
     },
     "ofox/x-ai/grok-4.1-fast": {
-        "max_tokens": 2000000,
+        "max_tokens": 30000,
         "max_input_tokens": 2000000,
         "max_output_tokens": 30000,
         "input_cost_per_token": 2e-07,
@@ -45132,7 +45245,7 @@
         "cache_read_input_token_cost": 5e-08
     },
     "ofox/x-ai/grok-4.20": {
-        "max_tokens": 2000000,
+        "max_tokens": 128000,
         "max_input_tokens": 2000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 4e-06,
@@ -45144,7 +45257,7 @@
         "cache_read_input_token_cost": 4e-07
     },
     "ofox/x-ai/grok-4.3": {
-        "max_tokens": 1000000,
+        "max_tokens": 128000,
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.25e-06,
@@ -45156,7 +45269,7 @@
         "cache_read_input_token_cost": 2e-08
     },
     "ofox/z-ai/glm-4.6": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 4e-07,
@@ -45168,7 +45281,7 @@
         "cache_read_input_token_cost": 1.1e-07
     },
     "ofox/z-ai/glm-4.7": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 4e-07,
@@ -45180,7 +45293,7 @@
         "cache_read_input_token_cost": 8e-08
     },
     "ofox/z-ai/glm-4.7-flash:free": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 0.0,
@@ -45191,7 +45304,7 @@
         "supports_vision": false
     },
     "ofox/z-ai/glm-4.7-flashx": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 7.2e-08,
@@ -45203,7 +45316,7 @@
         "cache_read_input_token_cost": 1.5e-08
     },
     "ofox/z-ai/glm-5": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1e-06,
@@ -45215,7 +45328,7 @@
         "cache_read_input_token_cost": 2e-07
     },
     "ofox/z-ai/glm-5-turbo": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.2e-06,
@@ -45227,7 +45340,7 @@
         "cache_read_input_token_cost": 2.4e-07
     },
     "ofox/z-ai/glm-5.1": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.4e-06,
@@ -45239,7 +45352,7 @@
         "cache_read_input_token_cost": 2.6e-07
     },
     "ofox/z-ai/glm-5.2": {
-        "max_tokens": 1048576,
+        "max_tokens": 128000,
         "max_input_tokens": 1048576,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.4e-06,
@@ -45251,7 +45364,7 @@
         "cache_read_input_token_cost": 2.6e-07
     },
     "ofox/z-ai/glm-5v-turbo": {
-        "max_tokens": 200000,
+        "max_tokens": 128000,
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "input_cost_per_token": 1.2e-06,
