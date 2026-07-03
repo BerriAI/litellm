@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useResetKeySpend } from "@/app/(dashboard)/hooks/keys/useResetKeySpend";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
+import { keyDeleteCall, keyInfoV1Call, keyUpdateCall } from "../networking";
 import { QueryClient } from "@tanstack/react-query";
 import KeyInfoView from "./key_info_view";
 
@@ -36,6 +36,7 @@ vi.mock("@/app/(dashboard)/hooks/projects/useProjects", () => ({
 
 vi.mock("../networking", () => ({
   keyDeleteCall: vi.fn().mockResolvedValue({}),
+  keyInfoV1Call: vi.fn().mockResolvedValue({ info: {} }),
   keyUpdateCall: vi.fn().mockResolvedValue({}),
   getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({
     resolved_guardrails: ["guardrail-1", "guardrail-2"],
@@ -181,6 +182,39 @@ describe("KeyInfoView", () => {
     );
     await waitFor(() => {
       expect(screen.getByText("test-tag")).toBeInTheDocument();
+    });
+  });
+
+  it("should show team-default per-model budget usage from /key/info", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+    vi.mocked(keyInfoV1Call).mockResolvedValue({
+      info: {
+        model_max_budget_usage: {
+          "claude-sonnet-4-6": {
+            current_spend: 5,
+            budget_limit: 20,
+            time_period: "1d",
+            scope: "team",
+            percent_used: 25,
+          },
+        },
+      },
+    });
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={{ ...MOCK_KEY_DATA, team_id: "team-1", model_max_budget: {} }}
+        onClose={() => {}}
+        keyId={"test-token-123"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(keyInfoV1Call).toHaveBeenCalledWith("test-token", "test-token-123");
+      expect(screen.getByText("claude-sonnet-4-6")).toBeInTheDocument();
+      expect(screen.getByText(/Shared across your keys on this team/)).toBeInTheDocument();
     });
   });
 

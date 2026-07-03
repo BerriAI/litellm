@@ -12935,6 +12935,35 @@ async def test_prepare_key_update_data_budget_duration_valid_sets_reset():
     assert result["budget_reset_at"] is not None
 
 
+def _install_test_model_max_budget_limiter(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    spends: dict[str, float | None] | None = None,
+    call_queue: list[float | None] | None = None,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+
+    spends = spends or {}
+    queue = list(call_queue) if call_queue is not None else None
+
+    async def async_get_cache(key: str) -> float | None:
+        if queue is not None:
+            return queue.pop(0) if queue else None
+        for model, spend in spends.items():
+            if f":{model}:" in key:
+                return spend
+        return None
+
+    mock_dual_cache = AsyncMock()
+    mock_dual_cache.async_get_cache = AsyncMock(side_effect=async_get_cache)
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=mock_dual_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.model_max_budget_limiter", limiter)
+
+
 @pytest.mark.asyncio
 async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     """
@@ -12954,10 +12983,10 @@ async def test_info_key_fn_includes_model_max_budget_usage(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.23)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
     )
+    _install_test_model_max_budget_limiter(monkeypatch, spends={"gpt-4o": 0.23})
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
     mock_key_info.token = test_key_token
@@ -13068,10 +13097,10 @@ async def test_info_key_fn_v2_includes_model_max_budget_usage(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=0.55)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
     )
+    _install_test_model_max_budget_limiter(monkeypatch, spends={"gpt-4o": 0.55})
 
     mock_key = MagicMock(spec=LiteLLM_VerificationToken)
     mock_key.token = test_key_token
@@ -13127,9 +13156,12 @@ async def test_info_key_fn_budget_table_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=1.20)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    _install_test_model_max_budget_limiter(
+        monkeypatch,
+        spends={"bedrock/anthropic.claude-opus-4": 1.20},
     )
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13195,9 +13227,12 @@ async def test_info_key_fn_v2_budget_table_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(return_value=2.50)
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    _install_test_model_max_budget_limiter(
+        monkeypatch,
+        spends={"bedrock/anthropic.claude-opus-4": 2.50},
     )
 
     mock_key = MagicMock(spec=LiteLLM_VerificationToken)
@@ -13255,10 +13290,10 @@ async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
     mock_prisma_client = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mock_user_api_key_cache = AsyncMock()
-    mock_user_api_key_cache.async_get_cache = AsyncMock(side_effect=[None, 0.75])
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
     )
+    _install_test_model_max_budget_limiter(monkeypatch, call_queue=[None, 0.75])
 
     mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
     mock_key_info.token = test_key_token
@@ -13294,7 +13329,82 @@ async def test_info_key_fn_provider_prefix_spend_fallback(monkeypatch):
     assert "model_max_budget_usage" in result["info"]
     usage = result["info"]["model_max_budget_usage"]
     assert usage["openai/gpt-4o"]["current_spend"] == 0.75
-    assert mock_user_api_key_cache.async_get_cache.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_includes_team_default_model_max_budget_usage(monkeypatch):
+    """Keys with empty model_max_budget inherit team defaults on /key/info."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    test_key_token = "hashed_token_team_default"
+    team_model_max_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mock_user_api_key_cache = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    _install_test_model_max_budget_limiter(
+        monkeypatch,
+        spends={"claude-sonnet-4-6": 12.5},
+    )
+
+    mock_team = MagicMock()
+    mock_team.model_max_budget = team_model_max_budget
+    mock_team.metadata = {}
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+        AsyncMock(return_value=mock_team),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        AsyncMock(return_value=None),
+    )
+
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = test_key_token
+    mock_key_info.object_permission_id = None
+    mock_key_info.user_id = "user-team"
+    mock_key_info.team_id = "team-systems"
+    mock_key_info.litellm_budget_table = None
+    mock_key_info.model_dump.return_value = {
+        "token": test_key_token,
+        "model_max_budget": {},
+        "user_id": "user-team",
+        "team_id": "team-systems",
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    mock_prisma_client.db.query_raw = AsyncMock()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-team-default-key",
+    )
+
+    result = await info_key_fn(
+        key="sk-team-default-key",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert "model_max_budget_usage" in result["info"]
+    usage = result["info"]["model_max_budget_usage"]
+    assert usage["claude-sonnet-4-6"]["current_spend"] == 12.5
+    assert usage["claude-sonnet-4-6"]["budget_limit"] == 20.0
+    assert usage["claude-sonnet-4-6"]["time_period"] == "1d"
+    assert usage["claude-sonnet-4-6"]["scope"] == "team"
+    assert usage["claude-sonnet-4-6"]["percent_used"] == 62.5
 
 
 @pytest.mark.asyncio

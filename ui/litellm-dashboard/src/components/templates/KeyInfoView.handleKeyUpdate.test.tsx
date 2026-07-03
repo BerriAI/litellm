@@ -22,6 +22,8 @@ vi.mock("../networking", () => {
   return {
     keyUpdateCall: (...args: any[]) => keyUpdateCallMock(...args),
     keyDeleteCall: (...args: any[]) => keyDeleteCallMock(...args),
+    keyInfoV1Call: vi.fn().mockResolvedValue({ info: {} }),
+    getPolicyInfoWithGuardrails: vi.fn().mockResolvedValue({ resolved_guardrails: [] }),
   };
 });
 

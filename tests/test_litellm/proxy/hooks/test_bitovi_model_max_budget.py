@@ -40,6 +40,31 @@ async def test_build_effective_model_max_budget_usage_uses_team_member_spend_for
     assert usage["claude-sonnet-4-6"]["scope"] == "team"
 
 
+async def test_build_effective_model_max_budget_usage_uses_key_spend_for_service_account_team_default(
+    budget_limiter,
+):
+    team_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", new_callable=AsyncMock, return_value=8.0
+    ) as mock_key_spend:
+        usage = await build_effective_model_max_budget_usage(
+            budget_limiter,
+            api_key_hash="sa-key-hash",
+            team_id="team-1",
+            user_id=None,
+            key_model_max_budget={},
+            team_model_max_budget=team_budget,
+            team_member_model_max_budget=None,
+        )
+
+    mock_key_spend.assert_awaited_once()
+    assert usage["claude-sonnet-4-6"]["current_spend"] == 8.0
+    assert usage["claude-sonnet-4-6"]["scope"] == "key"
+
+
 def test_update_team_request_accepts_model_max_budget() -> None:
     request = UpdateTeamRequest(
         team_id="team-1",
