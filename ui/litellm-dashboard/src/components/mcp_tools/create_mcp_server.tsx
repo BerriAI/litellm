@@ -211,6 +211,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     flowSource: "create",
   });
 
+  const clearAuthorizedOAuthState = (values: Record<string, unknown>) => {
+    form.resetFields(["credentials", "authorization_url", "token_url", "registration_url"]);
+    form.setFieldsValue(values);
+    setOauthAccessToken(null);
+    clearTools();
+    resetOAuthFlow();
+    setAuthorizedUrl(undefined);
+  };
+
   React.useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -529,12 +538,28 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const handleTransportChange = (value: string) => {
     setTransportType(value);
     // Clear fields that are not relevant for the selected transport
-    if (value === "stdio") {
-      form.setFieldsValue({ url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined });
-    } else if (value === TRANSPORT.OPENAPI) {
-      form.setFieldsValue({ url: undefined, command: undefined, args: undefined, env: undefined });
+    const transportValues =
+      value === "stdio"
+        ? { url: undefined, spec_path: undefined, auth_type: undefined, credentials: undefined }
+        : value === TRANSPORT.OPENAPI
+          ? { url: undefined, command: undefined, args: undefined, env: undefined }
+          : { spec_path: undefined, command: undefined, args: undefined, env: undefined };
+
+    const nextValues =
+      authorizedUrl === undefined
+        ? transportValues
+        : {
+            ...transportValues,
+            credentials: undefined,
+            authorization_url: undefined,
+            token_url: undefined,
+            registration_url: undefined,
+          };
+
+    if (authorizedUrl !== undefined) {
+      clearAuthorizedOAuthState(nextValues);
     } else {
-      form.setFieldsValue({ spec_path: undefined, command: undefined, args: undefined, env: undefined });
+      form.setFieldsValue(nextValues);
     }
   };
 
@@ -590,6 +615,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setOauthAccessToken(null);
       clearTools();
       resetOAuthFlow();
+      setAuthorizedUrl(undefined);
     }
   }, [isModalVisible, form, clearTools, resetOAuthFlow]);
 
@@ -608,12 +634,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         token_url: changedValues.token_url,
         registration_url: changedValues.registration_url,
       };
-      form.resetFields(["credentials", "authorization_url", "token_url", "registration_url"]);
-      form.setFieldsValue(invalidated);
-      setOauthAccessToken(null);
-      clearTools();
-      resetOAuthFlow();
-      setAuthorizedUrl(undefined);
+      clearAuthorizedOAuthState(invalidated);
       setFormValues({ ...allValues, ...invalidated });
       return;
     }
