@@ -580,7 +580,7 @@ def _check_permissions_caller_permission(
         return
     raise HTTPException(
         status_code=403,
-        detail={"error": "Only proxy admins can set `permissions` on a key."},
+        detail={"error": "Only proxy admins can set `permissions`."},
     )
 
 
