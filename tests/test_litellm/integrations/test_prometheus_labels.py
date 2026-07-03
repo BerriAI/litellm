@@ -173,8 +173,9 @@ def test_extract_api_provider_from_request_data_failure_path():
     """
     On the client-side failure path the provider is not always known. Prefer the
     resolved custom_llm_provider on litellm_params, fall back to a partial
-    standard_logging_object (e.g. a stream that broke mid-flight), and return
-    None when neither is present so the label emits empty rather than a guess.
+    standard_logging_object (e.g. a stream that broke mid-flight), then infer it
+    from the requested model name, and return None only when nothing maps so the
+    label emits empty rather than a guess.
     """
     from litellm.integrations.prometheus import PrometheusLogger
 
@@ -195,8 +196,14 @@ def test_extract_api_provider_from_request_data_failure_path():
         )
         == "openai"
     )
+    # Fallback: infer provider from the requested model name when the proxy's
+    # failure request_data carries only the client-supplied model. This is the
+    # common client-side failure case (e.g. an invalid param rejected with 400).
+    assert extract({"model": "gpt-4o-mini"}) == "openai"
+    assert extract({"litellm_params": {"model": "anthropic/claude-haiku-4-5"}}) == "anthropic"
     assert extract({}) is None
-    assert extract({"litellm_params": {"custom_llm_provider": ""}}) is None
+    # Unmappable model name -> None, not a guess
+    assert extract({"model": "some-unknown-model-xyz"}) is None
 
 
 def test_user_email_label_exists():

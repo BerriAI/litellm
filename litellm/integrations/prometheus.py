@@ -2012,16 +2012,27 @@ class PrometheusLogger(CustomLogger):
         A request can fail before a deployment is resolved, so the provider is
         not always known. Prefer the resolved ``custom_llm_provider`` on
         ``litellm_params``, then any provider recovered onto a partial
-        ``standard_logging_object`` (e.g. a stream that broke mid-flight);
-        return ``None`` when it cannot be determined so the label emits empty
-        rather than a guess.
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight), and
+        finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
+        ``openai``) since the proxy's failure ``request_data`` usually carries
+        only the client-supplied model. Return ``None`` when it cannot be
+        determined so the label emits empty rather than a guess.
         """
         litellm_params = request_data.get("litellm_params") or {}
         provider = litellm_params.get("custom_llm_provider")
         if provider:
             return provider
         standard_logging_object = request_data.get("standard_logging_object") or {}
-        return standard_logging_object.get("custom_llm_provider") or None
+        provider = standard_logging_object.get("custom_llm_provider")
+        if provider:
+            return provider
+        model = litellm_params.get("model") or request_data.get("model")
+        if not model:
+            return None
+        try:
+            return litellm.get_llm_provider(model=model)[1] or None
+        except Exception:
+            return None
 
     async def async_post_call_failure_hook(
         self,
