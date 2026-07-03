@@ -2,7 +2,6 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi.encoders import jsonable_encoder
 
 from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
     AzureDocumentIntelligenceOCRConfig,
@@ -115,7 +114,7 @@ def test_transform_ocr_response_preserves_azure_native_fields():
         logging_obj=MagicMock(),
     )
 
-    _assert_native_fields_preserved(jsonable_encoder(result))
+    _assert_native_fields_preserved(result.model_dump())
 
 
 @pytest.mark.asyncio
@@ -128,7 +127,7 @@ async def test_async_transform_ocr_response_preserves_azure_native_fields():
         logging_obj=MagicMock(),
     )
 
-    _assert_native_fields_preserved(jsonable_encoder(result))
+    _assert_native_fields_preserved(result.model_dump())
 
 
 def test_transform_ocr_response_tolerates_missing_native_fields():
@@ -154,7 +153,7 @@ def test_transform_ocr_response_tolerates_missing_native_fields():
         logging_obj=MagicMock(),
     )
 
-    serialized = jsonable_encoder(result)
+    serialized = result.model_dump()
     assert serialized["pages"][0]["markdown"] == "hello"
     assert serialized["content"] is None
     assert serialized["tables"] is None
