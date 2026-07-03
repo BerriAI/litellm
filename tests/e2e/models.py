@@ -194,6 +194,20 @@ class SpendCalculateResponse(BaseModel):
     cost: float
 
 
+# ---------- spend tags ----------
+
+
+class TagSpend(BaseModel):
+    individual_request_tag: str | None = None
+    log_count: int | None = None
+    total_spend: float | None = None
+
+
+class SpendTagsResponse(RootModel[list[TagSpend]]):
+    """GET /spend/tags answers with a bare array of per-tag aggregates, not an
+    object wrapping them (that's /global/spend/tags). Read the rows off .root."""
+
+
 # ---------- route probing ----------
 
 
