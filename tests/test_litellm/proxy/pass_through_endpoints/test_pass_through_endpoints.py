@@ -3619,3 +3619,92 @@ async def test_non_guardrail_exception_still_logs_with_traceback():
     assert (
         logger.warning.call_count == 0
     ), "a genuine failure must not be downgraded to WARNING"
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_strips_additional_drop_params():
+    """Regression: additional_drop_params configured globally must be stripped from
+    the forwarded body on all pass-through routes (Gemini, Cohere, Vertex AI, etc.)."""
+    import litellm
+
+    litellm.additional_drop_params = ["thinking"]
+    try:
+        with patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler"
+            ) as mock_http_handler:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+                ) as mock_processing:
+                    with patch(
+                        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                    ) as mock_success_handler:
+                        with patch(
+                            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_response_body"
+                        ) as mock_get_response_body:
+                            mock_proxy_logging.pre_call_hook = AsyncMock(
+                                return_value={
+                                    "model": "gemini-1.5-flash",
+                                    "thinking": {"type": "enabled"},
+                                    "messages": [{"role": "user", "content": "hi"}],
+                                }
+                            )
+                            mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                            mock_proxy_logging.post_call_response_headers_hook = (
+                                AsyncMock(return_value=None)
+                            )
+
+                            mock_response = MagicMock()
+                            mock_response.status_code = 200
+                            mock_response.headers = {}
+                            mock_response.aread = AsyncMock(
+                                return_value=b'{"success": true}'
+                            )
+                            mock_response.text = '{"success": true}'
+                            mock_response.raise_for_status = MagicMock()
+                            mock_http_handler.return_value = mock_response
+
+                            mock_get_response_body.return_value = {"success": True}
+                            mock_processing.get_custom_headers.return_value = {}
+                            mock_success_handler.return_value = None
+
+                            mock_request = MagicMock(spec=Request)
+                            mock_request.method = "POST"
+                            mock_request.url = "http://test-proxy.com/gemini/v1beta/models/gemini-1.5-flash:generateContent"
+                            mock_request.body = AsyncMock(
+                                return_value=b'{"model": "gemini-1.5-flash", "thinking": {"type": "enabled"}, "messages": [{"role": "user", "content": "hi"}]}'
+                            )
+                            mock_request.headers = Headers({})
+                            mock_request.query_params = QueryParams({})
+
+                            mock_user_api_key_dict = MagicMock()
+                            mock_user_api_key_dict.api_key = "test-api-key"
+                            mock_user_api_key_dict.key_alias = None
+                            mock_user_api_key_dict.user_email = None
+                            mock_user_api_key_dict.user_id = None
+                            mock_user_api_key_dict.team_id = None
+                            mock_user_api_key_dict.org_id = None
+                            mock_user_api_key_dict.team_alias = None
+                            mock_user_api_key_dict.end_user_id = None
+                            mock_user_api_key_dict.request_route = (
+                                "/gemini/v1beta/models/gemini-1.5-flash:generateContent"
+                            )
+
+                            await pass_through_request(
+                                request=mock_request,
+                                target="https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+                                custom_headers={},
+                                user_api_key_dict=mock_user_api_key_dict,
+                            )
+
+                            mock_http_handler.assert_called_once()
+                            forwarded_body = mock_http_handler.call_args.kwargs[
+                                "_parsed_body"
+                            ]
+                            assert "thinking" not in forwarded_body
+                            assert "model" in forwarded_body
+                            assert "messages" in forwarded_body
+    finally:
+        litellm.additional_drop_params = None
