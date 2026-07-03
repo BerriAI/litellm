@@ -16448,8 +16448,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query",
-        "supports_service_tier": true
+        "web_search_billing_unit": "per_query"
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -17983,8 +17982,7 @@
             "search_context_size_medium": 0.014,
             "search_context_size_high": 0.014
         },
-        "web_search_billing_unit": "per_query",
-        "supports_service_tier": true
+        "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -18038,7 +18036,6 @@
         "mode": "image_generation",
         "output_cost_per_image": 0.045,
         "output_cost_per_image_token": 6e-05,
-        "output_cost_per_image_token_batches": 3e-05,
         "output_cost_per_token": 1.5e-06,
         "output_cost_per_token_batches": 7.5e-07,
         "rpm": 1000,
@@ -19354,8 +19351,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/messages"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -19368,8 +19364,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/messages"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -19422,8 +19417,7 @@
         "max_tokens": 16000,
         "mode": "chat",
         "supported_endpoints": [
-            "/v1/chat/completions",
-            "/v1/messages"
+            "/v1/chat/completions"
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -43459,6 +43453,7 @@
     "supports_response_schema": true
   },
   "snowflake/claude-sonnet-4-6": {
+    "supports_adaptive_thinking": true,
     "max_tokens": 16384,
     "max_input_tokens": 200000,
     "max_output_tokens": 16384,
@@ -43977,8 +43972,7 @@
         "supports_reasoning": false,
         "source": "https://pinstripes.io/pricing"
     },
-
-  "darkbloom/gemma-4-26b": {
+    "darkbloom/gemma-4-26b": {
         "input_cost_per_token": 3e-08,
         "litellm_provider": "darkbloom",
         "max_input_tokens": 131072,
@@ -44011,9 +44005,8 @@
         "supports_native_streaming": true,
         "supports_system_messages": true,
         "supports_tool_choice": true
-    }
-},
-"fallback_generalizations": {
+    },
+  "fallback_generalizations": {
     "rules": [
       {
         "name": "anthropic-claude-adaptive-thinking",
