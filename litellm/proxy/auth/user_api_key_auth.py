@@ -187,7 +187,7 @@ async def _check_key_model_budget_with_fallback(
     request_data: dict,
     request: Request,
     llm_model_list: Optional[list] = None,
-    llm_router: Optional[Any] = None,
+    llm_router: Optional[litellm.Router] = None,
 ) -> None:
     """
     Enforce the key's per-model budget for `model_name`. If exceeded and the
