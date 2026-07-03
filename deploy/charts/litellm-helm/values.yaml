@@ -357,6 +357,30 @@ migrationJob:
   extraContainers: []
   extraInitContainers: []
 
+  # Environment variables for the migration Job only, as a map of key-value
+  # pairs. Rendered after the shared envVars/extraEnvVars, so entries here
+  # override them (Kubernetes uses the last value for a duplicate env name).
+  envVars: {}
+
+  # Environment variables for the migration Job only, as a list of Kubernetes
+  # env vars (supports valueFrom, e.g. secretKeyRef). Also rendered after the
+  # shared envVars/extraEnvVars, so entries here override them under the same
+  # last-wins semantics. Use this to run the schema migration as a
+  # higher-privilege database role while the proxy Deployment keeps a
+  # least-privilege user:
+  # extraEnvVars:
+  #   - name: DATABASE_USERNAME
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: litellm-db-migrator
+  #         key: username
+  #   - name: DATABASE_PASSWORD
+  #     valueFrom:
+  #       secretKeyRef:
+  #         name: litellm-db-migrator
+  #         key: password
+  extraEnvVars: []
+
   # Hook configuration
   hooks:
     argocd:
