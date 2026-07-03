@@ -421,17 +421,11 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabKey)} className="mb-4">
-        <TabsList className="bg-transparent border-b rounded-none w-full justify-start gap-0 h-auto p-0">
-          <TabsTrigger
-            value="all"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2 text-[13px]"
-          >
+        <TabsList variant="line" className="border-b rounded-none w-full justify-start h-auto p-0">
+          <TabsTrigger value="all" className="rounded-none px-4 py-2 text-[13px]">
             All
           </TabsTrigger>
-          <TabsTrigger
-            value="connected"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-4 py-2 text-[13px]"
-          >
+          <TabsTrigger value="connected" className="rounded-none px-4 py-2 text-[13px]">
             Connected{connectedCount > 0 ? ` (${connectedCount})` : ""}
           </TabsTrigger>
         </TabsList>

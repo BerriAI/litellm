@@ -1,9 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
-import { Loader2, BarChart3 } from "lucide-react";
+import { BarChart3 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { userDailyActivityAggregatedCall } from "../networking";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 
 const USAGE_QUERY_KEY = "chat-user-usage";
 
@@ -105,7 +107,7 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
   const maxSpend = Math.max(...dailySpend, 0);
   const maxRequests = Math.max(...dailyRequests, 0);
 
-  const statCards: Array<{ label: string; value: string; sub?: string }> = meta
+  const statCards: Array<{ label: string; value: string; sub?: string; subVariant?: "error" }> = meta
     ? [
         { label: "Total Spend", value: `$${meta.total_spend.toFixed(2)}` },
         { label: "API Requests", value: formatNumber(meta.total_api_requests) },
@@ -121,6 +123,7 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
               ? `${((meta.total_successful_requests / meta.total_api_requests) * 100).toFixed(1)}%`
               : "N/A",
           sub: meta.total_failed_requests > 0 ? `${meta.total_failed_requests} failed` : undefined,
+          subVariant: meta.total_failed_requests > 0 ? "error" : undefined,
         },
       ]
     : [];
@@ -132,27 +135,28 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
           <h2 className="text-base font-semibold text-foreground mb-0.5">Your Usage</h2>
           <p className="text-sm text-muted-foreground m-0">Spend and request activity</p>
         </div>
-        <div className="flex rounded-md border overflow-hidden">
+        <div className="flex gap-1">
           {TIME_RANGE_OPTIONS.map((opt) => (
-            <button
+            <Button
               key={opt.value}
+              variant={timeRange === opt.value ? "default" : "outline"}
+              size="sm"
               onClick={() => setTimeRange(opt.value)}
-              className={`px-3 py-1.5 text-[13px] transition-colors ${
-                timeRange === opt.value
-                  ? "bg-primary text-primary-foreground font-medium"
-                  : "bg-background text-muted-foreground hover:bg-accent"
-              }`}
-              style={{ border: "none" }}
             >
               {opt.label}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
 
       {isLoading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="grid grid-cols-2 gap-3">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="border rounded-lg px-4 py-3.5 flex flex-col gap-2">
+              <Skeleton className="h-3 w-1/2" />
+              <Skeleton className="h-5 w-2/3" />
+            </div>
+          ))}
         </div>
       ) : !meta || meta.total_api_requests === 0 ? (
         <div className="text-center text-muted-foreground text-sm py-12 border border-dashed rounded-lg">
@@ -166,7 +170,15 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
               <div key={card.label} className="border rounded-lg px-4 py-3.5">
                 <div className="text-xs text-muted-foreground mb-1">{card.label}</div>
                 <div className="text-xl font-semibold text-foreground">{card.value}</div>
-                {card.sub && <div className="text-xs text-muted-foreground mt-0.5">{card.sub}</div>}
+                {card.sub && (
+                  <div
+                    className={`text-xs mt-0.5 ${
+                      card.subVariant === "error" ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                    }`}
+                  >
+                    {card.sub}
+                  </div>
+                )}
               </div>
             ))}
           </div>
