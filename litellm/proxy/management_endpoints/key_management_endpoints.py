@@ -2069,6 +2069,11 @@ async def _process_single_key_update(
     # Validate max_budget
     _validate_max_budget(update_key_request.max_budget)
 
+    _check_permissions_caller_permission(
+        data=update_key_request,
+        user_api_key_dict=user_api_key_dict,
+    )
+
     # Get and validate existing key
     if existing_key_row is None:
         existing_key_row = await _get_and_validate_existing_key(
