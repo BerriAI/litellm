@@ -41,6 +41,7 @@ jobs:
           COMMIT_HASH: ${{ inputs.commit_hash }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          github-token: ${{ secrets.GH_TOKEN }}
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
@@ -184,3 +185,5 @@ jobs:
     with:
       tag: ${{ inputs.tag }}
       commit_hash: ${{ inputs.commit_hash }}
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}

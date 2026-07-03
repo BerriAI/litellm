@@ -21,6 +21,9 @@ on:
         description: "Full 40-char commit SHA the branch should point to"
         required: true
         type: string
+    secrets:
+      GH_TOKEN:
+        required: false
 
 permissions: {}
 
@@ -51,6 +54,7 @@ jobs:
           COMMIT_HASH: ${{ inputs.commit_hash }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          github-token: ${{ secrets.GH_TOKEN || github.token }}
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
@@ -70,6 +74,7 @@ jobs:
           COMMIT_HASH: ${{ inputs.commit_hash }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          github-token: ${{ secrets.GH_TOKEN || github.token }}
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
