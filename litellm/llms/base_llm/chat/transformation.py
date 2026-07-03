@@ -427,6 +427,16 @@ class BaseConfig(ABC):
         """
         return True
 
+    @property
+    def reserved_request_body_keys(self) -> frozenset[str]:
+        """
+        Request-body keys that ``extra_body`` may not override after
+        ``transform_request`` has sanitized them (e.g. an allowlisted ``tools``
+        list). Empty by default so ``extra_body`` stays a full escape hatch for
+        providers that do not sanitize their body.
+        """
+        return frozenset()
+
     def post_stream_processing(self, stream: Any) -> Any:
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
