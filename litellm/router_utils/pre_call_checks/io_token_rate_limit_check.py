@@ -299,7 +299,12 @@ def _reservation_value(value: int, limit: Optional[int]) -> int:
         return 0
     if value > 0:
         return value
-    return max(1, limit)
+    # Estimation failed (empty messages, unsupported model, tokenizer error).
+    # Reserve a minimal 1-token slot rather than the full limit: the latter
+    # would let one request whose estimate failed fill the entire bucket,
+    # serializing every concurrent request to the deployment until it
+    # completes and reconciles against actual usage.
+    return 1
 
 
 def _rate_limit_error(limit_label: str, limit: int, current: float) -> litellm.RateLimitError:

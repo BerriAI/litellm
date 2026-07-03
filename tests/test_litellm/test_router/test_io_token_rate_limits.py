@@ -14,6 +14,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     OTPM_CACHE_KEY,
     OTPM_RESERVED_KEY,
+    _reservation_value,
     _resolve_max_tokens,
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
@@ -33,6 +34,16 @@ class TestIOTokenRateLimitHelpers:
     def test_deployment_has_io_token_limits(self):
         assert deployment_has_io_token_limits({"litellm_params": {"itpm": 100, "otpm": 50}})
         assert not deployment_has_io_token_limits({"litellm_params": {"model": "x"}})
+
+    def test_reservation_value_minimal_when_estimate_fails(self):
+        # A failed/empty estimate (0) must reserve a minimal slot, not the
+        # entire limit - otherwise one request whose estimate failed fills
+        # the whole bucket and blocks every concurrent request until it
+        # completes and reconciles.
+        assert _reservation_value(0, 100) == 1
+        assert _reservation_value(0, 1) == 1
+        # A real non-zero estimate is reserved as-is.
+        assert _reservation_value(42, 100) == 42
 
     def test_resolve_max_tokens_respects_explicit_zero(self):
         deployment = {"litellm_params": {"model": "openai/gpt-4o-mini"}}
@@ -189,6 +200,58 @@ class TestModelRateLimitingCheckIOTokens:
         assert current_otpm == successes * max_tokens
 
     @pytest.mark.asyncio
+    async def test_itpm_estimate_failure_reserves_minimal_not_full_limit(self):
+        """
+        When input-token estimation yields 0 (no messages/prompt/input field,
+        unsupported model, tokenizer error), the reservation must be a
+        minimal 1 token, not the entire itpm limit. Otherwise the first
+        request whose estimate fails fills the whole bucket and every
+        concurrent request is rejected until it completes - effectively
+        serializing traffic to the deployment.
+        """
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        itpm_limit = 5
+        deployment = {
+            "litellm_params": {
+                "model": "bedrock_mantle/anthropic.claude-opus-4-7",
+                "itpm": itpm_limit,
+            },
+            "model_info": {"id": "io-itpm-estimate-fail-id"},
+            "model_name": "opus",
+        }
+
+        # No messages/prompt/input field -> _estimate_input_tokens returns 0.
+        set_io_token_rate_limit_request_kwargs(
+            {
+                "max_tokens": 5,
+                "metadata": {},
+            }
+        )
+
+        async def _attempt():
+            try:
+                await check.async_pre_call_check(deployment)
+                return True
+            except litellm.RateLimitError:
+                return False
+
+        results = await asyncio.gather(*[_attempt() for _ in range(8)])
+        successes = sum(1 for r in results if r)
+
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key = f"global_router:io-itpm-estimate-fail-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
+        current_itpm = await dual_cache.async_get_cache(key=itpm_key)
+
+        # A minimal 1-token reservation per request lets itpm_limit concurrent
+        # requests through, instead of a single request starving the rest.
+        assert current_itpm is not None
+        assert current_itpm <= itpm_limit
+        assert successes == itpm_limit
+
+    @pytest.mark.asyncio
     async def test_reservation_read_prefers_top_level_metadata_over_litellm_params(self):
         from litellm.utils import get_utc_datetime
 
@@ -235,7 +298,9 @@ class TestModelRateLimitingCheckIOTokens:
 
         minute = get_utc_datetime().strftime("%H-%M")
         itpm_key = f"global_router:io-zero-est-id:bedrock_mantle/anthropic.claude-opus-4-7:itpm:{minute}"
-        assert await dual_cache.async_get_cache(key=itpm_key) == 100
+        # A failed/zero estimate reserves a minimal 1 token, not the full
+        # itpm limit, so it doesn't starve concurrent requests.
+        assert await dual_cache.async_get_cache(key=itpm_key) == 1
 
         kwargs = {
             "standard_logging_object": {
@@ -254,7 +319,12 @@ class TestModelRateLimitingCheckIOTokens:
         assert await dual_cache.async_get_cache(key=itpm_key) == 7
 
     @pytest.mark.asyncio
-    async def test_zero_estimate_reserves_capacity_before_reconcile(self):
+    async def test_zero_estimate_reserves_minimal_capacity_before_reconcile(self):
+        """
+        A zero/failed estimate reserves a minimal 1 token rather than the
+        full itpm limit, so up to itpm_limit such calls are allowed
+        concurrently instead of the first one claiming the entire bucket.
+        """
         dual_cache = DualCache()
         check = ModelRateLimitingCheck(dual_cache=dual_cache)
         deployment = {
@@ -268,8 +338,13 @@ class TestModelRateLimitingCheckIOTokens:
         request_kwargs = {"max_tokens": 5, "metadata": {}}
         set_io_token_rate_limit_request_kwargs(request_kwargs)
         await check.async_pre_call_check(deployment)
-        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}})
 
+        # Second zero-estimate call still fits within the itpm=2 limit.
+        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}})
+        await check.async_pre_call_check(deployment)
+
+        # A third exceeds the limit and is rejected.
+        set_io_token_rate_limit_request_kwargs({"max_tokens": 5, "metadata": {}})
         with pytest.raises(litellm.RateLimitError):
             await check.async_pre_call_check(deployment)
 
