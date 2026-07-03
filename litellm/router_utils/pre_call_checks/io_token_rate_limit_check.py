@@ -97,7 +97,7 @@ def _get_cache_keys(deployment: dict, current_minute: str) -> Optional[tuple[str
     return itpm_key, otpm_key
 
 
-def _estimate_input_tokens(request_kwargs: Optional[dict[str, Any]]) -> int:
+def _estimate_input_tokens(request_kwargs: Optional[dict[str, Any]], model: str = "") -> int:
     if not request_kwargs:
         return 0
     messages = request_kwargs.get("messages")
@@ -105,9 +105,11 @@ def _estimate_input_tokens(request_kwargs: Optional[dict[str, Any]]) -> int:
     input_text = request_kwargs.get("input")
     # token_counter can raise from any of its tokenizer backends; this is a
     # best-effort estimate for the ITPM reservation and must never fail the
-    # underlying request.
+    # underlying request. Passing the deployment model name uses a model-specific
+    # tokenizer when available, reducing the reservation over/under-estimate window
+    # between pre-call and post-call reconcile.
     with contextlib.suppress(Exception):
-        return max(0, int(token_counter(messages=messages, text=prompt or input_text)))
+        return max(0, int(token_counter(model=model, messages=messages, text=prompt or input_text)))
     return 0
 
 
@@ -388,7 +390,8 @@ def io_token_pre_call_check(
         return deployment
 
     request_kwargs = get_io_token_rate_limit_request_kwargs()
-    estimated_input = _estimate_input_tokens(request_kwargs)
+    _model = (deployment.get("litellm_params") or {}).get("model") or ""
+    estimated_input = _estimate_input_tokens(request_kwargs, model=_model)
     max_tokens = _resolve_max_tokens(request_kwargs, deployment)
 
     dt = get_utc_datetime()
@@ -450,7 +453,8 @@ async def async_io_token_pre_call_check(
         return deployment
 
     request_kwargs = get_io_token_rate_limit_request_kwargs()
-    estimated_input = _estimate_input_tokens(request_kwargs)
+    _model = (deployment.get("litellm_params") or {}).get("model") or ""
+    estimated_input = _estimate_input_tokens(request_kwargs, model=_model)
     max_tokens = _resolve_max_tokens(request_kwargs, deployment)
 
     dt = get_utc_datetime()
@@ -645,6 +649,13 @@ def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: Optiona
     event - which may be scheduled as a background task - gets a chance to
     refund it, permanently stranding the reservation until its TTL expires
     and causing false rate-limit errors for subsequent requests.
+
+    ponytail: uses sync ``DualCache.increment_cache`` which issues a blocking
+    Redis INCR when a Redis backend is configured. This only triggers on
+    streaming mid-stream retries (non-streaming failures await their failure
+    handler before retrying, so the sentinels are already cleared). Upgrade
+    path: make ``_update_kwargs_with_deployment`` async and switch to
+    ``async_io_token_refund_failure`` — requires touching all callers.
     """
     if not kwargs:
         return
