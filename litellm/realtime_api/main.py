@@ -41,21 +41,9 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 
 
 def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
-    updated = {**session}
-    if "model" in updated:
-        updated["model"] = model_name
-    flat_transcription = updated.get("input_audio_transcription")
-    if isinstance(flat_transcription, dict) and "model" in flat_transcription:
-        updated["input_audio_transcription"] = {**flat_transcription, "model": model_name}
-    audio = updated.get("audio")
-    audio_input = audio.get("input") if isinstance(audio, dict) else None
-    transcription = audio_input.get("transcription") if isinstance(audio_input, dict) else None
-    if isinstance(transcription, dict) and "model" in transcription:
-        updated["audio"] = {
-            **audio,
-            "input": {**audio_input, "transcription": {**transcription, "model": model_name}},
-        }
-    return updated
+    if "model" not in session:
+        return session
+    return {**session, "model": model_name}
 
 
 def _build_litellm_metadata(kwargs: dict) -> dict:
@@ -120,7 +108,7 @@ async def acreate_realtime_client_secret(
         session=RealtimeSessionConfig(**session) if session else None,
         expires_after=RealtimeExpiresAfter(**expires_after) if expires_after else None,
     )
-    model_name = req.model or (req.session.model if req.session is not None else None) or "gpt-4o-realtime-preview"
+    model_name = (req.session.model if req.session is not None else None) or req.model or "gpt-4o-realtime-preview"
     litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
     litellm_params = GenericLiteLLMParams(**kwargs)
 
