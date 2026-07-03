@@ -10,9 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles
@@ -21,8 +19,12 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
     CacheSettingsManager,
     CacheSettingsUpdateRequest,
     CacheTestRequest,
+    _resolve_cache_url_precedence,
     test_cache_connection,
     update_cache_settings,
+)
+from litellm.types.management_endpoints.cache_settings_endpoints import (
+    CACHE_SETTINGS_FIELDS,
 )
 
 
@@ -41,9 +43,7 @@ async def test_test_cache_connection_calls_cache_test_connection_with_params():
     }
 
     request = CacheTestRequest(cache_settings=cache_settings)
-    user_api_key_dict = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="test-user"
-    )
+    user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="test-user")
 
     # Mock Cache class and its test_connection method
     mock_cache_instance = MagicMock()
@@ -60,9 +60,7 @@ async def test_test_cache_connection_calls_cache_test_connection_with_params():
         mock_cache_class.return_value = mock_cache_instance
 
         # Call the endpoint
-        result = await test_cache_connection(
-            request=request, user_api_key_dict=user_api_key_dict
-        )
+        result = await test_cache_connection(request=request, user_api_key_dict=user_api_key_dict)
 
         # Verify Cache was instantiated with correct params
         mock_cache_class.assert_called_once_with(**cache_settings)
@@ -74,6 +72,166 @@ async def test_test_cache_connection_calls_cache_test_connection_with_params():
         assert result.status == "success"
         assert result.message == "Redis connection test successful"
         assert result.error is None
+
+
+def test_cache_settings_fields_expose_url_and_db():
+    """The dynamic UI form is driven by CACHE_SETTINGS_FIELDS; url + db must be
+    present (with the right types) so the Redis URL and logical database index
+    are configurable from the Admin UI."""
+    by_name = {f.field_name: f for f in CACHE_SETTINGS_FIELDS}
+
+    assert "url" in by_name
+    assert "db" in by_name
+    # db is a logical database index → integer
+    assert by_name["db"].field_type == "Integer"
+    # Both are common connection fields, shown for every Redis type
+    assert by_name["url"].redis_type is None
+    assert by_name["db"].redis_type is None
+
+
+class TestResolveCacheUrlPrecedence:
+    """url wins over the discrete host/port/db/password fields."""
+
+    def test_url_overrides_discrete_connection_fields(self):
+        settings = {
+            "type": "redis",
+            "url": "redis://:pw@host:6379/1",
+            "host": "host",
+            "port": "6379",
+            "db": 1,
+            "password": "pw",
+            "namespace": "ns",
+            "ttl": 60,
+        }
+
+        result = _resolve_cache_url_precedence(settings)
+
+        assert result["url"] == "redis://:pw@host:6379/1"
+        assert "host" not in result
+        assert "port" not in result
+        assert "db" not in result
+        assert "password" not in result
+        # Non-connection fields survive
+        assert result["type"] == "redis"
+        assert result["namespace"] == "ns"
+        assert result["ttl"] == 60
+
+    def test_no_url_returns_copy_unchanged(self):
+        settings = {"type": "redis", "host": "host", "port": "6379", "db": 1}
+
+        result = _resolve_cache_url_precedence(settings)
+
+        assert result == settings
+        assert result is not settings
+
+    def test_blank_url_does_not_strip_discrete_fields(self):
+        settings = {"type": "redis", "url": "   ", "host": "host", "db": 2}
+
+        result = _resolve_cache_url_precedence(settings)
+
+        assert result["host"] == "host"
+        assert result["db"] == 2
+
+    def test_cluster_mode_keeps_discrete_fields(self):
+        settings = {
+            "type": "redis",
+            "url": "redis://host:6379",
+            "redis_startup_nodes": [{"host": "127.0.0.1", "port": "7001"}],
+            "host": "host",
+            "password": "pw",
+        }
+
+        result = _resolve_cache_url_precedence(settings)
+
+        assert result["host"] == "host"
+        assert result["password"] == "pw"
+
+
+@pytest.mark.asyncio
+async def test_test_cache_connection_url_takes_precedence_over_discrete_fields():
+    """When url + discrete fields are both sent, the tested Cache instance is
+    built from the url alone (host/port/db/password dropped)."""
+    cache_settings = {
+        "type": "redis",
+        "url": "redis://:pw@host:6379/1",
+        "host": "ignored-host",
+        "port": "6379",
+        "db": 1,
+        "password": "pw",
+    }
+
+    request = CacheTestRequest(cache_settings=cache_settings)
+    user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="test-user")
+
+    mock_cache_instance = MagicMock()
+    mock_cache_instance.cache = MagicMock()
+    mock_cache_instance.cache.test_connection = AsyncMock(return_value={"status": "success", "message": "ok"})
+
+    with patch("litellm.Cache") as mock_cache_class:
+        mock_cache_class.return_value = mock_cache_instance
+
+        result = await test_cache_connection(request=request, user_api_key_dict=user_api_key_dict)
+
+        called_kwargs = mock_cache_class.call_args.kwargs
+        assert called_kwargs["url"] == "redis://:pw@host:6379/1"
+        assert "host" not in called_kwargs
+        assert "port" not in called_kwargs
+        assert "db" not in called_kwargs
+        assert "password" not in called_kwargs
+        assert result.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_update_cache_settings_persists_url_precedence(monkeypatch):
+    """The persisted (source-of-truth) row and the reinitialized cache both use
+    the url-resolved settings, so a stored config never carries a contradictory
+    host+url pair."""
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_cacheconfig.upsert = AsyncMock()
+
+    proxy_config = MagicMock()
+    proxy_config._encrypt_env_variables = MagicMock(
+        side_effect=lambda environment_variables: dict(environment_variables)
+    )
+    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+    proxy_config._init_cache = MagicMock()
+    proxy_config.switch_on_llm_response_caching = MagicMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),
+    ):
+        await update_cache_settings(
+            request=CacheSettingsUpdateRequest(
+                cache_settings={
+                    "type": "redis",
+                    "url": "redis://:pw@host:6379/1",
+                    "host": "ignored-host",
+                    "port": "6379",
+                    "db": 1,
+                    "password": "pw",
+                    "namespace": "ns",
+                }
+            ),
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    persisted = proxy_config._encrypt_env_variables.call_args.kwargs["environment_variables"]
+    assert persisted["url"] == "redis://:pw@host:6379/1"
+    assert persisted["namespace"] == "ns"
+    assert "host" not in persisted
+    assert "port" not in persisted
+    assert "db" not in persisted
+    assert "password" not in persisted
+
+    init_params = proxy_config._init_cache.call_args.kwargs["cache_params"]
+    assert "host" not in init_params
+    assert init_params["url"] == "redis://:pw@host:6379/1"
 
 
 class TestCacheSettingsManager:
@@ -182,12 +340,8 @@ class TestCacheSettingsManager:
         # Mock prisma client
         mock_prisma_client = MagicMock()
         mock_cache_config = MagicMock()
-        mock_cache_config.cache_settings = (
-            '{"type": "redis", "host": "localhost", "port": "6379"}'
-        )
-        mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
-            return_value=mock_cache_config
-        )
+        mock_cache_config.cache_settings = '{"type": "redis", "host": "localhost", "port": "6379"}'
+        mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=mock_cache_config)
 
         # Mock proxy_config
         mock_proxy_config = MagicMock()
@@ -231,12 +385,8 @@ class TestCacheSettingsManager:
         # Mock prisma client
         mock_prisma_client = MagicMock()
         mock_cache_config = MagicMock()
-        mock_cache_config.cache_settings = (
-            '{"type": "redis", "host": "localhost", "port": "6379"}'
-        )
-        mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
-            return_value=mock_cache_config
-        )
+        mock_cache_config.cache_settings = '{"type": "redis", "host": "localhost", "port": "6379"}'
+        mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=mock_cache_config)
 
         # Mock proxy_config
         mock_proxy_config = MagicMock()
@@ -274,9 +424,7 @@ class TestCacheSettingsManager:
             return None  # No config → function returns early after retry.
 
         mock_prisma_client = MagicMock()
-        mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
-            side_effect=_flaky_find_unique
-        )
+        mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(side_effect=_flaky_find_unique)
         mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
         mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
         mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
@@ -289,10 +437,7 @@ class TestCacheSettingsManager:
         assert len(invocations) == 2
         mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
         reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-        assert (
-            reconnect_kwargs["reason"]
-            == "init_cache_settings_in_db_lookup_failure"
-        )
+        assert reconnect_kwargs["reason"] == "init_cache_settings_in_db_lookup_failure"
 
 
 # ── Audit-log emission for /cache/settings ────────────────────────────────────
@@ -320,9 +465,7 @@ async def test_update_cache_settings_emits_audit_log_when_enabled(monkeypatch):
     proxy_config._encrypt_env_variables = MagicMock(
         side_effect=lambda environment_variables: dict(environment_variables)
     )
-    proxy_config._decrypt_db_variables = MagicMock(
-        side_effect=lambda variables_dict: dict(variables_dict)
-    )
+    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
     proxy_config._init_cache = MagicMock()
     proxy_config.switch_on_llm_response_caching = MagicMock()
 
@@ -392,9 +535,7 @@ async def test_update_cache_settings_no_audit_when_disabled(monkeypatch):
     proxy_config._encrypt_env_variables = MagicMock(
         side_effect=lambda environment_variables: dict(environment_variables)
     )
-    proxy_config._decrypt_db_variables = MagicMock(
-        side_effect=lambda variables_dict: dict(variables_dict)
-    )
+    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
     proxy_config._init_cache = MagicMock()
     proxy_config.switch_on_llm_response_caching = MagicMock()
 
@@ -422,9 +563,7 @@ async def test_update_cache_settings_no_audit_when_disabled(monkeypatch):
         ),
     ):
         await update_cache_settings(
-            request=CacheSettingsUpdateRequest(
-                cache_settings={"type": "redis", "host": "redis.example.com"}
-            ),
+            request=CacheSettingsUpdateRequest(cache_settings={"type": "redis", "host": "redis.example.com"}),
             user_api_key_dict=_admin_auth(),
             litellm_changed_by=None,
         )
