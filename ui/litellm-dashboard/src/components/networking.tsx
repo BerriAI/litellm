@@ -2835,6 +2835,7 @@ export interface Member {
   rpm_limit?: number | null;
   budget_duration?: string | null;
   allowed_models?: string[] | null;
+  model_max_budget_in_team?: Record<string, { budget_limit: number; time_period: string }> | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {

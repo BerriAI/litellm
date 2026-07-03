@@ -78,7 +78,7 @@ export interface TeamMembership {
     max_parallel_requests: number | null;
     tpm_limit: number | null;
     rpm_limit: number | null;
-    model_max_budget: Record<string, number> | null;
+    model_max_budget: Record<string, { budget_limit: number; time_period: string }> | null;
     budget_duration: string | null;
     budget_reset_at: string | null;
     allowed_models?: string[] | null;
