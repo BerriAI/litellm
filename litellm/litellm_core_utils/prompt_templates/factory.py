@@ -5547,7 +5547,7 @@ def _bedrock_tools_pt(
     ]
     """
     from litellm.llms.bedrock.common_utils import (
-        get_bedrock_base_model,
+        bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
@@ -5556,9 +5556,12 @@ def _bedrock_tools_pt(
         ("array", "boolean", "integer", "null", "number", "object", "string")
     )
     # Only Claude on Bedrock honours strict tool schemas; other families
-    # (Nova, Llama, GPT-OSS) reject the strict field outright.
+    # (Nova, Llama, GPT-OSS) reject the strict field outright. Opus 4.7/4.8
+    # also reject `strict` on Bedrock Converse (see #31582) — their validator
+    # maps toolSpec to the native Anthropic tool shape, which has no strict
+    # field, even though Anthropic's native API accepts it as a top-level key.
     supports_strict_tools = bool(
-        model and get_bedrock_base_model(model).startswith("anthropic")
+        model and bedrock_converse_supports_strict_tools(model)
     )
     tool_block_list: List[BedrockToolBlock] = []
     for tool_idx, tool in enumerate(tools):
