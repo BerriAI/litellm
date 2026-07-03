@@ -45,6 +45,25 @@ _CACHE_SENSITIVE_FIELDS: set = {"password", "sentinel_password"}
 _REDACTED_VALUE = "***REDACTED***"
 
 
+_URL_OVERRIDDEN_CONNECTION_FIELDS: frozenset = frozenset({"host", "port", "db", "password"})
+
+
+def _resolve_cache_url_precedence(settings: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return cache settings with the url-vs-discrete-fields ambiguity resolved.
+
+    When a full ``url`` is supplied it wins: the discrete host/port/db/password
+    fields are dropped so the persisted config is unambiguous and matches
+    runtime resolution in ``litellm._redis`` (``redis.Redis.from_url`` ignores
+    them). Cluster mode (``redis_startup_nodes``) is exempt because it
+    authenticates via the discrete fields rather than a url.
+    """
+    url = settings.get("url")
+    has_url = isinstance(url, str) and url.strip() != ""
+    if not has_url or settings.get("redis_startup_nodes"):
+        return dict(settings)
+    return {k: v for k, v in settings.items() if k not in _URL_OVERRIDDEN_CONNECTION_FIELDS}
+
+
 def _redact_settings(settings: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     """Replace every value in a settings map with a fixed marker.
 
@@ -311,7 +330,7 @@ async def test_cache_connection(
     from litellm import Cache
 
     try:
-        cache_settings = request.cache_settings.copy()
+        cache_settings = _resolve_cache_url_precedence(request.cache_settings)
         verbose_proxy_logger.debug("Testing cache connection with settings: %s", cache_settings)
 
         # Only support Redis for now
@@ -378,7 +397,7 @@ async def update_cache_settings(
         )
 
     try:
-        cache_settings = request.cache_settings.copy()
+        cache_settings = _resolve_cache_url_precedence(request.cache_settings)
 
         # Snapshot the prior settings (key set only — values get redacted in
         # the audit row) so the audit-log entry shows which fields changed.
