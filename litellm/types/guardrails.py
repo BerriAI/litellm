@@ -135,6 +135,16 @@ class SupportedGuardrailIntegrations(Enum):
     STRAIKER = "straiker"
 
 
+AZURE_TEXT_MODERATION_PARAM_KEYS = (
+    "categories",
+    "severity_threshold",
+    "severity_threshold_by_category",
+    "blocklistNames",
+    "haltOnBlocklistHit",
+    "outputType",
+)
+
+
 class Role(Enum):
     SYSTEM = "system"
     ASSISTANT = "assistant"
@@ -988,6 +998,22 @@ class LitellmParams(
             return float(v)
         except (TypeError, ValueError) as e:
             raise ValueError(f"timeout must be numeric, got {v!r}") from e
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_azure_text_moderation_params(cls, data):
+        if not isinstance(data, dict):
+            return data
+        if data.get("guardrail") != SupportedGuardrailIntegrations.AZURE_TEXT_MODERATIONS.value:
+            return data
+
+        optional_params = dict(data.get("optional_params") or {})
+        for key in AZURE_TEXT_MODERATION_PARAM_KEYS:
+            if key in data:
+                optional_params[key] = data.pop(key)
+        if optional_params:
+            data["optional_params"] = optional_params
+        return data
 
     def __init__(self, **kwargs):
         default_on = kwargs.pop("default_on", None)
