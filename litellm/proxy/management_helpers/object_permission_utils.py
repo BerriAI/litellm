@@ -370,6 +370,53 @@ def _get_all_mcp_server_ids() -> set[str]:
     return set(global_mcp_server_manager.get_registry().keys())
 
 
+async def _existing_object_permission_mcp_servers(
+    object_permission_id: Optional[str],
+    prisma_client: Optional[PrismaClient],
+) -> list[str]:
+    if not object_permission_id or prisma_client is None:
+        return []
+    existing = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        where={"object_permission_id": object_permission_id},
+    )
+    if existing is None:
+        return []
+    return existing.mcp_servers or []
+
+
+async def enforce_all_proxy_mcp_servers_grant_is_admin_only(
+    requested_mcp_servers: Optional[list[str]],
+    existing_object_permission_id: Optional[str],
+    is_proxy_admin: bool,
+    prisma_client: Optional[PrismaClient],
+) -> None:
+    """
+    Only a proxy admin may newly grant the all-proxy MCP sentinel.
+
+    Scoping a team to every MCP server on the proxy is a proxy-wide authorization
+    decision, so a caller who is not a proxy admin (e.g. a team admin managing their
+    own team) cannot add ``all-proxy-mcpservers``. A sentinel a proxy admin already
+    granted is left untouched, so unrelated edits to such a team still succeed.
+
+    Raises HTTPException(403) when a non-admin tries to add the sentinel.
+    """
+    sentinel = SpecialMCPServerName.all_proxy_servers.value
+    if is_proxy_admin or sentinel not in (requested_mcp_servers or []):
+        return
+    existing_mcp_servers = await _existing_object_permission_mcp_servers(
+        object_permission_id=existing_object_permission_id,
+        prisma_client=prisma_client,
+    )
+    if sentinel in existing_mcp_servers:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": "Only a proxy admin can grant a team access to all proxy MCP servers ('all-proxy-mcpservers')."
+        },
+    )
+
+
 async def _get_team_allowed_mcp_servers(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: Optional[PrismaClient] = None,

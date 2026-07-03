@@ -1356,7 +1356,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         value={form.getFieldValue("mcp_servers_and_groups")}
                         accessToken={accessToken || ""}
                         placeholder="Select MCP servers or access groups (optional)"
-                        allowAllProxyMcpServers
+                        allowAllProxyMcpServers={is_proxy_admin}
                       />
                     </Form.Item>
 
