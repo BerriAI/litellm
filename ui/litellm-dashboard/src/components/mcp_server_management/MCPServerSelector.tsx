@@ -3,7 +3,7 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { Select } from "antd";
 import React from "react";
-import { NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
+import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 
 interface MCPServerSelectorProps {
   onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
@@ -18,6 +18,7 @@ interface MCPServerSelectorProps {
   disabled?: boolean;
   teamId?: string | null;
   allowNoMcpServers?: boolean;
+  allowAllProxyMcpServers?: boolean;
 }
 
 const TOOLSET_PREFIX = "toolset:";
@@ -31,6 +32,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   disabled = false,
   teamId,
   allowNoMcpServers = false,
+  allowAllProxyMcpServers = false,
 }) => {
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
@@ -81,9 +83,14 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   ];
 
   const hasNoMcpServersSelected = allowNoMcpServers && selectedValues.includes(NO_MCP_SERVERS_SENTINEL);
+  const hasAllProxyMcpServersSelected = selectedValues.includes(ALL_PROXY_MCP_SERVERS_SENTINEL);
 
   // Handle selection
   const handleChange = (selected: string[]) => {
+    if (allowAllProxyMcpServers && selected.includes(ALL_PROXY_MCP_SERVERS_SENTINEL)) {
+      onChange({ servers: [ALL_PROXY_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
+      return;
+    }
     // "No MCP Servers" is exclusive: picking it clears everything else.
     if (allowNoMcpServers && selected.includes(NO_MCP_SERVERS_SENTINEL)) {
       onChange({ servers: [NO_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
@@ -113,10 +120,20 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         disabled={disabled}
         filterOption={(input, option) => {
           if (option?.value === NO_MCP_SERVERS_SENTINEL) return true;
+          if (option?.value === ALL_PROXY_MCP_SERVERS_SENTINEL) return true;
           const searchText = options.find((opt) => opt.value === option?.value)?.searchText || "";
           return searchText.toLowerCase().includes(input.toLowerCase());
         }}
       >
+        {(allowAllProxyMcpServers || hasAllProxyMcpServersSelected) && (
+          <Select.Option
+            key={ALL_PROXY_MCP_SERVERS_SENTINEL}
+            value={ALL_PROXY_MCP_SERVERS_SENTINEL}
+            label="All Proxy MCP Servers"
+          >
+            <span style={{ color: "#1890ff", fontWeight: 500 }}>All Proxy MCP Servers</span>
+          </Select.Option>
+        )}
         {allowNoMcpServers && (
           <Select.Option key={NO_MCP_SERVERS_SENTINEL} value={NO_MCP_SERVERS_SENTINEL} label="No MCP Servers">
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -126,7 +143,12 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
           </Select.Option>
         )}
         {options.map((opt) => (
-          <Select.Option key={opt.value} value={opt.value} label={opt.label} disabled={hasNoMcpServersSelected}>
+          <Select.Option
+            key={opt.value}
+            value={opt.value}
+            label={opt.label}
+            disabled={hasNoMcpServersSelected || hasAllProxyMcpServersSelected}
+          >
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span
                 style={{
