@@ -3337,7 +3337,7 @@ class MCPServerManager:
         call_tool_params: MCPCallToolRequestParams,
         host_progress_callback: Optional[Callable],
         mcp_server: MCPServer,
-        server_auth_header: Optional[Union[str, dict[str, str]]],
+        server_auth_header: str | dict[str, str] | None,
         extra_headers: Optional[dict[str, str]],
         stdio_env: Optional[dict[str, str]],
         subject_token: Optional[str],
