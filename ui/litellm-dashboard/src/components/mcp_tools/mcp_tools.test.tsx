@@ -131,6 +131,25 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
   });
 
+  it("gates an OBO server whose stored token is expired and the list call 401s (refresh could not mint a token)", async () => {
+    // has_credential=true but the list call 401s: the server-side refresh could not
+    // produce a valid token (e.g. expired with no usable refresh token), so the user
+    // must reauthorize instead of seeing a dead empty list.
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue(
+      credStatus({ has_credential: true, is_expired: true }),
+    );
+    vi.mocked(listMCPTools).mockResolvedValue({
+      tools: [],
+      error: "unauthorized",
+      status: 401,
+    } as unknown as Awaited<ReturnType<typeof listMCPTools>>);
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
+  });
+
   it("does not gate an M2M server; lists with the LiteLLM key", async () => {
     renderViewer({ oauth2_flow: "client_credentials", delegate_auth_to_upstream: false });
 
