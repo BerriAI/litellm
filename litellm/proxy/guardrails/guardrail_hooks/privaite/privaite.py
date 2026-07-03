@@ -152,11 +152,16 @@ class PrivaiteGuardrail(CustomGuardrail):
             engine = PIIEngine(config)
             try:
                 await engine.initialize()
-            except OSError:
+            except OSError as exc:
                 # spaCy models not present yet: download them once, then retry.
                 # The download is synchronous pip machinery pulling hundreds of
                 # MB; run it off the event loop so it does not stall every other
-                # request in this proxy worker.
+                # request in this proxy worker. Only the missing-model OSError
+                # (spaCy E050) takes this path; permission/disk/network errors
+                # re-raise instead of triggering a pointless download.
+                message = str(exc)
+                if "E050" not in message and "Can't find model" not in message:
+                    raise
                 from spacy.cli import download
 
                 for lang in languages:
@@ -362,7 +367,11 @@ class PrivaiteGuardrail(CustomGuardrail):
         the legacy function_call."""
         content = getattr(delta, "content", None) or ""
         restored = restore(("content", index), content, finished)
-        if content or finished:
+        # Overwrite whenever there was input text (even if the whole fragment is
+        # held back, the raw fragment must not stay visible) or the finish flush
+        # produced text; a terminal chunk with content=None and nothing held back
+        # keeps its None instead of becoming "".
+        if content or restored:
             delta.content = restored
         for field in ("reasoning_content", "reasoning"):
             value = getattr(delta, field, None)
