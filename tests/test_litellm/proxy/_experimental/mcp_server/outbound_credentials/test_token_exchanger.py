@@ -146,6 +146,20 @@ async def test_rotated_config_re_exchanges_before_ttl():
 
 
 @pytest.mark.asyncio
+async def test_rotated_token_endpoint_auth_method_re_exchanges_before_ttl():
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    rotated = _CONFIG.model_copy(update={"token_endpoint_auth_method": "client_secret_basic"})
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    await exchanger.exchange("jwt", _SERVER, rotated)
+    assert len(post.calls) == 2
+    _, second_form = post.calls[1]
+    assert "client_id" not in second_form
+    assert "client_secret" not in second_form
+    assert "Authorization" in post.headers[1]
+
+
+@pytest.mark.asyncio
 async def test_concurrent_callers_single_flight_one_exchange():
     release = asyncio.Event()
 
