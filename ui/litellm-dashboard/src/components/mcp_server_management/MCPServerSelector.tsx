@@ -131,7 +131,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
             value={ALL_PROXY_MCP_SERVERS_SENTINEL}
             label="All Proxy MCP Servers"
           >
-            <span style={{ color: "#52c41a", fontWeight: 500 }}>All Proxy MCP Servers</span>
+            <span style={{ color: "#1890ff", fontWeight: 500 }}>All Proxy MCP Servers</span>
           </Select.Option>
         )}
         {allowNoMcpServers && (
