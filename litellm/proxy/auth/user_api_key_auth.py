@@ -30,6 +30,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
+    _can_object_call_model,
     _check_end_user_budget,
     _delete_cache_key_object,
     _get_user_role,
@@ -221,6 +222,15 @@ async def _check_key_model_budget_with_fallback(
                 valid_token=valid_token,
                 llm_router=llm_router,
             )
+            if valid_token.team_models:
+                _can_object_call_model(
+                    model=fallback_model,
+                    llm_router=llm_router,
+                    models=valid_token.team_models,
+                    team_model_aliases=valid_token.team_model_aliases,
+                    team_id=valid_token.team_id,
+                    object_type="team",
+                )
         except ProxyException:
             raise e
         request_data["model"] = fallback_model
