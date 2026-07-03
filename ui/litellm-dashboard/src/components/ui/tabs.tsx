@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { cva, type VariantProps } from "class-variance-authority";
+import { type VariantProps } from "cva";
 import { Tabs as TabsPrimitive } from "radix-ui";
 
-import { cn } from "@/lib/cva.config";
+import { cn, cva } from "@/lib/cva.config";
 
 function Tabs({ className, orientation = "horizontal", ...props }: React.ComponentProps<typeof TabsPrimitive.Root>) {
   return (
@@ -18,20 +18,18 @@ function Tabs({ className, orientation = "horizontal", ...props }: React.Compone
   );
 }
 
-const tabsListVariants = cva(
-  "group/tabs-list inline-flex w-fit items-center justify-center rounded-lg p-[3px] text-muted-foreground group-data-[orientation=horizontal]/tabs:h-9 group-data-[orientation=vertical]/tabs:h-fit group-data-[orientation=vertical]/tabs:flex-col data-[variant=line]:rounded-none",
-  {
-    variants: {
-      variant: {
-        default: "bg-muted",
-        line: "gap-1 bg-transparent",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
+const tabsListVariants = cva({
+  base: "group/tabs-list inline-flex w-fit items-center justify-center rounded-lg p-[3px] text-muted-foreground group-data-[orientation=horizontal]/tabs:h-9 group-data-[orientation=vertical]/tabs:h-fit group-data-[orientation=vertical]/tabs:flex-col data-[variant=line]:rounded-none",
+  variants: {
+    variant: {
+      default: "bg-muted",
+      line: "gap-1 bg-transparent",
     },
   },
-);
+  defaultVariants: {
+    variant: "default",
+  },
+});
 
 function TabsList({
   className,
