@@ -7627,6 +7627,7 @@ class ProxyStartupEvent:
                     proxy_logging_obj=proxy_logging_obj,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
+                    track_unmanaged_vertex_batch_cost=general_settings.get("track_unmanaged_vertex_batch_cost", False),
                 )
                 scheduler.add_job(
                     check_batch_cost_job.check_batch_cost,
@@ -8360,6 +8361,22 @@ async def model_info(
     )
 
 
+def _blocked_response_usage(original_response: Optional[Any]) -> "litellm.Usage":
+    """
+    Token usage for a synthetic guardrail-blocked response.
+
+    A post-call block replaces the LLM's response with the violation message,
+    but the upstream call already consumed tokens -- report that real usage
+    (carried on ``ModifyResponseException.original_response``) rather than
+    discarding it. Pre-call blocks never invoked the LLM (no original_response),
+    so usage is zero.
+    """
+    usage = getattr(original_response, "usage", None) if original_response is not None else None
+    if isinstance(usage, litellm.Usage):
+        return usage
+    return litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+
+
 @router.post(
     "/v1/chat/completions",
     dependencies=[Depends(user_api_key_auth)],
@@ -8466,6 +8483,9 @@ async def chat_completion(
         _chat_response.model = e.model  # type: ignore
         _chat_response.choices[0].message.content = e.message  # type: ignore
         _chat_response.choices[0].finish_reason = "content_filter"  # type: ignore
+        # Report the blocked LLM response's real usage (set before the stream
+        # branch so both paths carry it); zero for pre-call blocks.
+        _chat_response.usage = _blocked_response_usage(e.original_response)  # type: ignore
 
         if data.get("stream", None) is not None and data["stream"] is True:
             _iterator = litellm.utils.ModelResponseIterator(model_response=_chat_response, convert_to_delta=True)
@@ -8487,8 +8507,6 @@ async def chat_completion(
                 media_type="text/event-stream",
                 status_code=200,  # Return 200 for passthrough mode
             )
-        _usage = litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
-        _chat_response.usage = _usage  # type: ignore
         return _chat_response
     except RejectedRequestError as e:
         _data = e.request_data
@@ -8617,11 +8635,7 @@ async def completion(
             # Set text attribute dynamically for text completion format
             setattr(_text_response.choices[0], "text", e.message)
             _text_response.model = e.model  # type: ignore[assignment]
-            _usage = litellm.Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
+            _usage = _blocked_response_usage(e.original_response)
             # Set usage attribute dynamically (ModelResponse accepts usage in __init__ but it's not in type definition)
             setattr(_text_response, "usage", _usage)
             _iterator = litellm.utils.ModelResponseIterator(model_response=_text_response, convert_to_delta=True)
@@ -8646,11 +8660,7 @@ async def completion(
             _response = litellm.TextCompletionResponse()
             _response.choices[0].text = e.message
             _response.model = e.model  # type: ignore
-            _usage = litellm.Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
+            _usage = _blocked_response_usage(e.original_response)
             _response.usage = _usage  # type: ignore
             return _response
     except RejectedRequestError as e:
@@ -15620,9 +15630,10 @@ app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)
+app.include_router(batches_router)
+app.include_router(openai_files_router)
 app.include_router(llm_passthrough_router)
 app.include_router(pass_through_router)
-app.include_router(batches_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
@@ -15637,7 +15648,6 @@ app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
-app.include_router(openai_files_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
