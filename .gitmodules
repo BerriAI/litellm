@@ -1,0 +1,3 @@
+[submodule "tests/e2e/litellm-regression-tests"]
+	path = tests/e2e/litellm-regression-tests
+	url = https://github.com/otaviofbrito/litellm-regression-tests.git

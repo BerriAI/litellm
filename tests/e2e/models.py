@@ -6,6 +6,8 @@ response validates without mirroring every proxy field. No untyped dicts.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, RootModel
 
 # ---------- keys ----------
@@ -34,6 +36,7 @@ class KeyGenerateBody(BaseModel):
     budget_limits: list[BudgetWindow] | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    allowed_routes: list[str] | None = None
 
 
 class KeyGenerateResponse(BaseModel):
@@ -194,6 +197,20 @@ class SpendCalculateResponse(BaseModel):
     cost: float
 
 
+# ---------- spend tags ----------
+
+
+class TagSpend(BaseModel):
+    individual_request_tag: str | None = None
+    log_count: int | None = None
+    total_spend: float | None = None
+
+
+class SpendTagsResponse(RootModel[list[TagSpend]]):
+    """GET /spend/tags answers with a bare array of per-tag aggregates, not an
+    object wrapping them (that's /global/spend/tags). Read the rows off .root."""
+
+
 # ---------- route probing ----------
 
 
@@ -263,3 +280,62 @@ class ModelInfoEntry(BaseModel):
 
 class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
+
+
+class FileEntry(BaseModel):
+    id: str
+
+
+class FileListResponse(BaseModel):
+    """GET /files answer. `data` is required on purpose: a 200 whose body lacks
+    the OpenAI-format file list must fail validation, not pass vacuously."""
+
+    data: list[FileEntry]
+
+
+class FineTuningJobsParams(BaseModel):
+    custom_llm_provider: Literal["openai", "azure"]
+
+
+class FineTuningJobEntry(BaseModel):
+    id: str
+
+
+class FineTuningJobsResponse(BaseModel):
+    """GET /fine_tuning/jobs answer; `data` required for the same reason as
+    FileListResponse."""
+
+    data: list[FineTuningJobEntry]
+
+
+# ---------- model management ----------
+
+
+class LiteLLMParamsBody(BaseModel):
+    """POST /model/new litellm_params: `model` is the only required field; `api_key`
+    et al may be an `os.environ/FOO` reference the proxy resolves at call time."""
+
+    model: str
+    api_key: str | None = None
+    api_base: str | None = None
+    api_version: str | None = None
+
+
+class ModelInfoBody(BaseModel):
+    id: str
+
+
+class ModelNewBody(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    model_name: str
+    litellm_params: LiteLLMParamsBody
+    model_info: ModelInfoBody
+
+
+class ModelNewResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+    model_id: str
+
+
+class ModelDeleteBody(BaseModel):
+    id: str
