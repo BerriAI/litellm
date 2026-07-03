@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, call as mock_call, patch
 
 import pytest
@@ -16,6 +17,8 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._types import (
+    LiteLLM_MCPServerTable,
+    MCPTransport,
     SpecialHeaders,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
@@ -99,6 +102,66 @@ class TestMCPRequestHandler:
                 # Verify helper methods were called
                 mock_key_servers.assert_called_once_with(mock_user_auth)
                 mock_team_servers.assert_called_once_with(mock_user_auth)
+
+    async def test_get_allowed_mcp_servers_for_team_all_proxy_mcps(self):
+        """A team scoped to the all-proxy-mcps sentinel resolves to every
+        server in the live registry — the smoothest path requested in the
+        ticket, exercised through the real expansion logic."""
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        for server_id in ("srv-a", "srv-b", "srv-c"):
+            await manager.add_server(
+                LiteLLM_MCPServerTable(
+                    server_id=server_id,
+                    alias=server_id,
+                    description="",
+                    url=None,
+                    transport=MCPTransport.stdio,
+                    command="python",
+                    args=["-m", "server"],
+                    env={},
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                )
+            )
+
+        object_permission = MagicMock()
+        object_permission.mcp_servers = [
+            SpecialMCPServerNames.all_proxy_mcp_servers.value
+        ]
+        object_permission.mcp_access_groups = []
+        object_permission.mcp_tool_permissions = None
+
+        team_obj = MagicMock()
+        team_obj.object_permission = object_permission
+        team_obj.access_group_ids = []
+
+        user_auth = UserAPIKeyAuth(api_key="k", user_id="u", team_id="t")
+
+        with patch(
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ), patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            AsyncMock(return_value=team_obj),
+        ), patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            AsyncMock(return_value=[]),
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ), patch.object(
+            MCPRequestHandler,
+            "_get_mcp_servers_from_access_groups",
+            AsyncMock(return_value=[]),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+                user_auth
+            )
+
+        assert sorted(result) == ["srv-a", "srv-b", "srv-c"]
 
     @pytest.mark.parametrize(
         "team_servers,key_servers,expected_servers,scenario",
@@ -314,6 +377,65 @@ class TestMCPRequestHandler:
             )
 
         assert result == [SpecialMCPServerNames.no_mcp_servers.value]
+
+    @pytest.mark.parametrize(
+        "team_servers,expected",
+        [
+            (["team_server1", "team_server2"], ["team_server1", "team_server2"]),
+            # Fail closed: a team that grants nothing leaves an all-team-mcps key
+            # with zero servers rather than inheriting the whole proxy.
+            ([], []),
+        ],
+    )
+    async def test_all_team_mcps_sentinel_resolves_to_team_set(
+        self, team_servers, expected
+    ):
+        """A key scoped to all-team-mcps resolves to exactly its team's servers,
+        tracking the team grant and never leaking the sentinel marker."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key", user_id="test-user", team_id="test-team"
+        )
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.all_team_mcp_servers.value
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ), patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_team",
+            new_callable=AsyncMock,
+            return_value=team_servers,
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+        assert sorted(result) == sorted(expected)
+        assert SpecialMCPServerNames.all_team_mcp_servers.value not in result
+
+    async def test_get_allowed_mcp_servers_for_key_returns_all_team_marker(self):
+        """_get_allowed_mcp_servers_for_key surfaces the all-team-mcps sentinel
+        unexpanded so the caller can map it onto the team set, ignoring any other
+        entries on the key."""
+        user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        key_object_permission = MagicMock()
+        key_object_permission.mcp_servers = [
+            SpecialMCPServerNames.all_team_mcp_servers.value,
+            "some-other-server",
+        ]
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=key_object_permission,
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+                user_api_key_auth
+            )
+
+        assert result == [SpecialMCPServerNames.all_team_mcp_servers.value]
 
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""

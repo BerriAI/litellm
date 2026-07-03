@@ -40,6 +40,7 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPEnvVarScope,
     MCPTransport,
+    SpecialMCPServerNames,
 )
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
@@ -112,6 +113,129 @@ class TestMCPServerManager:
         assert added_server.command == "python"
         assert added_server.args == ["-m", "server"]
         assert added_server.env == {"DEBUG": "1", "TEST": "1"}
+
+    async def test_expand_permission_list_all_proxy_mcps_sentinel(self):
+        """The all-proxy-mcps sentinel expands to every server in the live
+        registry and re-expands against servers registered later, so a grant
+        stays current without the permission list being re-edited."""
+        manager = MCPServerManager()
+
+        async def _register(server_id: str):
+            await manager.add_server(
+                LiteLLM_MCPServerTable(
+                    server_id=server_id,
+                    alias=server_id,
+                    description="",
+                    url=None,
+                    transport=MCPTransport.stdio,
+                    command="python",
+                    args=["-m", "server"],
+                    env={},
+                    created_at=datetime.now(),
+                    updated_at=datetime.now(),
+                )
+            )
+
+        await _register("srv-a")
+        await _register("srv-b")
+
+        sentinel = SpecialMCPServerNames.all_proxy_mcp_servers.value
+
+        assert set(manager.expand_permission_list([sentinel])) == {"srv-a", "srv-b"}
+
+        # The sentinel dominates: mixing it with a concrete id still grants all.
+        assert set(manager.expand_permission_list([sentinel, "srv-a"])) == {
+            "srv-a",
+            "srv-b",
+        }
+
+        # A server registered after the grant is included with no re-edit.
+        await _register("srv-c")
+        assert set(manager.expand_permission_list([sentinel])) == {
+            "srv-a",
+            "srv-b",
+            "srv-c",
+        }
+
+        # Without the sentinel, only the named server resolves — proving the
+        # full-registry result above comes from the sentinel branch, not a
+        # blanket "return everything".
+        assert manager.expand_permission_list(["srv-a"]) == ["srv-a"]
+
+    async def test_expand_permission_list_resolution_branches(self):
+        """Pin every non-all-proxy branch of expand_permission_list: empty,
+        concrete id passthrough, alias/server_name expansion, and unknown
+        passthrough. Guards the ExplicitServers resolution loop."""
+        manager = MCPServerManager()
+        await manager.add_server(
+            LiteLLM_MCPServerTable(
+                server_id="srv-x",
+                alias="my-alias",
+                server_name="my-server-name",
+                description="",
+                url=None,
+                transport=MCPTransport.stdio,
+                command="python",
+                args=["-m", "server"],
+                env={},
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+
+        assert manager.expand_permission_list([]) == []
+        assert manager.expand_permission_list(["srv-x"]) == ["srv-x"]
+        assert manager.expand_permission_list(["my-alias"]) == ["srv-x"]
+        assert manager.expand_permission_list(["my-server-name"]) == ["srv-x"]
+        assert manager.expand_permission_list(["ghost"]) == ["ghost"]
+
+    async def test_expand_permission_list_no_mcp_servers_passthrough(self):
+        """The no-mcp-servers sentinel is not a registered server, so today it
+        passes through unchanged. Callers (key opt-out, team expansion) rely on
+        this literal surviving expand_permission_list, so pin it."""
+        manager = MCPServerManager()
+        await manager.add_server(
+            LiteLLM_MCPServerTable(
+                server_id="srv-x",
+                alias="srv-x",
+                description="",
+                url=None,
+                transport=MCPTransport.stdio,
+                command="python",
+                args=["-m", "server"],
+                env={},
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+        sentinel = SpecialMCPServerNames.no_mcp_servers.value
+        assert manager.expand_permission_list([sentinel]) == [sentinel]
+
+    async def test_expand_permission_list_all_team_mcps_passthrough(self):
+        """all-team-mcps cannot be expanded here (it needs team context, which
+        the registry-only manager lacks), so it is surfaced unexpanded for the
+        key resolver to map onto the team set. Pin that the literal survives and
+        is never confused with a registered server."""
+        manager = MCPServerManager()
+        await manager.add_server(
+            LiteLLM_MCPServerTable(
+                server_id="srv-x",
+                alias="srv-x",
+                description="",
+                url=None,
+                transport=MCPTransport.stdio,
+                command="python",
+                args=["-m", "server"],
+                env={},
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        )
+        sentinel = SpecialMCPServerNames.all_team_mcp_servers.value
+        assert manager.expand_permission_list([sentinel]) == [sentinel]
+        # Mixed with a real id the sentinel still dominates (most-restrictive
+        # grant), so the named server is NOT additionally resolved.
+        assert manager.expand_permission_list([sentinel, "srv-x"]) == [sentinel]
 
     async def test_create_mcp_client_stdio(self):
         """Test creating MCP client for stdio transport"""

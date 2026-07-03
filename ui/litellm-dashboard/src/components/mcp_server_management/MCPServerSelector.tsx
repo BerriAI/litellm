@@ -3,7 +3,11 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { Select } from "antd";
 import React from "react";
-import { NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
+import {
+  ALL_PROXY_MCPS_SENTINEL,
+  ALL_TEAM_MCPS_SENTINEL,
+  NO_MCP_SERVERS_SENTINEL,
+} from "@/components/mcp_tools/constants";
 
 interface MCPServerSelectorProps {
   onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
@@ -18,9 +22,35 @@ interface MCPServerSelectorProps {
   disabled?: boolean;
   teamId?: string | null;
   allowNoMcpServers?: boolean;
+  allowAllProxyMcps?: boolean;
+  allowAllTeamMcps?: boolean;
 }
 
 const TOOLSET_PREFIX = "toolset:";
+
+type ExclusiveSentinel = { value: string; label: string; caption: string; color: string };
+
+// Each entry grants a whole class of servers, so it is mutually exclusive with
+// every other pick. Ordered most-restrictive first to mirror the backend grant
+// precedence (block-all > team > proxy); the first match wins. "All Team MCPs"
+// only appears once a team is chosen, since it resolves against that team at
+// request time and is meaningless on a teamless key.
+const buildExclusiveSentinels = (
+  allowNoMcpServers: boolean,
+  allowAllTeamMcps: boolean,
+  allowAllProxyMcps: boolean,
+  teamId: string | null | undefined,
+): ExclusiveSentinel[] => [
+  ...(allowNoMcpServers
+    ? [{ value: NO_MCP_SERVERS_SENTINEL, label: "No MCP Servers", caption: "Block all", color: "#8c8c8c" }]
+    : []),
+  ...(allowAllTeamMcps && !!teamId
+    ? [{ value: ALL_TEAM_MCPS_SENTINEL, label: "All Team MCPs", caption: "Team's servers", color: "#13c2c2" }]
+    : []),
+  ...(allowAllProxyMcps
+    ? [{ value: ALL_PROXY_MCPS_SENTINEL, label: "All Proxy MCPs", caption: "Every server", color: "#1890ff" }]
+    : []),
+];
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   onChange,
@@ -31,6 +61,8 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   disabled = false,
   teamId,
   allowNoMcpServers = false,
+  allowAllProxyMcps = false,
+  allowAllTeamMcps = false,
 }) => {
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
@@ -80,13 +112,16 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     ...(value?.toolsets || []).map((id) => `${TOOLSET_PREFIX}${id}`),
   ];
 
-  const hasNoMcpServersSelected = allowNoMcpServers && selectedValues.includes(NO_MCP_SERVERS_SENTINEL);
+  const exclusiveSentinels = buildExclusiveSentinels(allowNoMcpServers, allowAllTeamMcps, allowAllProxyMcps, teamId);
+
+  const selectedExclusive = exclusiveSentinels.find((s) => selectedValues.includes(s.value)) ?? null;
+  const hasExclusiveSelected = selectedExclusive !== null;
 
   // Handle selection
   const handleChange = (selected: string[]) => {
-    // "No MCP Servers" is exclusive: picking it clears everything else.
-    if (allowNoMcpServers && selected.includes(NO_MCP_SERVERS_SENTINEL)) {
-      onChange({ servers: [NO_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
+    const exclusive = exclusiveSentinels.find((s) => selected.includes(s.value));
+    if (exclusive) {
+      onChange({ servers: [exclusive.value], accessGroups: [], toolsets: [] });
       return;
     }
     const toolsetsSelected = selected
@@ -97,6 +132,23 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     const accessGroupsSelected = rest.filter((v) => accessGroupSet.has(v));
     onChange({ servers, accessGroups: accessGroupsSelected, toolsets: toolsetsSelected });
   };
+
+  const renderExclusiveOptions = () =>
+    exclusiveSentinels.map((sentinel) => (
+      <Select.Option
+        key={sentinel.value}
+        value={sentinel.value}
+        label={sentinel.label}
+        disabled={hasExclusiveSelected && selectedExclusive?.value !== sentinel.value}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ flex: 1 }}>{sentinel.label}</span>
+          <span style={{ color: sentinel.color, fontSize: "12px", fontWeight: 500, opacity: 0.8 }}>
+            {sentinel.caption}
+          </span>
+        </div>
+      </Select.Option>
+    ));
 
   return (
     <div>
@@ -112,21 +164,14 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         style={{ width: "100%" }}
         disabled={disabled}
         filterOption={(input, option) => {
-          if (option?.value === NO_MCP_SERVERS_SENTINEL) return true;
+          if (exclusiveSentinels.some((s) => s.value === option?.value)) return true;
           const searchText = options.find((opt) => opt.value === option?.value)?.searchText || "";
           return searchText.toLowerCase().includes(input.toLowerCase());
         }}
       >
-        {allowNoMcpServers && (
-          <Select.Option key={NO_MCP_SERVERS_SENTINEL} value={NO_MCP_SERVERS_SENTINEL} label="No MCP Servers">
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span style={{ flex: 1 }}>No MCP Servers</span>
-              <span style={{ color: "#8c8c8c", fontSize: "12px", fontWeight: 500, opacity: 0.8 }}>Block all</span>
-            </div>
-          </Select.Option>
-        )}
+        {renderExclusiveOptions()}
         {options.map((opt) => (
-          <Select.Option key={opt.value} value={opt.value} label={opt.label} disabled={hasNoMcpServersSelected}>
+          <Select.Option key={opt.value} value={opt.value} label={opt.label} disabled={hasExclusiveSelected}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span
                 style={{

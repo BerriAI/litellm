@@ -21,9 +21,12 @@ from litellm.proxy._types import (
     MCPEnvVarScope,
     MCPSubmissionsSummary,
     NewMCPServerRequest,
-    SpecialMCPServerName,
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
+)
+from litellm.proxy._experimental.mcp_server.permission_grant import (
+    AllTeamServers,
+    parse_mcp_server_grant,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _get_salt_key,
@@ -462,8 +465,9 @@ async def get_all_mcp_servers_for_user(
         token_mcp_servers = await get_mcp_servers_by_verificationtoken(prisma_client, user.api_key)
         mcp_server_ids.update(token_mcp_servers)
 
-        # check for special team membership
-        if SpecialMCPServerName.all_team_servers in mcp_server_ids and user.team_id is not None:
+        # all-team-mcps expands to the key's team servers, so discovery matches
+        # what the access resolver grants at request time.
+        if isinstance(parse_mcp_server_grant(token_mcp_servers), AllTeamServers) and user.team_id is not None:
             team_mcp_servers = await get_mcp_servers_by_team(prisma_client, user.team_id)
             mcp_server_ids.update(team_mcp_servers)
 

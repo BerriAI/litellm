@@ -7,11 +7,21 @@ import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
 from fastapi import HTTPException, status
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerNames
+from litellm.proxy._experimental.mcp_server.permission_grant import (
+    MCP_GRANT_SENTINELS,
+    AllServers,
+    AllTeamServers,
+    ExplicitServers,
+    MCPServerGrant,
+    NoServers,
+    parse_mcp_server_grant,
+)
+from litellm.proxy._types import ObjectPermissionDict
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -264,12 +274,13 @@ def _rewrite_object_permission_mcp_servers(
     if not isinstance(mcp_servers, list):
         return
 
-    normalized_servers: List[str] = []
-    for identifier in mcp_servers:
-        if identifier == SpecialMCPServerNames.no_mcp_servers.value:
-            normalized_servers.append(SpecialMCPServerNames.no_mcp_servers.value)
-            continue
-        normalized_servers.extend(sorted(identifier_to_server_ids.get(identifier, [])))
+    normalized_servers = [
+        resolved
+        for identifier in mcp_servers
+        for resolved in (
+            [identifier] if identifier in MCP_GRANT_SENTINELS else sorted(identifier_to_server_ids.get(identifier, []))
+        )
+    ]
     object_permission["mcp_servers"] = _dedupe_preserving_order(normalized_servers)
 
 
@@ -328,26 +339,44 @@ async def _resolve_team_allowed_mcp_servers(
     - Direct mcp_servers list
     - Servers from mcp_access_groups
     - Server IDs referenced in mcp_tool_permissions keys
-    """
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
-        MCPRequestHandler,
-    )
 
-    direct_servers: List[str] = team_object_permission.mcp_servers or []
-    access_group_servers: List[str] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-        team_object_permission.mcp_access_groups or []
-    )
-    raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
-    if isinstance(raw_tool_perms, str):
-        raw_tool_perms = json.loads(raw_tool_perms)
-    tool_perm_servers: List[str] = list(raw_tool_perms.keys())
-    raw_servers = set(direct_servers + access_group_servers + tool_perm_servers)
-    resolved_servers = await _resolve_mcp_server_identifiers_to_ids(
-        identifiers=raw_servers,
-        prisma_client=prisma_client,
-    )
-    unresolved_servers = {server_id for server_id in raw_servers if not resolved_servers.get(server_id)}
-    return _flatten_resolved_mcp_server_ids(resolved_servers) | unresolved_servers
+    The grant on the direct list decides everything: ``all-proxy-mcps`` resolves
+    to every registered server, ``no-mcp-servers`` blocks all of them.
+    """
+    grant = parse_mcp_server_grant(team_object_permission.mcp_servers or [])
+    match grant:
+        case NoServers() | AllTeamServers():
+            # no-mcp-servers blocks everything; all-team-mcps is key-only and
+            # meaningless on a team (a team cannot grant "its own team's
+            # servers"), so a misconfigured team fails closed to no servers.
+            return set()
+        case AllServers():
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            return set(global_mcp_server_manager.get_registry().keys())
+        case ExplicitServers(identifiers):
+            from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+                MCPRequestHandler,
+            )
+
+            access_group_servers = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                team_object_permission.mcp_access_groups or []
+            )
+            raw_tool_perms_value = team_object_permission.mcp_tool_permissions or {}
+            raw_tool_perms = (
+                json.loads(raw_tool_perms_value) if isinstance(raw_tool_perms_value, str) else raw_tool_perms_value
+            )
+            raw_servers = set(identifiers) | set(access_group_servers) | set(raw_tool_perms.keys())
+            resolved_servers = await _resolve_mcp_server_identifiers_to_ids(
+                identifiers=raw_servers,
+                prisma_client=prisma_client,
+            )
+            unresolved_servers = {server_id for server_id in raw_servers if not resolved_servers.get(server_id)}
+            return _flatten_resolved_mcp_server_ids(resolved_servers) | unresolved_servers
+        case _:
+            assert_never(grant)
 
 
 def _get_allow_all_keys_server_ids() -> Set[str]:
@@ -395,17 +424,19 @@ def _extract_requested_mcp_server_ids(
     if not object_permission or not isinstance(object_permission, dict):
         return set()
 
-    server_ids: Set[str] = set()
     mcp_servers = object_permission.get("mcp_servers")
-    if isinstance(mcp_servers, list):
-        server_ids.update(mcp_servers)
-        server_ids.discard(SpecialMCPServerNames.no_mcp_servers.value)
+    explicit_servers = (
+        frozenset(s for s in mcp_servers if s not in MCP_GRANT_SENTINELS)
+        if isinstance(mcp_servers, list)
+        else frozenset()
+    )
 
     mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
-    if isinstance(mcp_tool_permissions, dict):
-        server_ids.update(mcp_tool_permissions.keys())
+    tool_permission_servers = (
+        frozenset(mcp_tool_permissions.keys()) if isinstance(mcp_tool_permissions, dict) else frozenset()
+    )
 
-    return server_ids
+    return set(explicit_servers | tool_permission_servers)
 
 
 def _extract_requested_mcp_access_groups(
@@ -434,6 +465,117 @@ def _extract_requested_mcp_toolsets(
     return set()
 
 
+def _key_mcp_grant(object_permission: Optional[ObjectPermissionDict]) -> MCPServerGrant:
+    mcp_servers = object_permission.get("mcp_servers") if isinstance(object_permission, dict) else None
+    if isinstance(mcp_servers, list):
+        return parse_mcp_server_grant(mcp_servers)
+    return ExplicitServers(frozenset())
+
+
+def _team_mcp_grant(team_obj: Optional["LiteLLM_TeamTableCachedObj"]) -> MCPServerGrant:
+    if team_obj is None or team_obj.object_permission is None:
+        return ExplicitServers(frozenset())
+    return parse_mcp_server_grant(team_obj.object_permission.mcp_servers or [])
+
+
+async def _raise_if_servers_exceed_team(
+    object_permission: Optional[ObjectPermissionDict],
+    requested_servers: Set[str],
+    team_grant: MCPServerGrant,
+    teamless_admin_assignment: bool,
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    prisma_client: Optional[PrismaClient],
+) -> None:
+    # Normalize aliases/names before authorization. Only entries that do not
+    # resolve to a server in the DB or config registry are treated as stale.
+    identifier_to_server_ids = await _resolve_mcp_server_identifiers_to_ids(
+        identifiers=requested_servers,
+        prisma_client=prisma_client,
+    )
+    stale_identifiers = {identifier for identifier in requested_servers if not identifier_to_server_ids.get(identifier)}
+    if stale_identifiers:
+        verbose_proxy_logger.warning(
+            "validate_key_mcp_servers_against_team: ignoring stale MCP server "
+            f"identifiers (no longer in registry or DB): {sorted(stale_identifiers)}"
+        )
+    _rewrite_object_permission_mcp_identifiers(
+        object_permission=object_permission,
+        identifier_to_server_ids=identifier_to_server_ids,
+    )
+    if isinstance(team_grant, AllServers):
+        return
+
+    allow_all_keys_servers = _get_allow_all_keys_server_ids()
+    team_allowed_servers = await _get_team_allowed_mcp_servers(
+        team_obj=team_obj,
+        prisma_client=prisma_client,
+    )
+    all_allowed_servers = team_allowed_servers | allow_all_keys_servers
+    active_requested_servers = _flatten_resolved_mcp_server_ids(identifier_to_server_ids)
+    allowed_servers = (
+        all_allowed_servers | active_requested_servers if teamless_admin_assignment else all_allowed_servers
+    )
+    disallowed_servers = active_requested_servers - allowed_servers
+    if not disallowed_servers:
+        return
+
+    if team_obj is not None:
+        detail = (
+            f"Key requests MCP servers not allowed by team '{team_obj.team_id}': "
+            f"{sorted(disallowed_servers)}. "
+            f"Team allows: {sorted(team_allowed_servers)}. "
+            f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
+        )
+    else:
+        detail = (
+            "Key is not in a team. Only globally available (allow_all_keys) MCP "
+            f"servers can be assigned: {sorted(allow_all_keys_servers)}. "
+            f"Disallowed servers: {sorted(disallowed_servers)}."
+        )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": detail},
+    )
+
+
+def _raise_if_access_groups_exceed_team(
+    requested_access_groups: Set[str],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+    teamless_admin_assignment: bool,
+) -> None:
+    team_access_groups = (
+        set(team_obj.object_permission.mcp_access_groups)
+        if (
+            team_obj is not None
+            and team_obj.object_permission is not None
+            and team_obj.object_permission.mcp_access_groups
+        )
+        else set()
+    )
+    allowed_access_groups = (
+        team_access_groups | requested_access_groups if teamless_admin_assignment else team_access_groups
+    )
+    disallowed_groups = requested_access_groups - allowed_access_groups
+    if not disallowed_groups:
+        return
+
+    if team_obj is not None:
+        detail = (
+            "Key requests MCP access groups not allowed by team "
+            f"'{team_obj.team_id}': {sorted(disallowed_groups)}. "
+            f"Team allows: {sorted(team_access_groups)}."
+        )
+    else:
+        detail = (
+            "Key is not in a team. MCP access groups cannot be assigned to "
+            f"keys outside of a team. Disallowed groups: {sorted(disallowed_groups)}."
+        )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={"error": detail},
+    )
+
+
 async def validate_key_mcp_servers_against_team(
     object_permission: Optional[ObjectPermissionDict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
@@ -453,107 +595,55 @@ async def validate_key_mcp_servers_against_team(
     - If key is NOT in a team and the caller is not a proxy admin: key's
       mcp_servers must only contain allow_all_keys servers
     - If team has no MCP config: key can only use allow_all_keys servers
+    - A key may carry all-proxy-mcps only via a teamless proxy-admin
+      assignment; inside a team it inherits the team grant at request time
 
     Raises HTTPException(403) if validation fails.
     """
     teamless_admin_assignment = team_obj is None and is_proxy_admin
     requested_servers = _extract_requested_mcp_server_ids(object_permission)
     requested_access_groups = _extract_requested_mcp_access_groups(object_permission)
-
     requested_toolsets = _extract_requested_mcp_toolsets(object_permission)
 
-    # Nothing to validate
-    if not requested_servers and not requested_access_groups and not requested_toolsets:
+    key_grant = _key_mcp_grant(object_permission)
+    if isinstance(key_grant, AllServers) and not teamless_admin_assignment:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "all-proxy-mcps cannot be granted directly on a key. A key in a "
+                    "team inherits the team's MCP grant at request time; only a proxy "
+                    "admin may assign all-proxy-mcps to a teamless key."
+                )
+            },
+        )
+    if isinstance(key_grant, AllTeamServers) and team_obj is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    "all-team-mcps can only be granted to a key that belongs to a "
+                    "team. It resolves to the team's MCP servers at request time, so "
+                    "a teamless key would reach zero servers."
+                )
+            },
+        )
+
+    if not any((requested_servers, requested_access_groups, requested_toolsets)):
         return object_permission
 
-    allow_all_keys_servers = _get_allow_all_keys_server_ids()
-    team_allowed_servers = await _get_team_allowed_mcp_servers(
-        team_obj=team_obj,
-        prisma_client=prisma_client,
-    )
-
-    # Combined allowed set = team servers + allow_all_keys servers
-    all_allowed_servers = team_allowed_servers | allow_all_keys_servers
-
-    # Validate requested server IDs
     if requested_servers:
-        # Normalize aliases/names before authorization. Only entries that do not
-        # resolve to a server in the DB or config registry are treated as stale.
-        identifier_to_server_ids = await _resolve_mcp_server_identifiers_to_ids(
-            identifiers=requested_servers,
+        await _raise_if_servers_exceed_team(
+            object_permission=object_permission,
+            requested_servers=requested_servers,
+            team_grant=_team_mcp_grant(team_obj),
+            teamless_admin_assignment=teamless_admin_assignment,
+            team_obj=team_obj,
             prisma_client=prisma_client,
         )
-        stale_identifiers = {
-            identifier for identifier in requested_servers if not identifier_to_server_ids.get(identifier)
-        }
-        if stale_identifiers:
-            verbose_proxy_logger.warning(
-                "validate_key_mcp_servers_against_team: ignoring stale MCP server "
-                f"identifiers (no longer in registry or DB): {sorted(stale_identifiers)}"
-            )
-        _rewrite_object_permission_mcp_identifiers(
-            object_permission=object_permission,
-            identifier_to_server_ids=identifier_to_server_ids,
-        )
-        active_requested_servers = _flatten_resolved_mcp_server_ids(identifier_to_server_ids)
 
-        allowed_servers = all_allowed_servers
-        if teamless_admin_assignment:
-            allowed_servers = all_allowed_servers | active_requested_servers
-
-        disallowed_servers = active_requested_servers - allowed_servers
-        if disallowed_servers:
-            if team_obj is not None:
-                team_id = team_obj.team_id
-                detail = (
-                    f"Key requests MCP servers not allowed by team '{team_id}': "
-                    f"{sorted(disallowed_servers)}. "
-                    f"Team allows: {sorted(team_allowed_servers)}. "
-                    f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
-                )
-            else:
-                detail = (
-                    f"Key is not in a team. Only globally available (allow_all_keys) MCP servers "
-                    f"can be assigned: {sorted(allow_all_keys_servers)}. "
-                    f"Disallowed servers: {sorted(disallowed_servers)}."
-                )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": detail},
-            )
-
-    # Validate requested access groups (must be subset of team's access groups)
     if requested_access_groups:
-        team_access_groups: Set[str] = set()
-        if (
-            team_obj is not None
-            and team_obj.object_permission is not None
-            and team_obj.object_permission.mcp_access_groups
-        ):
-            team_access_groups = set(team_obj.object_permission.mcp_access_groups)
-
-        allowed_access_groups = team_access_groups
-        if teamless_admin_assignment:
-            allowed_access_groups = team_access_groups | requested_access_groups
-
-        disallowed_groups = requested_access_groups - allowed_access_groups
-        if disallowed_groups:
-            if team_obj is not None:
-                team_id = team_obj.team_id
-                detail = (
-                    f"Key requests MCP access groups not allowed by team '{team_id}': "
-                    f"{sorted(disallowed_groups)}. "
-                    f"Team allows: {sorted(team_access_groups)}."
-                )
-            else:
-                detail = (
-                    f"Key is not in a team. MCP access groups cannot be assigned to "
-                    f"keys outside of a team. Disallowed groups: {sorted(disallowed_groups)}."
-                )
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={"error": detail},
-            )
+        _raise_if_access_groups_exceed_team(requested_access_groups, team_obj, teamless_admin_assignment)
 
     _validate_requested_toolsets(
         requested_toolsets=requested_toolsets,

@@ -19,7 +19,7 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { ALL_TEAM_MCPS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getPromptsList, modelAvailableCall, tagListCall } from "../networking";
@@ -626,8 +626,10 @@ export function KeyEditView({
           onChange={(val) => form.setFieldValue("mcp_servers_and_groups", val)}
           value={form.getFieldValue("mcp_servers_and_groups")}
           accessToken={accessToken || ""}
+          teamId={keyData.team_id ?? null}
           placeholder="Select MCP servers or access groups (optional)"
           allowNoMcpServers
+          allowAllTeamMcps
         />
       </Form.Item>
 
@@ -648,7 +650,7 @@ export function KeyEditView({
             <MCPToolPermissions
               accessToken={accessToken || ""}
               selectedServers={(form.getFieldValue("mcp_servers_and_groups")?.servers || []).filter(
-                (s: string) => s !== NO_MCP_SERVERS_SENTINEL,
+                (s: string) => s !== NO_MCP_SERVERS_SENTINEL && s !== ALL_TEAM_MCPS_SENTINEL,
               )}
               toolPermissions={form.getFieldValue("mcp_tool_permissions") || {}}
               onChange={(toolPerms) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}

@@ -7,6 +7,11 @@ from starlette.requests import Request
 from starlette.types import Scope
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.permission_grant import (
+    AllTeamServers,
+    NoServers,
+    parse_mcp_server_grant,
+)
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     ProxyException,
@@ -582,10 +587,11 @@ class MCPRequestHandler:
         try:
             # Get allowed servers from key and team
             allowed_mcp_servers_for_key = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
+            key_grant = parse_mcp_server_grant(allowed_mcp_servers_for_key)
 
             # The key explicitly opted out of every MCP server. This overrides
             # team inheritance and additive grants (mirrors no-default-models).
-            if SpecialMCPServerNames.no_mcp_servers.value in allowed_mcp_servers_for_key:
+            if isinstance(key_grant, NoServers):
                 return []
 
             allowed_mcp_servers_for_team = await MCPRequestHandler._get_allowed_mcp_servers_for_team(user_api_key_auth)
@@ -602,7 +608,11 @@ class MCPRequestHandler:
             has_lower_level_mcp_restrictions = bool(key_set or team_set or grants_set)
 
             # 1. Key/team ceiling. An empty set means "this level does not restrict".
-            if not team_set:
+            if isinstance(key_grant, AllTeamServers):
+                # The key explicitly requested its team's full grant: resolve to
+                # exactly the team set, failing closed when the team grants nothing.
+                base = team_set
+            elif not team_set:
                 base = key_set  # no team restriction
             elif not key_set:
                 # A key that grants no MCP servers of its own inherits the
@@ -666,26 +676,43 @@ class MCPRequestHandler:
                         f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
                     )
 
-            #########################################################
-            # Apply org-level ceiling if org_id is set
-            #########################################################
-            if user_api_key_auth and user_api_key_auth.org_id:
-                allowed_mcp_servers_for_org = await MCPRequestHandler._get_allowed_mcp_servers_for_org(
-                    user_api_key_auth
-                )
-                if len(allowed_mcp_servers_for_org) > 0:
-                    if has_lower_level_mcp_restrictions:
-                        # Lower-level restrictions exist, so org can only cap them.
-                        allowed_mcp_servers = [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_org]
-                    else:
-                        # No lower-level restrictions → org list becomes the ceiling
-                        allowed_mcp_servers = allowed_mcp_servers_for_org
-                    verbose_logger.debug(f"Applied org ceiling filter. Final allowed servers: {allowed_mcp_servers}")
+            allowed_mcp_servers = await MCPRequestHandler._apply_org_ceiling(
+                user_api_key_auth,
+                allowed_mcp_servers,
+                has_lower_level_mcp_restrictions,
+            )
 
             return list(set(allowed_mcp_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}")
             return []
+
+    @staticmethod
+    async def _apply_org_ceiling(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        allowed_mcp_servers: List[str],
+        has_lower_level_mcp_restrictions: bool,
+    ) -> List[str]:
+        """Cap the running allowed set to the org's MCP servers when the org sets one.
+
+        When lower-level restrictions already exist the org can only intersect
+        them; otherwise the org's list becomes the ceiling. An empty org list
+        means the org places no restriction.
+        """
+        if not (user_api_key_auth and user_api_key_auth.org_id):
+            return allowed_mcp_servers
+
+        allowed_mcp_servers_for_org = await MCPRequestHandler._get_allowed_mcp_servers_for_org(user_api_key_auth)
+        if len(allowed_mcp_servers_for_org) == 0:
+            return allowed_mcp_servers
+
+        capped = (
+            [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_org]
+            if has_lower_level_mcp_restrictions
+            else allowed_mcp_servers_for_org
+        )
+        verbose_logger.debug(f"Applied org ceiling filter. Final allowed servers: {capped}")
+        return capped
 
     @staticmethod
     def _get_key_object_permission(
@@ -961,10 +988,13 @@ class MCPRequestHandler:
             if key_object_permission is None:
                 return []
 
-            # Sentinel opt-out: surface it unexpanded so the caller can short-circuit
-            # to zero servers instead of inheriting the team.
-            if SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or []):
+            # Sentinels are surfaced unexpanded so the caller can short-circuit:
+            # no-mcp-servers -> zero servers, all-team-mcps -> the team's own set.
+            key_grant = parse_mcp_server_grant(key_object_permission.mcp_servers or [])
+            if isinstance(key_grant, NoServers):
                 return [SpecialMCPServerNames.no_mcp_servers.value]
+            if isinstance(key_grant, AllTeamServers):
+                return [SpecialMCPServerNames.all_team_mcp_servers.value]
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(

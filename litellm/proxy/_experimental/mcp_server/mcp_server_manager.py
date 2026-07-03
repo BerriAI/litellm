@@ -17,6 +17,8 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
+from typing_extensions import assert_never
+
 import anyio
 from fastapi import HTTPException
 from httpx import HTTPStatusError
@@ -50,6 +52,13 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.permission_grant import (
+    AllServers,
+    AllTeamServers,
+    ExplicitServers,
+    NoServers,
+    parse_mcp_server_grant,
+)
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -1331,8 +1340,9 @@ class MCPServerManager:
         # The key explicitly opted out of every MCP server. Return zero before
         # layering on allow_all_keys or submitted servers so the opt-out is absolute.
         key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
-        if key_object_permission is not None and (
-            SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
+        if key_object_permission is not None and isinstance(
+            parse_mcp_server_grant(key_object_permission.mcp_servers or []),
+            NoServers,
         ):
             return []
 
@@ -3918,6 +3928,26 @@ class MCPServerManager:
             if server.available_on_public_internet or server.server_id in public_ids
         ]
 
+    def _resolve_permission_identifier(self, identifier: str, registry: Dict[str, MCPServer]) -> Tuple[str, ...]:
+        if identifier in registry:
+            return (identifier,)
+        matches = tuple(
+            server_id
+            for server_id, server in registry.items()
+            if server.alias == identifier or server.server_name == identifier or server.name == identifier
+        )
+        if matches:
+            return matches
+        # %r quotes and escapes control chars so an admin-controlled identifier
+        # with newlines cannot forge log lines.
+        verbose_logger.debug(
+            "MCP permission entry %r does not resolve to any known "
+            "server (config + DB union). Passing through — the "
+            "downstream access check will deny it if it's stale.",
+            identifier,
+        )
+        return (identifier,)
+
     def expand_permission_list(self, identifiers: List[str]) -> List[str]:
         """
         Expand a permission list of server_ids/names/aliases into concrete
@@ -3930,33 +3960,34 @@ class MCPServerManager:
         emitted so admins can diagnose stale/typo permission entries — the
         downstream access-check denies them when compared against the
         concrete request server_id.
+
+        The ``all-proxy-mcps`` sentinel expands to every server in the live
+        registry, so an entity granted it stays in sync as servers are added
+        or removed without re-editing its permission list. The
+        ``no-mcp-servers`` sentinel surfaces unexpanded so opt-out-aware callers
+        can short-circuit before inheriting any other scope.
         """
         if not identifiers:
             return []
         registry = self.get_registry()
-        expanded: Set[str] = set()
-        for identifier in identifiers:
-            if identifier in registry:
-                expanded.add(identifier)
-                continue
-            matches: List[str] = [
-                server_id
-                for server_id, server in registry.items()
-                if server.alias == identifier or server.server_name == identifier or server.name == identifier
-            ]
-            if matches:
-                expanded.update(matches)
-            else:
-                # %r quotes and escapes control chars so an admin-controlled
-                # identifier with newlines cannot forge log lines.
-                verbose_logger.debug(
-                    "MCP permission entry %r does not resolve to any known "
-                    "server (config + DB union). Passing through — the "
-                    "downstream access check will deny it if it's stale.",
-                    identifier,
+        grant = parse_mcp_server_grant(identifiers)
+        match grant:
+            case AllServers():
+                return list(registry.keys())
+            case AllTeamServers():
+                return [SpecialMCPServerNames.all_team_mcp_servers.value]
+            case NoServers():
+                return [SpecialMCPServerNames.no_mcp_servers.value]
+            case ExplicitServers(identifiers=explicit):
+                return list(
+                    frozenset(
+                        server_id
+                        for identifier in explicit
+                        for server_id in self._resolve_permission_identifier(identifier, registry)
+                    )
                 )
-                expanded.add(identifier)
-        return list(expanded)
+            case _:
+                assert_never(grant)
 
     def expand_tool_permissions(
         self,
