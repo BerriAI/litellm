@@ -125,22 +125,35 @@ class ComplexityRouter(CustomLogger):
 
     def _keyword_matches(self, text: str, keyword: str) -> bool:
         """
-        Check if a keyword matches in text using word boundary matching.
+        Check if a keyword matches in text.
 
-        For single-word keywords, uses regex word boundaries to avoid
-        false positives (e.g., "error" matching "terrorism", "class" matching "classical").
-        For multi-word phrases, uses substring matching.
+        For single-word ASCII keywords, uses ASCII letter boundary
+        lookaround to avoid false positives (e.g., "error" matching
+        "terrorism", "class" matching "classical") while correctly
+        handling CJK-mixed text (e.g., "python" in "用python写函数").
+        For multi-word phrases or non-ASCII keywords, uses substring matching.
+
+        Note: ``\\b`` (Unicode word boundary) cannot be used here because
+        CJK characters are classified as ``\\w`` in Python's ``re`` module.
+        This means ``\\bpython\\b`` fails to match "python" when adjacent
+        characters are CJK (e.g., "用python写"), since there is no word
+        boundary between two ``\\w`` characters. Using ``(?<![a-zA-Z])``
+        instead restricts boundary detection to ASCII letters only, which
+        is the original intent (prevent English substring false positives)
+        without breaking CJK-adjacent matches.
         """
         kw_lower = keyword.lower()
 
-        # For single-word keywords, use word boundary matching to avoid false positives
-        # e.g., "api" should not match "capital", "error" should not match "terrorism"
         if " " not in kw_lower:
-            pattern = r"\b" + re.escape(kw_lower) + r"\b"
-            return bool(re.search(pattern, text))
+            if kw_lower.isascii():
+                # ASCII keyword: use ASCII letter boundary + case-insensitive
+                pattern = r"(?<![a-zA-Z])" + re.escape(kw_lower) + r"(?![a-zA-Z])"
+                return bool(re.search(pattern, text, re.IGNORECASE))
+            else:
+                # Non-ASCII (e.g., CJK) keyword: direct substring match
+                return kw_lower in text.lower()
 
-        # For multi-word phrases, substring matching is fine
-        return kw_lower in text
+        return kw_lower in text.lower()
 
     def _score_keyword_match(
         self,
