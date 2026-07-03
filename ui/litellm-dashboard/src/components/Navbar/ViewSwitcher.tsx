@@ -4,27 +4,18 @@ import { AppstoreOutlined, CheckOutlined, DownOutlined } from "@ant-design/icons
 import type { MenuProps } from "antd";
 import { usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { isAdminRole } from "@/utils/roles";
 import { migratedHref } from "@/utils/migratedPages";
 
 const GATEWAY = "ai-gateway";
 const CHAT = "chat";
-const ADMIN_SETTINGS_KEY = "admin-panel";
 
 export default function ViewSwitcher() {
   const { mode, setMode, plugins } = usePluginMode();
   const { data: uiSettings } = useUISettings();
-  const { userRole } = useAuthorized();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
-  const isAdmin = isAdminRole(userRole ?? "");
-  // Admins see the Chat entry even when disabled, so they can discover and turn
-  // it on; everyone else only sees it once it's enabled for users.
-  const showChatEntry = chatEnabled || isAdmin;
 
-  // Only render a switcher when there is somewhere to switch to.
-  if (plugins.length === 0 && !showChatEntry) return null;
+  if (plugins.length === 0 && !chatEnabled) return null;
 
   const activeLabel = plugins.find((p) => p.name === mode)?.display_name ?? "AI Gateway";
 
@@ -43,18 +34,13 @@ export default function ViewSwitcher() {
         </div>
       ),
     })),
-    ...(showChatEntry
+    ...(chatEnabled
       ? [
           {
             key: CHAT,
-            label: chatEnabled ? (
+            label: (
               <div className="flex items-center justify-between gap-6 py-0.5">
                 <span className="font-medium">Chat</span>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-0.5 py-0.5">
-                <span className="font-medium text-gray-400">Chat</span>
-                <span className="text-xs text-gray-400">Enable in Admin Settings &rarr; UI Settings</span>
               </div>
             ),
           },
@@ -64,9 +50,7 @@ export default function ViewSwitcher() {
 
   const onClick: MenuProps["onClick"] = ({ key }) => {
     if (key === CHAT) {
-      // Enabled: go to the chat app. Disabled (admin-only): send them to the
-      // admin panel where the enable_chat_ui toggle lives.
-      window.location.assign(migratedHref(chatEnabled ? CHAT : ADMIN_SETTINGS_KEY));
+      window.location.assign(migratedHref(CHAT));
       return;
     }
     setMode(key);

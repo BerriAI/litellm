@@ -58,12 +58,12 @@ describe("ChatPageRoute", () => {
     expect(mockReplace).toHaveBeenCalledWith("/ui/");
   });
 
-  it("still renders the chat page for admins when enable_chat_ui is off", () => {
+  it("redirects admins to the dashboard when enable_chat_ui is off", () => {
     state.enableChatUI = false;
     state.userRole = "Admin";
     render(<ChatPageRoute />);
-    expect(screen.getByTestId("chat-page")).toBeInTheDocument();
-    expect(mockReplace).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("chat-page")).not.toBeInTheDocument();
+    expect(mockReplace).toHaveBeenCalledWith("/ui/");
   });
 
   it("renders nothing while UI settings are still loading", () => {

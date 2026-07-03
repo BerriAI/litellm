@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ViewSwitcher from "./ViewSwitcher";
 
-const { mockUsePluginMode, mockUseUISettings, mockUseAuthorized, state } = vi.hoisted(() => {
+const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
   const state = {
     mode: "ai-gateway" as string,
     setMode: vi.fn(),
     plugins: [] as { name: string; display_name: string; url: string }[],
     activePlugin: null as { name: string; display_name: string; url: string } | null,
     enableChatUI: false,
-    userRole: "Internal User" as string,
   };
   return {
     state,
@@ -20,13 +19,11 @@ const { mockUsePluginMode, mockUseUISettings, mockUseAuthorized, state } = vi.ho
       activePlugin: state.activePlugin,
     })),
     mockUseUISettings: vi.fn(() => ({ data: { values: { enable_chat_ui: state.enableChatUI } } })),
-    mockUseAuthorized: vi.fn(() => ({ userRole: state.userRole })),
   };
 });
 
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: mockUsePluginMode }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
-vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: mockUseAuthorized }));
 // Deterministic hrefs so navigation assertions don't depend on server_root_path.
 vi.mock("@/utils/migratedPages", () => ({ migratedHref: (seg: string) => `/ui/${seg}` }));
 
@@ -45,7 +42,6 @@ describe("ViewSwitcher", () => {
     state.mode = "ai-gateway";
     state.plugins = [];
     state.enableChatUI = false;
-    state.userRole = "Internal User";
     state.setMode.mockClear();
   });
 
@@ -89,7 +85,6 @@ describe("ViewSwitcher", () => {
 
   it("shows a clickable Chat entry that navigates to the chat app when enabled", async () => {
     state.enableChatUI = true;
-    state.userRole = "Internal User";
     render(<ViewSwitcher />);
 
     act(() => {
@@ -105,27 +100,8 @@ describe("ViewSwitcher", () => {
     expect(state.setMode).not.toHaveBeenCalled();
   });
 
-  it("greys out Chat and points admins to Admin Settings when disabled", async () => {
+  it("hides the Chat entry from everyone when disabled", async () => {
     state.enableChatUI = false;
-    state.userRole = "Admin";
-    render(<ViewSwitcher />);
-
-    act(() => {
-      fireEvent.click(screen.getByRole("button"));
-    });
-    await waitFor(() => expect(screen.getByText("Chat")).toBeInTheDocument());
-    expect(screen.getByText(/Enable in Admin Settings/i)).toBeInTheDocument();
-
-    act(() => {
-      fireEvent.click(screen.getByText("Chat"));
-    });
-    expect(assignSpy).toHaveBeenCalledWith("/ui/admin-panel");
-    expect(state.setMode).not.toHaveBeenCalled();
-  });
-
-  it("hides the Chat entry from non-admins when disabled", async () => {
-    state.enableChatUI = false;
-    state.userRole = "Internal User";
     state.plugins = [{ name: "obs", display_name: "Observability", url: "http://localhost:9000" }];
     render(<ViewSwitcher />);
 
