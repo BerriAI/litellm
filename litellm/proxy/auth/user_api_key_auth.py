@@ -221,7 +221,7 @@ async def _check_key_model_budget_with_fallback(
                 valid_token=valid_token,
                 llm_router=llm_router,
             )
-        except Exception:
+        except ProxyException:
             raise e
         request_data["model"] = fallback_model
         _safe_set_request_parsed_body(request=request, parsed_body=request_data)
