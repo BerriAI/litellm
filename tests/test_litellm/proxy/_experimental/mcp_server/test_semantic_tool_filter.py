@@ -1543,6 +1543,55 @@ class TestGetToolsByNames:
 
         assert matched == []
 
+    def test_nested_chat_completions_format_matches_by_name(self):
+        """
+        Regression test (issue #31909): tools in the standard chat/completions
+        nested shape (``{"type": "function", "function": {"name": ...}}``)
+        must be name-matchable like the flat format, not invisible to the
+        filter.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "my_mcp-search",
+                    "description": "Search the web",
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "pkb_search",
+                    "description": "Search notes",
+                },
+            },
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["my_mcp-search"], available_tools
+        )
+
+        assert len(matched) == 1
+        assert matched[0]["function"]["name"] == "my_mcp-search"
+
+    def test_fail_open_when_no_names_extractable(self):
+        """
+        Regression test (issue #31909): if the filter cannot extract a
+        usable name from any tool in ``available_tools``, it must fail
+        open and return the tools unchanged instead of silently
+        collapsing the request to zero tools.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {"type": "mcp", "server_label": "x"},
+            {"type": "mcp", "server_label": "y"},
+        ]
+
+        matched = filter_instance._get_tools_by_names(["search"], available_tools)
+
+        assert matched == available_tools
+
 
 @pytest.mark.asyncio
 async def test_semantic_filter_headers_hook_emits_only_complete_tool_names():
@@ -2160,3 +2209,71 @@ async def test_top_k_above_router_default_is_respected():
 
     assert len(filtered) == 6
     print("✅ Configured top_k above the semantic-router default of 5 is honored")
+
+
+class TestExtractToolInfo:
+    """
+    Regression coverage for SemanticMCPToolFilter._extract_tool_info
+    (issue #31909): the nested chat/completions tool schema was silently
+    unparseable, returning an empty name for every such tool.
+    """
+
+    def _make_filter(self):
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+
+        return SemanticMCPToolFilter(
+            embedding_model="text-embedding-3-small",
+            litellm_router_instance=Mock(),
+            top_k=5,
+            similarity_threshold=0.3,
+            enabled=True,
+        )
+
+    def test_nested_chat_completions_format(self):
+        filter_instance = self._make_filter()
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "my_mcp-search",
+                "description": "Search the web for pages relevant to a query",
+            },
+        }
+
+        name, description = filter_instance._extract_tool_info(tool)
+
+        assert name == "my_mcp-search"
+        assert description == "Search the web for pages relevant to a query"
+
+    def test_nested_format_missing_description_falls_back_to_name(self):
+        filter_instance = self._make_filter()
+        tool = {"type": "function", "function": {"name": "my_mcp-search"}}
+
+        name, description = filter_instance._extract_tool_info(tool)
+
+        assert name == "my_mcp-search"
+        assert description == "my_mcp-search"
+
+    def test_flat_format_unchanged(self):
+        """The legacy flat/Responses-API shape must keep working."""
+        filter_instance = self._make_filter()
+        tool = {"name": "send_email", "description": "send mail"}
+
+        name, description = filter_instance._extract_tool_info(tool)
+
+        assert name == "send_email"
+        assert description == "send mail"
+
+    def test_mcp_tool_object_unchanged(self):
+        filter_instance = self._make_filter()
+        tool = MCPTool(
+            name="scrape_url",
+            description="Fetch a URL",
+            inputSchema={"type": "object"},
+        )
+
+        name, description = filter_instance._extract_tool_info(tool)
+
+        assert name == "scrape_url"
+        assert description == "Fetch a URL"

@@ -122,9 +122,17 @@ class SemanticMCPToolFilter:
         description: str
 
         if isinstance(tool, dict):
-            # OpenAI function format
-            name = tool.get("name", "")
-            description = tool.get("description", name)
+            function_spec = tool.get("function")
+            if isinstance(function_spec, dict):
+                # Chat Completions nested format:
+                # {"type": "function", "function": {"name": ..., "description": ...}}
+                name = function_spec.get("name", "")
+                description = function_spec.get("description", name)
+            else:
+                # Flat format (legacy OpenAI functions / Responses API):
+                # {"type": "function", "name": ..., "description": ...}
+                name = tool.get("name", "")
+                description = tool.get("description", name)
         else:
             # MCPTool object
             name = str(tool.name)
@@ -408,6 +416,16 @@ class SemanticMCPToolFilter:
             client_name, _ = self._extract_tool_info(tool)
             if client_name and client_name not in available_by_name:
                 available_by_name[client_name] = tool
+
+        if available_tools and not available_by_name:
+            # Couldn't extract a usable name from any tool in the list, so
+            # there's nothing to safely map the router's matches back onto.
+            # Fail open instead of silently returning zero tools.
+            verbose_logger.warning(
+                f"Semantic tool filter: could not extract names from any of "
+                f"{len(available_tools)} available tool(s); returning tools unfiltered"
+            )
+            return available_tools
 
         matched: List[Any] = []
         used_ids: set = set()
