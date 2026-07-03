@@ -198,11 +198,11 @@ async def _check_key_model_budget_with_fallback(
 
     The selected fallback is validated against the key's model-access
     allowlist and the team's model restrictions so that budget_fallbacks
-    cannot bypass model authorization. The rewrite is persisted to both
-    the parsed-body cache and Starlette's JSON cache via
-    ``_safe_set_request_parsed_body`` so that downstream handlers
-    (whether they read via ``_read_request_body`` or ``request.json()``)
-    see the final model.
+    cannot bypass model authorization. The rewrite is persisted to the
+    parsed-body cache, Starlette's JSON cache (``request._json``), and
+    path parameters so that downstream handlers see the final model
+    regardless of whether they consume ``_read_request_body()``,
+    ``request.json()``, or the path ``model`` parameter.
 
     Raises:
         BudgetExceededError: if `model_name` is over budget and no configured
@@ -240,6 +240,8 @@ async def _check_key_model_budget_with_fallback(
             raise e
         request_data["model"] = fallback_model
         _safe_set_request_parsed_body(request=request, parsed_body=request_data)
+        if hasattr(request, "_json"):
+            request._json = request_data  # type: ignore[attr-defined]
         path_params = request.scope.get("path_params")
         if isinstance(path_params, dict) and "model" in path_params:
             path_params["model"] = fallback_model
