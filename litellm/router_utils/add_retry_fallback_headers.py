@@ -15,13 +15,37 @@ class _HiddenParamsHost(Protocol):
     _hidden_params: dict[str, object]
 
 
-def get_hidden_params_dict(response: object) -> dict[str, object]:
-    hidden_params: object = cast(object, getattr(response, "_hidden_params", None))
+def _normalize_hidden_params(hidden_params: object) -> dict[str, object]:
     if isinstance(hidden_params, BaseModel):
         return cast("dict[str, object]", hidden_params.model_dump())
     if isinstance(hidden_params, dict):
         return cast("dict[str, object]", hidden_params)
     return {}
+
+
+def get_hidden_params_dict(
+    response: object,
+    *,
+    create: bool = False,
+) -> dict[str, object]:
+    if isinstance(response, dict):
+        hidden_params = _normalize_hidden_params(response.get("_hidden_params"))
+        if not hidden_params and create:
+            hidden_params = {}
+            response["_hidden_params"] = hidden_params
+        return hidden_params
+
+    hidden_params = _normalize_hidden_params(
+        cast(object, getattr(response, "_hidden_params", None))
+    )
+    return hidden_params
+
+
+def _write_hidden_params(response: object, hidden_params: dict[str, object]) -> None:
+    if isinstance(response, dict):
+        response["_hidden_params"] = hidden_params
+    elif hasattr(response, "_hidden_params"):
+        cast(_HiddenParamsHost, response)._hidden_params = hidden_params
 
 
 def _ensure_additional_headers_dict(
@@ -73,15 +97,19 @@ def _add_headers_to_response(response: object, headers: dict[str, object]) -> ob
     if response is None:
         return response
 
-    if not isinstance(response, BaseModel) and not hasattr(response, "_hidden_params"):
+    if (
+        not isinstance(response, BaseModel)
+        and not isinstance(response, dict)
+        and not hasattr(response, "_hidden_params")
+    ):
         return response
 
-    hidden_params = get_hidden_params_dict(response)
+    hidden_params = get_hidden_params_dict(response, create=isinstance(response, dict))
     additional_headers = _ensure_additional_headers_dict(hidden_params)
     additional_headers.update(headers)
     hidden_params["additional_headers"] = additional_headers
 
-    cast(_HiddenParamsHost, response)._hidden_params = hidden_params
+    _write_hidden_params(response, hidden_params)
     return response
 
 
@@ -127,12 +155,12 @@ def add_fallback_headers_to_response(
     if fallback_errors is None or response is None:
         return response
 
-    hidden_params = get_hidden_params_dict(response)
+    hidden_params = get_hidden_params_dict(response, create=isinstance(response, dict))
     additional_headers = _ensure_additional_headers_dict(hidden_params)
     merged_errors = get_fallback_errors_from_headers(additional_headers) + [
         cast("dict[str, object]", error) for error in fallback_errors
     ]
     additional_headers["x-litellm-fallback-errors"] = json.dumps(merged_errors)
     hidden_params["additional_headers"] = additional_headers
-    cast(_HiddenParamsHost, response)._hidden_params = hidden_params
+    _write_hidden_params(response, hidden_params)
     return response

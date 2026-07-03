@@ -39,6 +39,7 @@ class TestIOTokenRateLimitHelpers:
         assert _resolve_max_tokens({"max_tokens": 0}, deployment) == 0
         # max_completion_tokens is the fallback only when max_tokens is absent.
         assert _resolve_max_tokens({"max_completion_tokens": 12}, deployment) == 12
+        assert _resolve_max_tokens({"max_output_tokens": 9}, deployment) == 9
 
     def test_build_io_token_rate_limit_headers(self):
         headers = build_io_token_rate_limit_headers(

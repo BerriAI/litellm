@@ -1222,6 +1222,36 @@ async def test_set_response_headers_handles_missing_usage(model_list):
     assert headers["x-ratelimit-remaining-requests"] == 99
 
 
+@pytest.mark.asyncio
+async def test_set_response_headers_dict_anthropic_messages_response(model_list):
+    """Anthropic /v1/messages returns a dict; IO rate-limit headers must attach."""
+    router = Router(model_list=model_list)
+    router.get_remaining_model_group_usage = AsyncMock(
+        return_value={
+            "x-ratelimit-limit-input-tokens": 25,
+            "x-ratelimit-remaining-input-tokens": 20,
+            "x-ratelimit-limit-output-tokens": 100,
+            "x-ratelimit-remaining-output-tokens": 95,
+        }
+    )
+
+    resp = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}],
+        "usage": {"input_tokens": 5, "output_tokens": 1},
+    }
+    await router.set_response_headers(response=resp, model_group="io-itpm-strict")
+
+    assert "_hidden_params" in resp
+    headers = resp["_hidden_params"]["additional_headers"]
+    assert headers["x-litellm-model-group"] == "io-itpm-strict"
+    assert headers["x-ratelimit-limit-input-tokens"] == 25
+    assert headers["x-ratelimit-remaining-input-tokens"] == 20
+    assert headers["x-ratelimit-remaining-output-tokens"] == 95
+
+
 def test_get_all_deployments(model_list):
     """Test if the 'get_all_deployments' function is working correctly"""
     router = Router(model_list=model_list)

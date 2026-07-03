@@ -129,6 +129,8 @@ def _resolve_max_tokens(request_kwargs: Optional[dict[str, Any]], deployment: di
         explicit = request_kwargs.get("max_tokens")
         if explicit is None:
             explicit = request_kwargs.get("max_completion_tokens")
+        if explicit is None:
+            explicit = request_kwargs.get("max_output_tokens")
         if explicit is not None:
             return max(0, int(explicit))
 
