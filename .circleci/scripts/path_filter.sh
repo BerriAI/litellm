@@ -28,9 +28,9 @@ changed="$(git diff --name-only "$merge_base" HEAD 2>/dev/null)" || run_full "gi
 [ -n "$changed" ] || run_full "no files changed vs $merge_base"
 
 echo "path-filter[$category]: changed files vs ${merge_base}:"
-printf '%s\n' "$changed" | sed 's/^/  /'
+printf '%s\n' "$changed" | sed 's/^/  /' || true
 
-decision="$(printf '%s\n' "$changed" | bash "$here/classify_changes.sh" "$category")"
+decision="$(printf '%s\n' "$changed" | bash "$here/classify_changes.sh" "$category")" || run_full "classify_changes.sh failed"
 
 if [ "$decision" = run ]; then
   run_full "$category-relevant changes detected"
