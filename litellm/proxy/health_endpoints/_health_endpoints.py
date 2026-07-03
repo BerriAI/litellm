@@ -1002,12 +1002,8 @@ async def health_endpoint(
         # (issue #28206).
         accessible_models = get_key_models(
             user_api_key_dict=user_api_key_dict,
-            proxy_model_list=(
-                llm_router.get_model_names() if llm_router is not None else []
-            ),
-            model_access_groups=(
-                llm_router.get_model_access_groups() if llm_router is not None else {}
-            ),
+            proxy_model_list=(llm_router.get_model_names() if llm_router is not None else []),
+            model_access_groups=(llm_router.get_model_access_groups() if llm_router is not None else {}),
         )
         restrict_to_allowed_models = (
             len(accessible_models) > 0 and SpecialModelNames.all_proxy_models.value not in accessible_models
