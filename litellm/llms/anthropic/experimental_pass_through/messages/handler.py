@@ -199,7 +199,7 @@ async def anthropic_messages(
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
-    system: Optional[str] = None,
+    system: Optional[Union[str, list]] = None,
     temperature: Optional[float] = None,
     thinking: Optional[Dict] = None,
     tool_choice: Optional[Dict] = None,
@@ -229,6 +229,12 @@ async def anthropic_messages(
     # Replay of cross-provider tool history (e.g. kimi -> Anthropic) may carry
     # ids like ``functions.Bash:0`` that violate Anthropic's id pattern.
     messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
 
     original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
@@ -375,7 +381,7 @@ def anthropic_messages_handler(
     metadata: Optional[Dict] = None,
     stop_sequences: Optional[List[str]] = None,
     stream: Optional[bool] = False,
-    system: Optional[str] = None,
+    system: Optional[Union[str, list]] = None,
     temperature: Optional[float] = None,
     thinking: Optional[Dict] = None,
     tool_choice: Optional[Dict] = None,
@@ -411,6 +417,12 @@ def anthropic_messages_handler(
     if not kwargs.pop("_litellm_messages_presanitized", False):
         messages = strip_empty_text_blocks_from_anthropic_messages(messages)
         messages = sanitize_tool_use_ids_in_anthropic_messages(messages)
+
+    from litellm.integrations.anthropic_cache_control_hook import (
+        AnthropicCacheControlHook,
+    )
+
+    messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(messages, system, kwargs)
 
     metadata = validate_anthropic_api_metadata(metadata)
 

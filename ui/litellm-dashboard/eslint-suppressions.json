@@ -40,11 +40,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/caching/components/cache_settings/CacheFieldRenderer.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/caching/components/cache_settings/RedisTypeSelector.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -730,11 +725,6 @@
       "count": 1
     }
   },
-  "src/components/DefaultUserSettings.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/DeletedKeysPage/DeletedKeysTable/DeletedKeysTable.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1269,11 +1259,6 @@
       "count": 1
     },
     "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "src/components/edit_user.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -2015,19 +2000,6 @@
       "count": 2
     }
   },
-  "src/components/user_edit_view.test.tsx": {
-    "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/components/user_edit_view.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/components/vector_store_management/CreateVectorStore.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2103,35 +2075,6 @@
   "src/components/view_user_spend.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
-    }
-  },
-  "src/components/view_users.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/view_users/columns.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_users/table.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/view_users/user_info_view.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/contexts/AuthContext.tsx": {
