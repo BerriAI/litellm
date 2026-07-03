@@ -153,12 +153,15 @@ class EndpointsClient:
         ).model_id
 
     def delete_model(self, model_id: str) -> None:
-        _ = self.gateway.transport.post(
+        result = self.gateway.transport.post(
             "/model/delete",
             headers=self.gateway.transport.master,
             json=ModelDeleteBody(id=model_id),
             response_type=NoBody,
         )
+        if not is_ok(result):
+            import warnings
+            warnings.warn(f"delete_model({model_id!r}) failed: {result}", stacklevel=2)
 
     def _send(self, path: str, key: str, body: BaseModel) -> StreamingResponse:
         return self.gateway.transport.send(
