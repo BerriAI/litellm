@@ -1337,3 +1337,31 @@ async def test_budget_alert_failed_send_releases_claim_for_retry(
             )
 
     assert len(attempts) == 2
+
+
+@pytest.mark.asyncio
+async def test_budget_alert_release_failure_does_not_propagate(base_email_logger):
+    """If the send fails and releasing the claim also fails (transient cache
+    error), budget_alerts must swallow it and still log the send failure rather
+    than letting the exception escape the fire-and-forget task."""
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_increment_cache = mock.AsyncMock(return_value=1)
+    mock_cache.async_delete_cache = mock.AsyncMock(
+        side_effect=RuntimeError("cache backend unavailable")
+    )
+    base_email_logger.internal_usage_cache = mock_cache
+
+    async def failing_send(*args, **kwargs):
+        raise ValueError("smtp backend down")
+
+    with mock.patch.object(
+        base_email_logger, "send_max_budget_alert_email", side_effect=failing_send
+    ):
+        with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+            # Must not raise even though both the send and the release fail.
+            await base_email_logger.budget_alerts(
+                type="max_budget_alert",
+                user_info=_budget_alert_user_info(dict(max_budget=100.0, spend=85.0)),
+            )
+
+    mock_cache.async_delete_cache.assert_awaited_once()
