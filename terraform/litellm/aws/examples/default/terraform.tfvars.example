@@ -20,6 +20,7 @@ env    = "stage"
 # TLS: provide an ACM cert for production. Without one, plan fails unless
 # allow_plaintext_alb = true is set explicitly (trial/dev only).
 # acm_certificate_domain_name = "your.domain.here"
+# route53_zone_id             = "Z1234567890ABC"
 # allow_plaintext_alb = true
 
 # Storage retention: false (default) makes `terraform destroy` refuse on a

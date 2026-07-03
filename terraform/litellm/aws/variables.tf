@@ -332,11 +332,25 @@ variable "redis_num_replicas" {
 
 variable "acm_certificate_domain_name" {
   description = <<-EOT
-    ACM certificate ARN for the ALB's HTTPS listener. When set, the stack
-    provisions a 443 listener carrying the same path-routing rules as the 80
-    listener, and the 80 listener is rewritten to redirect HTTP→HTTPS. Leave
+    Domain name to request in ACM for the ALB's HTTPS listener. When set, the
+    stack requests a DNS-validated certificate for this hostname, provisions a
+    443 listener carrying the same path-routing rules as the 80 listener, and
+    rewrites the 80 listener to redirect HTTP→HTTPS. Set `route53_zone_id` to
+    have this module create the ACM validation records and the public ALB alias
+    record in Route53; otherwise manage both in your DNS zone yourself. Leave
     empty ("") to disable TLS (must combine with `allow_plaintext_alb = true`
     for the plan to succeed — see README.md "TLS").
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "route53_zone_id" {
+  description = <<-EOT
+    Route53 hosted zone ID for `acm_certificate_domain_name`. When set
+    alongside that domain name, the module creates the ACM DNS validation
+    records, waits for certificate issuance, and creates an ALB alias record
+    for the hostname. Leave empty to manage DNS outside this module.
   EOT
   type        = string
   default     = ""

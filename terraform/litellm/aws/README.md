@@ -297,9 +297,14 @@ is the supported posture. Two paths:
 
 **Production / staging — provide an ACM certificate:**
 
-1. Create or import an ACM cert in `var.region` covering the DNS name you
-   plan to point at the ALB.
-2. Set `acm_certificate_domain_name = "your.domain..."` in tfvars and apply.
+1. Set `acm_certificate_domain_name = "your.domain..."` in tfvars and apply.
+2. If the DNS zone lives in Route53 and you want this module to manage it,
+   also set `route53_zone_id = "Z..."`. The module will create the ACM DNS
+   validation records, wait for certificate issuance, and create the public
+   ALB alias record for the hostname.
+3. If you leave `route53_zone_id = ""`, create both the ACM DNS validation
+   records and the hostname -> `terraform output -raw alb_dns_name` record in
+   your DNS provider yourself.
 
 Result: a 443 listener carries the path-routing rules; the 80 listener
 serves a permanent 301 redirect to HTTPS, so HTTP clients are

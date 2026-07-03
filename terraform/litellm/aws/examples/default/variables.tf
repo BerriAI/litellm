@@ -55,6 +55,12 @@ variable "acm_certificate_domain_name" {
   default     = ""
 }
 
+variable "route53_zone_id" {
+  description = "Route53 hosted zone ID for the TLS hostname. Empty → manage DNS elsewhere."
+  type        = string
+  default     = ""
+}
+
 variable "allow_plaintext_alb" {
   description = "Opt into HTTP-only ALB (trial/dev only)."
   type        = bool

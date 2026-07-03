@@ -5,6 +5,7 @@ tenant = "data-reply"
 env    = "prod"
 
 acm_certificate_domain_name = "litellm.datareply.de"
+route53_zone_id             = "Z046271219OMVB01WCCVM"
 
 s3_force_destroy    = false
 skip_final_snapshot = false
@@ -14,35 +15,35 @@ skip_final_snapshot = false
 proxy_config = {
   model_list = [
     {
-      model_name = "GPT-5.5"
+      model_name = "gpt-5.5"
       litellm_params = {
         model   = "openai/gpt-5.5"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },
     {
-      model_name = "GPT-5.4"
+      model_name = "gpt-5.4"
       litellm_params = {
         model   = "openai/gpt-5.4"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },
     {
-      model_name = "GPT-5.4-Mini"
+      model_name = "gpt-5.4-mini"
       litellm_params = {
         model   = "openai/gpt-5.4-mini"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },
     {
-      model_name = "GPT-5.3-Codex"
+      model_name = "gpt-5.3-codex"
       litellm_params = {
         model   = "openai/gpt-5.3-codex"
         api_key = "os.environ/OPENAI_API_KEY"
       }
     },
     {
-      model_name = "GPT-5.2"
+      model_name = "gpt-5.2"
       litellm_params = {
         model   = "openai/gpt-5.2"
         api_key = "os.environ/OPENAI_API_KEY"
@@ -78,6 +79,10 @@ proxy_config = {
       similarity_threshold = 0.3
     }
     redact_messages_in_exceptions = true
+    ui_theme_config = {
+      logo_url    = "https://www.reply.com/favicon.ico"
+      favicon_url = "https://www.reply.com/favicon.ico"
+    }
   },
   mcp_servers = {
     data_reply_sharepoint_server = {
@@ -100,7 +105,7 @@ backend_extra_env = {
   SMTP_SENDER_EMAIL = "data.awsacccounts.management@reply.de"
   PROXY_BASE_URL    = "https://litellm.datareply.de"
   STORE_MODEL_IN_DB = true
-  DISABLE_ADMIN_UI  = true
+  DISABLE_ADMIN_UI  = false
 }
 
 backend_extra_secrets = {
