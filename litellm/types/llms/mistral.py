@@ -1,5 +1,6 @@
 from typing import Literal
 
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 
@@ -22,3 +23,45 @@ class MistralTextBlock(TypedDict):
 class MistralThinkingBlock(TypedDict):
     type: Literal["thinking"]
     thinking: list[MistralTextBlock]
+
+
+class MistralConversationInputMessage(TypedDict):
+    role: str
+    content: str
+
+
+class MistralConversationContentChunk(BaseModel):
+    """A single chunk of a Conversations API ``message.output`` content list.
+
+    Text chunks carry ``text``; ``tool_reference`` chunks (web search sources)
+    carry ``title``/``url``. Modelled permissively so unknown chunk types from
+    the API don't break parsing.
+    """
+
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    text: str | None = None
+    title: str | None = None
+    url: str | None = None
+
+
+class MistralConversationOutput(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    type: str | None = None
+    name: str | None = None
+    content: str | list[MistralConversationContentChunk] | None = None
+
+
+class MistralConversationUsage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    connectors: dict[str, int] | None = None
+
+
+class MistralConversationsResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    conversation_id: str | None = None
+    outputs: list[MistralConversationOutput] = Field(default_factory=list)
+    usage: MistralConversationUsage | None = None
