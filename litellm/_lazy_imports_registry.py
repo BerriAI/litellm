@@ -314,6 +314,7 @@ LLM_CONFIG_NAMES = (
     "MorphChatConfig",
     "RAGFlowConfig",
     "LambdaAIChatConfig",
+    "NeuralwattChatConfig",
     "InceptionChatConfig",
     "HyperbolicChatConfig",
     "VercelAIGatewayConfig",
@@ -1178,6 +1179,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "MorphChatConfig": (".llms.morph.chat.transformation", "MorphChatConfig"),
     "RAGFlowConfig": (".llms.ragflow.chat.transformation", "RAGFlowConfig"),
     "LambdaAIChatConfig": (".llms.lambda_ai.chat.transformation", "LambdaAIChatConfig"),
+    "NeuralwattChatConfig": (
+        ".llms.neuralwatt.chat.transformation",
+        "NeuralwattChatConfig",
+    ),
     "InceptionChatConfig": (
         ".llms.inception.chat.transformation",
         "InceptionChatConfig",
