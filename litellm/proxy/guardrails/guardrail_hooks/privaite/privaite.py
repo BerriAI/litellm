@@ -282,10 +282,18 @@ class PrivaiteGuardrail(CustomGuardrail):
 
             raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
-        if mapping is not None and self.deanonymize and not mapping.is_empty:
+        if (
+            mapping is not None
+            and self.deanonymize
+            and not mapping.is_empty
+            and not data.get("background")
+        ):
             # Carry a plain fake->original dict to the post-call hook on the same
             # request, the same channel LiteLLM's Presidio guardrail uses. The
             # post-call hook pops it again so it does not linger in metadata.
+            # Background requests are excluded: their result is fetched by a later
+            # poll the post-call hooks never see, so the map would persist in
+            # request state with no consumer; those responses keep placeholders.
             data.setdefault("metadata", {})["privaite_map"] = dict(mapping.get_all_fakes())
         return data
 
