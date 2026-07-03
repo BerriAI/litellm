@@ -16,10 +16,12 @@ import litellm
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.cache_settings_endpoints import (
+    _CACHE_SENSITIVE_FIELDS,
     CacheSettingsManager,
     CacheSettingsUpdateRequest,
     CacheTestRequest,
     _resolve_cache_url_precedence,
+    get_cache_settings,
     test_cache_connection,
     update_cache_settings,
 )
@@ -95,10 +97,11 @@ class TestResolveCacheUrlPrecedence:
     def test_url_overrides_discrete_connection_fields(self):
         settings = {
             "type": "redis",
-            "url": "redis://:pw@host:6379/1",
+            "url": "redis://user:pw@host:6379/1",
             "host": "host",
             "port": "6379",
             "db": 1,
+            "username": "user",
             "password": "pw",
             "namespace": "ns",
             "ttl": 60,
@@ -106,10 +109,13 @@ class TestResolveCacheUrlPrecedence:
 
         result = _resolve_cache_url_precedence(settings)
 
-        assert result["url"] == "redis://:pw@host:6379/1"
+        assert result["url"] == "redis://user:pw@host:6379/1"
         assert "host" not in result
         assert "port" not in result
         assert "db" not in result
+        # username and password are both encodable in the url, so the discrete
+        # copies must not ride along and override it
+        assert "username" not in result
         assert "password" not in result
         # Non-connection fields survive
         assert result["type"] == "redis"
@@ -232,6 +238,41 @@ async def test_update_cache_settings_persists_url_precedence(monkeypatch):
     init_params = proxy_config._init_cache.call_args.kwargs["cache_params"]
     assert "host" not in init_params
     assert init_params["url"] == "redis://:pw@host:6379/1"
+
+
+def test_url_is_a_masked_field():
+    """A Redis URL can carry an inline password, so it must be masked on read
+    alongside the discrete password fields."""
+    assert "url" in _CACHE_SENSITIVE_FIELDS
+
+
+@pytest.mark.asyncio
+async def test_get_cache_settings_masks_password_bearing_url():
+    """GET /cache/settings must not leak an inline url password in plaintext,
+    while non-credential fields (e.g. namespace) come back untouched."""
+    stored_url = "redis://:supersecretpassword@host:6379/1"
+    stored_settings = {"type": "redis", "url": stored_url, "namespace": "ns"}
+
+    cache_row = MagicMock()
+    cache_row.cache_settings = json.dumps(stored_settings)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=cache_row)
+
+    proxy_config = MagicMock()
+    proxy_config._decrypt_db_variables = MagicMock(side_effect=lambda variables_dict: dict(variables_dict))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+    ):
+        response = await get_cache_settings(user_api_key_dict=_admin_auth())
+
+    returned_url = response.current_values["url"]
+    assert returned_url != stored_url
+    assert "supersecretpassword" not in returned_url
+    # non-credential field is not masked
+    assert response.current_values["namespace"] == "ns"
 
 
 class TestCacheSettingsManager:

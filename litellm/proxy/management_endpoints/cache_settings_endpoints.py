@@ -38,24 +38,27 @@ from litellm.types.management_endpoints import (
 router = APIRouter()
 
 # Cache fields holding credentials. Masked on read so plaintext Redis /
-# Sentinel passwords never leave the server in a GET response.
-_CACHE_SENSITIVE_FIELDS: set = {"password", "sentinel_password"}
+# Sentinel passwords never leave the server in a GET response. `url` is here
+# because a Redis/Valkey URL can embed a password inline
+# (e.g. redis://:secret@host:6379/1).
+_CACHE_SENSITIVE_FIELDS: set = {"password", "sentinel_password", "url"}
 
 
 _REDACTED_VALUE = "***REDACTED***"
 
 
-_URL_OVERRIDDEN_CONNECTION_FIELDS: frozenset = frozenset({"host", "port", "db", "password"})
+_URL_OVERRIDDEN_CONNECTION_FIELDS: frozenset = frozenset({"host", "port", "db", "password", "username"})
 
 
 def _resolve_cache_url_precedence(settings: Mapping[str, Any]) -> Dict[str, Any]:
     """Return cache settings with the url-vs-discrete-fields ambiguity resolved.
 
-    When a full ``url`` is supplied it wins: the discrete host/port/db/password
-    fields are dropped so the persisted config is unambiguous and matches
-    runtime resolution in ``litellm._redis`` (``redis.Redis.from_url`` ignores
-    them). Cluster mode (``redis_startup_nodes``) is exempt because it
-    authenticates via the discrete fields rather than a url.
+    When a full ``url`` is supplied it wins: the discrete
+    host/port/db/password/username fields are dropped so the persisted config
+    is unambiguous and matches runtime resolution in ``litellm._redis``
+    (``redis.Redis.from_url`` ignores them). Cluster mode
+    (``redis_startup_nodes``) is exempt because it authenticates via the
+    discrete fields rather than a url.
     """
     url = settings.get("url")
     has_url = isinstance(url, str) and url.strip() != ""
