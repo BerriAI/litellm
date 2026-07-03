@@ -142,6 +142,26 @@ class TestResponsesAPIRequestUtils:
         assert decoded.get("model_id") == "gpt-4o"
         assert decoded.get("custom_llm_provider") == "openai"
 
+
+    def test_update_responses_api_response_id_with_model_id_is_idempotent_for_litellm_ids(self):
+        raw = "resp_" + "a" * 48
+        litellm_metadata = {"model_info": {"id": "model-123"}}
+
+        once = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            {"id": raw},
+            custom_llm_provider="openai",
+            litellm_metadata=litellm_metadata,
+        )
+        twice = ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+            {"id": once["id"]},
+            custom_llm_provider="openai",
+            litellm_metadata=litellm_metadata,
+        )
+
+        assert twice == once
+        assert ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(twice["id"]) == raw
+        assert ResponsesAPIRequestUtils._decode_responses_api_response_id(once["id"]).get("response_id") == raw
+
     def test_build_decode_container_id_omits_none_model_id(self):
         """model_id=None must not round-trip as the truthy string 'None'."""
         encoded = ResponsesAPIRequestUtils._build_container_id(
