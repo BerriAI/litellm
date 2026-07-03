@@ -148,6 +148,33 @@ async def test_missing_access_token_is_upstream_unavailable():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("token_type", ["N_A", "n_a", "DPoP", "mac"])
+async def test_non_bearer_token_type_is_refused(token_type):
+    # RFC 8693 2.2.1: the resolver forwards the exchanged token as `Bearer`. A non-Bearer token_type
+    # (e.g. N_A = not a standalone access token) must fail closed, not be minted as a bogus Bearer.
+    post = _RecordingPost({"access_token": "x", "token_type": token_type, "expires_in": 3600})
+    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token_type", ["Bearer", "bearer", "BEARER"])
+async def test_bearer_token_type_is_accepted_case_insensitively(token_type):
+    post = _RecordingPost({"access_token": "x", "token_type": token_type, "expires_in": 3600})
+    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Ok) and result.ok.access_token == "x"
+
+
+@pytest.mark.asyncio
+async def test_absent_token_type_defaults_to_bearer():
+    # Many IdPs omit token_type; absence must not fail the exchange (RFC 6750 default is Bearer).
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Ok) and result.ok.access_token == "x"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "config",
     [

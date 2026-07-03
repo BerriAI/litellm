@@ -197,6 +197,11 @@ class Rfc8693TokenExchanger:
         access_token = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             return None
+        # token_type is forwarded downstream as Bearer, so a present-but-non-Bearer type (e.g. N_A)
+        # must fail closed rather than be minted as a bogus Bearer; an absent type defaults to Bearer.
+        token_type = body.get("token_type")
+        if isinstance(token_type, str) and token_type.strip().lower() != "bearer":
+            return None
         expires_in = _parse_expires_in(body.get("expires_in"))
         expires_at = self._clock() + expires_in if expires_in is not None else None
         return OAuthToken(access_token=access_token, expires_at=expires_at)
