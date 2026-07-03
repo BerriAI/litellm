@@ -9,7 +9,7 @@ import ChatPage from "@/components/chat/ChatPage";
 
 // ChatPage uses useSearchParams() which requires a Suspense boundary for static export.
 const ChatPageContent = () => {
-  const { accessToken, userRole, userId, userEmail } = useAuthorized();
+  const { accessToken, userRole, userId, userEmail, premiumUser } = useAuthorized();
   const { data: uiSettings, isLoading: isUISettingsLoading } = useUISettings();
   const { data: uiConfig } = useUIConfig();
   const router = useRouter();
@@ -33,6 +33,7 @@ const ChatPageContent = () => {
       userRole={userRole ?? ""}
       userId={userId ?? ""}
       userEmail={userEmail ?? ""}
+      premiumUser={premiumUser ?? false}
     />
   );
 };
