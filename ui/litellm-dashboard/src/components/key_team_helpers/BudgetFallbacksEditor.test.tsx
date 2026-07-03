@@ -68,6 +68,23 @@ describe("BudgetFallbacksEditor", () => {
     expect(labels.length).toBe(2);
   });
 
+  it("resets internal state when remounted with empty value via key prop", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <BudgetFallbacksEditor
+        key={1}
+        value={{ "gpt-4": ["gpt-3.5-turbo"] }}
+        onChange={onChange}
+        availableModels={MODELS}
+      />,
+    );
+    expect(screen.getAllByText("Primary Model").length).toBe(1);
+
+    rerender(<BudgetFallbacksEditor key={2} value={{}} onChange={onChange} availableModels={MODELS} />);
+    expect(screen.queryByText("Primary Model")).toBeNull();
+    expect(screen.getByText("Add Budget Fallback")).toBeTruthy();
+  });
+
   it("shows ordering hint when multiple fallback models are configured", () => {
     const onChange = vi.fn();
     render(

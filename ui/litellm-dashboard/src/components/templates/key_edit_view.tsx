@@ -308,7 +308,9 @@ export function KeyEditView({
         values.budget_limits = [];
       }
 
-      values.budget_fallbacks = budgetFallbacks;
+      if (Object.keys(budgetFallbacks).length > 0) {
+        values.budget_fallbacks = budgetFallbacks;
+      }
 
       await onSubmit(values);
     } finally {
