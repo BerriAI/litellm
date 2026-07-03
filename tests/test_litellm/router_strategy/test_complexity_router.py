@@ -1047,3 +1047,114 @@ class TestExtractUserMessageAndSystemPrompt:
         )
         assert user_msg is None
         assert sys_prompt is None
+
+
+class TestCJKKeywordMatching:
+    """Test keyword matching with CJK (Chinese/Japanese/Korean) text.
+
+    Regression tests for the ``\\b`` word boundary bug where CJK characters
+    are classified as ``\\w`` in Python's ``re`` module, causing
+    ``\\bpython\\b`` to fail when adjacent to CJK characters.
+    """
+
+    @pytest.fixture
+    def cjk_config(self) -> Dict:
+        """Config with both English and CJK keywords."""
+        return {
+            "tiers": {
+                "SIMPLE": "gpt-4o-mini",
+                "MEDIUM": "gpt-4o",
+                "COMPLEX": "claude-sonnet-4-20250514",
+                "REASONING": "o1-preview",
+            },
+            "code_keywords": [
+                # English
+                "python", "function", "api",
+                # Chinese
+                "函数", "代码", "算法",
+            ],
+            "technical_keywords": [
+                # English
+                "architecture", "distributed",
+                # Chinese
+                "架构", "量子",
+            ],
+        }
+
+    @pytest.fixture
+    def cjk_router(self, mock_router_instance, cjk_config):
+        """ComplexityRouter with CJK keywords."""
+        return ComplexityRouter(
+            model_name="test-cjk-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=cjk_config,
+        )
+
+    # ── Direct _keyword_matches unit tests ──
+
+    def test_ascii_keyword_in_cjk_text(self, cjk_router):
+        """English keyword embedded in Chinese text should match.
+
+        'python' in '用python写函数' must be detected.
+        This is the core bug: ``\\b`` fails here because '用' and '写'
+        are ``\\w`` characters.
+        """
+        assert cjk_router._keyword_matches("用python写函数", "python") is True
+
+    def test_ascii_keyword_case_insensitive(self, cjk_router):
+        """Matching should be case-insensitive (regression: original
+        ``\\b`` version also lacked explicit IGNORECASE in some paths)."""
+        assert cjk_router._keyword_matches("I love Python", "python") is True
+        assert cjk_router._keyword_matches("Call the REST API", "api") is True
+
+    def test_cjk_keyword_direct_match(self, cjk_router):
+        """Chinese keyword should match via substring."""
+        assert cjk_router._keyword_matches("请帮我写一个函数", "函数") is True
+
+    def test_cjk_keyword_in_mixed_text(self, cjk_router):
+        """Chinese keyword adjacent to English should still match."""
+        assert cjk_router._keyword_matches("python函数实现", "函数") is True
+
+    def test_ascii_false_positive_still_prevented(self, cjk_router):
+        """English substring false positives must still be blocked."""
+        assert cjk_router._keyword_matches("terrorism is bad", "error") is False
+        assert cjk_router._keyword_matches("classical music", "class") is False
+        assert cjk_router._keyword_matches("the capital city", "api") is False
+
+    def test_ascii_keyword_with_digits(self, cjk_router):
+        """'python3' should match 'python' (digits are not ASCII letters)."""
+        assert cjk_router._keyword_matches("I use python3", "python") is True
+
+    # ── End-to-end classify() tests ──
+
+    def test_classify_chinese_code_query(self, cjk_router):
+        """A Chinese prompt with code keywords should score higher than SIMPLE."""
+        prompt = "用python写一个函数实现快速排序"
+        tier, score, signals = cjk_router.classify(prompt)
+        code_signals = [s for s in signals if "code" in s.lower()]
+        assert len(code_signals) > 0, (
+            f"Expected code signal for Chinese coding prompt, got {signals}"
+        )
+
+    def test_classify_pure_chinese_keyword(self, cjk_router):
+        """A prompt using only Chinese code keywords should be detected."""
+        prompt = "帮我重构这段代码里的函数"
+        tier, score, signals = cjk_router.classify(prompt)
+        code_signals = [s for s in signals if "code" in s.lower()]
+        assert len(code_signals) > 0, (
+            f"Expected code signal for '代码/函数', got {signals}"
+        )
+
+    def test_classify_chinese_technical_term(self, cjk_router):
+        """Chinese technical terms should be detected.
+
+        Note: technical_keywords threshold is (2,4) by default, so we
+        include two terms to trigger the signal. The _keyword_matches
+        unit tests above verify single-keyword matching directly.
+        """
+        prompt = "请解释量子纠缠与分布式架构的关系"
+        tier, score, signals = cjk_router.classify(prompt)
+        tech_signals = [s for s in signals if "technical" in s.lower()]
+        assert len(tech_signals) > 0, (
+            f"Expected technical signal for '量子/架构', got {signals}"
+        )
