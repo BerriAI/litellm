@@ -40,6 +40,72 @@ class HiddenParamsAsyncIteratorWrapper:
             await aclose()
 
 
+def prepare_response_for_header_attachment(response: object) -> object | None:
+    if response is None:
+        return None
+    if isinstance(response, dict) or hasattr(response, "_hidden_params"):
+        return response
+    if hasattr(response, "__anext__"):
+        return HiddenParamsAsyncIteratorWrapper(response)
+    return response
+
+
+def ensure_response_additional_headers(response: object) -> dict[str, object]:
+    hidden_params = get_hidden_params_dict(response, create=isinstance(response, dict))
+    _write_hidden_params(response, hidden_params)
+    additional_headers = hidden_params.get("additional_headers")
+    if not isinstance(additional_headers, dict):
+        additional_headers = {}
+        hidden_params["additional_headers"] = additional_headers
+    return additional_headers
+
+
+def apply_quality_router_decision_headers(
+    additional_headers: dict[str, object],
+    request_kwargs: object,
+) -> None:
+    metadata = (request_kwargs.get("metadata") or {}) if isinstance(request_kwargs, dict) else {}
+    decision = metadata.get("quality_router_decision") if isinstance(metadata, dict) else None
+    if not isinstance(decision, dict):
+        return
+    quality_header_fields = (
+        ("routed_model", "x-litellm-quality-router-model"),
+        ("quality_tier", "x-litellm-quality-router-tier"),
+        ("routed_via", "x-litellm-quality-router-via"),
+        ("matched_keyword", "x-litellm-quality-router-keyword"),
+        ("complexity_tier", "x-litellm-quality-router-complexity"),
+    )
+    for field, header in quality_header_fields:
+        if decision.get(field) is not None:
+            additional_headers[header] = str(decision[field])
+
+
+def response_in_flight_token_count(response: object) -> int:
+    usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
+    if usage is None:
+        return 0
+    if isinstance(usage, dict):
+        total = int(usage.get("total_tokens") or 0)
+        if total:
+            return total
+        return int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    return int(getattr(usage, "total_tokens", 0) or 0)
+
+
+def apply_remaining_usage_headers(
+    additional_headers: dict[str, object],
+    remaining_usage: dict[str, int],
+    in_flight_tokens: int,
+) -> None:
+    in_flight_delta = {
+        "x-ratelimit-remaining-tokens": in_flight_tokens,
+        "x-ratelimit-remaining-requests": 1,
+    }
+    for header, value in remaining_usage.items():
+        if value is not None and header not in additional_headers:
+            additional_headers[header] = value - in_flight_delta.get(header, 0)
+
+
 def _normalize_hidden_params(hidden_params: object) -> dict[str, object]:
     if isinstance(hidden_params, BaseModel):
         return cast("dict[str, object]", hidden_params.model_dump())

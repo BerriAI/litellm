@@ -83,12 +83,15 @@ from litellm.router_strategy.lowest_tpm_rpm_v2 import LowestTPMLoggingHandler_v2
 from litellm.router_strategy.simple_shuffle import simple_shuffle
 from litellm.router_strategy.tag_based_routing import get_deployments_for_tag
 from litellm.router_utils.add_retry_fallback_headers import (
-    HiddenParamsAsyncIteratorWrapper,
     _HiddenParamsHost,
-    _write_hidden_params,
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
+    apply_quality_router_decision_headers,
+    apply_remaining_usage_headers,
+    ensure_response_additional_headers,
     get_hidden_params_dict,
+    prepare_response_for_header_attachment,
+    response_in_flight_token_count,
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
@@ -9014,89 +9017,25 @@ class Router:
         # - if healthy_deployments > 1, return model group rate limit headers
         # - else return the model's rate limit headers
         """
+        response = prepare_response_for_header_attachment(response)
         if response is None:
             return response
 
-        can_attach = isinstance(response, dict) or hasattr(response, "_hidden_params")
-        if not can_attach:
-            # Bare async generators/iterators (e.g. a provider's raw SSE stream,
-            # like the Anthropic /v1/messages bridge) can't hold attributes, so
-            # header attachment silently no-ops on them. Wrap them so streaming
-            # responses get the same rate-limit headers as object-based ones.
-            if hasattr(response, "__anext__"):
-                response = HiddenParamsAsyncIteratorWrapper(response)
-            else:
-                return response
-
-        hidden_params = get_hidden_params_dict(
-            response,
-            create=isinstance(response, dict),
-        )
-        _write_hidden_params(response, hidden_params)
-
-        additional_headers = hidden_params.get("additional_headers")
-        if not isinstance(additional_headers, dict):
-            additional_headers = {}
-            hidden_params["additional_headers"] = additional_headers
+        additional_headers = ensure_response_additional_headers(response)
         additional_headers["x-litellm-model-group"] = model_group
-
-        # Lift QualityRouter routing decision into response headers for
-        # transparency. The decision is stashed in request_kwargs.metadata
-        # by QualityRouter.async_pre_routing_hook.
-        metadata = (request_kwargs.get("metadata") or {}) if isinstance(request_kwargs, dict) else {}
-        decision = metadata.get("quality_router_decision") if isinstance(metadata, dict) else None
-        if isinstance(decision, dict):
-            # Only emit headers for fields that have a meaningful value.
-            # `complexity_tier` and `matched_keyword` are mutually exclusive
-            # (the keyword path short-circuits classification), so each
-            # request emits one or the other but not both.
-            if decision.get("routed_model") is not None:
-                additional_headers["x-litellm-quality-router-model"] = str(decision["routed_model"])
-            if decision.get("quality_tier") is not None:
-                additional_headers["x-litellm-quality-router-tier"] = str(decision["quality_tier"])
-            if decision.get("routed_via") is not None:
-                additional_headers["x-litellm-quality-router-via"] = str(decision["routed_via"])
-            if decision.get("matched_keyword") is not None:
-                additional_headers["x-litellm-quality-router-keyword"] = str(decision["matched_keyword"])
-            if decision.get("complexity_tier") is not None:
-                additional_headers["x-litellm-quality-router-complexity"] = str(decision["complexity_tier"])
+        apply_quality_router_decision_headers(additional_headers, request_kwargs)
 
         if model_group is not None:
             remaining_usage = await self.get_remaining_model_group_usage(model_group)
-
-            # get_remaining_model_group_usage reads the router's TPM/RPM
-            # counter, which is incremented post-response by
-            # deployment_callback_on_success. So the values returned here
-            # are pre-decrement for the current request, while vendor
-            # headers (OpenAI/Anthropic/Azure) are post-decrement. Replay
-            # the in-flight increment so router-derived headers match
-            # vendor-derived semantics — for both the HTTP response sent
-            # to the client and the prometheus gauges that read these
-            # headers downstream (LIT-2719).
-            #
-            # Only the TPM/RPM counters are post-incremented; the ITPM/OTPM
-            # counters are incremented at reservation time (pre-call), so the
-            # input/output token headers already reflect this request and
-            # must not be adjusted.
-            in_flight_tokens = 0
-            usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
-            if usage is not None:
-                if isinstance(usage, dict):
-                    in_flight_tokens = int(usage.get("total_tokens") or 0)
-                    if not in_flight_tokens:
-                        in_flight_tokens = int(usage.get("input_tokens") or 0) + int(
-                            usage.get("output_tokens") or 0
-                        )
-                else:
-                    in_flight_tokens = getattr(usage, "total_tokens", 0) or 0
-            in_flight_delta = {
-                "x-ratelimit-remaining-tokens": in_flight_tokens,
-                "x-ratelimit-remaining-requests": 1,
-            }
-
-            for header, value in remaining_usage.items():
-                if value is not None and header not in additional_headers:
-                    additional_headers[header] = value - in_flight_delta.get(header, 0)
+            # get_remaining_model_group_usage reads the router's TPM/RPM counter,
+            # which is incremented post-response by deployment_callback_on_success.
+            # Replay the in-flight increment for TPM/RPM only (LIT-2719); ITPM/OTPM
+            # counters are incremented at reservation time and must not be adjusted.
+            apply_remaining_usage_headers(
+                additional_headers,
+                remaining_usage,
+                response_in_flight_token_count(response),
+            )
         return response
 
     def _build_model_name_index(self, model_list: list) -> None:
