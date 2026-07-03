@@ -145,6 +145,17 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             key=f"supports_{level}_reasoning_effort",
         )
 
+    @classmethod
+    def _get_default_reasoning_effort(cls, model: str) -> str:
+        """Return the model's default reasoning_effort from the model map.
+
+        Falls back to "none" for models without the field, preserving the historical
+        gpt-5.x assumption that an omitted reasoning_effort behaves like "none".
+        """
+        from litellm.utils import _get_default_reasoning_effort
+
+        return _get_default_reasoning_effort(model=model, custom_llm_provider=None)
+
     def get_supported_openai_params(self, model: str) -> list:
         if self.is_model_gpt_5_search_model(model):
             return [
@@ -211,6 +222,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         # must be treated as effort="none" to avoid incorrect tool-drop or sampling errors.
         raw_reasoning_effort = non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")
         effective_effort = _get_effort_level(raw_reasoning_effort)
+        resolved_effort = (
+            effective_effort if effective_effort is not None else self._get_default_reasoning_effort(model)
+        )
 
         # Normalize dict reasoning_effort to string for Chat Completions API.
         # Example: {"effort": "high", "summary": "detailed"} -> "high"
@@ -260,7 +274,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         if supports_none:
             sampling_params = ["logprobs", "top_logprobs", "top_p"]
             has_sampling = any(p in non_default_params for p in sampling_params)
-            if has_sampling and effective_effort not in (None, "none"):
+            if has_sampling and resolved_effort != "none":
                 if litellm.drop_params or drop_params:
                     for p in sampling_params:
                         non_default_params.pop(p, None)
@@ -278,7 +292,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             temperature_value: Optional[float] = non_default_params.pop("temperature")
             if temperature_value is not None:
                 # models supporting reasoning_effort="none" also support flexible temperature
-                if supports_none and (effective_effort == "none" or effective_effort is None):
+                if supports_none and resolved_effort == "none":
                     optional_params["temperature"] = temperature_value
                 elif temperature_value == 1:
                     optional_params["temperature"] = temperature_value
@@ -289,7 +303,10 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                         message=(
                             "gpt-5 models (including gpt-5-codex) don't support temperature={}. "
                             "Only temperature=1 is supported. "
-                            "For gpt-5.1, temperature is supported when reasoning_effort='none' (or not specified, as it defaults to 'none'). "
+                            "For gpt-5.1/5.2/5.4, temperature is supported when reasoning_effort='none', "
+                            "which is also their default when reasoning_effort is unspecified. "
+                            "gpt-5.5 defaults to reasoning_effort='medium'; set reasoning_effort='none' "
+                            "explicitly to use a non-default temperature. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ).format(temperature_value),
                         status_code=400,

@@ -1183,6 +1183,71 @@ def test_gpt5_1_logprobs_dropped_with_reasoning_effort(config: OpenAIConfig):
     assert params["reasoning_effort"] == "high"
 
 
+def test_gpt5_5_temperature_dropped_when_effort_omitted(config: OpenAIConfig):
+    """gpt-5.5 defaults to reasoning_effort='medium', so an omitted effort must NOT
+    forward a non-default temperature; drop_params=True drops it (was forwarded -> Azure 400)."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.2},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_gpt5_5_temperature_error_when_effort_omitted(config: OpenAIConfig):
+    """Without drop_params, gpt-5.5 + omitted effort + temp!=1 raises instead of a silent forward."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.2},
+            optional_params={},
+            model="gpt-5.5",
+            drop_params=False,
+        )
+
+
+def test_gpt5_5_temperature_forwarded_with_explicit_effort_none(config: OpenAIConfig):
+    """gpt-5.5 accepts flexible temperature at explicit reasoning_effort='none'."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.2, "reasoning_effort": "none"},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.2
+    assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_5_sampling_params_dropped_when_effort_omitted(config: OpenAIConfig):
+    """Sibling defect: logprobs/top_p must be dropped for gpt-5.5 on omitted effort."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_p": 0.9},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=True,
+    )
+    assert "logprobs" not in params
+    assert "top_p" not in params
+
+
+def test_gpt5_1_temperature_still_forwarded_when_effort_omitted(config: OpenAIConfig):
+    """Control: gpt-5.1 default is 'none', so omitted effort must still forward temperature (guards #27351)."""
+    params = config.map_openai_params(
+        non_default_params={"temperature": 0.2},
+        optional_params={},
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.2
+
+
+def test_get_default_reasoning_effort_gpt5_5_vs_gpt5_1(gpt5_config: OpenAIGPT5Config):
+    """The helper reads 'medium' for gpt-5.5 and defaults to 'none' for gpt-5.1."""
+    assert gpt5_config._get_default_reasoning_effort("gpt-5.5") == "medium"
+    assert gpt5_config._get_default_reasoning_effort("gpt-5.5-2026-04-23") == "medium"
+    assert gpt5_config._get_default_reasoning_effort("gpt-5.1") == "none"
+
+
 # ---------------------------------------------------------------------------
 # Responses API: GPT-5 temperature validation (#16090)
 # ---------------------------------------------------------------------------
@@ -1309,3 +1374,30 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+def test_responses_gpt5_5_drop_temperature_effort_omitted(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """Responses API: gpt-5.5 omitted effort must drop temperature (default 'medium')."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(temperature=0.5),
+        model="gpt-5.5",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt5_5_allow_temperature_effort_none(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """Responses API: gpt-5.5 with explicit reasoning.effort='none' allows temperature."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.5,
+            reasoning={"effort": "none"},
+        ),
+        model="gpt-5.5",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.5

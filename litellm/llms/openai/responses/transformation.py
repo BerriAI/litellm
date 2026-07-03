@@ -98,7 +98,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 reasoning = params.get("reasoning") or {}
                 effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
                 supports_none = self._supports_reasoning_effort_none(model=model)
-                if supports_none and (effort == "none" or effort is None):
+                from litellm.utils import _get_default_reasoning_effort
+
+                resolved_effort = (
+                    effort
+                    if effort is not None
+                    else _get_default_reasoning_effort(model=model, custom_llm_provider=None)
+                )
+                if supports_none and resolved_effort == "none":
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)

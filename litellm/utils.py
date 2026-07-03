@@ -2417,6 +2417,37 @@ def _is_explicitly_disabled_factory(model: str, custom_llm_provider: Optional[st
         return False
 
 
+def _get_default_reasoning_effort(model: str, custom_llm_provider: Optional[str] = None) -> str:
+    """Return the model's documented default reasoning_effort from the model map.
+
+    Reads ``default_reasoning_effort``, falling back to the bare model-name entry,
+    and finally to ``"none"`` for models that do not declare a default.  ``"none"``
+    is the historical assumption of the gpt-5.x path (correct for gpt-5.1/5.2/5.4);
+    gpt-5.5 declares ``"medium"`` because that is its real API default.
+    """
+    try:
+        model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        model_info = _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        value = model_info.get("default_reasoning_effort")
+        if isinstance(value, str):
+            return value
+        bare_model_key = _get_model_cost_key(model)
+        if bare_model_key is not None:
+            bare_entry = litellm.model_cost.get(bare_model_key) or {}
+            bare_value = bare_entry.get("default_reasoning_effort")
+            if isinstance(bare_value, str):
+                return bare_value
+        return "none"
+    except Exception as e:
+        verbose_logger.debug(
+            f"Model not found or error reading default_reasoning_effort. "
+            f"model={model}, custom_llm_provider={custom_llm_provider}. Error: {str(e)}"
+        )
+        return "none"
+
+
 def supports_audio_input(model: str, custom_llm_provider: Optional[str] = None) -> bool:
     """Check if a given model supports audio input in a chat completion call"""
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_audio_input")
@@ -5471,6 +5502,7 @@ def _get_model_info_helper(
                 supports_low_reasoning_effort=_model_info.get("supports_low_reasoning_effort", None),
                 supports_xhigh_reasoning_effort=_model_info.get("supports_xhigh_reasoning_effort", None),
                 supports_max_reasoning_effort=_model_info.get("supports_max_reasoning_effort", None),
+                default_reasoning_effort=_model_info.get("default_reasoning_effort", None),
                 bedrock_output_config_effort_ceiling=_model_info.get("bedrock_output_config_effort_ceiling", None),
                 bedrock_converse_supports_strict_tools=_model_info.get("bedrock_converse_supports_strict_tools", None),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
