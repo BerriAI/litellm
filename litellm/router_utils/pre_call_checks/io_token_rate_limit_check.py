@@ -613,6 +613,8 @@ def io_token_refund_failure(
     kwargs: Any,
 ) -> None:
     itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(kwargs)
+    if itpm_key is None and otpm_key is None:
+        return
     if itpm_key is not None and itpm_reserved > 0:
         dual_cache.increment_cache(
             key=itpm_key,
@@ -629,6 +631,26 @@ def io_token_refund_failure(
     verbose_router_logger.debug(f"[IO TOKEN LIMIT] refunded ITPM={itpm_reserved} OTPM={otpm_reserved}")
 
 
+def refund_stale_reservation_before_retry(dual_cache: DualCache, kwargs: Optional[dict[str, Any]]) -> None:
+    """
+    Synchronously refund and clear any reservation a previous deployment
+    attempt stashed in ``kwargs``, before it's overwritten for the next
+    attempt (retry/fallback).
+
+    ``set_io_token_rate_limit_request_kwargs`` strips reservation sentinels
+    from ``kwargs`` on every deployment pick (a security measure so a
+    caller-forged reservation can't be replayed). Without this refund, a
+    retry after a non-RateLimitError failure (e.g. an upstream 500) would
+    wipe deployment A's still-unreconciled reservation before its failure
+    event - which may be scheduled as a background task - gets a chance to
+    refund it, permanently stranding the reservation until its TTL expires
+    and causing false rate-limit errors for subsequent requests.
+    """
+    if not kwargs:
+        return
+    io_token_refund_failure(dual_cache, kwargs)
+
+
 async def async_io_token_refund_failure(
     dual_cache: DualCache,
     kwargs: Any,
@@ -636,6 +658,8 @@ async def async_io_token_refund_failure(
     parent_otel_span: Optional[Span] = None,
 ) -> None:
     itpm_reserved, otpm_reserved, itpm_key, otpm_key = _read_reservation_from_kwargs(kwargs)
+    if itpm_key is None and otpm_key is None:
+        return
     if itpm_key is not None and itpm_reserved > 0:
         await dual_cache.async_increment_cache(
             key=itpm_key,

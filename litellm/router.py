@@ -137,6 +137,7 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     build_io_token_rate_limit_headers,
     deployment_has_io_token_limits,
+    refund_stale_reservation_before_retry,
     set_io_token_rate_limit_request_kwargs,
 )
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
@@ -2945,6 +2946,11 @@ class Router:
             }
         )
 
+        # A retry/fallback reuses this same kwargs dict for the next deployment.
+        # Refund and clear any reservation the previous deployment attempt left
+        # here before it's wiped below, instead of relying on that attempt's
+        # (possibly still-pending) failure event to do it.
+        refund_stale_reservation_before_retry(self.cache, kwargs)
         set_io_token_rate_limit_request_kwargs(kwargs)
 
         ## DEPLOYMENT-LEVEL TAGS

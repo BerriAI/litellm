@@ -22,6 +22,8 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     deployment_has_io_token_limits,
     get_io_token_rate_limit_request_kwargs,
     io_token_reconcile_success,
+    io_token_refund_failure,
+    refund_stale_reservation_before_retry,
     set_io_token_rate_limit_request_kwargs,
 )
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
@@ -496,6 +498,54 @@ class TestModelRateLimitingCheckIOTokens:
         # ...and the non-IO deployment's TPM usage is tracked normally.
         tpm_key = f"non-io-second:openai/gpt-4o-mini:tpm:{minute}"
         assert await dual_cache.async_get_cache(key=tpm_key) == 12
+
+    @pytest.mark.asyncio
+    async def test_stale_reservation_refunded_before_retry_overwrites_it(self):
+        """
+        A retry reuses the same mutable kwargs dict for the next deployment.
+        If deployment A's failure event hasn't run yet (e.g. it was scheduled
+        as a background task) when the retry calls
+        set_io_token_rate_limit_request_kwargs for deployment B, the router
+        must first synchronously refund + clear A's reservation via
+        refund_stale_reservation_before_retry - otherwise A's counter stays
+        elevated by the reservation until its TTL expires, and the
+        now-orphaned sentinels must not leak into B's accounting either.
+        """
+        from litellm.utils import get_utc_datetime
+
+        dual_cache = DualCache()
+        minute = get_utc_datetime().strftime("%H-%M")
+        itpm_key_a = f"global_router:io-retry-a:bedrock_mantle/test-a:itpm:{minute}"
+        await dual_cache.async_increment_cache(key=itpm_key_a, value=9, ttl=60)
+
+        # Deployment A's still-unreconciled reservation, stashed on the shared
+        # kwargs dict the retry loop reuses.
+        shared_kwargs = {"metadata": {ITPM_RESERVED_KEY: 9, ITPM_CACHE_KEY: itpm_key_a}}
+
+        # Router calls this before overwriting kwargs for deployment B's attempt -
+        # simulating the fix landing ahead of set_io_token_rate_limit_request_kwargs.
+        refund_stale_reservation_before_retry(dual_cache, shared_kwargs)
+
+        # A's reservation is refunded immediately, not left stranded for a
+        # background failure task that may run arbitrarily later (or never,
+        # if the sentinels get cleared out from under it first).
+        assert await dual_cache.async_get_cache(key=itpm_key_a) == 0
+        assert ITPM_RESERVED_KEY not in shared_kwargs["metadata"]
+        assert ITPM_CACHE_KEY not in shared_kwargs["metadata"]
+
+        # A's own (now-late) failure event finds nothing left to refund and
+        # is a safe no-op, since the sentinels were already cleared above.
+        io_token_refund_failure(dual_cache, shared_kwargs)
+        assert await dual_cache.async_get_cache(key=itpm_key_a) == 0
+
+        # The retry proceeds to stash deployment B's own reservation on the
+        # same dict; it starts clean, unaffected by A's cleared sentinels.
+        set_io_token_rate_limit_request_kwargs(shared_kwargs)
+        itpm_key_b = f"global_router:io-retry-b:bedrock_mantle/test-b:itpm:{minute}"
+        shared_kwargs["metadata"][ITPM_RESERVED_KEY] = 4
+        shared_kwargs["metadata"][ITPM_CACHE_KEY] = itpm_key_b
+        await dual_cache.async_increment_cache(key=itpm_key_b, value=4, ttl=60)
+        assert await dual_cache.async_get_cache(key=itpm_key_b) == 4
 
     @pytest.mark.asyncio
     async def test_client_supplied_reservation_keys_are_stripped(self):
