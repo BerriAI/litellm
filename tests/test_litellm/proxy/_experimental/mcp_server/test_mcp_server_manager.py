@@ -5370,13 +5370,15 @@ class TestMCPToolsListAuthSurfacing:
 
     @pytest.mark.asyncio
     async def test_get_tools_from_server_absorbs_non_challenge_http_error(self):
+        """A non-auth HTTPException (500) stays absorbed so one misconfigured server cannot blank
+        the listing; 401/403 are the challenge-class statuses routed to MCPUpstreamAuthError."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http
         )
         manager._create_mcp_client = AsyncMock(
             side_effect=HTTPException(
-                status_code=403,
+                status_code=500,
                 detail="MCP stdio command 'foo' is not in the allowlist",
             )
         )
