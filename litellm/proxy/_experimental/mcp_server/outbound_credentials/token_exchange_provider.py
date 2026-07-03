@@ -1,0 +1,62 @@
+"""Composition root for the v2-native token_exchange (OBO) exchanger.
+
+Wires the pure ``Rfc8693TokenExchanger`` to its runtime edges: the real httpx POST against the IdP and
+the configured cache sizing/TTL constants. ``build_token_exchanger`` is built once at egress
+construction and reused, so the in-process exchanged-token cache survives across requests. Unlike the
+per-user store, nothing here reads a runtime global at build time (the httpx client is acquired per
+call), so it needs no lazy wrapper.
+"""
+
+from __future__ import annotations
+
+from litellm._logging import verbose_logger
+from litellm.constants import (
+    MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
+    MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
+    MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
+    MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
+    InMemoryTokenCacheBackend,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+    Rfc8693TokenExchanger,
+)
+
+
+async def _post_exchange_endpoint(
+    url: str, form: dict[str, str], client_auth_headers: dict[str, str]
+) -> dict[str, object] | None:
+    from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415
+        get_async_httpx_client,  # pyright: ignore
+    )
+    from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415
+
+    # litellm's httpx handler and httpx.Response are only partially typed; the IdP returns a JSON
+    # object and the exchanger validates each field, so the untyped boundary is contained here.
+    # A failed exchange is a miss, not a 500 (matches v1), so any error becomes None.
+    headers = {"Accept": "application/json", **client_auth_headers}
+    try:
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)  # pyright: ignore
+        response = await client.post(url, headers=headers, data=form)  # pyright: ignore
+        response.raise_for_status()  # pyright: ignore
+        parsed: object = response.json()  # pyright: ignore
+    except Exception as exc:  # noqa: BLE001
+        verbose_logger.warning("MCP token exchange request failed: %s", exc)
+        return None
+    if not isinstance(parsed, dict):
+        # A valid-but-non-object JSON body (list/string/number) would crash the field parsing; map it
+        # to a miss so it surfaces as a typed upstream_unavailable, not a 500.
+        verbose_logger.warning("MCP token exchange returned non-object JSON (%s)", type(parsed).__name__)
+        return None
+    return parsed  # pyright: ignore
+
+
+def build_token_exchanger() -> Rfc8693TokenExchanger:
+    return Rfc8693TokenExchanger(
+        _post_exchange_endpoint,
+        cache=InMemoryTokenCacheBackend(max_size=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE),
+        default_ttl_seconds=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
+        min_ttl_seconds=MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
+        expiry_buffer_seconds=MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
+    )

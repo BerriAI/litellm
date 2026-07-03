@@ -71,6 +71,9 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
 from litellm.proxy._experimental.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
+    build_token_exchanger,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     AuthorizationCodeConfig,
 )
@@ -531,7 +534,8 @@ class MCPServerManager:
 
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
-            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id)
+            oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id),
+            token_exchanger=build_token_exchanger(),
         )
         self.registry: dict[str, MCPServer] = {}
         self.config_mcp_servers: dict[str, MCPServer] = {}
@@ -1977,9 +1981,11 @@ class MCPServerManager:
                         ):
                             resolved_auth = None
                     case Error(err):
-                        if err.tag == "unauthorized":
-                            # The arm signals a missing per-user token semantically; raise the
-                            # per-server OAuth challenge here, where the full MCPServer is in hand.
+                        if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
+                            # authorization_code's missing per-user token -> the per-server
+                            # browser-OAuth challenge, built here where the full MCPServer is in
+                            # hand. token_exchange and other modes carry their own 401 (e.g. OBO
+                            # needs a caller token, not a browser flow), so they go via raise_public.
                             raise_user_oauth_challenge(server)
                         raise_public(err)
                 return MCPClient(
