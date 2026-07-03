@@ -87,25 +87,22 @@ class LocalFirstRoutingStrategy(BaseRoutingStrategy):
         # Use local_fallback_order to determine priority
         for fallback_type in self.local_fallback_order:
             for deployment in healthy_deployments:
-                model_name = deployment.get("model_name") or deployment.get("litellm_params", {}).get("model", "")
-                if fallback_type == "local" and self._is_local_model(model_name):
+                model_name = deployment.get("model_name") or ""
+                model_id = deployment.get("litellm_params", {}).get("model", "")
+                # Check both model_name and model_id for flexibility
+                is_match = False
+                if fallback_type == "local":
+                    is_match = self._is_local_model(model_name) or self._is_local_model(model_id)
+                elif fallback_type == "domestic_free":
+                    is_match = self._is_domestic_free(model_name) or self._is_domestic_free(model_id)
+                elif fallback_type == "openrouter_free":
+                    is_match = self._is_openrouter_free(model_name) or self._is_openrouter_free(model_id)
+                elif fallback_type == "openrouter_paid":
+                    is_match = self._is_openrouter_paid(model_name) or self._is_openrouter_paid(model_id)
+
+                if is_match:
                     verbose_router_logger.debug(
-                        f"Local-first routing: using local model '{model_name}'"
-                    )
-                    return deployment
-                elif fallback_type == "domestic_free" and self._is_domestic_free(model_name):
-                    verbose_router_logger.debug(
-                        f"Local-first routing: using domestic free model '{model_name}'"
-                    )
-                    return deployment
-                elif fallback_type == "openrouter_free" and self._is_openrouter_free(model_name):
-                    verbose_router_logger.debug(
-                        f"Local-first routing: using openrouter free model '{model_name}'"
-                    )
-                    return deployment
-                elif fallback_type == "openrouter_paid" and self._is_openrouter_paid(model_name):
-                    verbose_router_logger.debug(
-                        f"Local-first routing: using openrouter paid model '{model_name}'"
+                        f"Local-first routing: using {fallback_type} model '{model_name}'"
                     )
                     return deployment
 
