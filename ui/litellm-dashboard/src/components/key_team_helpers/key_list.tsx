@@ -166,9 +166,7 @@ const useKeyList = ({
 
   const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
     try {
-      console.log("calling fetchKeys");
       if (!accessToken) {
-        console.log("accessToken", accessToken);
         return;
       }
       setIsLoading(true);
@@ -189,7 +187,6 @@ const useKeyList = ({
         null,
         expand.join(","),
       );
-      console.log("data", data);
       setKeyData(data);
       setError(null);
     } catch (err) {
@@ -201,16 +198,6 @@ const useKeyList = ({
 
   useEffect(() => {
     fetchKeys();
-    console.log(
-      "selectedTeam",
-      selectedTeam,
-      "currentOrg",
-      currentOrg,
-      "accessToken",
-      accessToken,
-      "selectedKeyAlias",
-      selectedKeyAlias,
-    );
   }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
   const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {

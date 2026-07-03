@@ -383,9 +383,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         (key) => guardrail_provider_map[key] === guardrailData.litellm_params?.guardrail,
       );
 
-      console.log("values: ", JSON.stringify(values));
-      console.log("currentProvider: ", currentProvider);
-
       // Use pre-fetched provider params to copy recognised params
       const isToolPermissionGuardrail = guardrailData.litellm_params?.guardrail === "tool_permission";
       if (guardrailProviderSpecificParams && currentProvider && !isToolPermissionGuardrail) {
@@ -393,8 +390,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         const providerSpecificParams = guardrailProviderSpecificParams[providerKey] || {};
 
         const allowedParams = new Set<string>();
-
-        console.log("providerSpecificParams: ", JSON.stringify(providerSpecificParams));
 
         // Add root-level parameters (like api_key, api_base, api_version)
         Object.keys(providerSpecificParams).forEach((paramName) => {
@@ -410,7 +405,6 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
           });
         }
 
-        console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
           if (paramName === "patterns" || paramName === "blocked_words" || paramName === "categories") {
             return;

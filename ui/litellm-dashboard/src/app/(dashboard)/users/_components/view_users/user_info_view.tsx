@@ -97,7 +97,6 @@ export default function UserInfoView({
   }, []);
 
   React.useEffect(() => {
-    console.log(`userId: ${userId}, userRole: ${userRole}, accessToken: ${accessToken}`);
     const fetchData = async () => {
       try {
         if (!accessToken) return;
