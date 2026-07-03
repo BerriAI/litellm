@@ -9,17 +9,16 @@ When contributing to this directory, please first discuss the change you wish to
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with a throwaway Postgres and Redis; `docker compose down -v` resets everything, so no state leaks between runs. The proxy config is inlined in the compose file under `configs`, prewired with example models (`gpt-5.5`, `claude-haiku-4-5`, a load-balanced `gemini-2.5-flash` pair, `openai-text-embedding-3-small`) whose keys come from your `.env`. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that inline config and read it back in the test rather than hardcoding values. `gateway/` holds machine-local proxy configuration for deployed environments and never tests
+The suites run against a live proxy, so bring one up first. `docker-compose.yml` here starts that proxy with a throwaway Postgres and Redis; `docker compose down -v` resets everything, so no state leaks between runs. The proxy config is inlined in the compose file under `configs`, prewired with example models (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) whose keys come from your `.env`. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that inline config and read it back in the test rather than hardcoding values. `gateway/` holds machine-local proxy configuration for deployed environments and never tests
 
 ## Running the tests locally
 
-1. Create a `.env` file in this directory with the provider keys the example models use. `GEMINI_API_KEY_2` exists so the two `gemini-2.5-flash` deployments load-balance across keys; point it at the same key if you only have one
+1. Create a `.env` file in this directory with the provider keys the example models use:
 
    ```bash
    OPENAI_API_KEY="sk-..."
    ANTHROPIC_API_KEY="sk-..."
    GEMINI_API_KEY="..."
-   GEMINI_API_KEY_2="..."
    ```
 
 2. Bring the stack up from this directory:

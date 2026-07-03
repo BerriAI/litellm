@@ -40,10 +40,6 @@ configs:
           litellm_params:
             model: gemini/gemini-2.5-flash
             api_key: os.environ/GEMINI_API_KEY
-        - model_name: gemini-2.5-flash
-          litellm_params:
-            model: gemini/gemini-2.5-flash
-            api_key: os.environ/GEMINI_API_KEY_2
 
         - model_name: openai-text-embedding-3-small
           litellm_params:
