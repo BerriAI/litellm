@@ -20,6 +20,7 @@ class CacheControlToolConfigInjectionPoint(TypedDict):
     """Type for tool_config-level injection points (Bedrock)."""
 
     location: Literal["tool_config"]
+    control: Optional[ChatCompletionCachedContent]
 
 
 CacheControlInjectionPoint = Union[

@@ -25,6 +25,23 @@ from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_tran
 )
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so capability detection reads this
+    branch's flags, which the network-fetched ``main`` copy may lack."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
 @pytest.mark.asyncio
 async def test_bedrock_sse_wrapper_encodes_dict_chunks():
     """Verify that `bedrock_sse_wrapper` converts dictionary chunks to properly formatted Server-Sent Events and forwards non-dict chunks unchanged."""
@@ -467,7 +484,7 @@ def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_o
     assert result["tools"][0]["type"] == "custom"
 
 
-def test_remove_ttl_from_cache_control_processes_tools():
+def test_remove_ttl_from_cache_control_processes_tools(local_model_cost_map):
     """
     Ensure _remove_ttl_from_cache_control also sanitizes cache_control on tools.
 
@@ -513,7 +530,9 @@ def test_remove_ttl_from_cache_control_processes_tools():
     assert "ttl" not in request["system"][0]["cache_control"]
 
 
-def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
+def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5(
+    local_model_cost_map,
+):
     """
     For Claude 4.5+ models, ttl in ["5m", "1h"] should be preserved on tools,
     just like it is for system and messages.
@@ -539,7 +558,7 @@ def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
     }
 
     cfg._remove_ttl_from_cache_control(
-        request, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        request, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
 
     # Both tools and system should preserve ttl for Claude 4.5
