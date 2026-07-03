@@ -119,7 +119,7 @@ async def test_exchange_maps_idp_rejection_to_unauthorized():
         SubjectTokenRejected,
     )
 
-    async def _rejecting_post(url, form):
+    async def _rejecting_post(url, form, headers):
         raise SubjectTokenRejected("IdP rejected the token exchange (HTTP 400)")
 
     result = await Rfc8693TokenExchanger(_rejecting_post, clock=_Clock()).exchange("bad-jwt", _SERVER, _CONFIG)
@@ -268,6 +268,19 @@ async def test_non_bearer_token_type_is_refused(token_type):
     result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Error)
     assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_non_bearer_token_type_is_logged():
+    from unittest.mock import patch
+
+    post = _RecordingPost({"access_token": "x", "token_type": "N_A", "expires_in": 3600})
+    with patch(
+        "litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger.verbose_logger"
+    ) as mock_logger:
+        await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert mock_logger.warning.called
+    assert "N_A" in repr(mock_logger.warning.call_args)
 
 
 @pytest.mark.asyncio

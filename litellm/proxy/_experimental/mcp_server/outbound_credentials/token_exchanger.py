@@ -255,6 +255,9 @@ class Rfc8693TokenExchanger:
         # must fail closed rather than be minted as a bogus Bearer; an absent type defaults to Bearer.
         token_type = body.get("token_type")
         if isinstance(token_type, str) and token_type.strip().lower() != "bearer":
+            verbose_logger.warning(
+                "MCP token exchange returned unusable token_type %r; refusing to forward it as Bearer", token_type
+            )
             return None
         # issued_token_type says what representation was minted; reject a clearly-non-access type
         # (refresh/id/saml) even if token_type claimed Bearer. access_token / jwt / absent / unknown pass.
