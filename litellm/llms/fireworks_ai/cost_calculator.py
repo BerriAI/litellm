@@ -75,8 +75,20 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         model_info = get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
     ## CALCULATE INPUT COST
-
-    prompt_cost: float = usage["prompt_tokens"] * model_info["input_cost_per_token"]
+    # Fireworks returns cached prompt tokens in prompt_tokens_details.cached_tokens.
+    # Bill those at the cache-read rate when the model defines one, matching the
+    # generic cost path; otherwise fall back to charging every token at full price.
+    prompt_tokens_details = usage.get("prompt_tokens_details") or None
+    cached_tokens = getattr(prompt_tokens_details, "cached_tokens", 0) or 0
+    cache_read_cost = model_info.get("cache_read_input_token_cost")
+    if cache_read_cost is not None and cached_tokens:
+        uncached_tokens = usage["prompt_tokens"] - cached_tokens
+        prompt_cost: float = (
+            uncached_tokens * model_info["input_cost_per_token"]
+            + cached_tokens * cache_read_cost
+        )
+    else:
+        prompt_cost = usage["prompt_tokens"] * model_info["input_cost_per_token"]
 
     ## CALCULATE OUTPUT COST
     completion_cost = usage["completion_tokens"] * model_info["output_cost_per_token"]
