@@ -183,17 +183,23 @@ class ClientCredentialsConfig(BaseModel):
 
 class TokenExchangeConfig(BaseModel):
     """RFC 8693 OBO; swap the caller's live subject_token for a token bound to the upstream's
-    audience (`server.resource`, RFC 8707). The gateway authenticates to the exchange endpoint
-    as an OAuth client (`client_id`/`client_secret`); the inbound token is sent only to that
-    endpoint, never to the upstream.
+    audience. The gateway authenticates to the exchange endpoint as an OAuth client
+    (`client_id`/`client_secret`); the inbound token is sent only to that endpoint, never to the
+    upstream.
+
+    `audience` is the RFC 8693 target; it is optional and sent only when the operator configured
+    one, since both `audience` and `resource` are optional in the spec and the authorization server
+    applies its own default when neither is sent (fabricating one risks `invalid_target`).
     """
 
     model_config = ConfigDict(frozen=True)
     kind: Literal[AuthSpecKind.token_exchange] = AuthSpecKind.token_exchange
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     token_exchange_endpoint: str | None = None
+    audience: str | None = None
     client_id: str | None = None
     client_secret: SecretStr | None = None
+    token_endpoint_auth_method: Literal["client_secret_basic", "client_secret_post"] | None = None
     scopes: tuple[str, ...] = ()
 
 

@@ -24,6 +24,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
     CredError,
     NoneConfig,
     SharedKey,
+    TokenExchangeConfig,
 )
 from litellm.types.mcp import MCPAuth, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -65,9 +66,7 @@ def test_authorization_schemes_map_with_their_prefix(auth_type, prefix):
 
 
 def test_basic_scheme_base64_encodes_the_token():
-    spec = to_server_spec(
-        _server(auth_type=MCPAuth.basic, authentication_token="user:pass")
-    )
+    spec = to_server_spec(_server(auth_type=MCPAuth.basic, authentication_token="user:pass"))
     assert spec is not None and isinstance(spec.config, ApiKeyConfig)
     assert spec.config.value_prefix == "Basic"
     expected = base64.b64encode(b"user:pass").decode()
@@ -89,22 +88,74 @@ def test_oauth2_user_token_maps_to_authorization_code(oauth2_flow):
     [
         _server(auth_type=MCPAuth.api_key),  # no token configured
         _server(auth_type=MCPAuth.bearer_token),  # no token configured
+        _server(auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials"),  # M2M -> v1
+        _server(auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True),  # delegated upstream OAuth -> v1
+        _server(auth_type=MCPAuth.oauth2_token_exchange),  # no endpoint/client creds -> incomplete -> v1
         _server(
-            auth_type=MCPAuth.oauth2, oauth2_flow="client_credentials"
-        ),  # M2M -> v1
-        _server(
-            auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True
-        ),  # delegated upstream OAuth -> v1
-        _server(auth_type=MCPAuth.oauth2_token_exchange),
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp/token",
+            client_id="cid",
+        ),  # missing client_secret -> incomplete -> v1
         _server(auth_type=MCPAuth.aws_sigv4),
-        _server(
-            auth_type=None, oauth_passthrough=True, extra_headers=["Authorization"]
-        ),
+        _server(auth_type=None, oauth_passthrough=True, extra_headers=["Authorization"]),
     ],
 )
 def test_unmigrated_modes_defer_to_v1(server):
     # A None spec is the defer signal; the caller falls back to v1.
     assert to_server_spec(server) is None
+
+
+def test_token_exchange_maps_full_config():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            url="https://up.example.com/mcp",
+            token_exchange_endpoint="https://idp.example.com/token",
+            audience="https://up.example.com",
+            client_id="cid",
+            client_secret="csec",
+            subject_token_type="urn:ietf:params:oauth:token-type:jwt",
+            scopes=["a", "b"],
+        )
+    )
+    assert spec is not None
+    config = spec.config
+    assert isinstance(config, TokenExchangeConfig)
+    assert config.token_exchange_endpoint == "https://idp.example.com/token"
+    assert config.audience == "https://up.example.com"
+    assert config.client_id == "cid"
+    assert config.client_secret is not None
+    assert config.client_secret.get_secret_value() == "csec"
+    assert config.subject_token_type == "urn:ietf:params:oauth:token-type:jwt"
+    assert config.scopes == ("a", "b")
+
+
+def test_token_exchange_falls_back_to_token_url_when_no_exchange_endpoint():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_url="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.token_exchange_endpoint == "https://idp.example.com/token"
+
+
+def test_token_exchange_omits_audience_when_unset():
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/token",
+            client_id="cid",
+            client_secret="csec",
+        )
+    )
+    assert spec is not None
+    assert isinstance(spec.config, TokenExchangeConfig)
+    assert spec.config.audience is None
 
 
 @pytest.mark.parametrize(
@@ -115,9 +166,7 @@ def test_unmigrated_modes_defer_to_v1(server):
         # static token must not route a BYOK server to a v2 shared-key spec with the wrong value.
         _server(auth_type=MCPAuth.bearer_token, is_byok=True, authentication_token="x"),
         _server(auth_type=MCPAuth.basic, is_byok=True, authentication_token="x"),
-        _server(
-            auth_type=MCPAuth.authorization, is_byok=True, authentication_token="x"
-        ),
+        _server(auth_type=MCPAuth.authorization, is_byok=True, authentication_token="x"),
         _server(auth_type=MCPAuth.token, is_byok=True, authentication_token="x"),
         _server(auth_type=None, is_byok=True),
     ],
@@ -161,9 +210,7 @@ def test_raise_public_maps_each_error_to_its_status(error, status):
 
 def test_raise_public_emits_unauthorized_challenge():
     body = {"error": "byok_auth_required", "server_id": "s1"}
-    error = CredError.of_unauthorized(
-        "needs key", www_authenticate='Bearer resource_metadata="/x"', body=body
-    )
+    error = CredError.of_unauthorized("needs key", www_authenticate='Bearer resource_metadata="/x"', body=body)
     with pytest.raises(HTTPException) as exc_info:
         raise_public(error)
     exc = exc_info.value
@@ -191,8 +238,7 @@ def test_raise_user_oauth_challenge_points_at_per_server_prm():
     exc = exc_info.value
     assert exc.status_code == 401
     assert (
-        exc.headers["WWW-Authenticate"]
-        == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/my-srv"'
+        exc.headers["WWW-Authenticate"] == 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/my-srv"'
     )
 
 
