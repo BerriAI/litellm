@@ -1,6 +1,8 @@
+import asyncio
 import json
+from datetime import datetime
 from typing import Any, Dict, Optional
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -330,7 +332,8 @@ class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
     async def test_m2m_does_not_build_presented_store(self, monkeypatch):
         """M2M (client_credentials): to_server_spec returns None, so no presented provider is built;
-        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before)."""
+        the auto-fetch path is unchanged (no cred_provider, the incoming header dropped as before).
+        """
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
@@ -377,7 +380,8 @@ class TestExecuteWithMcpClient:
     @pytest.mark.asyncio
     async def test_token_exchange_does_not_build_presented_store(self, monkeypatch):
         """OBO / token-exchange (auth_type oauth2_token_exchange, not oauth2): excluded by the
-        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs."""
+        auth_type == oauth2 guard, so no presented provider is built and the v1 exchange path runs.
+        """
         captured: dict = {}
 
         def fake_build_stdio_env(server, raw_headers):
@@ -839,6 +843,76 @@ class TestListToolsRestAPI:
         assert exc_info.value.status_code == upstream_status
         assert exc_info.value.headers == {"www-authenticate": challenge}
 
+    async def test_aggregate_list_absorbs_one_server_auth_failure(self, monkeypatch):
+        """The multi-server aggregate listing degrades a server whose upstream
+        rejects auth to an empty contribution and still returns the healthy
+        server's tools with a 200, rather than surfacing a 401."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        class StubServer:
+            def __init__(self, name):
+                self.alias = name
+                self.server_name = name
+                self.name = name
+                self.allowed_tools = None
+                self.mcp_info = {"server_name": name}
+                self.available_on_public_internet = True
+
+        good = StubServer("good")
+        bad = StubServer("bad")
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["good", "bad"]
+
+        async def fake_get_tools(server, *args, **kwargs):
+            if server.server_name == "bad":
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate='Bearer realm="x"',
+                    server_name="bad",
+                )
+            return ["good-tool"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: {"good": good, "bad": bad}.get(server_id),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == ["good-tool"]
+        assert result["error"] is None
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""
@@ -1196,6 +1270,13 @@ class TestCallToolRestAPI:
             fake_execute_mcp_tool,
             raising=False,
         )
+        fire_logging = AsyncMock(side_effect=RuntimeError("logging failed"))
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_success_logging",
+            fire_logging,
+            raising=False,
+        )
 
         request_payload = {
             "server_id": "server-1",
@@ -1217,6 +1298,23 @@ class TestCallToolRestAPI:
         assert captured["name"] == "demo-tool"
         assert captured["arguments"] == {"foo": "bar"}
         assert captured["allowed_mcp_servers"] == [stub_server]
+        fire_logging.assert_awaited_once()
+
+    async def test_success_logging_cancellation_propagates(self, monkeypatch):
+        fire_logging = AsyncMock(side_effect=asyncio.CancelledError())
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_fire_mcp_success_logging",
+            fire_logging,
+            raising=False,
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await rest_endpoints._safe_fire_mcp_success_logging(
+                object(), {"result": "ok"}, datetime.now(), datetime.now()
+            )
+
+        fire_logging.assert_awaited_once()
 
 
 class TestGetToolsForSingleServer:
@@ -1809,9 +1907,9 @@ class TestPreviewOpenAPITools:
         names = [t["name"] for t in result["tools"]]
         anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
         for name in names:
-            assert anthropic_re.match(name), (
-                f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
-            )
+            assert anthropic_re.match(
+                name
+            ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
         assert "actions_download-job-logs-for-workflow-run" in names
         assert "pulls_list-files" in names
 
@@ -1868,7 +1966,9 @@ class TestPreviewOpenAPITools:
 
         registered_summary_to_name: dict = {}
 
-        def fake_create_tool_function(path, method, operation, base_url):  # noqa: ANN001
+        def fake_create_tool_function(
+            path, method, operation, base_url
+        ):  # noqa: ANN001
             def _f():
                 return None
 
@@ -1881,7 +1981,9 @@ class TestPreviewOpenAPITools:
         )
 
         class _StubRegistry:
-            def register_tool(self, name, description, input_schema, handler):  # noqa: ANN001
+            def register_tool(
+                self, name, description, input_schema, handler
+            ):  # noqa: ANN001
                 registered_summary_to_name[description] = name
 
         monkeypatch.setattr(

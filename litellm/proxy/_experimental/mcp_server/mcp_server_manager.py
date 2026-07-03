@@ -13,7 +13,8 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
 import anyio
@@ -550,6 +551,11 @@ class MCPServerManager:
         ]
         """
 
+        # Per-server outbound tool-call concurrency limiters, lazily created from
+        # each server's max_concurrent_requests. Keyed by server_id so the cap
+        # survives the registry atomic-swap on config reload; a missing key means
+        # the server has no configured limit.
+        self._server_call_semaphores: Dict[str, asyncio.Semaphore] = {}
         self.tool_name_to_mcp_server_name_mapping: Dict[str, str] = {}
         """
         {
@@ -790,6 +796,7 @@ class MCPServerManager:
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
+                max_concurrent_requests=server_config.get("max_concurrent_requests", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -1164,6 +1171,7 @@ class MCPServerManager:
             subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
             or "urn:ietf:params:oauth:token-type:access_token",
             timeout=getattr(mcp_server, "timeout", None),
+            max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
         return new_server
@@ -1246,6 +1254,67 @@ class MCPServerManager:
         """Return server IDs that bypass per-key restrictions."""
         return [server.server_id for server in self.get_registry().values() if server.allow_all_keys is True]
 
+    @staticmethod
+    def get_byom_submitted_servers_cache_key(user_id: str) -> str:
+        return f"byom_submitted_servers:{user_id}"
+
+    async def invalidate_byom_submitted_servers_cache(self, user_id: str | None) -> None:
+        if not user_id:
+            return
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            await user_api_key_cache.async_delete_cache(key=self.get_byom_submitted_servers_cache_key(user_id))
+        except Exception as e:  # noqa: BLE001
+            verbose_logger.warning(f"Failed to invalidate BYOM submitted MCP server cache: {str(e)}")
+
+    async def _get_active_submitted_mcp_server_ids_for_user(
+        self, user_api_key_auth: UserAPIKeyAuth | None
+    ) -> list[str]:
+        submitter_user_id = getattr(user_api_key_auth, "user_id", None) if user_api_key_auth else None
+        if not submitter_user_id:
+            return []
+
+        try:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                get_active_submitted_mcp_server_ids_for_user,
+            )
+            from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+        except Exception as e:  # noqa: BLE001
+            verbose_logger.warning(f"Failed to load BYOM submitted MCP server cache dependencies: {str(e)}")
+            return []
+
+        byom_cache_key = self.get_byom_submitted_servers_cache_key(submitter_user_id)
+        submitted_server_ids: list[str] | None = None
+        try:
+            cached_submitted_server_ids = await user_api_key_cache.async_get_cache(key=byom_cache_key)
+            if cached_submitted_server_ids is not None:
+                submitted_server_ids = cast(list[str], cached_submitted_server_ids)
+        except Exception as e:  # noqa: BLE001
+            verbose_logger.warning(f"Failed to read BYOM submitted MCP server cache: {str(e)}")
+
+        if submitted_server_ids is None:
+            if prisma_client is None:
+                submitted_server_ids = []
+            else:
+                try:
+                    submitted_server_ids = await get_active_submitted_mcp_server_ids_for_user(
+                        prisma_client, submitter_user_id
+                    )
+                except Exception as e:  # noqa: BLE001
+                    verbose_logger.warning(f"Failed to read BYOM submitted MCP servers from database: {str(e)}")
+                    submitted_server_ids = []
+            try:
+                await user_api_key_cache.async_set_cache(
+                    key=byom_cache_key,
+                    value=submitted_server_ids,
+                    ttl=60,
+                )
+            except Exception as e:  # noqa: BLE001
+                verbose_logger.warning(f"Failed to write BYOM submitted MCP server cache: {str(e)}")
+
+        return [server_id for server_id in submitted_server_ids if self.get_mcp_server_by_id(server_id) is not None]
+
     async def get_allowed_mcp_servers(self, user_api_key_auth: Optional[UserAPIKeyAuth] = None) -> List[str]:
         """
         Get the allowed MCP Servers for the user.
@@ -1259,25 +1328,30 @@ class MCPServerManager:
 
         allow_all_server_ids = self.get_allow_all_keys_server_ids()
 
+        # The key explicitly opted out of every MCP server. Return zero before
+        # layering on allow_all_keys or submitted servers so the opt-out is absolute.
+        key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
+        if key_object_permission is not None and (
+            SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
+        ):
+            return []
+
+        # Check if object_permission.mcp_servers is explicitly set (not None, empty list is valid)
+        has_explicit_object_permission = key_object_permission is not None and (
+            key_object_permission.mcp_servers is not None
+        )
+        if has_explicit_object_permission:
+            verbose_logger.debug(f"Object permission mcp_servers explicitly set: {key_object_permission.mcp_servers}")
+
+        # BYOM creator visibility never widens a key that was explicitly scoped:
+        # only keys without their own mcp_servers list get submitted servers unioned in.
+        submitted_server_ids = (
+            []
+            if has_explicit_object_permission
+            else await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
+        )
+
         try:
-            # The key explicitly opted out of every MCP server. Return zero before
-            # layering on allow_all_keys servers so the opt-out is absolute.
-            key_object_permission = user_api_key_auth.object_permission if user_api_key_auth else None
-            if key_object_permission is not None and (
-                SpecialMCPServerNames.no_mcp_servers.value in (key_object_permission.mcp_servers or [])
-            ):
-                return []
-
-            # Check if object_permission.mcp_servers is explicitly set
-            has_explicit_object_permission = False
-            if user_api_key_auth and user_api_key_auth.object_permission:
-                # Check if mcp_servers is explicitly set (not None, empty list is valid)
-                if user_api_key_auth.object_permission.mcp_servers is not None:
-                    has_explicit_object_permission = True
-                    verbose_logger.debug(
-                        f"Object permission mcp_servers explicitly set: {user_api_key_auth.object_permission.mcp_servers}"
-                    )
-
             # If admin but NO explicit object permission, get all servers
             if user_api_key_auth and _user_has_admin_view(user_api_key_auth) and not has_explicit_object_permission:
                 verbose_logger.debug("Admin user without explicit object_permission - returning all servers")
@@ -1299,6 +1373,7 @@ class MCPServerManager:
             in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
+                combined_servers.update(submitted_server_ids)
 
             # For anonymous callers (no user_id, no role), also surface any
             # servers the operator has opted into upstream-delegated auth.
@@ -1331,9 +1406,9 @@ class MCPServerManager:
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
-                "grants may be dropped. Falling back to global servers only."
+                "grants may be dropped. Falling back to global and submitted servers."
             )
-            return allow_all_server_ids
+            return list(dict.fromkeys(allow_all_server_ids + submitted_server_ids))
 
     async def resolve_toolset_tool_permissions(
         self,
@@ -2055,7 +2130,7 @@ class MCPServerManager:
                     ]
                 return tools
             else:
-                tools = await self._fetch_tools_with_timeout(client, server.name, server=server)
+                tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(tools, server, add_prefix=add_prefix)
@@ -2067,6 +2142,17 @@ class MCPServerManager:
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
             raise
+        except HTTPException as e:
+            headers = e.headers or {}
+            www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
+            if e.status_code == 401 and www_authenticate is not None:
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate=www_authenticate,
+                    server_name=server.name,
+                ) from e
+            verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
+            return []
         except Exception as e:
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
             return []
@@ -2617,7 +2703,6 @@ class MCPServerManager:
         self,
         client: MCPClient,
         server_name: str,
-        server: Optional[MCPServer] = None,
     ) -> List[MCPTool]:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -2625,38 +2710,27 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
-        For OAuth pass-through and upstream-delegated OAuth2 MCP servers, an
-        upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
-        instead of being swallowed to an empty tool list. That lets the
-        single-server HTTP routes surface a proper 401 + ``WWW-Authenticate``
-        challenge so standards-compliant MCP clients trigger the upstream
-        OAuth flow. Other servers keep today's swallow-and-log behaviour so
-        the multi-server ``/mcp`` aggregator doesn't get tainted by a single
-        bad server.
+        An upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
+        instead of being swallowed to an empty tool list, regardless of the
+        server's auth_type. Callers route it by surface: the single-server HTTP
+        routes turn it into a 401 + ``WWW-Authenticate`` challenge so standards-
+        compliant MCP clients trigger the upstream OAuth flow, while the
+        multi-server ``/mcp`` aggregator absorbs it to an empty list so one
+        unauthenticated server doesn't fail the whole listing. Only a 401
+        (missing/invalid credential) drives the re-auth challenge; a 403
+        (authenticated but forbidden, e.g. insufficient scope) is not a re-auth
+        signal and, like other non-auth errors, returns an empty list.
 
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
-            server: Optional MCPServer; when upstream auth is delegated, auth
-                errors are re-raised as :class:`MCPUpstreamAuthError`.
 
         Returns:
             List of tools from the server
         """
-        should_surface_upstream_auth = bool(
-            server is not None
-            and (
-                server.is_oauth_passthrough
-                or (
-                    server.auth_type == MCPAuth.oauth2
-                    and getattr(server, "delegate_auth_to_upstream", False) is True
-                    and not server.has_client_credentials
-                )
-            )
-        )
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools(raise_on_error=should_surface_upstream_auth)
+                tools = await client.list_tools(raise_on_error=True)
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -2669,16 +2743,15 @@ class MCPServerManager:
             verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
             return []
         except Exception as e:
-            if should_surface_upstream_auth:
-                auth_info = _extract_upstream_auth_failure(e)
-                if auth_info is not None:
-                    status_code, www_authenticate = auth_info
-                    verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP {status_code}")
-                    raise MCPUpstreamAuthError(
-                        status_code=status_code,
-                        www_authenticate=www_authenticate,
-                        server_name=server_name,
-                    ) from e
+            auth_info = _extract_upstream_auth_failure(e)
+            if auth_info is not None and auth_info[0] == 401:
+                _, www_authenticate = auth_info
+                verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP 401")
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate=www_authenticate,
+                    server_name=server_name,
+                ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
             return []
 
@@ -3144,6 +3217,25 @@ class MCPServerManager:
             )
         )
 
+    def _get_call_semaphore(self, mcp_server: MCPServer) -> Optional[asyncio.Semaphore]:
+        limit = mcp_server.max_concurrent_requests
+        if limit is None or limit <= 0:
+            return None
+        semaphore = self._server_call_semaphores.get(mcp_server.server_id)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(limit)
+            self._server_call_semaphores[mcp_server.server_id] = semaphore
+        return semaphore
+
+    @asynccontextmanager
+    async def _limit_outbound_concurrency(self, mcp_server: MCPServer) -> AsyncIterator[None]:
+        semaphore = self._get_call_semaphore(mcp_server)
+        if semaphore is None:
+            yield
+            return
+        async with semaphore:
+            yield
+
     async def _call_regular_mcp_tool(
         self,
         mcp_server: MCPServer,
@@ -3303,7 +3395,8 @@ class MCPServerManager:
         )
 
         async def _call_tool_via_client(client, params):
-            return await client.call_tool(params, host_progress_callback=host_progress_callback)
+            async with self._limit_outbound_concurrency(mcp_server):
+                return await client.call_tool(params, host_progress_callback=host_progress_callback)
 
         tasks.append(asyncio.create_task(_call_tool_via_client(client, call_tool_params)))
 
@@ -3525,7 +3618,12 @@ class MCPServerManager:
                     "transport to enable hook header injection.",
                     server_name,
                 )
-            tasks.append(asyncio.create_task(self._call_openapi_tool_handler(mcp_server, name, arguments)))
+
+            async def _call_openapi_via_handler():
+                async with self._limit_outbound_concurrency(mcp_server):
+                    return await self._call_openapi_tool_handler(mcp_server, name, arguments)
+
+            tasks.append(asyncio.create_task(_call_openapi_via_handler()))
         else:
             return await self._call_regular_mcp_tool(
                 mcp_server=mcp_server,
@@ -4082,6 +4180,7 @@ class MCPServerManager:
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
+            max_concurrent_requests=server.max_concurrent_requests,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -4189,6 +4288,7 @@ class MCPServerManager:
             source_url=server.source_url,
             instructions=server.instructions,
             timeout=server.timeout,
+            max_concurrent_requests=server.max_concurrent_requests,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:
