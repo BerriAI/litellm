@@ -2,5 +2,5 @@
   "@typescript-eslint/no-explicit-any": 1991,
   "complexity": 128,
   "max-depth": 59,
-  "no-console": 486
+  "no-console": 484
 }
