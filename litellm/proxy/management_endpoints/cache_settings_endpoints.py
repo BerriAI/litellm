@@ -50,7 +50,7 @@ _REDACTED_VALUE = "***REDACTED***"
 _URL_OVERRIDDEN_CONNECTION_FIELDS: frozenset = frozenset({"host", "port", "db", "password", "username"})
 
 
-def _resolve_cache_url_precedence(settings: Mapping[str, Any]) -> Dict[str, Any]:
+def _resolve_cache_url_precedence(settings: Mapping[str, Any]) -> dict[str, Any]:
     """Return cache settings with the url-vs-discrete-fields ambiguity resolved.
 
     When a full ``url`` is supplied it wins: the discrete
