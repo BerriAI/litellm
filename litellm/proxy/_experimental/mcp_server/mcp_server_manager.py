@@ -1963,6 +1963,36 @@ class MCPServerManager:
                     raise_token_exchange_challenge(server, root_path=get_server_root_path())
                 raise_public(err)
 
+    async def preflight_token_exchange(
+        self,
+        server: MCPServer,
+        oauth2_headers: Optional[dict[str, str]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """Run the OBO exchange for a caller-supplied subject at the transport edge.
+
+        Single-server routes call this before the MCP session opens, where an HTTP status and
+        ``WWW-Authenticate`` still reach the client. A rejected subject raises the RFC 9728
+        challenge and any other ``CredError`` maps onto its public HTTP status, so an exchange
+        failure surfaces as a failure instead of the session continuing into an empty tool list.
+        A successful exchange is cached by the exchanger, so the session's list/call reuses it.
+        """
+        if server.auth_type != MCPAuth.oauth2_token_exchange:
+            return
+        subject_token = self._extract_bearer_token(oauth2_headers, None)
+        if not subject_token:
+            return
+        spec = to_server_spec(server)
+        if spec is None or not isinstance(spec.config, TokenExchangeConfig):
+            return
+        match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
+            case Ok(_):
+                return
+            case Error(err):
+                if err.tag == "unauthorized":
+                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                raise_public(err)
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -2741,6 +2771,14 @@ class MCPServerManager:
                 continue
 
             scopes = self._extract_scopes(data.get("scopes_supported"))
+            verbose_logger.debug(
+                "Authorization server metadata from %s: issuer=%s grant_types_supported=%s "
+                "token_endpoint_auth_methods_supported=%s",
+                url,
+                data.get("issuer"),
+                data.get("grant_types_supported"),
+                data.get("token_endpoint_auth_methods_supported"),
+            )
             metadata = MCPOAuthMetadata(
                 scopes=scopes,
                 authorization_url=data.get("authorization_endpoint"),

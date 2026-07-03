@@ -838,6 +838,86 @@ class TestMCPServerManager:
         assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
 
     @pytest.mark.asyncio
+    async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
+        """A subject the IdP rejects must raise the RFC 9728 401 challenge from the preflight, so a
+        single-server route fails observably at the transport edge instead of the old behavior of
+        the session opening and list_tools masking the failed exchange as an empty tool list."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_unauthorized("subject token rejected by the IdP"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-401")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer rejected-subject"},
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 401
+        headers = exc_info.value.headers or {}
+        www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+        assert "resource_metadata" in www_authenticate
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_maps_gateway_fault_to_public_status(self):
+        """A gateway-fault CredError (e.g. invalid_client) must surface its public status (500)
+        from the preflight, not the OBO 401 challenge and not an empty-success session."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_misconfigured("token exchange configuration error"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-500")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer subj"},
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_noop_on_success_and_without_subject(self):
+        """A successful exchange returns without raising, and a request with no bearer never
+        reaches the resolver (the no-subject case is the existing preemptive challenge's job)."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        resolved = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-ok")
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer good-subject"},
+                user_api_key_auth=None,
+            )
+            is None
+        )
+        assert resolved == ["good-subject"]
+
+        await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
+        assert resolved == ["good-subject"]
+
+    @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
     ):
