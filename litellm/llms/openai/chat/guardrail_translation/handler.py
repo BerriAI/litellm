@@ -171,16 +171,31 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         return data
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
-        """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name)."""
+        """Extract tool names from an OpenAI chat completions request.
+
+        Covers function tools (``tools[].function.name`` and ``functions[].name``),
+        built-in tool types such as ``web_search`` / ``web_search_premium`` (whose
+        name is the type itself), and the ``web_search_options`` shorthand, so the
+        key/team tool allowlist enforces built-in tools and not just functions.
+        """
         names: List[str] = []
         for tool in data.get("tools") or []:
-            if isinstance(tool, dict) and tool.get("type") == "function":
+            if not isinstance(tool, dict):
+                continue
+            tool_type = tool.get("type")
+            if tool_type == "function":
                 fn = tool.get("function")
                 if isinstance(fn, dict) and fn.get("name"):
                     names.append(str(fn["name"]))
+            elif tool_type in ("web_search", "web_search_premium"):
+                names.append(str(tool_type))
         for fn in data.get("functions") or []:
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
+        web_search_options = data.get("web_search_options")
+        if web_search_options is not None:
+            premium = isinstance(web_search_options, dict) and web_search_options.get("premium") is True
+            names.append("web_search_premium" if premium else "web_search")
         return names
 
     def _extract_inputs(
