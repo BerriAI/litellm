@@ -610,6 +610,50 @@ class TestModelRateLimitingCheckIOTokens:
         assert ITPM_RESERVED_KEY not in kwargs["metadata"]
 
     @pytest.mark.asyncio
+    async def test_reconcile_total_tokens_only_keeps_reservation(self):
+        """
+        A response usage object with only total_tokens (no prompt/completion
+        breakdown) can't be split into input/output, so it must be treated the
+        same as missing usage: keep the reservation instead of resolving to
+        (0, 0) and refunding it in full.
+        """
+        dual_cache = DualCache()
+        itpm_key = "global_router:io-total-only:bedrock_mantle/test:itpm:00-00"
+        otpm_key = "global_router:io-total-only:bedrock_mantle/test:otpm:00-00"
+        await dual_cache.async_increment_cache(key=itpm_key, value=8, ttl=60)
+        await dual_cache.async_increment_cache(key=otpm_key, value=5, ttl=60)
+
+        kwargs = {
+            "metadata": {
+                ITPM_RESERVED_KEY: 8,
+                OTPM_RESERVED_KEY: 5,
+                ITPM_CACHE_KEY: itpm_key,
+                OTPM_CACHE_KEY: otpm_key,
+            }
+        }
+        response = {"type": "message", "usage": {"total_tokens": 13}}
+
+        await async_io_token_reconcile_success(dual_cache, kwargs, response)
+
+        assert await dual_cache.async_get_cache(key=itpm_key) == 8
+        assert await dual_cache.async_get_cache(key=otpm_key) == 5
+
+    def test_reconcile_standard_logging_total_tokens_only_keeps_reservation(self):
+        dual_cache = DualCache()
+        itpm_key = "global_router:io-slo-total-only:bedrock_mantle/test:itpm:00-00"
+        dual_cache.set_cache(key=itpm_key, value=10, ttl=60)
+
+        kwargs = {
+            "metadata": {ITPM_RESERVED_KEY: 10, ITPM_CACHE_KEY: itpm_key},
+            "standard_logging_object": {"total_tokens": 4},
+        }
+        response = {"type": "message", "role": "assistant", "content": []}
+
+        io_token_reconcile_success(dual_cache, kwargs, response)
+
+        assert dual_cache.get_cache(key=itpm_key) == 10
+
+    @pytest.mark.asyncio
     async def test_reconcile_falls_back_to_standard_logging_object(self):
         dual_cache = DualCache()
         itpm_key = "global_router:io-slo-fallback:bedrock_mantle/test:itpm:00-00"

@@ -173,20 +173,20 @@ def _extract_response_usage(response_obj: Any) -> Any:
 
 
 def _usage_is_present(usage: Any) -> bool:
+    """
+    True only if usage carries an actual input/output breakdown.
+
+    ``total_tokens`` alone is deliberately excluded: ``_get_usage_tokens`` has
+    no way to split a bare total into input vs. output, so treating it as
+    "present" would resolve to (0, 0) and refund the full reservation as if
+    zero tokens were used.
+    """
     if usage is None:
         return False
+    fields = ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens")
     if isinstance(usage, dict):
-        return any(
-            key in usage
-            for key in (
-                "prompt_tokens",
-                "completion_tokens",
-                "input_tokens",
-                "output_tokens",
-                "total_tokens",
-            )
-        )
-    return True
+        return any(key in usage for key in fields)
+    return any(hasattr(usage, key) for key in fields)
 
 
 def _resolve_reconcile_usage_tokens(
@@ -214,7 +214,10 @@ def _resolve_reconcile_usage_tokens(
             metadata = standard_logging_object.get("metadata")
             if isinstance(metadata, dict):
                 cached_tokens = int(metadata.get("cache_read_input_tokens") or 0)
-            if prompt_tokens or completion_tokens or int(standard_logging_object.get("total_tokens") or 0):
+            # Same rationale as _usage_is_present: a bare total_tokens with no
+            # prompt/completion breakdown can't be split, so it isn't treated
+            # as resolved usage - the reservation is kept instead of refunded.
+            if prompt_tokens or completion_tokens:
                 return max(0, prompt_tokens - cached_tokens), completion_tokens, True
 
     return 0, 0, False
