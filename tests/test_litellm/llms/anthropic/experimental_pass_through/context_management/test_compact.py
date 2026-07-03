@@ -2223,8 +2223,7 @@ async def test_async_handler_additional_drop_params_strips_context_management():
     assert "sunny in SF" in forwarded
 
 
-def test_sync_handler_runs_polyfill_when_request_drop_params_true():
-    """The sync entry point reads its own kwargs; cover its gate separately."""
+def _call_sync_adapter_handler(**handler_kwargs: Any):
     from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
         LiteLLMMessagesToCompletionTransformationHandler,
     )
@@ -2242,9 +2241,33 @@ def test_sync_handler_runs_polyfill_when_request_drop_params_true():
             model=MODEL,
             context_management=_CLEAR_TOOL_USES_SPEC,
             litellm_router=None,
-            drop_params=True,
+            **handler_kwargs,
         )
+    return response, captured
+
+
+def test_sync_handler_runs_polyfill_when_request_drop_params_true():
+    """The sync entry point reads its own kwargs; cover its gate separately."""
+    response, captured = _call_sync_adapter_handler(drop_params=True)
     _assert_polyfill_applied(response, captured)
+
+
+def test_sync_handler_runs_polyfill_when_litellm_drop_params_true(monkeypatch):
+    """Proxy-wide litellm.drop_params=True must not skip the polyfill on the
+    sync entry point either."""
+    monkeypatch.setattr(litellm, "drop_params", True)
+    response, captured = _call_sync_adapter_handler()
+    _assert_polyfill_applied(response, captured)
+
+
+def test_sync_handler_additional_drop_params_strips_context_management():
+    """The additional_drop_params=["context_management"] escape hatch is honored
+    on the sync entry point too: no polyfill, request forwarded untouched."""
+    response, captured = _call_sync_adapter_handler(additional_drop_params=["context_management"])
+    assert response.get("context_management") is None
+    forwarded = json.dumps(captured["messages"], default=str)
+    assert _CLEARED_PLACEHOLDER not in forwarded
+    assert "sunny in SF" in forwarded
 
 
 async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata():
