@@ -35,15 +35,51 @@ class ComplianceChecker:
         If a guardrail doesn't have a mode specified, it's treated as pre-call
         (the most common case).
         """
-        result = []
-        for g in self.guardrails:
-            g_mode = g.get("guardrail_mode")
-            # If no mode specified, default to pre_call
-            if g_mode is None and mode == "pre_call":
-                result.append(g)
-            elif g_mode == mode:
-                result.append(g)
-        return result
+        return [g for g in self.guardrails if self._mode_matches(g.get("guardrail_mode"), mode)]
+
+    @staticmethod
+    def _mode_matches(g_mode: object, mode: str) -> bool:
+        """
+        Return True if a guardrail whose logged ``guardrail_mode`` is ``g_mode``
+        ran in ``mode``.
+
+        ``guardrail_mode`` in a spend log can take several shapes because
+        ``LitellmParams.mode`` is typed ``Union[str, List[str], Mode]``:
+
+        - ``None``            → treated as ``pre_call`` (the common default)
+        - ``str``             → single mode, e.g. ``"pre_call"``
+        - ``list``/``tuple``  → multi-mode guardrail, e.g. ``["pre_call", "post_call"]``
+        - ``dict``            → tag-based ``Mode``; modes live in its ``default``
+                                and per-tag values
+
+        A prior implementation compared ``g_mode == mode`` directly, which
+        silently failed for the list form (a list never equals a string), so a
+        single guardrail configured with ``mode: [pre_call, post_call]`` was
+        counted for no mode at all and every mode-based compliance check
+        reported NON-COMPLIANT.
+        """
+        if g_mode is None:
+            return mode == "pre_call"
+        if isinstance(g_mode, str):
+            return g_mode == mode
+        if isinstance(g_mode, (list, tuple, set)):
+            return mode in g_mode
+        if isinstance(g_mode, dict):
+            candidates: set = set()
+
+            def _collect(value: object) -> None:
+                if isinstance(value, str):
+                    candidates.add(value)
+                elif isinstance(value, (list, tuple, set)):
+                    candidates.update(v for v in value if isinstance(v, str))
+
+            _collect(g_mode.get("default"))
+            tags = g_mode.get("tags")
+            if isinstance(tags, dict):
+                for tag_value in tags.values():
+                    _collect(tag_value)
+            return mode in candidates
+        return False
 
     def _has_guardrail_intervention(self, guardrails: List[Dict]) -> bool:
         """Check if any guardrail intervened (blocked/masked content)."""
