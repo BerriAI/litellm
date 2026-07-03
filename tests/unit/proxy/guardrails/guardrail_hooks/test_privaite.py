@@ -348,6 +348,21 @@ async def test_pre_call_without_pii_does_not_stash():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_background_request_anonymizes_but_does_not_stash():
+    # Background results are fetched by a later poll the post-call hooks never
+    # see, so the fake->original map must not persist in request state.
+    gr = _make_guardrail()
+    data = {
+        "input": "Email Marie Dupont at marie@acme.com",
+        "background": True,
+    }
+    out = await gr.async_pre_call_hook(None, None, data, "aresponses")
+    assert "Marie Dupont" not in out["input"]
+    assert "<PERSON_1>" in out["input"]
+    assert "privaite_map" not in out.get("metadata", {})
+
+
+@pytest.mark.asyncio
 async def test_pre_call_clears_client_supplied_map():
     # metadata is caller-controlled: a client-supplied privaite_map must be
     # dropped, so it can never drive post-call restoration of model output.
