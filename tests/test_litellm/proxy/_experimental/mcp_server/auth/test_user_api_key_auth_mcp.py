@@ -4495,3 +4495,128 @@ async def test_get_allowed_mcp_servers_surfaces_ungated_key_access_group_grant_e
         assert result == ["srv-deepwiki"]
     finally:
         _stop_patches(patches)
+
+
+def test_expand_permission_list_all_proxy_sentinel_returns_full_registry():
+    """The all-proxy sentinel expands to every registered server id (and picks up
+    servers registered later), while the marker itself never leaks into the
+    result and concrete ids pass through unchanged. Reverting the sentinel
+    branch makes the sentinel pass through as a literal, breaking this test."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import SpecialMCPServerName
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    sentinel = SpecialMCPServerName.all_proxy_servers.value
+    for sid in ("srv-x", "srv-y"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        result = global_mcp_server_manager.expand_permission_list([sentinel])
+        assert set(result) == set(global_mcp_server_manager.get_registry().keys())
+        assert {"srv-x", "srv-y"} <= set(result)
+        assert sentinel not in result
+
+        global_mcp_server_manager.registry["srv-z"] = MCPServer(
+            server_id="srv-z",
+            name="srv-z",
+            server_name="srv-z",
+            url="https://srv-z.example.com",
+            transport=MCPTransport.http,
+        )
+        assert "srv-z" in global_mcp_server_manager.expand_permission_list([sentinel])
+
+        assert global_mcp_server_manager.expand_permission_list(["srv-x"]) == ["srv-x"]
+    finally:
+        for sid in ("srv-x", "srv-y", "srv-z"):
+            global_mcp_server_manager.registry.pop(sid, None)
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_team_all_proxy_key_scoped_to_one_end_to_end():
+    """End-to-end: a team scoped to the all-proxy sentinel is a ceiling of every
+    registered server, so a key scoped to a single server (srv-x) resolves to
+    exactly that server (key ∩ all-servers == key). If the sentinel branch is
+    reverted the team ceiling collapses to the literal marker, the intersection
+    empties, and the result is [] instead of ["srv-x"]."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTable,
+        SpecialMCPServerName,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for sid in ("srv-x", "srv-y"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+    try:
+        key_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="key-perm",
+            mcp_servers=["srv-x"],
+            mcp_access_groups=[],
+            vector_stores=[],
+        )
+        team_perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="team-perm",
+            mcp_servers=[SpecialMCPServerName.all_proxy_servers.value],
+            mcp_access_groups=[],
+            vector_stores=[],
+        )
+        team_obj = LiteLLM_TeamTable(
+            team_id="team-1",
+            access_group_ids=[],
+            object_permission_id="team-perm",
+        )
+        team_obj.object_permission = team_perm
+
+        auth = UserAPIKeyAuth(
+            token="test-token",
+            api_key="sk-test",
+            team_id="team-1",
+            object_permission=key_perm,
+        )
+
+        patches = _patch_proxy_server_globals_for_mcp() + [
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new_callable=AsyncMock,
+                return_value=team_obj,
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ]
+        _start_patches(patches)
+        try:
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        finally:
+            _stop_patches(patches)
+
+        assert result == ["srv-x"]
+    finally:
+        for sid in ("srv-x", "srv-y"):
+            global_mcp_server_manager.registry.pop(sid, None)

@@ -9,7 +9,12 @@ sys.path.insert(0, os.path.abspath("../../../.."))
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import LiteLLM_ObjectPermissionBase, LiteLLM_ObjectPermissionTable, ObjectPermissionDict
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionBase,
+    LiteLLM_ObjectPermissionTable,
+    ObjectPermissionDict,
+    SpecialMCPServerName,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     _extract_requested_mcp_access_groups,
     _extract_requested_mcp_server_ids,
@@ -874,6 +879,107 @@ async def test_resolve_team_allowed_mcp_servers_dict_tool_permissions(
 
     result = await _resolve_team_allowed_mcp_servers(mock_perm)
     assert result == {"server-a"}
+
+
+# ---- Tests for the all-proxy-mcpservers sentinel (team scoped to every server) ----
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_resolve_team_all_proxy_sentinel_resolves_dynamically(mock_access_groups):
+    """A team whose object_permission.mcp_servers holds the all-proxy sentinel
+    resolves to every registered server id, and picks up a server registered
+    later without any change to the team's stored permission (this kills the
+    early-return that maps the sentinel to the live registry)."""
+    registry = {
+        "srv-x": _make_mock_mcp_server("srv-x"),
+        "srv-y": _make_mock_mcp_server("srv-y"),
+    }
+    mock_mgr = MagicMock()
+    mock_mgr.get_registry.return_value = registry
+
+    team_perm = MagicMock(spec=LiteLLM_ObjectPermissionTable)
+    team_perm.mcp_servers = [SpecialMCPServerName.all_proxy_servers.value]
+    team_perm.mcp_access_groups = []
+    team_perm.mcp_tool_permissions = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        mock_mgr,
+    ):
+        assert await _resolve_team_allowed_mcp_servers(team_perm) == {"srv-x", "srv-y"}
+
+        registry["srv-z"] = _make_mock_mcp_server("srv-z")
+        assert await _resolve_team_allowed_mcp_servers(team_perm) == {
+            "srv-x",
+            "srv-y",
+            "srv-z",
+        }
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("srv-x", "srv-y", "srv-z"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_key_scoped_to_server_added_after_team_all_proxy(
+    mock_access_groups, mock_allow_all
+):
+    """The exact user scenario: a team scoped to the all-proxy sentinel, a server
+    (srv-z) registered afterwards, and a key scoped to just srv-z. Because the
+    team ceiling resolves to every registered server, the key passes validation
+    and keeps srv-z in its normalized permission."""
+    team_obj = _make_team_obj(mcp_servers=[SpecialMCPServerName.all_proxy_servers.value])
+    object_permission = {"mcp_servers": ["srv-z"]}
+    result = await validate_key_mcp_servers_against_team(
+        object_permission=object_permission,
+        team_obj=team_obj,
+    )
+    assert result is not None
+    assert result["mcp_servers"] == ["srv-z"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+    new=_make_mock_mcp_manager("srv-x", "srv-z"),
+)
+@patch(
+    "litellm.proxy.management_helpers.object_permission_utils._get_allow_all_keys_server_ids",
+    return_value=set(),
+)
+@patch(
+    "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_mcp_servers_from_access_groups",
+    new_callable=AsyncMock,
+    return_value=[],
+)
+async def test_validate_key_scoped_to_server_rejected_when_team_not_all_proxy(
+    mock_access_groups, mock_allow_all
+):
+    """Contrast with the sentinel case: a team scoped to a concrete server list
+    (srv-x, not the sentinel) does NOT unlock srv-z for a key. It is the sentinel
+    specifically, not a blanket allow, that widens the team ceiling."""
+    team_obj = _make_team_obj(mcp_servers=["srv-x"])
+    with pytest.raises(HTTPException) as exc_info:
+        await validate_key_mcp_servers_against_team(
+            object_permission={"mcp_servers": ["srv-z"]},
+            team_obj=team_obj,
+        )
+    assert exc_info.value.status_code == 403
+    assert "srv-z" in str(exc_info.value.detail)
 
 
 # ---- Tests for validate_key_search_tools_against_team ----

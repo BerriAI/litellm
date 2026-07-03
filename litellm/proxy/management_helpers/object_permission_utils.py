@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerNames
+from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -334,6 +334,8 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
+    if SpecialMCPServerName.all_proxy_servers.value in direct_servers:
+        return _get_all_mcp_server_ids()
     access_group_servers: List[str] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
@@ -357,6 +359,15 @@ def _get_allow_all_keys_server_ids() -> Set[str]:
     )
 
     return set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+
+
+def _get_all_mcp_server_ids() -> set[str]:
+    """Return every MCP server id registered on the proxy (config + DB union)."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return set(global_mcp_server_manager.get_registry().keys())
 
 
 async def _get_team_allowed_mcp_servers(
