@@ -76,9 +76,7 @@ async def test_fetch_tools_from_passthrough_raises_on_upstream_401():
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(
-            mock_client, passthrough_server.name, server=passthrough_server
-        )
+        await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate == (
@@ -113,9 +111,7 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
     with pytest.raises(MCPUpstreamAuthError) as exc_info:
-        await manager._fetch_tools_with_timeout(
-            mock_client, delegated_server.name, server=delegated_server
-        )
+        await manager._fetch_tools_with_timeout(mock_client, delegated_server.name)
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.www_authenticate == (
@@ -126,7 +122,10 @@ async def test_fetch_tools_from_delegated_oauth2_raises_on_upstream_401():
 
 
 @pytest.mark.asyncio
-async def test_fetch_tools_from_client_credentials_oauth2_keeps_swallow_behavior():
+async def test_fetch_tools_from_client_credentials_oauth2_surfaces_upstream_401():
+    """The auth_type carve-out was removed: a client_credentials (M2M) server now
+    surfaces an upstream 401 as MCPUpstreamAuthError too, instead of swallowing it
+    to an empty list, so single-server routes can return a 401 challenge."""
     manager = MCPServerManager()
     m2m_server = MCPServer(
         server_id="oauth-m2m",
@@ -150,12 +149,12 @@ async def test_fetch_tools_from_client_credentials_oauth2_keeps_swallow_behavior
     mock_client = MagicMock()
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
-    tools = await manager._fetch_tools_with_timeout(
-        mock_client, m2m_server.name, server=m2m_server
-    )
+    with pytest.raises(MCPUpstreamAuthError) as exc_info:
+        await manager._fetch_tools_with_timeout(mock_client, m2m_server.name)
 
-    assert tools == []
-    mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.server_name == "m2m_docs"
+    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
 
 
 @pytest.mark.asyncio
@@ -176,9 +175,7 @@ async def test_fetch_tools_from_passthrough_returns_tools_on_success():
     mock_client = MagicMock()
     mock_client.list_tools = AsyncMock(return_value=[tool])
 
-    tools = await manager._fetch_tools_with_timeout(
-        mock_client, passthrough_server.name, server=passthrough_server
-    )
+    tools = await manager._fetch_tools_with_timeout(mock_client, passthrough_server.name)
     assert tools == [tool]
 
 
@@ -238,8 +235,11 @@ def test_to_http_exception_skips_challenge_for_non_401_status():
 
 
 @pytest.mark.asyncio
-async def test_fetch_tools_from_gateway_managed_swallows_errors():
-    """Regression guard: non-pass-through servers keep returning [] on errors."""
+async def test_fetch_tools_from_gateway_managed_surfaces_upstream_401():
+    """An oauth2 server that is neither pass-through nor delegate now surfaces an
+    upstream 401 as MCPUpstreamAuthError as well; the auth_type carve-out that
+    swallowed it to [] was removed. A missing upstream WWW-Authenticate is carried
+    through as None (the single-server route fabricates one from the gateway URL)."""
     manager = MCPServerManager()
     oauth2_server = MCPServer(
         server_id="o1",
@@ -260,11 +260,13 @@ async def test_fetch_tools_from_gateway_managed_swallows_errors():
     mock_client = MagicMock()
     mock_client.list_tools = AsyncMock(side_effect=upstream_error)
 
-    tools = await manager._fetch_tools_with_timeout(
-        mock_client, oauth2_server.name, server=oauth2_server
-    )
-    assert tools == []
-    mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+    with pytest.raises(MCPUpstreamAuthError) as exc_info:
+        await manager._fetch_tools_with_timeout(mock_client, oauth2_server.name)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.www_authenticate is None
+    assert exc_info.value.server_name == "keycloak_whoami"
+    mock_client.list_tools.assert_awaited_with(raise_on_error=True)
 
 
 def _http_server(server_id: str, name: str, **kwargs) -> MCPServer:

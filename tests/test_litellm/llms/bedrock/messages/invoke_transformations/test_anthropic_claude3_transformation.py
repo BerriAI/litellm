@@ -492,7 +492,7 @@ def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_o
     assert result["tools"][0]["type"] == "custom"
 
 
-def test_remove_ttl_from_cache_control_processes_tools():
+def test_remove_ttl_from_cache_control_processes_tools(local_model_cost_map):
     """
     Ensure _remove_ttl_from_cache_control also sanitizes cache_control on tools.
 
@@ -538,7 +538,7 @@ def test_remove_ttl_from_cache_control_processes_tools():
     assert "ttl" not in request["system"][0]["cache_control"]
 
 
-def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
+def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5(local_model_cost_map):
     """
     For Claude 4.5+ models, ttl in ["5m", "1h"] should be preserved on tools,
     just like it is for system and messages.
@@ -564,7 +564,7 @@ def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
     }
 
     cfg._remove_ttl_from_cache_control(
-        request, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+        request, model="us.anthropic.claude-sonnet-4-5-20250929-v1:0"
     )
 
     # Both tools and system should preserve ttl for Claude 4.5

@@ -2130,7 +2130,7 @@ class MCPServerManager:
                     ]
                 return tools
             else:
-                tools = await self._fetch_tools_with_timeout(client, server.name, server=server)
+                tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(tools, server, add_prefix=add_prefix)
@@ -2142,6 +2142,17 @@ class MCPServerManager:
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
             raise
+        except HTTPException as e:
+            headers = e.headers or {}
+            www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
+            if e.status_code == 401 and www_authenticate is not None:
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate=www_authenticate,
+                    server_name=server.name,
+                ) from e
+            verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
+            return []
         except Exception as e:
             verbose_logger.warning(f"Failed to get tools from server {server.name}: {str(e)}")
             return []
@@ -2692,7 +2703,6 @@ class MCPServerManager:
         self,
         client: MCPClient,
         server_name: str,
-        server: Optional[MCPServer] = None,
     ) -> list[MCPTool]:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -2700,38 +2710,27 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
-        For OAuth pass-through and upstream-delegated OAuth2 MCP servers, an
-        upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
-        instead of being swallowed to an empty tool list. That lets the
-        single-server HTTP routes surface a proper 401 + ``WWW-Authenticate``
-        challenge so standards-compliant MCP clients trigger the upstream
-        OAuth flow. Other servers keep today's swallow-and-log behaviour so
-        the multi-server ``/mcp`` aggregator doesn't get tainted by a single
-        bad server.
+        An upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
+        instead of being swallowed to an empty tool list, regardless of the
+        server's auth_type. Callers route it by surface: the single-server HTTP
+        routes turn it into a 401 + ``WWW-Authenticate`` challenge so standards-
+        compliant MCP clients trigger the upstream OAuth flow, while the
+        multi-server ``/mcp`` aggregator absorbs it to an empty list so one
+        unauthenticated server doesn't fail the whole listing. Only a 401
+        (missing/invalid credential) drives the re-auth challenge; a 403
+        (authenticated but forbidden, e.g. insufficient scope) is not a re-auth
+        signal and, like other non-auth errors, returns an empty list.
 
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
-            server: Optional MCPServer; when upstream auth is delegated, auth
-                errors are re-raised as :class:`MCPUpstreamAuthError`.
 
         Returns:
             List of tools from the server
         """
-        should_surface_upstream_auth = bool(
-            server is not None
-            and (
-                server.is_oauth_passthrough
-                or (
-                    server.auth_type == MCPAuth.oauth2
-                    and getattr(server, "delegate_auth_to_upstream", False) is True
-                    and not server.has_client_credentials
-                )
-            )
-        )
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools(raise_on_error=should_surface_upstream_auth)
+                tools = await client.list_tools(raise_on_error=True)
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -2744,16 +2743,15 @@ class MCPServerManager:
             verbose_logger.warning(f"Connection error while listing tools from {server_name}: {str(e)}")
             return []
         except Exception as e:
-            if should_surface_upstream_auth:
-                auth_info = _extract_upstream_auth_failure(e)
-                if auth_info is not None:
-                    status_code, www_authenticate = auth_info
-                    verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP {status_code}")
-                    raise MCPUpstreamAuthError(
-                        status_code=status_code,
-                        www_authenticate=www_authenticate,
-                        server_name=server_name,
-                    ) from e
+            auth_info = _extract_upstream_auth_failure(e)
+            if auth_info is not None and auth_info[0] == 401:
+                _, www_authenticate = auth_info
+                verbose_logger.info(f"Upstream auth failure from MCP server {server_name}: HTTP 401")
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate=www_authenticate,
+                    server_name=server_name,
+                ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
             return []
 
