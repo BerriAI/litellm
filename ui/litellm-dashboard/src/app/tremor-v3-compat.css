@@ -22,8 +22,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-slate-500) 20%, transparent);
 }
 
-.ring-slate-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-slate-500) 40%, transparent);
+.ring-slate-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-slate-300) 40%, transparent);
 }
 
 .bg-gray-500.bg-opacity-10 {
@@ -50,8 +50,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-gray-500) 20%, transparent);
 }
 
-.ring-gray-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-gray-500) 40%, transparent);
+.ring-gray-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-gray-300) 40%, transparent);
 }
 
 .bg-zinc-500.bg-opacity-10 {
@@ -78,8 +78,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-zinc-500) 20%, transparent);
 }
 
-.ring-zinc-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-zinc-500) 40%, transparent);
+.ring-zinc-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-zinc-300) 40%, transparent);
 }
 
 .bg-neutral-500.bg-opacity-10 {
@@ -106,8 +106,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-neutral-500) 20%, transparent);
 }
 
-.ring-neutral-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-neutral-500) 40%, transparent);
+.ring-neutral-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-neutral-300) 40%, transparent);
 }
 
 .bg-stone-500.bg-opacity-10 {
@@ -134,8 +134,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-stone-500) 20%, transparent);
 }
 
-.ring-stone-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-stone-500) 40%, transparent);
+.ring-stone-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-stone-300) 40%, transparent);
 }
 
 .bg-red-500.bg-opacity-10 {
@@ -162,8 +162,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-red-500) 20%, transparent);
 }
 
-.ring-red-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-red-500) 40%, transparent);
+.ring-red-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-red-300) 40%, transparent);
 }
 
 .bg-orange-500.bg-opacity-10 {
@@ -190,8 +190,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-orange-500) 20%, transparent);
 }
 
-.ring-orange-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-orange-500) 40%, transparent);
+.ring-orange-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-orange-300) 40%, transparent);
 }
 
 .bg-amber-500.bg-opacity-10 {
@@ -218,8 +218,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-amber-500) 20%, transparent);
 }
 
-.ring-amber-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-amber-500) 40%, transparent);
+.ring-amber-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-amber-300) 40%, transparent);
 }
 
 .bg-yellow-500.bg-opacity-10 {
@@ -246,8 +246,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-yellow-500) 20%, transparent);
 }
 
-.ring-yellow-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-yellow-500) 40%, transparent);
+.ring-yellow-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-yellow-300) 40%, transparent);
 }
 
 .bg-lime-500.bg-opacity-10 {
@@ -274,8 +274,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-lime-500) 20%, transparent);
 }
 
-.ring-lime-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-lime-500) 40%, transparent);
+.ring-lime-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-lime-300) 40%, transparent);
 }
 
 .bg-green-500.bg-opacity-10 {
@@ -302,8 +302,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-green-500) 20%, transparent);
 }
 
-.ring-green-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-green-500) 40%, transparent);
+.ring-green-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-green-300) 40%, transparent);
 }
 
 .bg-emerald-500.bg-opacity-10 {
@@ -330,8 +330,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-emerald-500) 20%, transparent);
 }
 
-.ring-emerald-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-emerald-500) 40%, transparent);
+.ring-emerald-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-emerald-300) 40%, transparent);
 }
 
 .bg-teal-500.bg-opacity-10 {
@@ -358,8 +358,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-teal-500) 20%, transparent);
 }
 
-.ring-teal-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-teal-500) 40%, transparent);
+.ring-teal-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-teal-300) 40%, transparent);
 }
 
 .bg-cyan-500.bg-opacity-10 {
@@ -386,8 +386,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-cyan-500) 20%, transparent);
 }
 
-.ring-cyan-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-cyan-500) 40%, transparent);
+.ring-cyan-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-cyan-300) 40%, transparent);
 }
 
 .bg-sky-500.bg-opacity-10 {
@@ -414,8 +414,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-sky-500) 20%, transparent);
 }
 
-.ring-sky-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-sky-500) 40%, transparent);
+.ring-sky-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-sky-300) 40%, transparent);
 }
 
 .bg-blue-500.bg-opacity-10 {
@@ -442,8 +442,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-blue-500) 20%, transparent);
 }
 
-.ring-blue-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-blue-500) 40%, transparent);
+.ring-blue-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-blue-300) 40%, transparent);
 }
 
 .bg-indigo-500.bg-opacity-10 {
@@ -470,8 +470,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-indigo-500) 20%, transparent);
 }
 
-.ring-indigo-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-indigo-500) 40%, transparent);
+.ring-indigo-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-indigo-300) 40%, transparent);
 }
 
 .bg-violet-500.bg-opacity-10 {
@@ -498,8 +498,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-violet-500) 20%, transparent);
 }
 
-.ring-violet-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-violet-500) 40%, transparent);
+.ring-violet-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-violet-300) 40%, transparent);
 }
 
 .bg-purple-500.bg-opacity-10 {
@@ -526,8 +526,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-purple-500) 20%, transparent);
 }
 
-.ring-purple-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-purple-500) 40%, transparent);
+.ring-purple-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-purple-300) 40%, transparent);
 }
 
 .bg-fuchsia-500.bg-opacity-10 {
@@ -554,8 +554,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-fuchsia-500) 20%, transparent);
 }
 
-.ring-fuchsia-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-fuchsia-500) 40%, transparent);
+.ring-fuchsia-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-fuchsia-300) 40%, transparent);
 }
 
 .bg-pink-500.bg-opacity-10 {
@@ -582,8 +582,8 @@
   --tw-ring-color: color-mix(in oklab, var(--color-pink-500) 20%, transparent);
 }
 
-.ring-pink-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-pink-500) 40%, transparent);
+.ring-pink-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-pink-300) 40%, transparent);
 }
 
 .bg-rose-500.bg-opacity-10 {
@@ -610,6 +610,6 @@
   --tw-ring-color: color-mix(in oklab, var(--color-rose-500) 20%, transparent);
 }
 
-.ring-rose-500.ring-opacity-40 {
-  --tw-ring-color: color-mix(in oklab, var(--color-rose-500) 40%, transparent);
+.ring-rose-300.ring-opacity-40 {
+  --tw-ring-color: color-mix(in oklab, var(--color-rose-300) 40%, transparent);
 }
