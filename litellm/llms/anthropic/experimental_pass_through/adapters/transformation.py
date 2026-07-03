@@ -582,14 +582,17 @@ class LiteLLMAnthropicMessagesAdapter:
                 else:
                     assistant_content = assistant_message_str
 
-                is_anthropic_backend = model is not None and ("anthropic" in model.lower() or "claude" in model.lower())
+                is_anthropic = (
+                    LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model or "")
+                    or LiteLLMAnthropicMessagesAdapter.is_bedrock_arn_model(model or "")
+                )
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
                     content=assistant_content,
                 )
                 if len(tool_calls) > 0:
                     assistant_message["tool_calls"] = tool_calls  # type: ignore
-                if len(thinking_blocks) > 0 and is_anthropic_backend:
+                if len(thinking_blocks) > 0 and is_anthropic:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
                 new_messages.append(assistant_message)
 
