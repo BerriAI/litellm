@@ -279,6 +279,7 @@ model LiteLLM_ObjectPermissionTable {
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
+  mcp_tool_search_enabled Boolean?
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -337,6 +338,7 @@ model LiteLLM_MCPServerTable {
   byok_api_key_help_url String?
   source_url            String?
   timeout               Float?
+  max_concurrent_requests Int?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -417,6 +419,7 @@ model LiteLLM_VerificationToken {
     access_group_ids String[] @default([])
     model_spend      Json @default("{}")
     model_max_budget Json @default("{}")
+    budget_fallbacks Json @default("{}")
     budget_id String?
     organization_id String?
     object_permission_id String?
@@ -510,6 +513,7 @@ model LiteLLM_DeletedVerificationToken {
     access_group_ids String[] @default([])
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
+    budget_fallbacks        Json     @default("{}")
     router_settings  Json? @default("{}")
     budget_id               String?
     organization_id         String?

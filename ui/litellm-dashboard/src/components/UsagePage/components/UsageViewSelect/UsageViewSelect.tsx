@@ -153,7 +153,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
     <div className="w-full" data-id={dataId}>
       <div className="flex flex-wrap items-center justify-start gap-4">
         <div className="flex items-stretch gap-2 min-w-0">
-          <div className="flex-shrink-0 flex items-center">
+          <div className="shrink-0 flex items-center">
             <BarChartOutlined style={{ fontSize: "32px" }} />
           </div>
           <div className="flex-1 min-w-0">
@@ -161,7 +161,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
             <p className="text-xs text-gray-600 leading-tight">{description}</p>
           </div>
         </div>
-        <div className="flex-shrink-0">
+        <div className="shrink-0">
           <Select
             value={value}
             onChange={onChange}
@@ -176,7 +176,7 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
               if (!opt) return option.label;
               return (
                 <div className="flex items-center gap-2 py-1">
-                  <div className="flex-shrink-0 mt-0.5">{opt.icon}</div>
+                  <div className="shrink-0 mt-0.5">{opt.icon}</div>
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-gray-900">{opt.label}</div>
                     <div className="text-xs text-gray-600 mt-0.5">{opt.description}</div>

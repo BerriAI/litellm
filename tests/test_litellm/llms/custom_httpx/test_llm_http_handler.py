@@ -1212,6 +1212,73 @@ def test_async_compact_handler_sends_json_when_not_signed():
     assert "data" not in kwargs
 
 
+@pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_passes_api_key_to_agentic_hooks():
+    """
+    Regression: async_anthropic_messages_handler must inject api_key into the
+    kwargs dict forwarded to _call_agentic_completion_hooks.
+
+    Without this, follow-up calls made by agentic hooks (e.g. websearch
+    interception's second LLM call after executing searches) have no api_key
+    and fail with "x-api-key header is required".
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "sk-test"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-haiku", "messages": [], "max_tokens": 16}
+    )
+    mock_config.sign_request = Mock(return_value=({}, None))
+
+    fake_raw_response = {"id": "msg_1", "type": "message", "role": "assistant", "content": [], "stop_reason": "end_turn"}
+    mock_config.transform_anthropic_messages_response = Mock(return_value=fake_raw_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_environment_variables = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+    mock_logging_obj.dynamic_success_callbacks = None
+
+    captured_kwargs: dict = {}
+    sentinel_response = object()
+
+    async def fake_agentic_hooks(**call_kwargs):
+        captured_kwargs.update(call_kwargs)
+        return sentinel_response
+
+    mock_httpx_response = Mock()
+    mock_httpx_response.status_code = 200
+
+    with (
+        patch.object(handler, "_async_post_anthropic_messages_with_http_error_retry", new=AsyncMock(return_value=mock_httpx_response)),
+        patch.object(handler, "_call_agentic_completion_hooks", side_effect=fake_agentic_hooks),
+        patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"),
+        patch("litellm.litellm_core_utils.get_provider_specific_headers.ProviderSpecificHeaderUtils.get_provider_specific_headers", return_value=None),
+    ):
+        result = await handler.async_anthropic_messages_handler(
+            model="claude-haiku",
+            messages=[{"role": "user", "content": "hi"}],
+            anthropic_messages_provider_config=mock_config,
+            anthropic_messages_optional_request_params={"stream": False},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(api_key="sk-real-anthropic-key"),
+            logging_obj=mock_logging_obj,
+            api_key="sk-real-anthropic-key",
+            stream=False,
+        )
+
+    assert result is sentinel_response
+    assert "kwargs" in captured_kwargs, "_call_agentic_completion_hooks not called"
+    forwarded = captured_kwargs["kwargs"]
+    assert forwarded.get("api_key") == "sk-real-anthropic-key", (
+        "api_key must be injected into kwargs passed to _call_agentic_completion_hooks "
+        "so follow-up calls in agentic hooks (e.g. websearch) can authenticate"
+    )
+
+
 class _FakeWSExceptions:
     class WebSocketException(Exception):
         pass

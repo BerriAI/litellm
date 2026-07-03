@@ -114,6 +114,19 @@ class BaseAnthropicMessagesConfig(ABC):
         """
         return True
 
+    def handles_web_search_natively(self) -> bool:
+        """
+        Whether the upstream this config routes to executes ``web_search`` tools
+        itself as part of its Anthropic Messages agentic loop.
+
+        The web-search interception handler short-circuits web-search-only
+        requests (running the search itself and returning synthetic results) only
+        for providers that do NOT. Providers whose agentic loop already performs
+        the search plus a follow-up synthesis step (bedrock, vertex_ai, ...)
+        return True so those requests flow through untouched.
+        """
+        return True
+
     def get_async_streaming_response_iterator(
         self,
         model: str,

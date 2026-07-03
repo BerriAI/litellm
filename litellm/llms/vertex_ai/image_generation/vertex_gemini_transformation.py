@@ -1,5 +1,7 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+from litellm._logging import verbose_logger
 
 import httpx
 
@@ -52,6 +54,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         return [
             "n",
             "size",
+            "imageConfig",
             "aspectRatio",
             "aspect_ratio",
             "imageSize",
@@ -83,7 +86,12 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    elif k not in ("tools", "web_search_options"):
+                    elif k == "imageConfig":
+                        if isinstance(v, dict):
+                            mapped_params["imageConfig"] = v
+                        else:
+                            verbose_logger.warning("imageConfig must be a dict, got %s — ignoring.", type(v).__name__)
+                    elif k not in ("tools", "web_search_options", "imageConfig"):
                         mapped_params[k] = v
 
         mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
@@ -167,7 +175,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: Optional[str] = None,
@@ -209,18 +217,16 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         contents = [{"role": "user", "parts": [{"text": prompt}]}]
 
         # Prepare generation config
-        generation_config: Dict[str, Any] = {"responseModalities": ["IMAGE"]}
+        generation_config: dict[str, Any] = {"responseModalities": ["IMAGE"]}
 
-        # Handle image-specific config parameters
-        image_config: Dict[str, Any] = {}
+        # Seed from user-supplied imageConfig dict; flat params are overlaid for backward compat.
+        image_config: dict[str, Any] = dict(optional_params.get("imageConfig") or {})
 
-        # Map aspectRatio
         if "aspectRatio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspectRatio"]
         elif "aspect_ratio" in optional_params:
             image_config["aspectRatio"] = optional_params["aspect_ratio"]
 
-        # Map imageSize (for Gemini 3 Pro)
         if "imageSize" in optional_params:
             image_config["imageSize"] = optional_params["imageSize"]
         elif "image_size" in optional_params:
@@ -235,7 +241,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         elif "n" in optional_params:
             generation_config["candidateCount"] = optional_params["n"]
 
-        request_body: Dict[str, Any] = {
+        request_body: dict[str, Any] = {
             "contents": contents,
             "generationConfig": generation_config,
         }

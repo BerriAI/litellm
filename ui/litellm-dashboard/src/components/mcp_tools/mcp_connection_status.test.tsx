@@ -41,6 +41,21 @@ describe("MCPConnectionStatus", () => {
     expect(screen.getByText("Connecting...")).toBeInTheDocument();
   });
 
+  it("should show info message without retry when tool preview returns 403", () => {
+    render(
+      <MCPConnectionStatus
+        {...defaultProps}
+        canFetchTools={true}
+        toolsError="Tool preview is not available for submissions. Tools will be verified by an admin during review."
+        toolsErrorStatus={403}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/Tools will be verified by an admin during review/i);
+    expect(screen.queryByText("Connection Failed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+  });
+
   it("should show error state with retry button when toolsError is set", async () => {
     const fetchTools = vi.fn();
     const user = userEvent.setup();

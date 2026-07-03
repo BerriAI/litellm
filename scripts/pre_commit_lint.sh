@@ -36,6 +36,22 @@ spec_files=$(staged_match '^(litellm/(proxy|types)/.*|ui/litellm-dashboard/(scri
 ui_prettier_files=$(staged_match '^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs|json|css|scss|md|mdx|yml|yaml|html)$')
 ui_eslint_files=$(staged_match '^ui/litellm-dashboard/.*\.(js|jsx|ts|tsx|mjs|cjs)$')
 
+# CI lints the committed tree, so this script predicts CI for what you have STAGED
+# (every trigger above reads `git diff --cached`). The tools it runs, though, read
+# the working tree, so unstaged edits to tracked files and untracked files fold
+# into the result and a green/red here won't match a commit of just the staged
+# changes. There's no safe way to lint the index in place, so surface the gap
+# instead of hiding it: stage everything you intend to commit before trusting a
+# pass. This only warns; it never blocks or touches your changes.
+unstaged=$(git diff --name-only)
+untracked=$(git ls-files --others --exclude-standard)
+if [ -n "$unstaged" ] || [ -n "$untracked" ]; then
+    echo "pre-commit: NOTE - unstaged/untracked changes are included in these checks but" >&2
+    echo "  won't be in a commit of only your staged changes, so this result may differ from" >&2
+    echo "  CI. Stage everything you intend to commit (git add) for an accurate prediction:" >&2
+    printf '%s\n' "$unstaged" "$untracked" | sed '/^$/d' | sed 's/^/    /' >&2
+fi
+
 lint_dashboard() {
     (
         rc=0
@@ -95,7 +111,7 @@ if [ -n "$spec_files" ]; then
     # and an up-to-date Prisma client; check-ui-api-types.yml installs those and runs
     # prisma generate before gen:api, so mirror that here or a stale client can mask
     # drift that CI will still flag.
-    if ! uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma; then
+    if ! uv run --no-sync python scripts/prisma_generate_if_needed.py; then
         echo "✗ Could not regenerate Prisma client (prisma generate failed)." >&2
         status=1
     elif ( cd ui/litellm-dashboard && LITELLM_PYTHON="uv run --no-sync python" npm run gen:api ); then

@@ -249,7 +249,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
           <Paragraph className="text-xs text-gray-500 mb-2">
             Using the connection details you entered above. We&apos;ll fetch:
           </Paragraph>
-          <div className="bg-white border border-gray-200 rounded px-3 py-2 mb-3 font-mono text-xs text-gray-700 break-all">
+          <div className="bg-white border border-gray-200 rounded-sm px-3 py-2 mb-3 font-mono text-xs text-gray-700 break-all">
             {discoveryRequest!.display_url || effectiveUrl || (
               <span className="text-gray-400 italic">Fill in the fields above first</span>
             )}
@@ -409,7 +409,7 @@ const AgentCardDiscovery: React.FC<AgentCardDiscoveryProps> = ({
                   return (
                     <div
                       key={key}
-                      className="flex items-center justify-between p-2 border border-gray-200 rounded bg-white"
+                      className="flex items-center justify-between p-2 border border-gray-200 rounded-sm bg-white"
                     >
                       <div>
                         <Text strong className="capitalize">
