@@ -151,7 +151,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
   };
 
   return (
-    <div className="bg-white rounded-lg shadow">
+    <div className="bg-white rounded-lg shadow-sm">
       <TabGroup>
         <TabList className="border-b border-gray-200 px-4">
           <Tab className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800">Summary</Tab>
@@ -225,7 +225,7 @@ const HealthCheckDetails: React.FC<{ response: any }> = ({ response }) => {
 
           <TabPanel className="p-4">
             <div className="bg-gray-50 rounded-md p-4 font-mono text-sm">
-              <pre className="whitespace-pre-wrap break-words overflow-auto max-h-[500px]">
+              <pre className="whitespace-pre-wrap wrap-break-word overflow-auto max-h-[500px]">
                 {(() => {
                   try {
                     const data = {

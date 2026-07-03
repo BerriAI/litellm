@@ -624,6 +624,58 @@
       "count": 1
     }
   },
+  "src/app/(dashboard)/users/_components/DefaultUserSettings.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/edit_user.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/user_edit_view.test.tsx": {
+    "react/display-name": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/user_edit_view.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/view_users.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/view_users/columns.tsx": {
+    "max-params": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/view_users/table.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "src/app/(dashboard)/users/_components/view_users/user_info_view.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
   "src/app/(dashboard)/workflows/WorkflowRuns.tsx": {
     "no-restricted-syntax": {
       "count": 3
@@ -2086,16 +2138,6 @@
   "src/utils/dataUtils.test.ts": {
     "max-nested-callbacks": {
       "count": 1
-    }
-  },
-  "tailwind.config.js": {
-    "@typescript-eslint/no-require-imports": {
-      "count": 4
-    }
-  },
-  "tailwind.config.ts": {
-    "@typescript-eslint/no-require-imports": {
-      "count": 3
     }
   },
   "tests/CreateKeyPage.expiredToken.test.tsx": {
