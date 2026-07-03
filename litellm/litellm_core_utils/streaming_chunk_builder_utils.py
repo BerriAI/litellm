@@ -606,25 +606,13 @@ class ChunkProcessor:
                     usage_chunk_dict["prompt_tokens_details"],
                 )
 
-                incoming_breakdown = cast(
-                    Optional[CacheCreationTokenDetails],
-                    getattr(prompt_tokens_details, "cache_creation_token_details", None),
+                cache_creation_token_details = self._capture_cache_creation_token_details(
+                    prompt_tokens_details, cache_creation_token_details
                 )
-                if incoming_breakdown is not None:
-                    cache_creation_token_details = incoming_breakdown
 
-        if (
-            cache_creation_token_details is not None
-            and prompt_tokens_details is not None
-            and cast(
-                Optional[CacheCreationTokenDetails],
-                getattr(prompt_tokens_details, "cache_creation_token_details", None),
-            )
-            is None
-        ):
-            prompt_tokens_details = prompt_tokens_details.model_copy(
-                update={"cache_creation_token_details": cache_creation_token_details}
-            )
+        prompt_tokens_details = self._attach_cache_creation_token_details(
+            prompt_tokens_details, cache_creation_token_details
+        )
 
         completion_tokens = self._reset_anthropic_cursor_completion_tokens(
             chunks=chunks,
@@ -642,6 +630,34 @@ class ChunkProcessor:
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
         )
+
+    @staticmethod
+    def _capture_cache_creation_token_details(
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper],
+        current: Optional[CacheCreationTokenDetails],
+    ) -> Optional[CacheCreationTokenDetails]:
+        incoming = cast(
+            Optional[CacheCreationTokenDetails],
+            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        )
+        if incoming is not None:
+            return incoming
+        return current
+
+    @staticmethod
+    def _attach_cache_creation_token_details(
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper],
+        cache_creation_token_details: Optional[CacheCreationTokenDetails],
+    ) -> Optional[PromptTokensDetailsWrapper]:
+        if prompt_tokens_details is None or cache_creation_token_details is None:
+            return prompt_tokens_details
+        existing = cast(
+            Optional[CacheCreationTokenDetails],
+            getattr(prompt_tokens_details, "cache_creation_token_details", None),
+        )
+        if existing is not None:
+            return prompt_tokens_details
+        return prompt_tokens_details.model_copy(update={"cache_creation_token_details": cache_creation_token_details})
 
     @staticmethod
     def _reset_anthropic_cursor_completion_tokens(
