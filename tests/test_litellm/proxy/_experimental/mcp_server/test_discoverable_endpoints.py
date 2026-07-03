@@ -2733,3 +2733,598 @@ async def test_token_exchange_passes_through_upstream_expires_in():
         {"access_token": "tok", "token_type": "Bearer", "expires_in": 43200}
     )
     assert body["expires_in"] == 43200
+
+
+def _token_request(headers):
+    """A real Starlette request with case-insensitive headers (matches production)."""
+    from starlette.requests import Request
+
+    raw = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    return Request({"type": "http", "method": "POST", "path": "/token", "headers": raw, "query_string": b""})
+
+
+@pytest.fixture
+def proxy_globals():
+    """Inject the cache/prisma the OAuth token endpoint resolves identity through, and restore
+    them afterward. These module globals are the proxy's real wiring points, so setting them is
+    dependency injection rather than monkeypatching a class."""
+    import litellm.proxy.proxy_server as ps
+
+    saved = (ps.user_api_key_cache, ps.prisma_client)
+    try:
+        yield ps
+    finally:
+        ps.user_api_key_cache, ps.prisma_client = saved
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_reads_x_litellm_api_key_header(proxy_globals):
+    """The LiteLLM key arrives on x-litellm-api-key (what Claude Desktop/Code send), not
+    Authorization. Reading only Authorization dropped the identity, so the per-user token was
+    never stored and the egress 401'd forever. Resolution must honor x-litellm-api-key."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-alice-key"
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        hash_token(key),
+        UserAPIKeyAuth(token=hash_token(key), user_id="alice"),
+        model_type=UserAPIKeyAuth,
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"x-litellm-api-key": f"Bearer {key}"})
+    assert await _extract_user_id_from_request(request) == "alice"
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rehydrates_cross_replica_dict_cache(proxy_globals):
+    """Cross-replica, async_get_cache hands back a serialized dict, not a UserAPIKeyAuth.
+    Resolution must rehydrate it; the old getattr(cached, "user_id") returned None on a dict,
+    which is exactly why a multi-replica gateway never found the stored token."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-alice-key"
+    cache = UserApiKeyCache()
+    cache.in_memory_cache.set_cache(hash_token(key), {"token": hash_token(key), "user_id": "alice"})
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"Authorization": f"Bearer {key}"})
+    assert await _extract_user_id_from_request(request) == "alice"
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_falls_back_to_db_on_cache_miss(proxy_globals):
+    """A cache miss must read the key from the DB rather than returning None; the old code did a
+    cache-only peek and skipped the DB, so any replica that hadn't just authenticated the key
+    failed to store the token."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key = "sk-bob-key"
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="db-bob")
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": key})
+    assert await _extract_user_id_from_request(request) == "db-bob"
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_none_without_litellm_key(proxy_globals):
+    """No LiteLLM key on the request resolves to None without consulting the resolver."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = object()
+
+    request = _token_request({"content-type": "application/json"})
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rejects_blocked_key(proxy_globals):
+    """A blocked LiteLLM key must not resolve an identity. get_key_object returns the DB row without
+    checking blocked/expiry (the main auth pipeline does, and the public token endpoint bypasses it),
+    so a revoked key could otherwise overwrite the stored per-user OAuth token for its user."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="blocked-user", blocked=True)
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-blocked-key"})
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_extract_user_id_rejects_expired_key(proxy_globals):
+    """An expired LiteLLM key must not resolve an identity, for the same reason as a blocked key."""
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _extract_user_id_from_request,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+    class _FakePrisma:
+        async def get_data(self, token, table_name, parent_otel_span=None, proxy_logging_obj=None):
+            return UserAPIKeyAuth(token=token, user_id="expired-user", expires=expired)
+
+    proxy_globals.user_api_key_cache = UserApiKeyCache()
+    proxy_globals.prisma_client = _FakePrisma()
+
+    request = _token_request({"x-litellm-api-key": "sk-expired-key"})
+    assert await _extract_user_id_from_request(request) is None
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_uses_client_secret_basic_when_configured():
+    """LIT-4091: a server with token_endpoint_auth_method=client_secret_basic must send the
+    credentials as an HTTP Basic Authorization header and omit client_secret from the body;
+    providers requiring Basic rejected body credentials with invalid_client."""
+    import base64
+    from unittest.mock import AsyncMock
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        token_endpoint,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="basic_mcp",
+        name="basic_mcp",
+        server_name="basic_mcp",
+        alias="basic_mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="basic-client",
+        client_secret="basic-secret",
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/oauth2/token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "access_token": "at",
+        "token_type": "Bearer",
+        "expires_in": 3599,
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
+    ) as mock_get_client:
+        mock_async_client = MagicMock()
+        mock_async_client.post = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_async_client
+
+        await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="basic-client",
+            mcp_server_name="basic_mcp",
+            client_secret="basic-secret",
+            code_verifier="verifier",
+        )
+
+    call_args = mock_async_client.post.call_args
+    expected = "Basic " + base64.b64encode(b"basic-client:basic-secret").decode()
+    assert call_args[1]["headers"]["Authorization"] == expected
+    assert "client_secret" not in call_args[1]["data"]
+    assert "client_id" not in call_args[1]["data"]
+    assert call_args[1]["data"]["grant_type"] == "authorization_code"
+    assert call_args[1]["data"]["code"] == "auth-code"
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_client_secret_basic_without_secret_returns_400():
+    """A server configured client_secret_basic but missing its secret is a misconfiguration; the
+    inbound /token endpoint surfaces it as a 400 rather than silently posting a downgraded request."""
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        token_endpoint,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="basic_no_secret",
+        name="basic_no_secret",
+        server_name="basic_no_secret",
+        alias="basic_no_secret",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="basic-client",
+        client_secret=None,
+        authorization_url="https://idp.example.com/authorize",
+        token_url="https://idp.example.com/oauth2/token",
+        token_endpoint_auth_method="client_secret_basic",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm-proxy.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await token_endpoint(
+            request=mock_request,
+            grant_type="authorization_code",
+            code="auth-code",
+            redirect_uri="http://localhost/callback",
+            client_id="basic-client",
+            mcp_server_name="basic_no_secret",
+            client_secret=None,
+            code_verifier="verifier",
+        )
+    assert exc_info.value.status_code == 400
+
+
+# -------------------------------------------------------------------
+# Non-oauth2 (auth_type=none, access-group gated) servers must not be
+# driven through the gateway OAuth authorize/token/register/discovery
+# flow, and must not be advertised as OAuth-protected in discovery docs.
+# -------------------------------------------------------------------
+
+
+def _access_group_none_server(server_name="access_group_server"):
+    """A non-oauth2, access-group gated MCP server: no client_id, no OAuth."""
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    return MCPServer(
+        server_id=server_name,
+        name=server_name,
+        server_name=server_name,
+        alias=server_name,
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        access_groups=["eng"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_endpoint_rejects_non_oauth2_server():
+    """authorize() against a none-auth server returns an accurate 'does not use OAuth' 400,
+    not the misleading 'client_id is required' that fired before the auth_type was checked."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    server = _access_group_none_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await authorize(
+                request=mock_request,
+                client_id=None,
+                mcp_server_name="access_group_server",
+                redirect_uri="http://127.0.0.1:60108/callback",
+                state="test_state",
+            )
+        assert exc_info.value.status_code == 400
+        detail_text = str(exc_info.value.detail)
+        assert "does not use OAuth" in detail_text
+        assert "client_id is required" not in detail_text
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_rejects_non_oauth2_server():
+    """token_endpoint() against a none-auth server returns 'does not use OAuth' 400 instead
+    of the misleading 'token url is not set'."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    server = _access_group_none_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await token_endpoint(
+                request=mock_request,
+                grant_type="authorization_code",
+                code="auth-code",
+                redirect_uri="http://localhost/callback",
+                client_id="some-client",
+                mcp_server_name="access_group_server",
+                client_secret=None,
+                code_verifier="verifier",
+            )
+        assert exc_info.value.status_code == 400
+        detail_text = str(exc_info.value.detail)
+        assert "does not use OAuth" in detail_text
+        assert "token url is not set" not in detail_text
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_register_client_rejects_non_oauth2_server():
+    """register_client() against a named none-auth server returns 'does not use OAuth' 400
+    instead of the misleading 'authorization url is not set'."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            register_client,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    server = _access_group_none_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            with patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(return_value={}),
+            ):
+                await register_client(request=mock_request, mcp_server_name="access_group_server")
+        assert exc_info.value.status_code == 400
+        detail_text = str(exc_info.value.detail)
+        assert "does not use OAuth" in detail_text
+        assert "authorization url is not set" not in detail_text
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_404_for_non_oauth2_server():
+    """Discovery must not advertise a none-auth server as an OAuth-protected resource."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    server = _access_group_none_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await _build_oauth_protected_resource_response(
+                request=mock_request,
+                mcp_server_name="access_group_server",
+                use_standard_pattern=False,
+            )
+        assert exc_info.value.status_code == 404
+        assert "not an OAuth-protected resource" in str(exc_info.value.detail)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorization_server_404_for_non_oauth2_server():
+    """Discovery must not advertise a none-auth server as an OAuth authorization server."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    server = _access_group_none_server()
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            _build_oauth_authorization_server_response(
+                request=mock_request,
+                mcp_server_name="access_group_server",
+            )
+        assert exc_info.value.status_code == 404
+        assert "not an OAuth authorization server" in str(exc_info.value.detail)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_passthrough_none_auth_not_404():
+    """Regression guard for the protected-resource auth_type gate placement: a none-auth
+    server that opted into OAuth pass-through must still proxy upstream metadata, it must
+    NOT be 404'd. The gate has to sit after the pass-through branch."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    passthrough_server = MCPServer(
+        server_id="passthrough_server",
+        name="passthrough_server",
+        server_name="passthrough_server",
+        alias="passthrough_server",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        oauth_passthrough=True,
+        extra_headers=["Authorization"],
+    )
+    global_mcp_server_manager.registry[passthrough_server.server_id] = passthrough_server
+
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.fetch_upstream_oauth_protected_resource",
+            new=AsyncMock(return_value={"authorization_servers": ["https://upstream-idp.example.com"]}),
+        ):
+            response = await _build_oauth_protected_resource_response(
+                request=mock_request,
+                mcp_server_name="passthrough_server",
+                use_standard_pattern=False,
+            )
+        assert response["authorization_servers"] == ["https://upstream-idp.example.com"]
+        assert response["resource"].endswith("/passthrough_server/mcp")
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_protected_resource_404_for_unknown_server_name():
+    """A discovery request for an unknown server name returns the same 404 as a non-oauth2
+    server (not a 200 metadata doc with broken URLs), so the well-known paths cannot be used
+    to enumerate non-OAuth server names."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _build_oauth_protected_resource_response(
+            request=mock_request,
+            mcp_server_name="does_not_exist",
+            use_standard_pattern=True,
+        )
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_oauth_authorization_server_404_for_unknown_server_name():
+    """A named authorization-server discovery request for an unknown server returns 404, not a
+    200 metadata document pointing at non-existent /{name}/authorize and /{name}/token."""
+    try:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    mock_request = MagicMock()
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        _build_oauth_authorization_server_response(
+            request=mock_request,
+            mcp_server_name="does_not_exist",
+        )
+    assert exc_info.value.status_code == 404

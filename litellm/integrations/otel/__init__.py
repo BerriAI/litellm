@@ -32,11 +32,13 @@ from litellm.integrations.otel.model.payloads import (
     LLMCallSpanData,
     LLMRequestParams,
     LLMUsage,
+    MCPListToolsSpanData,
     MCPToolCallSpanData,
     ProxyRequestSpanData,
     ServerInfo,
     ServiceSpanData,
     SpanError,
+    is_mcp_list_tools,
     is_mcp_tool_call,
 )
 from litellm.integrations.otel.model.semconv import (
@@ -106,6 +108,7 @@ __all__ = [
     "LLMCallSpanData",
     "LLMRequestParams",
     "LLMUsage",
+    "MCPListToolsSpanData",
     "MCPToolCallSpanData",
     "ProxyRequestSpanData",
     "RequestContext",
@@ -113,6 +116,7 @@ __all__ = [
     "ServerInfo",
     "ServiceSpanData",
     "SpanError",
+    "is_mcp_list_tools",
     "is_mcp_tool_call",
     "promoted_baggage",
 ]

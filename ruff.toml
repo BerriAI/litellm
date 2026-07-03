@@ -1,5 +1,5 @@
-lint.ignore = ["F405", "E402", "E501", "F403"]
-lint.extend-select = ["E501", "T20", "PGH004", "RUF008", "RUF009", "RUF100"]
+lint.ignore = ["F405", "E402", "F403"]
+lint.extend-select = ["T20", "PGH004", "RUF008", "RUF009", "RUF100"]
 # RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
 # `# noqa` directives that protect rules enforced elsewhere. List those codes as external
 # so RUF100 leaves their directives alone: the strict gate (ruff-strict.toml) and upstream
@@ -12,10 +12,6 @@ lint.external = [
 ]
 line-length = 120
 
-# `ruff format` (replacing Black) must wrap at 88, the width Black used and the whole
-# history is formatted to. The global line-length stays 120 because E501 and the import
-# sorter (I001, strict gate) are tuned to it and ruff has no per-formatter line-length,
-# so 88 is passed at the `ruff format --line-length 88` call sites (Makefile + CI).
 format.exclude = ["**/enterprise/**"]
 
 # Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths

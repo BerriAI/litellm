@@ -66,12 +66,8 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(
-            litellm_params=litellm_params
-        )
-        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(
-            litellm_params=litellm_params
-        )
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_credentials = VertexBase.safe_get_vertex_ai_credentials(litellm_params=litellm_params)
 
         # Get access token from Vertex credentials
         access_token, project_id = self.vertex_base.get_access_token(
@@ -110,12 +106,8 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         # Use safe_get_* methods that don't mutate litellm_params dict
         litellm_params = litellm_params or {}
 
-        vertex_project = VertexBase.safe_get_vertex_ai_project(
-            litellm_params=litellm_params
-        )
-        vertex_location = VertexBase.safe_get_vertex_ai_location(
-            litellm_params=litellm_params
-        )
+        vertex_project = VertexBase.safe_get_vertex_ai_project(litellm_params=litellm_params)
+        vertex_location = VertexBase.safe_get_vertex_ai_location(litellm_params=litellm_params)
 
         if vertex_project is None:
             raise ValueError(
@@ -159,9 +151,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         Returns:
             OCRRequestData with JSON data for the DeepSeek OCR endpoint
         """
-        verbose_logger.debug(
-            "Vertex AI DeepSeek OCR transform_ocr_request (sync) called"
-        )
+        verbose_logger.debug("Vertex AI DeepSeek OCR transform_ocr_request (sync) called")
 
         if not isinstance(document, dict):
             raise ValueError(f"Expected document dict, got {type(document)}")
@@ -176,9 +166,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
         elif doc_type == "document_url":
             document_url = document.get("document_url", "")
         else:
-            raise ValueError(
-                f"Unsupported document type: {doc_type}. Expected 'image_url' or 'document_url'"
-            )
+            raise ValueError(f"Unsupported document type: {doc_type}. Expected 'image_url' or 'document_url'")
 
         # Build DeepSeek OCR message content
         content_item = {}
@@ -317,17 +305,11 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
                     "pages": [
                         {
                             "index": 0,
-                            "markdown": (
-                                content
-                                if isinstance(content, str)
-                                else json.dumps(content)
-                            ),
+                            "markdown": (content if isinstance(content, str) else json.dumps(content)),
                         }
                     ],
                     "model": ocr_data.get("model", model),
-                    "usage_info": ocr_data.get(
-                        "usage_info", response_json.get("usage", {})
-                    ),
+                    "usage_info": ocr_data.get("usage_info", response_json.get("usage", {})),
                 }
 
             # Convert usage info if present
@@ -352,11 +334,7 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
 
             if not pages:
                 # Create a default page if none exist
-                pages = [
-                    OCRPage(
-                        index=0, markdown=content if isinstance(content, str) else ""
-                    )
-                ]
+                pages = [OCRPage(index=0, markdown=content if isinstance(content, str) else "")]
 
             return OCRResponse(
                 pages=pages,

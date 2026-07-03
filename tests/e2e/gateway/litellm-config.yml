@@ -25,9 +25,10 @@ general_settings:
   database_url: os.environ/DATABASE_URL
   control_plane_url: os.environ/CONTROL_PLANE_URL
   alerts: ["email"]
+
   proxy_budget_rescheduler_min_time: 15
   proxy_budget_rescheduler_max_time: 20
-
+  
 # fallbacks: [{"gpt-4": ["anthropic.claude-3-5-sonnet-20240620-v1:0"]}] #Configure fallbacks for context window exeeded errors (In this example, we will fall back to Claude Sonnet if over 8000 tokens, which is gpt-4's limit)
   # default_fallbacks: ["anthropic.claude-3-haiku-20240307-v1:0"] #Configure fallbacks for any error for every model (the above fallback configurations override this one)
 # environment_variables:
@@ -132,14 +133,52 @@ model_list:
       model: gemini/gemini-2-embedding
       api_key: os.environ/GEMINI_API_KEY
 
-  # realtime models
   - model_name: openai-realtime
     litellm_params:
-      model: openai/realtime-2
+      model: openai/gpt-realtime
       api_key: os.environ/OPENAI_API_KEY
     model_info:
       mode: realtime
 
+  - model_name: azure-realtime
+    litellm_params:
+      model: azure/gpt-realtime-2
+      api_key: os.environ/AZURE_API_KEY
+      api_base: os.environ/AZURE_API_BASE
+      api_version: "2025-08-28"
+      realtime_protocol: GA # Possible values: "GA"/ "v1", "beta"
+    model_info:
+      mode: realtime
+
+  - model_name: gemini-realtime
+    litellm_params:
+      model: gemini/gemini-3.1-flash-live-preview
+      api_key: os.environ/GEMINI_API_KEY
+    model_info:
+      mode: realtime
+
+  - model_name: vertex-realtime
+    litellm_params:
+      model: vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+    model_info:
+      mode: realtime
+
+  - model_name: bedrock-realtime
+    litellm_params:
+      model: bedrock/amazon.nova-sonic-v1:0
+      aws_region_name: us-east-1
+    model_info:
+      mode: realtime
+
+  - model_name: xai-realtime
+    litellm_params:
+      model: xai/grok-voice-latest
+      api_key: os.environ/XAI_API_KEY
+    model_info:
+      mode: realtime
   - model_name: rust-ocr-mistral
     litellm_params:
       model: mistral/mistral-ocr-latest
@@ -169,6 +208,57 @@ model_list:
       vertex_project: os.environ/VERTEXAI_PROJECT
       vertex_location: us-central1
 
+  # batch models exercised by tests/e2e/batches/
+  - model_name: openai-batch
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: batch
+
+  - model_name: azure-batch
+    litellm_params:
+      model: azure/gpt-4.1-mini-batch
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
+      api_version: "2024-07-01-preview"
+    model_info:
+      mode: batch
+
+  - model_name: vertex-batch
+    litellm_params:
+      model: vertex_ai/gemini-2.5-flash
+      vertex_project: os.environ/VERTEXAI_PROJECT
+      vertex_location: us-central1
+      vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+      bucket_name: os.environ/GCS_BUCKET_NAME
+    model_info:
+      mode: batch
+
+  - model_name: bedrock-batch
+    litellm_params:
+      model: bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0
+      s3_bucket_name: os.environ/AWS_BATCH_S3_BUCKET
+      s3_region_name: us-west-2
+      s3_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      s3_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_batch_role_arn: os.environ/AWS_BATCH_ROLE_ARN
+    model_info:
+      mode: batch
+
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+  - custom_llm_provider: azure
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: "2024-07-01-preview"
+  - custom_llm_provider: vertex_ai
+    vertex_project: os.environ/VERTEXAI_PROJECT
+    vertex_location: us-central1
+    vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+    bucket_name: os.environ/GCS_BUCKET_NAME
+
 
 mcp_servers:
   deepwiki_mcp:
@@ -195,4 +285,3 @@ guardrails:
         CREDIT_CARD: BLOCK
         US_SSN: BLOCK
         PHONE_NUMBER: BLOCK
-

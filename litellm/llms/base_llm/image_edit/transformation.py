@@ -102,9 +102,7 @@ class BaseImageEditConfig(ABC):
     ) -> Tuple[Dict, RequestFiles]:
         pass
 
-    def finalize_image_edit_request_data(
-        self, data: dict, resolved_request_url: str
-    ) -> dict:
+    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
         """
         Last pass on the request dict after ``transform_image_edit_request``, using the
         exact URL string used for the HTTP POST (same as ``get_complete_url`` output).

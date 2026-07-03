@@ -260,9 +260,7 @@ class PrismaWrapper:
             return self.FALLBACK_REFRESH_INTERVAL_SECONDS
 
         # Calculate when we should refresh (expiration - buffer)
-        refresh_at = expiration_time - timedelta(
-            seconds=self.TOKEN_REFRESH_BUFFER_SECONDS
-        )
+        refresh_at = expiration_time - timedelta(seconds=self.TOKEN_REFRESH_BUFFER_SECONDS)
 
         # How long until refresh time?
         now = datetime.utcnow()
@@ -281,9 +279,7 @@ class PrismaWrapper:
 
         if expiration_time is None:
             # If we can't parse the token, assume it's expired to trigger refresh
-            verbose_proxy_logger.debug(
-                "Could not parse token expiration, treating as expired"
-            )
+            verbose_proxy_logger.debug("Could not parse token expiration, treating as expired")
             return True
 
         return datetime.utcnow() > expiration_time
@@ -303,9 +299,7 @@ class PrismaWrapper:
 
         if self._iam_endpoint is not None:
             endpoint = self._iam_endpoint
-            token = generate_iam_auth_token(
-                db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user
-            )
+            token = generate_iam_auth_token(db_host=endpoint.host, db_port=endpoint.port, db_user=endpoint.user)
             _db_url = endpoint.build_url(token)
         else:
             db_host = os.getenv("DATABASE_HOST")
@@ -317,9 +311,7 @@ class PrismaWrapper:
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
 
-            token = generate_iam_auth_token(
-                db_host=db_host, db_port=db_port, db_user=db_user
-            )
+            token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
 
             _db_url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
             if db_schema:
@@ -381,13 +373,9 @@ class PrismaWrapper:
         """
         from prisma import Prisma  # type: ignore
 
-        if (
-            expected_generation is not None
-            and expected_generation != self._engine_generation
-        ):
+        if expected_generation is not None and expected_generation != self._engine_generation:
             verbose_proxy_logger.info(
-                "%sSkipping Prisma client recreate: engine already replaced "
-                "(generation %s != expected %s).",
+                "%sSkipping Prisma client recreate: engine already replaced (generation %s != expected %s).",
                 self._log_prefix,
                 self._engine_generation,
                 expected_generation,
@@ -437,9 +425,7 @@ class PrismaWrapper:
         Prisma client connection is established.
         """
         if not self.iam_token_db_auth:
-            verbose_proxy_logger.debug(
-                "IAM token auth not enabled, skipping token refresh task"
-            )
+            verbose_proxy_logger.debug("IAM token auth not enabled, skipping token refresh task")
             return
 
         if self._token_refresh_task is not None:
@@ -467,9 +453,7 @@ class PrismaWrapper:
         except asyncio.CancelledError:
             pass
         self._token_refresh_task = None
-        verbose_proxy_logger.info(
-            "%sStopped RDS IAM token refresh background task", self._log_prefix
-        )
+        verbose_proxy_logger.info("%sStopped RDS IAM token refresh background task", self._log_prefix)
 
     async def _token_refresh_loop(self) -> None:
         """
@@ -497,15 +481,11 @@ class PrismaWrapper:
                     await asyncio.sleep(sleep_seconds)
 
                 # Refresh the token
-                verbose_proxy_logger.info(
-                    "%sProactively refreshing RDS IAM token...", self._log_prefix
-                )
+                verbose_proxy_logger.info("%sProactively refreshing RDS IAM token...", self._log_prefix)
                 await self._safe_refresh_token()
 
             except asyncio.CancelledError:
-                verbose_proxy_logger.info(
-                    "%sRDS IAM token refresh loop cancelled", self._log_prefix
-                )
+                verbose_proxy_logger.info("%sRDS IAM token refresh loop cancelled", self._log_prefix)
                 break
             except Exception as e:
                 verbose_proxy_logger.error(
@@ -644,9 +624,7 @@ class PrismaManager:
         return dname
 
     @staticmethod
-    def setup_database(
-        use_migrate: bool = False, use_v2_resolver: bool = False
-    ) -> bool:
+    def setup_database(use_migrate: bool = False, use_v2_resolver: bool = False) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
 
@@ -669,9 +647,7 @@ class PrismaManager:
                     try:
                         from litellm_proxy_extras.utils import ProxyExtrasDBManager
                     except ImportError as e:
-                        verbose_proxy_logger.error(
-                            f"\033[1;31mLiteLLM: Failed to import proxy extras. Got {e}\033[0m"
-                        )
+                        verbose_proxy_logger.error(f"\033[1;31mLiteLLM: Failed to import proxy extras. Got {e}\033[0m")
                         return False
 
                     prisma_dir = PrismaManager._get_prisma_dir()
@@ -699,14 +675,8 @@ class PrismaManager:
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt
-                retry_msg = (
-                    f" Retrying... ({attempts_left} attempts left)"
-                    if attempts_left > 0
-                    else ""
-                )
-                verbose_proxy_logger.warning(
-                    f"The process failed to execute. Details: {e}.{retry_msg}"
-                )
+                retry_msg = f" Retrying... ({attempts_left} attempts left)" if attempts_left > 0 else ""
+                verbose_proxy_logger.warning(f"The process failed to execute. Details: {e}.{retry_msg}")
                 time.sleep(random.randrange(5, 15))
             finally:
                 os.chdir(original_dir)

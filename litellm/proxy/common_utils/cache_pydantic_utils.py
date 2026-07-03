@@ -56,9 +56,7 @@ class CacheCodec:
                 # Already the right type: dump directly, skip re-validation copy.
                 return value.model_dump(mode="json", exclude_none=True)
             if isinstance(value, (dict, BaseModel)):
-                return model_type.model_validate(value).model_dump(
-                    mode="json", exclude_none=True
-                )
+                return model_type.model_validate(value).model_dump(mode="json", exclude_none=True)
             return value
         if isinstance(value, BaseModel):
             return value.model_dump(mode="json", exclude_none=True)
