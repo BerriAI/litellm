@@ -4,8 +4,8 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	info lint lint-dev format \
-	lint-basedpyright lint-basedpyright-budget-update \
+	info lint lint-dev lint-checks format \
+	lint-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety pre-commit \
@@ -27,12 +27,12 @@ help:
 	@echo "  make lint               - Run all linting (Ruff, basedpyright, format check, circular imports, import safety)"
 	@echo "  make lint-ruff          - Run Ruff linting only"
 	@echo "  make lint-basedpyright  - Run basedpyright strict, gated by per-rule error counts"
-	@echo "  make lint-basedpyright-budget-update - Re-capture the basedpyright per-rule budget (ratchet)"
+	@echo "  make lint-basedpyright-budget-update - Ratchet basedpyright limits down by what this branch fixed"
 	@echo "  make lint-format        - Check ruff format formatting (matches CI)"
-	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its ceiling"
+	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its limit"
 	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
-	@echo "  make lint-ruff-budget-update - Re-capture per-rule baselines in ruff-strict-budget.json (ratchet)"
-	@echo "  make lint-budget-update - Re-capture all ratchet budgets (ruff + basedpyright)"
+	@echo "  make lint-ruff-budget-update - Ratchet ruff-strict-budget.json limits down by what this branch fixed"
+	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + basedpyright)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -52,6 +52,11 @@ help:
 
 UV := uv
 UV_RUN := $(UV) run --no-sync
+
+LINT_DEP_INSTALL ?= install-dev
+LINT_DEP_BASE ?= lint-fetch-base
+LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
 
 # Show info
 info:
@@ -88,7 +93,7 @@ install-hooks:
 
 # Formatting
 # Wrap width is ruff.toml's single source of truth (line-length = 120), shared by the
-# formatter, E501, and the import sorter so there's no 88-vs-120 split to reconcile.
+# formatter and the import sorter so there's no 88-vs-120 split to reconcile.
 format: install-dev
 	cd litellm && $(UV_RUN) ruff format --exclude '/enterprise/' . && cd ..
 
@@ -107,12 +112,12 @@ lint-fetch-base:
 # running proxy need.
 lint-install:
 	$(UV) sync --inexact --frozen --group proxy-dev
-	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
+	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
 # Diff-scoped format check, identical to test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
 # format issue elsewhere doesn't block an unrelated commit.
-lint-format-check-changed: install-dev lint-fetch-base
+lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	@files=$$(git diff --name-only origin/litellm_internal_staging...HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' || true); \
 	if [ -z "$$files" ]; then \
 		echo "No changed litellm Python files to format-check."; \
@@ -121,7 +126,7 @@ lint-format-check-changed: install-dev lint-fetch-base
 	fi
 
 # Linting targets
-lint-ruff: install-dev
+lint-ruff: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) ruff check . && cd ..
 
 # faster linter for developing ...
@@ -156,15 +161,17 @@ lint-ruff-FULL-dev: install-dev
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
-lint-basedpyright: install-dev lint-fetch-base
+lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
 
 # Type-discipline budget (mutable collections / casts / type guards / kwargs /
 # unexplained suppressions), the test-linting.yml step `make lint` used to omit.
-lint-type-discipline: install-dev lint-fetch-base
+lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/type_discipline_gate.py --base origin/litellm_internal_staging
 
-lint-basedpyright-budget-update: install-dev
+# --update lowers each limit by what this branch fixed since its branch point, so
+# it needs the base ref fetched to resolve the merge-base.
+lint-basedpyright-budget-update: install-dev lint-fetch-base
 	($(UV_RUN) basedpyright --outputjson || true) | $(UV_RUN) python scripts/type_check_gate.py --update
 
 lint-format: format-check
@@ -174,19 +181,22 @@ lint-ruff-budget: install-dev
 
 # Strict gate, invoked the same way CI does in test-linting.yml so a local pass
 # means the CI check will pass too.
-lint-gate: install-dev lint-fetch-base
+lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/ruff_strict_gate.py --base origin/litellm_internal_staging
 
-lint-ruff-budget-update: install-dev
+lint-ruff-budget-update: install-dev lint-fetch-base
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update
 
-# Ratchet all budgets in one shot (ruff strict + basedpyright)
-lint-budget-update: lint-ruff-budget-update lint-basedpyright-budget-update
+lint-type-discipline-budget-update: install-dev lint-fetch-base
+	$(UV_RUN) python scripts/type_discipline_gate.py --update
 
-check-circular-imports: install-dev
+# Ratchet all budgets in one shot (ruff strict + type-discipline + basedpyright)
+lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-basedpyright-budget-update
+
+check-circular-imports: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
 
-check-import-safety: install-dev
+check-import-safety: $(LINT_DEP_INSTALL)
 	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting, isomorphic to test-linting.yml's lint job so a local pass means a
@@ -194,9 +204,13 @@ check-import-safety: install-dev
 # runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
 # type-discipline / basedpyright budgets as a delta vs the base, then the circular-import
 # and import-safety checks. Steps that compare against the base resolve it the same way CI
-# does (merge-base with origin/litellm_internal_staging). lint-install is first so the
-# Prisma client exists before basedpyright runs.
-lint: lint-install lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright check-circular-imports check-import-safety
+# does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
+# base fetch) runs once up front; the checks themselves are independent, so a sub-make
+# fans them out with -j and the fast ones finish under basedpyright's shadow.
+lint: lint-install lint-fetch-base
+	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_DEP_BASE= lint-checks
+
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety

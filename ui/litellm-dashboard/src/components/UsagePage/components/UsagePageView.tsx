@@ -747,7 +747,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <button
                                 className={`px-3 py-1 text-sm rounded-md transition-colors ${
                                   modelViewType === "groups"
-                                    ? "bg-white shadow-sm text-gray-900"
+                                    ? "bg-white shadow-xs text-gray-900"
                                     : "text-gray-600 hover:text-gray-900"
                                 }`}
                                 onClick={() => setModelViewType("groups")}
@@ -757,7 +757,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <button
                                 className={`px-3 py-1 text-sm rounded-md transition-colors ${
                                   modelViewType === "individual"
-                                    ? "bg-white shadow-sm text-gray-900"
+                                    ? "bg-white shadow-xs text-gray-900"
                                     : "text-gray-600 hover:text-gray-900"
                                 }`}
                                 onClick={() => setModelViewType("individual")}
