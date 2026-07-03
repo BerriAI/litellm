@@ -3017,7 +3017,9 @@ async def can_key_call_resolved_model(
     )
 
     skip_key_model_check = valid_token.config or (
-        isinstance(valid_token.models, list) and SpecialModelNames.all_team_models.value in valid_token.models
+        isinstance(valid_token.models, list)
+        and SpecialModelNames.all_team_models.value in valid_token.models
+        and valid_token.team_id is not None
     )
     if not skip_key_model_check:
         await can_key_call_model(
