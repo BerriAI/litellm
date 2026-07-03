@@ -242,6 +242,60 @@ def _without_authorization(
     return filtered or None
 
 
+_INTERNAL_HEADER_PREFIXES = (
+    "x-litellm-",
+    "x-mcp-auth-",
+)
+
+_INTERNAL_HEADER_EXACT = frozenset(
+    {
+        "x-litellm-api-key",
+        "x-api-key",
+    }
+)
+
+
+def _is_internal_header(header: str) -> bool:
+    """Return True if the header is a LiteLLM credential or control header."""
+    return header in _INTERNAL_HEADER_EXACT or any(header.startswith(p) for p in _INTERNAL_HEADER_PREFIXES)
+
+
+def _apply_extra_header_patterns(
+    patterns: list[str],
+    normalized_raw_headers: dict[str, str],
+    extra_headers: dict[str, str],
+    strip_caller_authorization: bool,
+) -> None:
+    """Apply extra_headers patterns (exact or wildcard) to forward client headers.
+
+    Wildcard matches are filtered against LiteLLM internal credential and
+    control headers (``x-litellm-*``, ``x-mcp-auth-*``, ``x-api-key``) to
+    prevent broad patterns like ``x-*`` from leaking caller credentials to
+    upstream MCP servers.  Exact-name entries bypass this filter so admins
+    can still explicitly forward a specific internal header when needed.
+    """
+    for header_pattern in patterns:
+        if not isinstance(header_pattern, str):
+            continue
+        pattern_lower = header_pattern.lower()
+        if pattern_lower.endswith("*"):
+            prefix = pattern_lower[:-1]
+            for raw_key, raw_val in normalized_raw_headers.items():
+                if raw_key.startswith(prefix):
+                    if raw_key == "authorization" and strip_caller_authorization:
+                        continue
+                    if _is_internal_header(raw_key):
+                        continue
+                    extra_headers[raw_key] = raw_val
+        else:
+            if pattern_lower == "authorization" and strip_caller_authorization:
+                continue
+            header_value = normalized_raw_headers.get(pattern_lower)
+            if header_value is None:
+                continue
+            extra_headers[header_pattern] = header_value
+
+
 def _extract_upstream_auth_failure(
     exc: BaseException,
 ) -> Optional[tuple[int, Optional[str]]]:
@@ -3329,15 +3383,12 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
             )
 
-            for header in mcp_server.extra_headers:
-                if not isinstance(header, str):
-                    continue
-                if header.lower() == "authorization" and strip_caller_authorization:
-                    continue
-                header_value = normalized_raw_headers.get(header.lower())
-                if header_value is None:
-                    continue
-                extra_headers[header] = header_value
+            _apply_extra_header_patterns(
+                mcp_server.extra_headers,
+                normalized_raw_headers,
+                extra_headers,
+                strip_caller_authorization,
+            )
 
         # Interpolate env vars into static_headers. Raises
         # MCPMissingUserEnvVarsError when the calling user has not filled in
