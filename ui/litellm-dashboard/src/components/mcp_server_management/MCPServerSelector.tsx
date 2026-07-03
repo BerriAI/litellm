@@ -112,12 +112,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
     ...(value?.toolsets || []).map((id) => `${TOOLSET_PREFIX}${id}`),
   ];
 
-  const exclusiveSentinels = buildExclusiveSentinels(
-    allowNoMcpServers,
-    allowAllTeamMcps,
-    allowAllProxyMcps,
-    teamId,
-  );
+  const exclusiveSentinels = buildExclusiveSentinels(allowNoMcpServers, allowAllTeamMcps, allowAllProxyMcps, teamId);
 
   const selectedExclusive = exclusiveSentinels.find((s) => selectedValues.includes(s.value)) ?? null;
   const hasExclusiveSelected = selectedExclusive !== null;

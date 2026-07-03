@@ -3,11 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import MCPServerSelector from "./MCPServerSelector";
-import {
-  ALL_PROXY_MCPS_SENTINEL,
-  ALL_TEAM_MCPS_SENTINEL,
-  NO_MCP_SERVERS_SENTINEL,
-} from "../mcp_tools/constants";
+import { ALL_PROXY_MCPS_SENTINEL, ALL_TEAM_MCPS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 
 vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
   useMCPServers: vi.fn(),

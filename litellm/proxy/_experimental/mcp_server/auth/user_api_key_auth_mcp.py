@@ -676,26 +676,43 @@ class MCPRequestHandler:
                         f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
                     )
 
-            #########################################################
-            # Apply org-level ceiling if org_id is set
-            #########################################################
-            if user_api_key_auth and user_api_key_auth.org_id:
-                allowed_mcp_servers_for_org = await MCPRequestHandler._get_allowed_mcp_servers_for_org(
-                    user_api_key_auth
-                )
-                if len(allowed_mcp_servers_for_org) > 0:
-                    if has_lower_level_mcp_restrictions:
-                        # Lower-level restrictions exist, so org can only cap them.
-                        allowed_mcp_servers = [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_org]
-                    else:
-                        # No lower-level restrictions → org list becomes the ceiling
-                        allowed_mcp_servers = allowed_mcp_servers_for_org
-                    verbose_logger.debug(f"Applied org ceiling filter. Final allowed servers: {allowed_mcp_servers}")
+            allowed_mcp_servers = await MCPRequestHandler._apply_org_ceiling(
+                user_api_key_auth,
+                allowed_mcp_servers,
+                has_lower_level_mcp_restrictions,
+            )
 
             return list(set(allowed_mcp_servers))
         except Exception as e:
             verbose_logger.warning(f"Failed to get allowed MCP servers: {str(e)}")
             return []
+
+    @staticmethod
+    async def _apply_org_ceiling(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        allowed_mcp_servers: List[str],
+        has_lower_level_mcp_restrictions: bool,
+    ) -> List[str]:
+        """Cap the running allowed set to the org's MCP servers when the org sets one.
+
+        When lower-level restrictions already exist the org can only intersect
+        them; otherwise the org's list becomes the ceiling. An empty org list
+        means the org places no restriction.
+        """
+        if not (user_api_key_auth and user_api_key_auth.org_id):
+            return allowed_mcp_servers
+
+        allowed_mcp_servers_for_org = await MCPRequestHandler._get_allowed_mcp_servers_for_org(user_api_key_auth)
+        if len(allowed_mcp_servers_for_org) == 0:
+            return allowed_mcp_servers
+
+        capped = (
+            [s for s in allowed_mcp_servers if s in allowed_mcp_servers_for_org]
+            if has_lower_level_mcp_restrictions
+            else allowed_mcp_servers_for_org
+        )
+        verbose_logger.debug(f"Applied org ceiling filter. Final allowed servers: {capped}")
+        return capped
 
     @staticmethod
     def _get_key_object_permission(

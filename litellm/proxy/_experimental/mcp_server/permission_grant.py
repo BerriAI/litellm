@@ -8,7 +8,6 @@ identifiers into concrete deployments.
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Union
 
 from litellm.proxy._types import SpecialMCPServerNames
 
@@ -48,7 +47,7 @@ class ExplicitServers:
     identifiers: frozenset[str]
 
 
-MCPServerGrant = Union[AllServers, AllTeamServers, NoServers, ExplicitServers]
+MCPServerGrant = AllServers | AllTeamServers | NoServers | ExplicitServers
 
 
 def parse_mcp_server_grant(raw: Iterable[str]) -> MCPServerGrant:

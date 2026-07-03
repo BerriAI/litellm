@@ -104,9 +104,7 @@ export function MCPServerPermissions({
     ...mcpServers
       .filter(
         (server) =>
-          server !== NO_MCP_SERVERS_SENTINEL &&
-          server !== ALL_PROXY_MCPS_SENTINEL &&
-          server !== ALL_TEAM_MCPS_SENTINEL,
+          server !== NO_MCP_SERVERS_SENTINEL && server !== ALL_PROXY_MCPS_SENTINEL && server !== ALL_TEAM_MCPS_SENTINEL,
       )
       .map((server) => ({ type: "server", value: server })),
     ...mcpAccessGroups.map((group) => ({ type: "accessGroup", value: group })),
