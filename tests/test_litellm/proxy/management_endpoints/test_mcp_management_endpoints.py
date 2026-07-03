@@ -2264,7 +2264,54 @@ class TestTemporaryMCPSessionEndpoints:
             response_types=["code"],
             token_endpoint_auth_method="client_secret_basic",
             fallback_client_id="server-1",
+            persist_credentials=True,
         )
+
+    @pytest.mark.asyncio
+    async def test_mcp_register_does_not_persist_for_non_admin(self):
+        """A non-admin caller (who may have access to a real server) must not persist the DCR
+        result onto the shared server row. register_client_with_server is invoked with
+        persist_credentials=False, so user-side registration returns the DCR response without
+        writing shared client credentials. Only a full PROXY_ADMIN establishes the shared client."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            mcp_register,
+        )
+
+        request = MagicMock()
+        server = generate_mock_mcp_server_config_record(server_id="server-1")
+        register_response = {"client_id": "generated"}
+        request_body = {
+            "client_name": "LiteLLM",
+            "grant_types": ["authorization_code"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "client_secret_basic",
+        }
+        non_admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
+                return_value=server,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value=request_body),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.register_client_with_server",
+                AsyncMock(return_value=register_response),
+            ) as register_mock,
+        ):
+            result = await mcp_register(
+                request=request,
+                server_id="server-1",
+                user_api_key_dict=non_admin_auth,
+            )
+
+        assert result is register_response
+        assert register_mock.await_args.kwargs["persist_credentials"] is False
 
     @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_falls_back_to_redis(self):

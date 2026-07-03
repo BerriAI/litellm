@@ -2,12 +2,13 @@ import asyncio
 import html as _html
 import json
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -30,8 +31,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import get_server_root_path
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import LiteLLM_MCPServerTable
 
 # TTL cache for upstream OAuth metadata fetched from pass-through MCP servers.
 # Keeps us from hammering the upstream IdP on each discovery request.
@@ -509,6 +513,178 @@ async def exchange_token_with_server(
     return JSONResponse(result, headers=TOKEN_NO_CACHE_HEADERS)
 
 
+class _DcrClientRegistration(BaseModel):
+    """RFC 7591 dynamic client registration response, narrowed to the fields the gateway
+    must persist to authenticate later token-endpoint calls. Extra members are ignored."""
+
+    client_id: str
+    client_secret: Optional[str] = None
+    token_endpoint_auth_method: Optional[str] = None
+
+
+class _PersistedDcrCredentials(BaseModel):
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    token_endpoint_auth_method: Optional[str] = None
+
+
+def _get_persisted_dcr_credentials(credentials: object) -> Optional[_PersistedDcrCredentials]:
+    if not credentials:
+        return None
+    try:
+        return (
+            _PersistedDcrCredentials.model_validate_json(credentials)
+            if isinstance(credentials, str)
+            else _PersistedDcrCredentials.model_validate(credentials)
+        )
+    except ValidationError:
+        return None
+
+
+def _decrypt_persisted_dcr_credential(value: Optional[str], key: str) -> Optional[str]:
+    if value is None:
+        return None
+    return decrypt_value_helper(
+        value=value,
+        key=key,
+        exception_type="debug",
+        return_original_value=True,
+    )
+
+
+def _apply_persisted_dcr_credentials(mcp_server: MCPServer, credentials: _PersistedDcrCredentials) -> bool:
+    client_id = _decrypt_persisted_dcr_credential(credentials.client_id, "client_id")
+    if not client_id:
+        return False
+    mcp_server.client_id = client_id
+    mcp_server.client_secret = _decrypt_persisted_dcr_credential(credentials.client_secret, "client_secret")
+    mcp_server.token_endpoint_auth_method = credentials.token_endpoint_auth_method
+    return True
+
+
+async def _get_persisted_mcp_server_with_dcr_client_id(
+    mcp_server: MCPServer,
+) -> Optional[tuple["LiteLLM_MCPServerTable", _PersistedDcrCredentials]]:
+    from litellm.proxy._experimental.mcp_server.db import get_mcp_server  # noqa: PLC0415
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+
+    try:
+        prisma_client = get_prisma_client_or_throw("Database not connected. Cannot read MCP OAuth client registration.")
+        persisted_mcp_server = await get_mcp_server(
+            prisma_client=prisma_client,
+            server_id=mcp_server.server_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        verbose_logger.debug(
+            "register_client_with_server: failed to read persisted DCR client registration for server_id=%s: %s",
+            mcp_server.server_id,
+            exc,
+        )
+        return None
+
+    if persisted_mcp_server is None:
+        return None
+
+    credentials = _get_persisted_dcr_credentials(persisted_mcp_server.credentials)
+    if credentials is None or not credentials.client_id:
+        return None
+
+    return persisted_mcp_server, credentials
+
+
+async def _reuse_persisted_dcr_client_if_available(mcp_server: MCPServer) -> bool:
+    persisted = await _get_persisted_mcp_server_with_dcr_client_id(mcp_server)
+    if persisted is None:
+        return False
+    persisted_mcp_server, credentials = persisted
+    if not _apply_persisted_dcr_credentials(mcp_server, credentials):
+        return False
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        global_mcp_server_manager,
+    )
+
+    try:
+        await global_mcp_server_manager.update_server(persisted_mcp_server)
+    except Exception as exc:  # noqa: BLE001
+        verbose_logger.warning(
+            "register_client_with_server: failed to refresh persisted DCR client registration for server_id=%s: %s",
+            mcp_server.server_id,
+            exc,
+        )
+    return bool(mcp_server.client_id)
+
+
+DcrRegistrationPersistenceResult = Literal["persisted", "reused", "failed"]
+
+
+async def _persist_dcr_client_registration(
+    mcp_server: MCPServer, registration_response: object
+) -> DcrRegistrationPersistenceResult:
+    """Persist the dynamically registered OAuth client (RFC 7591) onto the MCP server row.
+
+    The interactive authorization_code flow mints a ``client_id`` via Dynamic Client
+    Registration that discovery cannot re-derive; without persisting it the autonomous
+    ``refresh_token`` grant has no client identity, so an expired access token forces a
+    full re-authorization instead of a silent refresh. Mirrors the ``encrypt_credentials``
+    write that ``client_credentials`` and token exchange already use. Failures are logged,
+    never raised: registration still returns to the caller even when persistence fails.
+    """
+    try:
+        registration = _DcrClientRegistration.model_validate(registration_response)
+    except ValidationError as exc:
+        verbose_logger.warning(
+            "register_client_with_server: DCR response has no usable client_id for server_id=%s; "
+            "client registration not persisted (%s)",
+            mcp_server.server_id,
+            exc,
+        )
+        return "failed"
+
+    if await _reuse_persisted_dcr_client_if_available(mcp_server):
+        return "reused"
+
+    credentials: MCPCredentials = {
+        "client_id": registration.client_id,
+        **({"client_secret": registration.client_secret} if registration.client_secret is not None else {}),
+        **(
+            {"token_endpoint_auth_method": "client_secret_basic"}
+            if registration.token_endpoint_auth_method == "client_secret_basic"
+            else {}
+        ),
+    }
+
+    from litellm.proxy._experimental.mcp_server.db import update_mcp_server  # noqa: PLC0415
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import UpdateMCPServerRequest  # noqa: PLC0415
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415
+
+    try:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Cannot persist MCP OAuth client registration."
+        )
+        updated_row = await update_mcp_server(
+            prisma_client=prisma_client,
+            data=UpdateMCPServerRequest(
+                server_id=mcp_server.server_id,
+                credentials=credentials,
+                **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
+            ),
+            touched_by="mcp_oauth_dcr",
+        )
+        await global_mcp_server_manager.update_server(updated_row)
+        return "persisted"
+    except Exception as exc:  # noqa: BLE001
+        verbose_logger.warning(
+            "register_client_with_server: failed to persist DCR client registration for server_id=%s: %s",
+            mcp_server.server_id,
+            exc,
+        )
+        return "failed"
+
+
 async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -517,6 +693,7 @@ async def register_client_with_server(
     response_types: Optional[list],
     token_endpoint_auth_method: Optional[str],
     fallback_client_id: Optional[str] = None,
+    persist_credentials: bool = False,
 ):
     request_base_url = get_request_base_url(request)
     dummy_return = {
@@ -525,7 +702,10 @@ async def register_client_with_server(
         "redirect_uris": [f"{request_base_url}/callback"],
     }
 
-    if mcp_server.client_id and mcp_server.client_secret:
+    if mcp_server.client_id:
+        return dummy_return
+
+    if await _reuse_persisted_dcr_client_if_available(mcp_server):
         return dummy_return
 
     if mcp_server.authorization_url is None:
@@ -560,6 +740,11 @@ async def register_client_with_server(
     response.raise_for_status()
 
     token_response = response.json()
+
+    if persist_credentials:
+        persistence_result = await _persist_dcr_client_registration(mcp_server, token_response)
+        if persistence_result == "reused":
+            return dummy_return
 
     return JSONResponse(token_response)
 
