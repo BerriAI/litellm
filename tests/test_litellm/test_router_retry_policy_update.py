@@ -273,7 +273,13 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     assert isinstance(router.retry_policy, RetryPolicy)
     assert router.retry_policy.RateLimitErrorRetries == 7
 
-    read_back = (await proxy_server.get_config())["router_settings"]["retry_policy"]
+    read_back = (
+        await proxy_server.get_config(
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+            )
+        )
+    )["router_settings"]["retry_policy"]
     assert read_back.BadRequestErrorRetries == 5
     assert read_back.TimeoutErrorRetries == 3
     assert read_back.RateLimitErrorRetries == 7

@@ -13644,3 +13644,270 @@ async def test_permissions_admin_can_set_any(monkeypatch):
             team_table=None,
         )
     assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_permissions_explicit_empty_rejected_for_non_admin_on_generate(monkeypatch):
+    """`_common_key_generation_helper` rejects a non-admin when
+    `permissions` is present in the request body, even as `{}`. Omit-default
+    stays allowed; that carve-out lives in
+    `test_permissions_empty_default_allowed_for_non_admin`."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+    request = GenerateKeyRequest(permissions={})
+    assert "permissions" in request.model_fields_set
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "permissions" in str(exc_info.value.detail)
+
+
+def _make_personal_key_row_for_alice():
+    return MagicMock(
+        token="hashed_alice_personal_key",
+        user_id="alice",
+        team_id=None,
+        created_by="alice",
+        max_budget=None,
+        organization_id=None,
+        project_id=None,
+    )
+
+
+def _make_alice_internal_user():
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-alice",
+        user_id="alice",
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_permissions_non_empty_rejected(monkeypatch):
+    """`_validate_update_key_data` rejects a non-admin when `permissions`
+    is present in the request body (personal-key fast-path caller)."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        permissions={"get_spend_routes": True},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_make_personal_key_row_for_alice(),
+            user_api_key_dict=_make_alice_internal_user(),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "permissions" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_permissions_explicit_empty_rejected(monkeypatch):
+    """`_validate_update_key_data` rejects a non-admin when `permissions`
+    is present as `{}` in the request body. The value matches the model
+    default but `model_fields_set` distinguishes the two."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        permissions={},
+    )
+    assert "permissions" in data.model_fields_set
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_make_personal_key_row_for_alice(),
+            user_api_key_dict=_make_alice_internal_user(),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "permissions" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_permissions_explicit_null_rejected(monkeypatch):
+    """`_validate_update_key_data` rejects a non-admin when `permissions`
+    is present as `null` in the request body."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        permissions=None,
+    )
+    assert "permissions" in data.model_fields_set
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_make_personal_key_row_for_alice(),
+            user_api_key_dict=_make_alice_internal_user(),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "permissions" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_omits_permissions_succeeds(monkeypatch):
+    """`_validate_update_key_data` accepts a non-admin owner when
+    `permissions` is absent from the request body (personal-key fast path
+    on an unrelated field)."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    data = UpdateKeyRequest(key="sk-alice-personal", tpm_limit=42)
+    assert "permissions" not in data.model_fields_set
+
+    await _validate_update_key_data(
+        data=data,
+        existing_key_row=_make_personal_key_row_for_alice(),
+        user_api_key_dict=_make_alice_internal_user(),
+        llm_router=None,
+        premium_user=True,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=MagicMock(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_key_admin_can_set_permissions(monkeypatch):
+    """`_validate_update_key_data` accepts a PROXY_ADMIN caller for every
+    shape of `permissions` in the request body."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin-1",
+    )
+    for permissions_value in ({"get_spend_routes": True}, {}, None):
+        data = UpdateKeyRequest(
+            key="sk-alice-personal",
+            permissions=permissions_value,
+        )
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_make_personal_key_row_for_alice(),
+            user_api_key_dict=admin,
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_non_admin_permissions_rejected(monkeypatch):
+    """`regenerate_key_fn` rejects a non-admin when `permissions` is
+    present in the request body, before any DB work."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    data = RegenerateKeyRequest(
+        key="sk-alice-personal",
+        permissions={"get_spend_routes": True},
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await regenerate_key_fn(
+            key=None,
+            data=data,
+            user_api_key_dict=_make_alice_internal_user(),
+            litellm_changed_by=None,
+        )
+    assert int(exc.value.code) == 403
+    assert "permissions" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_non_admin_permissions_explicit_empty_rejected(monkeypatch):
+    """`regenerate_key_fn` rejects a non-admin when `permissions` is
+    present as `{}` in the request body."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+
+    data = RegenerateKeyRequest(key="sk-alice-personal", permissions={})
+    assert "permissions" in data.model_fields_set
+
+    with pytest.raises(ProxyException) as exc:
+        await regenerate_key_fn(
+            key=None,
+            data=data,
+            user_api_key_dict=_make_alice_internal_user(),
+            litellm_changed_by=None,
+        )
+    assert int(exc.value.code) == 403
+    assert "permissions" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_gate(monkeypatch):
+    """`regenerate_key_fn` runs `_check_permissions_caller_permission`
+    before the `premium_user` check, so a non-premium proxy still returns
+    the permissions rejection (403) rather than the enterprise-license
+    error (500) when a non-admin sends `permissions`."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+
+    data = RegenerateKeyRequest(
+        key="sk-alice-personal",
+        permissions={"get_spend_routes": True},
+    )
+
+    with pytest.raises(ProxyException) as exc:
+        await regenerate_key_fn(
+            key=None,
+            data=data,
+            user_api_key_dict=_make_alice_internal_user(),
+            litellm_changed_by=None,
+        )
+    assert int(exc.value.code) == 403
+    assert "permissions" in str(exc.value.message)
+    assert "Enterprise" not in str(exc.value.message)
