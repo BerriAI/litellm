@@ -1023,6 +1023,11 @@ async def new_team(
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
 
+        if "model_max_budget" in data.model_dump(exclude_unset=True):
+            from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+            validate_model_max_budget(data.model_max_budget)
+
         if data.soft_budget is not None:
             if data.max_budget is not None:
                 # If max_budget is set, soft_budget must be strictly lower than max_budget
@@ -1675,6 +1680,11 @@ async def update_team(
                 status_code=400,
                 detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
             )
+
+        if "model_max_budget" in data.model_dump(exclude_unset=True):
+            from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+            validate_model_max_budget(data.model_max_budget)
 
         existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": data.team_id})
 

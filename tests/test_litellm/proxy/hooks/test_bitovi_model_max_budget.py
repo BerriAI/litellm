@@ -1,7 +1,21 @@
 import pytest
 
+from litellm.proxy._types import UpdateTeamRequest
 from litellm.proxy.hooks.model_max_budget_limiter import resolve_effective_model_max_budget
 from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+
+def test_update_team_request_accepts_model_max_budget() -> None:
+    request = UpdateTeamRequest(
+        team_id="team-1",
+        model_max_budget={
+            "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+        },
+    )
+
+    dumped = request.model_dump(exclude_unset=True)
+    assert dumped["model_max_budget"]["claude-sonnet-4-6"]["max_budget"] == 20.0
+    assert dumped["model_max_budget"]["claude-sonnet-4-6"]["budget_duration"] == "1d"
 
 
 def test_resolve_effective_model_max_budget_prefers_key_overrides() -> None:

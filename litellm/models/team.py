@@ -80,6 +80,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     router_settings: Optional[dict] = None
     access_group_ids: Optional[List[str]] = None
     default_team_member_models: Optional[List[str]] = None
+    model_max_budget: Optional[dict] = None
 
 
 class LiteLLM_TeamTable(TeamBase):

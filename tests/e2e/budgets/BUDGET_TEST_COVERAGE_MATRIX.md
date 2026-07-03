@@ -28,7 +28,7 @@ on the shared lifecycle (every entity it creates is deleted on teardown).
 | End-user / customer | `test_custom_auth_end_user_budget.py` | - | `test_end_user_budget_blocks` | **covered (new)** |
 | Organization | `test_organization_budget_enforcement.py` (flagged weak) | - | `test_organization_budget_blocks` | **covered (new)** |
 | Tag (proxy-level) | - | router only | `test_tag_budget_e2e::test_tag_budget_blocks_tagged_requests` | **covered (new)** |
-| Model-level (`model_max_budget`) | `test_unit_test_max_model_budget_limiter.py` | - | `test_model_max_budget_e2e::test_model_max_budget_isolates_per_model` | **covered (new)** |
+| Model-level (`model_max_budget`) | `test_unit_test_max_model_budget_limiter.py` | - | `test_model_max_budget_e2e` (key / team / member isolation + team update persistence) | **covered (new)** |
 | Provider (router) | `test_budget_limiter_hotpath.py` | `test_router_budget_limiter.py` | - | **covered** (router) |
 | Global proxy (`litellm.max_budget`) | unit | - | - | **gap** (needs a config-level cap; not key-settable) |
 
@@ -62,7 +62,7 @@ on the shared lifecycle (every entity it creates is deleted on teardown).
 | File | Covers |
 |------|--------|
 | `test_budget_enforcement_e2e.py` | key / internal-user / end-user / organization / team-member hard enforcement |
-| `test_model_max_budget_e2e.py` | per-model caps isolate by model |
+| `test_model_max_budget_e2e.py` | per-model caps on keys, team defaults, and member overrides |
 | `test_soft_budget_e2e.py` | soft budget alerts but does not block |
 | `test_tag_budget_e2e.py` | proxy-level tag budget blocks tagged requests, spares others |
 | `test_budget_crud_e2e.py` | `/budget/*` CRUD roundtrip + delete + `budget_reset_at` scheduling |

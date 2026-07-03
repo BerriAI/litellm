@@ -1791,6 +1791,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: Optional[List[str]] = None
     budget_limits: Optional[List[BudgetLimitEntry]] = None  # multiple concurrent budget windows
     default_team_member_models: Optional[List[str]] = None  # default allowed_models seeded onto new team members
+    model_max_budget: Optional[GenericBudgetConfigType] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
