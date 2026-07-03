@@ -240,8 +240,7 @@ async def _check_key_model_budget_with_fallback(
             raise e
         request_data["model"] = fallback_model
         _safe_set_request_parsed_body(request=request, parsed_body=request_data)
-        if hasattr(request, "_json"):
-            request._json = request_data  # type: ignore[attr-defined]
+        request._json = request_data  # type: ignore[attr-defined]
         path_params = request.scope.get("path_params")
         if isinstance(path_params, dict) and "model" in path_params:
             path_params["model"] = fallback_model
