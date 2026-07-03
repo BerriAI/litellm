@@ -2629,7 +2629,7 @@ jobs:
             cd ui/litellm-dashboard
 
             CI=true npm run test -- --run \
-              --pool forks --poolOptions.forks.maxForks=8
+              --pool forks --poolOptions.forks.maxForks=6
 
   e2e_ui_testing:
     docker:
