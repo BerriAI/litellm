@@ -152,9 +152,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         Falls back to "none" for models without the field, preserving the historical
         gpt-5.x assumption that an omitted reasoning_effort behaves like "none".
         """
-        from litellm.utils import _get_default_reasoning_effort
+        from litellm.utils import _lookup_default_reasoning_effort
 
-        return _get_default_reasoning_effort(model=model, custom_llm_provider=None)
+        return _lookup_default_reasoning_effort(model)
 
     def get_supported_openai_params(self, model: str) -> list:
         if self.is_model_gpt_5_search_model(model):

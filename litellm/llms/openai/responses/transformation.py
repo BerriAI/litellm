@@ -90,6 +90,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         is accepted unless reasoning_effort='none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
+        from litellm.utils import _lookup_default_reasoning_effort
+
         params = dict(response_api_optional_params)
 
         if self._is_gpt_5_model(model=model):
@@ -98,13 +100,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 reasoning = params.get("reasoning") or {}
                 effort = reasoning.get("effort") if isinstance(reasoning, dict) else None
                 supports_none = self._supports_reasoning_effort_none(model=model)
-                from litellm.utils import _get_default_reasoning_effort
-
-                resolved_effort = (
-                    effort
-                    if effort is not None
-                    else _get_default_reasoning_effort(model=model, custom_llm_provider=None)
-                )
+                resolved_effort = effort if effort is not None else _lookup_default_reasoning_effort(model)
                 if supports_none and resolved_effort == "none":
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
@@ -114,8 +110,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                         message=(
                             "gpt-5 models don't support temperature={}. "
                             "Only temperature=1 is supported. "
-                            "For models like gpt-5.1/5.4, temperature is supported "
-                            "when reasoning.effort='none' (or not specified). "
+                            "For gpt-5.1/5.2/5.4, temperature is supported when reasoning.effort='none', "
+                            "which is also their default when effort is unspecified. "
+                            "gpt-5.5 defaults to reasoning.effort='medium'; set reasoning.effort='none' "
+                            "explicitly to use a non-default temperature. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ).format(temperature),
                         status_code=400,
