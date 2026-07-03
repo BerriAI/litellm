@@ -410,11 +410,11 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
             </div>
             <div className="flex items-center space-x-4">
               <Text>Model Hub URL:</Text>
-              <div className="flex items-center bg-gray-200 px-2 py-1 rounded">
+              <div className="flex items-center bg-gray-200 px-2 py-1 rounded-sm">
                 <Text className="mr-2">{`${getProxyBaseUrl()}/ui/model_hub_table`}</Text>
                 <button
                   onClick={() => copyToClipboard(`${getProxyBaseUrl()}/ui/model_hub_table`)}
-                  className="p-1 hover:bg-gray-300 rounded transition-colors"
+                  className="p-1 hover:bg-gray-300 rounded-sm transition-colors"
                   title="Copy URL"
                 >
                   <Copy size={16} className="text-gray-600" />
@@ -563,7 +563,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         <div className="pt-5 pb-5">
           <div className="flex justify-between mb-4">
             <Text className="text-base mr-2">Shareable Link:</Text>
-            <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded">
+            <Text className="max-w-sm ml-2 bg-gray-200 pr-2 pl-2 pt-1 pb-1 text-center rounded-sm">
               {`${getProxyBaseUrl()}/ui/model_hub_table`}
             </Text>
           </div>
@@ -817,7 +817,7 @@ print(response.choices[0].message.content)`}
                 <Text className="text-lg font-semibold mb-4">Skills</Text>
                 <div className="space-y-4">
                   {selectedAgent.skills.map((skill) => (
-                    <div key={skill.id} className="border border-gray-200 rounded p-4">
+                    <div key={skill.id} className="border border-gray-200 rounded-sm p-4">
                       <div className="flex justify-between items-start mb-2">
                         <div>
                           <Text className="font-medium text-base">{skill.name}</Text>
@@ -938,7 +938,9 @@ print(response.choices[0].message.content)`}
                 {selectedMcpServer.command && (
                   <div>
                     <Text className="font-medium">Command:</Text>
-                    <Text className="text-sm bg-gray-100 p-2 rounded mt-1 font-mono">{selectedMcpServer.command}</Text>
+                    <Text className="text-sm bg-gray-100 p-2 rounded-sm mt-1 font-mono">
+                      {selectedMcpServer.command}
+                    </Text>
                   </div>
                 )}
               </div>
@@ -1014,7 +1016,7 @@ print(response.choices[0].message.content)`}
                 )}
               </div>
               {selectedMcpServer.health_check_error && (
-                <div className="mt-2 p-2 bg-red-50 rounded">
+                <div className="mt-2 p-2 bg-red-50 rounded-sm">
                   <Text className="font-medium text-red-700">Health Check Error:</Text>
                   <Text className="text-sm text-red-600 mt-1">{selectedMcpServer.health_check_error}</Text>
                 </div>

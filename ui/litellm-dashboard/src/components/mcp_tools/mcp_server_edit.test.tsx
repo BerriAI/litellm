@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent, act } from "@testing-library/react"
 import MCPServerEdit from "./mcp_server_edit";
 import * as networking from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import { selectAntOption } from "./testUtils";
 
 vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
@@ -504,6 +505,68 @@ describe("MCPServerEdit (interactive OAuth)", () => {
 
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.token_validation).toEqual({ organization: "my-org" });
+  });
+
+  it("includes credentials.token_endpoint_auth_method in update payload when client_secret_basic is selected", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
+    });
+
+    await selectAntOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials?.token_endpoint_auth_method).toBe("client_secret_basic");
+  });
+
+  it("omits token_endpoint_auth_method from the update payload when the selector is left blank", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(interactiveOAuthServer);
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.credentials?.token_endpoint_auth_method).toBeUndefined();
   });
 
   it("does not include token_validation in payload when field is empty and server had none", async () => {

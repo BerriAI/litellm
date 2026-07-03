@@ -784,7 +784,7 @@ export function KeyEditView({
         <Input />
       </Form.Item>
 
-      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
+      <div className="sticky z-10 bg-white p-4 border-t border-gray-200 -bottom-6 -inset-x-6">
         <div className="flex justify-end items-center gap-2">
           <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
             Cancel

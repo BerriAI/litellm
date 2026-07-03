@@ -1062,7 +1062,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                     onChange={(e) =>
                       setEndSessionAfterNFails(e.target.value ? parseInt(e.target.value, 10) : undefined)
                     }
-                    className="border border-gray-300 rounded px-3 py-1.5 text-sm w-32"
+                    className="border border-gray-300 rounded-sm px-3 py-1.5 text-sm w-32"
                   />
                 </div>
 
@@ -1105,7 +1105,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
                     placeholder="e.g. I'm not able to continue this conversation. Please contact us at 1-800-774-2678."
                     value={realtimeViolationMessage}
                     onChange={(e) => setRealtimeViolationMessage(e.target.value)}
-                    className="border border-gray-300 rounded px-3 py-2 text-sm w-full resize-none"
+                    className="border border-gray-300 rounded-sm px-3 py-2 text-sm w-full resize-none"
                   />
                 </div>
               </div>
@@ -1185,9 +1185,9 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
               return (
                 <div key={index} className="relative flex gap-4" style={{ paddingBottom: isLast ? 0 : 8 }}>
                   {/* Vertical line + step indicator */}
-                  <div className="flex flex-col items-center flex-shrink-0" style={{ width: 24 }}>
+                  <div className="flex flex-col items-center shrink-0" style={{ width: 24 }}>
                     <div
-                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium flex-shrink-0"
+                      className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium shrink-0"
                       style={{
                         background: isDone ? "#4f46e5" : isCurrent ? "#fff" : "#f8fafc",
                         color: isDone ? "#fff" : isCurrent ? "#4f46e5" : "#94a3b8",

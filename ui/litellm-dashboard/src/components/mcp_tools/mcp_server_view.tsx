@@ -89,7 +89,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const getTransportBadge = (transport: string) => {
     const label = transport.toUpperCase();
     return (
-      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded border bg-gray-50 text-gray-700 border-gray-200">
+      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded-sm border bg-gray-50 text-gray-700 border-gray-200">
         {label}
       </span>
     );
@@ -97,7 +97,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
 
   const getAuthBadge = (authType: string) => {
     return (
-      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded border bg-gray-50 text-gray-700 border-gray-200">
+      <span className="inline-flex items-center text-sm font-medium px-2.5 py-0.5 rounded-sm border bg-gray-50 text-gray-700 border-gray-200">
         {authType}
       </span>
     );
@@ -123,7 +123,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
             }`}
           />
           {mcpServer.alias && mcpServer.server_name && mcpServer.alias !== mcpServer.server_name && (
-            <span className="ml-2 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200 font-mono">
+            <span className="ml-2 inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-gray-100 text-gray-600 border border-gray-200 font-mono">
               {mcpServer.alias}
             </span>
           )}
@@ -187,7 +187,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   {hasToken && isProxyAdmin && (
                     <button
                       onClick={() => setShowFullUrl(!showFullUrl)}
-                      className="p-1 hover:bg-gray-100 rounded flex-shrink-0"
+                      className="p-1 hover:bg-gray-100 rounded-sm shrink-0"
                     >
                       <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
                     </button>
@@ -266,7 +266,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                       {hasToken && (
                         <button
                           onClick={() => setShowFullUrl(!showFullUrl)}
-                          className="p-1 hover:bg-gray-100 rounded flex-shrink-0"
+                          className="p-1 hover:bg-gray-100 rounded-sm shrink-0"
                         >
                           <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
                         </button>
@@ -370,7 +370,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                           {mcpServer.mcp_access_groups.map((group: any, index: number) => (
                             <span
                               key={index}
-                              className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200"
+                              className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-gray-100 text-gray-700 border border-gray-200"
                             >
                               {typeof group === "string" ? group : group?.name ?? ""}
                             </span>
@@ -389,14 +389,14 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                           {mcpServer.allowed_tools.map((tool: string, index: number) => (
                             <span
                               key={index}
-                              className="inline-flex items-center text-xs font-mono font-medium px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200"
+                              className="inline-flex items-center text-xs font-mono font-medium px-2 py-0.5 rounded-sm bg-blue-50 text-blue-700 border border-blue-200"
                             >
                               {tool}
                             </span>
                           ))}
                         </div>
                       ) : (
-                        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded bg-green-50 text-green-700 border border-green-200">
+                        <span className="inline-flex items-center text-xs font-medium px-2 py-0.5 rounded-sm bg-green-50 text-green-700 border border-green-200">
                           All tools enabled
                         </span>
                       )}
