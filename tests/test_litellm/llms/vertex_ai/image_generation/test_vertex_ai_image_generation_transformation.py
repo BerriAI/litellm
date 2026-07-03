@@ -680,3 +680,45 @@ class TestVertexAIImageGenerationIntegration:
         assert "us-central1" in url
         assert "imagegeneration@006" in url
         assert "predict" in url
+
+class TestVertexAIImageModelsSupportsReasoning:
+    """Vertex AI Gemini image models must not inherit reasoning support.
+
+    Image generation endpoints reject reasoning_effort with a 400. The
+    vertex_ai/ entries were missing an explicit supports_reasoning: false,
+    causing them to silently inherit True from the provider-level fallback.
+    """
+
+    MODELS = [
+        "vertex_ai/gemini-2.5-flash-image",
+        "vertex_ai/gemini-3-pro-image-preview",
+        "vertex_ai/gemini-3-pro-image",
+        "vertex_ai/gemini-3.1-flash-image-preview",
+        "vertex_ai/gemini-3.1-flash-image",
+        "gemini/gemini-3-pro-image-preview",
+        "gemini/gemini-3-pro-image",
+        "gemini/gemini-3.1-flash-image-preview",
+        "gemini/gemini-3.1-flash-image",
+    ]
+
+    def test_supports_reasoning_is_false_in_cost_map(self):
+        """supports_reasoning must be explicitly False in the cost map for all image models."""
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+        cost_map = GetModelCostMap.load_local_model_cost_map()
+        for model in self.MODELS:
+            assert model in cost_map, f"{model} not found in cost map"
+            assert cost_map[model].get("supports_reasoning") is False, (
+                f"{model}: expected supports_reasoning=False, "
+                f"got {cost_map[model].get('supports_reasoning')!r}"
+            )
+
+    def test_supports_reasoning_returns_false(self):
+        """litellm.supports_reasoning() must return False for all affected image models."""
+        import litellm
+
+        for model in self.MODELS:
+            result = litellm.supports_reasoning(model=model)
+            assert result is False, (
+                f"{model}: litellm.supports_reasoning() returned {result!r}, expected False"
+            )
