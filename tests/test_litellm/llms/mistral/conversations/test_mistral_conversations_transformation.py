@@ -135,6 +135,40 @@ def test_transform_request_drops_other_builtin_connectors():
     assert {"type": "code_interpreter"} not in body["tools"]
 
 
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {"tools": [{"type": "web_search"}]},
+        {"tools": [{"type": "web_search_premium"}]},
+        {"web_search_options": {}},
+        {"web_search_options": {"premium": True}},
+        {"web_search_options": {"premium": "yes"}},
+        {"web_search_options": {}, "tools": [{"type": "code_interpreter"}]},
+        {"web_search_options": {}, "tools": [{"type": "WEB_SEARCH"}]},
+        {"tools": [{"type": "web_search"}, {"type": "function", "function": {"name": "f"}}]},
+        {"web_search_options": {"premium": True}, "tools": [{"type": "web_search"}]},
+    ],
+)
+def test_wire_connectors_never_exceed_allowlist_checked_names(request_params):
+    """Invariant behind the tool allowlist: every non-function connector the
+    Conversations transform puts on the wire must have been named by
+    extract_request_tool_names for the same request, so the key/team allowlist
+    always sees what will actually be sent. Drift between the extractor and the
+    transform reopens a bypass; this pins them together."""
+    from litellm.proxy.guardrails.tool_name_extraction import extract_request_tool_names
+
+    checked_names = set(extract_request_tool_names("/v1/chat/completions", request_params))
+    wire_body = MistralConversationsConfig().transform_request(
+        model="mistral-medium-latest",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=dict(request_params),
+        litellm_params={},
+        headers={},
+    )
+    wire_connectors = {str(tool.get("type")) for tool in wire_body["tools"] if tool.get("type") != "function"}
+    assert wire_connectors <= checked_names
+
+
 def test_transform_request_maps_random_seed_from_extra_body():
     cfg = MistralConversationsConfig()
     body = cfg.transform_request(
@@ -297,6 +331,37 @@ async def test_completion_routes_web_search_to_conversations(sync_mode, web_sear
 
     assert response.choices[0].message.content == "Spain won Euro 2024."
     assert response.choices[0].message.annotations[0]["url_citation"]["url"] == ("https://uefa.com/euro2024")
+
+
+@pytest.mark.asyncio
+async def test_extra_body_cannot_override_sanitized_tools(respx_mock):
+    """Regression: extra_body must not clobber the allowlist-checked tools list
+    (or store/inputs/model) after transform_request sanitized them."""
+    litellm.disable_aiohttp_transport = True
+
+    conversations_route = respx_mock.post("https://api.mistral.ai/v1/conversations").respond(
+        json=CONVERSATIONS_RESPONSE
+    )
+
+    litellm.completion(
+        model="mistral/mistral-medium-latest",
+        messages=[{"role": "user", "content": "Who won the last Euro?"}],
+        web_search_options={},
+        extra_body={
+            "tools": [{"type": "web_search_premium"}],
+            "store": True,
+            "model": "mistral-large-latest",
+            "completion_args": {"temperature": 0.9},
+        },
+    )
+
+    import json
+
+    sent = json.loads(conversations_route.calls[0].request.content)
+    assert sent["tools"] == [{"type": "web_search"}]
+    assert sent["store"] is False
+    assert sent["model"] == "mistral-medium-latest"
+    assert sent["completion_args"] == {"temperature": 0.9}
 
 
 @pytest.mark.asyncio

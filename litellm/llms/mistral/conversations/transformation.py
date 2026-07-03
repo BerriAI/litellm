@@ -74,6 +74,13 @@ def _to_annotation(chunk: MistralConversationContentChunk) -> ChatCompletionAnno
 
 
 class MistralConversationsConfig(MistralConfig):
+    @property
+    def reserved_request_body_keys(self) -> frozenset[str]:
+        """Sanitized Conversations fields extra_body may not clobber: ``tools`` is
+        allowlist-checked, ``store`` is pinned to False, and ``inputs`` / ``model``
+        are built from the authenticated request."""
+        return frozenset({"tools", "store", "inputs", "model"})
+
     def should_fake_stream(
         self,
         model: Optional[str],
