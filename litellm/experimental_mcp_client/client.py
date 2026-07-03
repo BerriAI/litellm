@@ -555,7 +555,7 @@ class MCPClient:
         Call an MCP Tool.
         """
         verbose_logger.info(
-            f"MCP client calling tool '{call_tool_request_params.name}' with arguments: {call_tool_request_params.arguments}"
+            f"MCP client calling tool '{call_tool_request_params.name}'"
         )
 
         async def on_progress(
@@ -664,7 +664,7 @@ class MCPClient:
     ) -> GetPromptResult:
         """Fetch a prompt definition from the MCP server."""
         verbose_logger.info(
-            f"MCP client fetching prompt '{get_prompt_request_params.name}' with arguments: {get_prompt_request_params.arguments}"
+            f"MCP client fetching prompt '{get_prompt_request_params.name}'"
         )
 
         async def _get_prompt_operation(session: ClientSession):
