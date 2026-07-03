@@ -2980,6 +2980,9 @@ export const teamMemberUpdateCall = async (
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
     }
+    if ("model_max_budget_in_team" in formValues) {
+      requestBody.model_max_budget_in_team = orNull(formValues.model_max_budget_in_team);
+    }
 
     console.log("Final request body:", requestBody);
 

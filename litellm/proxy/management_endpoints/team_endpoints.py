@@ -2164,6 +2164,7 @@ async def _process_team_members(
                 default_team_budget_id=default_team_budget_id,
                 allowed_models=member_allowed_models,
                 budget_duration=data.budget_duration,
+                model_max_budget_in_team=data.model_max_budget_in_team,
             )
         except Exception as e:
             raise HTTPException(
@@ -2190,6 +2191,7 @@ async def _process_team_members(
                     default_team_budget_id=default_team_budget_id,
                     allowed_models=member_allowed_models,
                     budget_duration=data.budget_duration,
+                    model_max_budget_in_team=data.model_max_budget_in_team,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -2452,6 +2454,11 @@ async def team_member_add(
 
     _validate_budget_duration(data.budget_duration)
 
+    if data.model_max_budget_in_team is not None:
+        from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+        validate_model_max_budget(data.model_max_budget_in_team)
+
     prisma_client = cast(PrismaClient, prisma_client)
 
     existing_team_row = await get_team_object(
@@ -2707,6 +2714,7 @@ _MEMBER_BUDGET_PATCH_FIELDS = {
     "rpm_limit": "rpm_limit",
     "budget_duration": "budget_duration",
     "allowed_models": "allowed_models",
+    "model_max_budget_in_team": "model_max_budget",
 }
 
 
@@ -2785,6 +2793,11 @@ async def team_member_update(
         )
 
     _validate_budget_duration(data.budget_duration)
+
+    if "model_max_budget_in_team" in data.model_dump(exclude_unset=True):
+        from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+        validate_model_max_budget(data.model_max_budget_in_team)
 
     _existing_team_row = await TeamRepository(prisma_client).table.find_unique(where={"team_id": data.team_id})
 
@@ -2896,6 +2909,7 @@ async def team_member_update(
         rpm_limit=data.rpm_limit,
         budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
+        model_max_budget_in_team=data.model_max_budget_in_team,
     )
 
 

@@ -1586,6 +1586,10 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_spend"] = user_api_key_dict.spend
     data[_metadata_variable_name]["user_api_key_max_budget"] = user_api_key_dict.max_budget
     data[_metadata_variable_name]["user_api_key_model_max_budget"] = user_api_key_dict.model_max_budget
+    data[_metadata_variable_name]["user_api_key_team_model_max_budget"] = user_api_key_dict.auth_team_model_max_budget
+    data[_metadata_variable_name]["user_api_key_team_member_model_max_budget"] = (
+        user_api_key_dict.auth_team_member_model_max_budget
+    )
     data[_metadata_variable_name]["user_api_key_end_user_model_max_budget"] = (
         user_api_key_dict.end_user_model_max_budget
     )

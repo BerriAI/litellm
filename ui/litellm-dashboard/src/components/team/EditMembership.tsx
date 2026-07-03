@@ -3,6 +3,7 @@ import { Button as AntButton, Form, Modal, Select } from "antd";
 import React, { useEffect, useState } from "react";
 import NumericalInput from "../shared/numerical_input";
 import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import { ModelMaxBudgetEditor, ModelMaxBudgetValue } from "../key_team_helpers/ModelMaxBudgetEditor";
 
 interface BaseMember {
   user_email?: string;
@@ -22,8 +23,9 @@ interface ModalConfig {
   additionalFields?: Array<{
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
+    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration" | "model-max-budget";
     options?: Array<{ label: string; value: string }>;
+    modelOptions?: string[];
     rules?: any[];
     step?: number;
     min?: number;
@@ -69,6 +71,7 @@ const MemberModal = <T extends BaseMember>({
           budget_duration: (initialData as any).budget_duration || null,
           // Keep array values for multi-select fields
           allowed_models: (initialData as any).allowed_models || [],
+          model_max_budget_in_team: (initialData as any).model_max_budget_in_team || null,
         };
         console.log("Setting form values:", formValues);
         form.setFieldsValue(formValues);
@@ -119,8 +122,9 @@ const MemberModal = <T extends BaseMember>({
   const renderField = (field: {
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
+    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration" | "model-max-budget";
     options?: Array<{ label: string; value: string }>;
+    modelOptions?: string[];
     rules?: any[];
     step?: number;
     min?: number;
@@ -159,6 +163,14 @@ const MemberModal = <T extends BaseMember>({
         );
       case "budget-duration":
         return <BudgetDurationDropdown />;
+      case "model-max-budget":
+        return (
+          <ModelMaxBudgetEditor
+            modelOptions={field.modelOptions || []}
+            value={(form.getFieldValue(field.name) as ModelMaxBudgetValue | null) ?? null}
+            onChange={(nextValue) => form.setFieldValue(field.name, nextValue)}
+          />
+        );
       default:
         return null;
     }

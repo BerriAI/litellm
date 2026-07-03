@@ -53,6 +53,7 @@ import SearchToolSelector from "../search_tools/SearchToolSelector";
 import EditLoggingSettings from "./EditLoggingSettings";
 import RouterSettingsAccordion, { RouterSettingsAccordionRef } from "../common_components/RouterSettingsAccordion";
 import MemberModal from "./EditMembership";
+import { ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import MemberPermissions from "./member_permissions";
 import MyUserTab from "./MyUserTab";
 import {
@@ -97,6 +98,7 @@ export interface TeamData {
     tpm_limit: number | null;
     rpm_limit: number | null;
     max_budget: number | null;
+    model_max_budget?: Record<string, { budget_limit: number; time_period: string }> | null;
     soft_budget?: number | null;
     budget_duration: string | null;
     models: string[];
@@ -390,6 +392,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         rpm_limit: values.rpm_limit,
         budget_duration: values.budget_duration,
         allowed_models: values.allowed_models,
+        model_max_budget_in_team: values.model_max_budget_in_team,
       };
       MessageManager.destroy(); // Remove all existing toasts
 
@@ -522,6 +525,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
         max_budget: values.max_budget,
+        model_max_budget: values.model_max_budget,
         soft_budget: sanitizeNumeric(values.soft_budget),
         budget_duration: values.budget_duration,
         metadata: {
@@ -946,6 +950,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                         rpm: info.metadata?.model_rpm_limit?.[model],
                       })),
                       max_budget: info.max_budget,
+                      model_max_budget: info.model_max_budget,
                       soft_budget: info.soft_budget,
                       budget_duration: info.budget_duration,
                       team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -1028,6 +1033,26 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <Form.Item label="Max Budget (USD)" name="max_budget">
                       <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
+                    </Form.Item>
+
+                    <Form.Item
+                      label={
+                        <span>
+                          Per-Model Budgets{" "}
+                          <Tooltip title="Default per-model spend limits for all team members. Members and keys can override these limits with higher values.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="model_max_budget"
+                    >
+                      <Form.Item noStyle shouldUpdate={(prev, cur) => prev.models !== cur.models}>
+                        {({ getFieldValue }) => (
+                          <ModelMaxBudgetEditor
+                            modelOptions={getFieldValue("models") || info.models || []}
+                          />
+                        )}
+                      </Form.Item>
                     </Form.Item>
 
                     <Form.Item label="Soft Budget (USD)" name="soft_budget">
@@ -1745,6 +1770,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               type: "multi-select" as const,
               options: (info.models || []).map((m: string) => ({ label: m, value: m })),
               placeholder: "Leave empty to inherit all team models",
+            },
+            {
+              name: "model_max_budget_in_team",
+              label: (
+                <span>
+                  Per-Model Budgets{" "}
+                  <Tooltip title="Override team per-model budgets for this member. Use this to give a member higher limits on specific models.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "model-max-budget" as const,
+              modelOptions: info.models || [],
             },
           ],
         }}

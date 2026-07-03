@@ -61,7 +61,77 @@ def test_get_request_model_budget_config(budget_limiter):
     assert config is None
 
 
-# Test is_key_within_model_budget
+@pytest.mark.asyncio
+async def test_is_key_within_model_budget_with_team_override(budget_limiter):
+    user_api_key = UserAPIKeyAuth(
+        token="test-key",
+        key_alias="test-alias",
+        model_max_budget={},
+    )
+    team_budget = {
+        "gpt-4": {"budget_limit": 100.0, "time_period": "1d"},
+    }
+
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", return_value=50.0
+    ):
+        assert (
+            await budget_limiter.is_key_within_model_budget(
+                user_api_key,
+                "gpt-4",
+                model_max_budget=team_budget,
+            )
+            is True
+        )
+
+    with patch.object(
+        budget_limiter, "_get_virtual_key_spend_for_model", return_value=150.0
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_key_within_model_budget(
+                user_api_key,
+                "gpt-4",
+                model_max_budget=team_budget,
+            )
+
+
+@pytest.mark.asyncio
+async def test_is_key_within_model_budget_uses_team_member_spend_for_team_layer(budget_limiter):
+    user_api_key = UserAPIKeyAuth(
+        token="test-key",
+        key_alias="test-alias",
+        team_id="team-1",
+        user_id="user-1",
+        model_max_budget={},
+    )
+    team_budget = {
+        "gpt-4": {"budget_limit": 100.0, "time_period": "1d"},
+    }
+
+    with patch.object(
+        budget_limiter, "_get_team_member_model_spend_for_model", return_value=50.0
+    ) as team_member_spend_mock:
+        assert (
+            await budget_limiter.is_key_within_model_budget(
+                user_api_key,
+                "gpt-4",
+                team_model_max_budget=team_budget,
+            )
+            is True
+        )
+        team_member_spend_mock.assert_awaited_once()
+
+    with patch.object(
+        budget_limiter, "_get_team_member_model_spend_for_model", return_value=150.0
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await budget_limiter.is_key_within_model_budget(
+                user_api_key,
+                "gpt-4",
+                team_model_max_budget=team_budget,
+            )
+
+
 @pytest.mark.asyncio
 async def test_is_key_within_model_budget(budget_limiter):
     # Mock user API key dict

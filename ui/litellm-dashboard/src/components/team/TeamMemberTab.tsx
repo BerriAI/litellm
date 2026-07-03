@@ -212,6 +212,7 @@ export default function TeamMemberTab({
           rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
           budget_duration: membership?.litellm_budget_table?.budget_duration || null,
           allowed_models: membership?.litellm_budget_table?.allowed_models || [],
+          model_max_budget_in_team: membership?.litellm_budget_table?.model_max_budget || null,
         };
         setSelectedEditMember(enhancedMember);
         setIsEditMemberModalVisible(true);

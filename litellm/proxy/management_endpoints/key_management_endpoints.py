@@ -62,6 +62,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import (
     VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
+    resolve_effective_model_max_budget,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
@@ -790,6 +791,14 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+            elif key == "model_max_budget" and (value is None or value == {}):
+                setattr(data, key, litellm.default_key_generate_params.get(key, {}))
+
+    if team_table is not None and team_table.model_max_budget:
+        data.model_max_budget = resolve_effective_model_max_budget(
+            key_model_max_budget=data.model_max_budget,
+            team_model_max_budget=team_table.model_max_budget,
+        )
 
     # check if user set upperbound key/generate params on config.yaml
     _enforce_upperbound_key_params(data, fill_defaults=True)
@@ -6318,7 +6327,7 @@ async def _enforce_unique_key_alias(
 
 def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
     """
-    Validate the model_max_budget is GenericBudgetConfigType + enforce user has an enterprise license
+    Validate the model_max_budget is GenericBudgetConfigType
 
     Raises:
         Exception: If model_max_budget is not a valid GenericBudgetConfigType
@@ -6329,12 +6338,6 @@ def validate_model_max_budget(model_max_budget: Optional[Dict]) -> None:
         if len(model_max_budget) == 0:
             return
         if model_max_budget is not None:
-            from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
-
-            if premium_user is not True:
-                raise ValueError(
-                    f"You must have an enterprise license to set model_max_budget. {CommonProxyErrors.not_premium_user.value}"
-                )
             for _model, _budget_info in model_max_budget.items():
                 assert isinstance(_model, str)
 
