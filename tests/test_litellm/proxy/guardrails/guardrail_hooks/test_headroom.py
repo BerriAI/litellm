@@ -24,6 +24,8 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+import litellm
+
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
     extract_hashes_from_messages,
@@ -1187,3 +1189,61 @@ async def test_async_should_run_agentic_loop_detects_responses_api_output_format
     assert should_run is True
     assert len(ctx["tool_calls"]) == 1
     assert ctx["tool_calls"][0]["arguments"]["hash"] == "b573993006976af767214fac"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_litellm_timeout_raises_when_fail_closed():
+    guardrail = _make_guardrail()
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=litellm.Timeout(
+            message="Connection timed out after 10 seconds.",
+            model="default-model-name",
+            llm_provider="litellm-httpx-handler",
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 502
+    assert "unreachable" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+
+    inputs = GenericGuardrailAPIInputs(
+        texts=["hello"],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=litellm.Timeout(
+            message="Connection timed out after 10 seconds.",
+            model="default-model-name",
+            llm_provider="litellm-httpx-handler",
+        ),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES

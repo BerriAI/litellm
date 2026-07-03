@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
+
+import litellm
 from httpx import Response as HttpxResponse
 from typing_extensions import TypeGuard
 
@@ -297,7 +299,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 "Headroom compression service returned an error",
                 {"status_code": e.response.status_code, "body": e.response.text},
             )
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
             return self._handle_compress_failure(
                 messages,
                 "Headroom compression service unreachable",
@@ -368,7 +370,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 params=params,
                 headers=self._request_headers(),
             )
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError) as e:
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
             verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)
             return f"[Headroom: retrieval failed for hash={hash_value}]"
 
