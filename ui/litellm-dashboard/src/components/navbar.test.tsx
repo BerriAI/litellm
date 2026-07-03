@@ -130,7 +130,7 @@ vi.mock("@/utils/cookieUtils", () => ({
 
 // Mock window.location.href for logout testing
 Object.defineProperty(window, "location", {
-  value: { href: "" },
+  value: { href: "", pathname: "/" },
   writable: true,
 });
 
@@ -245,6 +245,31 @@ describe("Navbar", () => {
 
     // Reset mock
     mockUseThemeImpl = () => ({ logoUrl: null });
+  });
+
+  it("should use the dark logo fallback in dark mode", () => {
+    renderWithProviders(<Navbar {...defaultProps} isDarkMode />);
+
+    const logoImg = screen.getByAltText("LiteLLM Brand");
+    expect(logoImg).toHaveAttribute("src", "/assets/logos/litellm_logo_dark.png");
+  });
+
+  it("should use the proxy-served dark logo fallback when mounted under /ui", () => {
+    window.location.pathname = "/ui/model_hub";
+
+    renderWithProviders(<Navbar {...defaultProps} isDarkMode />);
+
+    const logoImg = screen.getByAltText("LiteLLM Brand");
+    expect(logoImg).toHaveAttribute("src", "http://localhost:4000/ui/assets/logos/litellm_logo_dark.png");
+
+    window.location.pathname = "/";
+  });
+
+  it("should use the backend default logo fallback in light mode", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    const logoImg = screen.getByAltText("LiteLLM Brand");
+    expect(logoImg).toHaveAttribute("src", "http://localhost:4000/get_image");
   });
 
   it("should hide user dropdown on public pages", () => {

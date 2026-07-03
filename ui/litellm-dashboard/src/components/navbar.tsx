@@ -50,8 +50,12 @@ const Navbar: React.FC<NavbarProps> = ({
   const version = healthData?.litellm_version;
   const disableBouncingIcon = useDisableBouncingIcon();
 
-  // Simple logo URL: use custom logo if available, otherwise default
-  const imageUrl = logoUrl || `${baseUrl}/get_image`;
+  const isServedFromProxyUi = typeof window !== "undefined" && window.location?.pathname?.startsWith("/ui");
+  const defaultDarkLogoUrl = isServedFromProxyUi
+    ? `${baseUrl}/ui/assets/logos/litellm_logo_dark.png`
+    : "/assets/logos/litellm_logo_dark.png";
+  const defaultLogoUrl = isDarkMode ? defaultDarkLogoUrl : `${baseUrl}/get_image`;
+  const imageUrl = logoUrl || defaultLogoUrl;
 
   useEffect(() => {
     const initializeProxySettings = async () => {
