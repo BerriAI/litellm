@@ -169,7 +169,7 @@ class OpenAILikeChatConfig(OpenAIGPTConfig):
 
 
 class CustomOpenAIChatConfig(OpenAILikeChatConfig):
-    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> List[str]:
+    def get_models(self, api_key: Optional[str] = None, api_base: Optional[str] = None) -> list[str]:
         if api_base is None:
             raise ValueError("api_base must be set to discover models for the custom_openai provider")
         models = super().get_models(api_key=api_key, api_base=api_base)
