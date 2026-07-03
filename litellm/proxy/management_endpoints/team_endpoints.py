@@ -93,6 +93,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
 )
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
+    enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
 )
 from litellm.proxy.management_helpers.team_member_permission_checks import (
@@ -1144,6 +1145,12 @@ async def new_team(
         data_json = data.json()
 
         ## Handle Object Permission - MCP, Vector Stores etc.
+        await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+            requested_mcp_servers=(data.object_permission.mcp_servers if data.object_permission is not None else None),
+            existing_object_permission_id=None,
+            is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+            prisma_client=prisma_client,
+        )
         data_json = await _set_object_permission(
             data_json=data_json,
             prisma_client=prisma_client,
@@ -1846,6 +1853,12 @@ async def update_team(
 
         # Check object permission
         if data.object_permission is not None:
+            await enforce_all_proxy_mcp_servers_grant_is_admin_only(
+                requested_mcp_servers=data.object_permission.mcp_servers,
+                existing_object_permission_id=existing_team_row.object_permission_id,
+                is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
+                prisma_client=prisma_client,
+            )
             updated_kv = await handle_update_object_permission(
                 data_json=updated_kv,
                 existing_team_row=existing_team_row,
