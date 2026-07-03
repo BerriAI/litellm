@@ -308,8 +308,7 @@ export function KeyEditView({
         values.budget_limits = [];
       }
 
-      const hadExistingFallbacks =
-        keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
+      const hadExistingFallbacks = keyData.budget_fallbacks != null && Object.keys(keyData.budget_fallbacks).length > 0;
       if (Object.keys(budgetFallbacks).length > 0) {
         values.budget_fallbacks = budgetFallbacks;
       } else if (hadExistingFallbacks) {
