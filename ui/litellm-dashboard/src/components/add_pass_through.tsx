@@ -16,6 +16,7 @@ import RoutePreview from "./route_preview";
 import NotificationsManager from "./molecules/notifications_manager";
 import PassThroughSecuritySection from "./common_components/PassThroughSecuritySection";
 import PassThroughGuardrailsSection from "./common_components/PassThroughGuardrailsSection";
+import { BRAND_NAME } from "../lib/brand";
 const { Option } = Select2;
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
@@ -140,7 +141,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
         <div className="mt-6">
           <Alert
             message="What is a Pass-Through Endpoint?"
-            description="Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through LiteLLM."
+            description={`Route requests from your ${BRAND_NAME} proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through ${BRAND_NAME}.`}
             type="info"
             showIcon
             className="mb-6"

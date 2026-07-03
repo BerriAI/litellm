@@ -1,6 +1,8 @@
 import React from "react";
 import { Alert, Button, Card, Form, Input, Typography } from "antd";
 
+import { BRAND_NAME } from "@/lib/brand";
+
 type OnboardingFormBodyProps = {
   variant: "signup" | "reset_password";
   userEmail: string;
@@ -20,7 +22,7 @@ export function OnboardingFormBody({ variant, userEmail, isPending, claimError, 
     <div className="mx-auto w-full max-w-md mt-10">
       <Card>
         <Typography.Title level={5} className="text-center mb-5">
-          🚅 LiteLLM
+          {BRAND_NAME}
         </Typography.Title>
         <Typography.Title level={3}>{variant === "reset_password" ? "Reset Password" : "Sign Up"}</Typography.Title>
         <Typography.Text>

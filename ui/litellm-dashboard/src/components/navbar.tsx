@@ -7,6 +7,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
 import useProxySettings from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
+import { BRAND_NAME } from "@/lib/brand";
 import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import { Tag } from "antd";
 import Link from "next/link";
@@ -80,7 +81,7 @@ const Navbar: React.FC<NavbarProps> = ({
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
                     <img
                       src={imageUrl}
-                      alt="LiteLLM Brand"
+                      alt={`${BRAND_NAME} Brand`}
                       className="h-auto max-h-full w-auto max-w-full object-contain"
                     />
                   </div>
@@ -92,7 +93,7 @@ const Navbar: React.FC<NavbarProps> = ({
                     <span
                       className="absolute -left-2 -top-1 animate-bounce text-lg"
                       style={{ animationDuration: "2s" }}
-                      title="Thanks for using LiteLLM!"
+                      title={`Thanks for using ${BRAND_NAME}!`}
                     >
                       🌑
                     </span>

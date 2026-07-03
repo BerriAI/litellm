@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
 import MakeAgentPublicForm from "@/components/AIHub/forms/MakeAgentPublicForm";
 import MakeMCPPublicForm from "@/components/AIHub/forms/MakeMCPPublicForm";
@@ -704,7 +705,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
 client = openai.OpenAI(
     api_key="your_api_key",
-    base_url="${getProxyBaseUrl()}"  # Your LiteLLM Proxy URL
+    base_url="${getProxyBaseUrl()}"  # Your ${BRAND_NAME} Proxy URL
 )
 
 response = client.chat.completions.create(

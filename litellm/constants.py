@@ -4,6 +4,10 @@ from typing import List, Literal, Optional
 
 from litellm.litellm_core_utils.env_utils import get_env_int
 
+# User-facing product brand name. Internal identifiers (package name, env-var
+# prefix, CLI commands, DB tables, class names) remain "litellm" for compatibility.
+DEFAULT_BRAND_NAME = "ArcheOps"
+
 DEFAULT_HEALTH_CHECK_PROMPT = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 ROUTER_MAX_FALLBACKS = int(os.getenv("ROUTER_MAX_FALLBACKS", 5))

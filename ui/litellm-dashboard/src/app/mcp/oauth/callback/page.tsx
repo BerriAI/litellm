@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { BRAND_NAME } from "@/lib/brand";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 
 // Written to sessionStorage so the admin hook (useMcpOAuthFlow), the user hook
@@ -79,9 +80,9 @@ const McpOAuthCallbackContent = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
       <div className="max-w-lg w-full rounded-lg bg-white shadow-md p-8 text-center space-y-4">
-        <h1 className="text-xl font-semibold text-slate-900">LiteLLM MCP OAuth</h1>
+        <h1 className="text-xl font-semibold text-slate-900">{BRAND_NAME} MCP OAuth</h1>
         <p className="text-sm text-slate-700">
-          Authorization complete. You may close this window and return to the LiteLLM dashboard.
+          Authorization complete. You may close this window and return to the {BRAND_NAME} dashboard.
         </p>
         <p className="text-xs text-slate-500">
           If the window does not close automatically, everything is still saved—you can close it manually.

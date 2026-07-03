@@ -1,7 +1,7 @@
 # ruff: noqa: T201
 # flake8: noqa: T201
 """
-LiteLLM Interactive Setup Wizard
+ArcheOps Interactive Setup Wizard
 
 Guides users through selecting LLM providers, entering API keys,
 and generating a proxy config file — mirroring the Claude Code onboarding UX.
@@ -193,13 +193,12 @@ def _yaml_escape(value: str) -> str:
 # Layout constants
 # ---------------------------------------------------------------------------
 
-LITELLM_ASCII = r"""
-  ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
-  ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
-  ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
-  ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
-  ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
-  ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+ARCHEOPS_ASCII = r"""
+   ___    ____   ____  _   _ _____  ___  ____   ____
+  / _ \  / ___| |  _ \| | | | ____|/ _ \|  _ \ / ___|
+ / /_\ \| |     | |_) | |_| |  _| | | | | |_) | |
+/ /   \ \ |___  |  __/|  _  | |___| |_| |  __/| |___
+/_/     \_\____| |_|   |_| |_|_____|\___/|_|    \____|
 """
 
 
@@ -257,8 +256,8 @@ class SetupWizard:
         except Exception:
             version = "unknown"
         print()
-        print(orange(LITELLM_ASCII.rstrip("\n")))
-        print(f"  {orange('Welcome')} to {bold('LiteLLM')} {grey('v' + version)}")
+        print(orange(ARCHEOPS_ASCII.rstrip("\n")))
+        print(f"  {orange('Welcome')} to {bold('ArcheOps')} {grey('v' + version)}")
         print()
         print(_divider())
         print()

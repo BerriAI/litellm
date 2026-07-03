@@ -14,7 +14,7 @@ import httpx
 from dotenv import load_dotenv
 
 import litellm
-from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.constants import DEFAULT_BRAND_NAME, DEFAULT_NUM_WORKERS_LITELLM_PROXY
 from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
@@ -96,11 +96,11 @@ class ProxyInitializationHelpers:
     @staticmethod
     def _echo_litellm_version():
         pkg_version = importlib.metadata.version("litellm")  # type: ignore
-        click.echo(f"\nLiteLLM: Current Version = {pkg_version}\n")
+        click.echo(f"\n{DEFAULT_BRAND_NAME}: Current Version = {pkg_version}\n")
 
     @staticmethod
     def _run_health_check(host, port):
-        print("\nLiteLLM: Health Testing models in config")
+        print(f"\n{DEFAULT_BRAND_NAME}: Health Testing models in config")
         response = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))
 
@@ -112,7 +112,9 @@ class ProxyInitializationHelpers:
         test: Union[bool, str],
     ):
         request_model = model or "gpt-3.5-turbo"
-        click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
+        click.echo(
+            f"\n{DEFAULT_BRAND_NAME}: Making a test ChatCompletions request to your proxy. Model={request_model}"
+        )
         import openai
 
         api_base = f"http://{host}:{port}"
@@ -132,9 +134,11 @@ class ProxyInitializationHelpers:
             ],
             max_tokens=256,
         )
-        click.echo(f"\nLiteLLM: response from proxy {response}")
+        click.echo(f"\n{DEFAULT_BRAND_NAME}: response from proxy {response}")
 
-        print(f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}")
+        print(
+            f"\n {DEFAULT_BRAND_NAME}: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}"
+        )
 
         stream_response = client.chat.completions.create(
             model=request_model,
@@ -147,7 +151,7 @@ class ProxyInitializationHelpers:
             stream=True,
         )
         for chunk in stream_response:
-            click.echo(f"LiteLLM: streaming response from proxy {chunk}")
+            click.echo(f"{DEFAULT_BRAND_NAME}: streaming response from proxy {chunk}")
         print("\n making completion request to proxy")
         completion_response = client.completions.create(
             model=request_model, prompt="this is a test request, write a short poem"
@@ -190,7 +194,7 @@ class ProxyInitializationHelpers:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
             else:
                 print(
-                    f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
+                    f"\033[1;33m{DEFAULT_BRAND_NAME} Proxy: --timeout_worker_healthcheck "
                     f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
                     f"Ignoring the flag.\033[0m"
                 )
@@ -211,7 +215,7 @@ class ProxyInitializationHelpers:
 
         if max_requests_before_restart is None:
             print(
-                "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                f"\033[1;33m{DEFAULT_BRAND_NAME} Proxy: --max_requests_before_restart_jitter "
                 "has no effect without --max_requests_before_restart\033[0m\n"
             )
             return
@@ -219,7 +223,7 @@ class ProxyInitializationHelpers:
             uvicorn_args["limit_max_requests_jitter"] = jitter
         else:
             print(
-                f"\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                f"\033[1;33m{DEFAULT_BRAND_NAME} Proxy: --max_requests_before_restart_jitter "
                 f"requires uvicorn>=0.41.0, but installed uvicorn=={uvicorn.__version__}. "
                 f"Ignoring the flag.\033[0m"
             )
@@ -299,7 +303,7 @@ class ProxyInitializationHelpers:
         env_path = os.path.join(os.getcwd(), ".env")
         ProxyInitializationHelpers._patch_statreload_extra_paths([config_path, env_path])
         verbose_proxy_logger.warning(
-            "LiteLLM --reload: worker processes re-read .env with override, so .env "
+            f"{DEFAULT_BRAND_NAME} --reload: worker processes re-read .env with override, so .env "
             "values win over shell-exported environment variables. Unset a key in .env "
             "to let a shell-exported value take precedence."
         )
@@ -321,13 +325,13 @@ class ProxyInitializationHelpers:
         from hypercorn.asyncio import serve
         from hypercorn.config import Config
 
-        print(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Hypercorn\033[0m\n")
+        print(f"\033[1;32m{DEFAULT_BRAND_NAME} Proxy: Starting server on {host}:{port} using Hypercorn\033[0m\n")
         config = Config()
         config.bind = [f"{host}:{port}"]
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                f"\033[1;32m{DEFAULT_BRAND_NAME} Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
             )
             config.certfile = ssl_certfile_path
             config.keyfile = ssl_keyfile_path
@@ -357,14 +361,14 @@ class ProxyInitializationHelpers:
         from granian import Granian
         from granian.constants import Interfaces
 
-        print(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} using Granian\033[0m\n")
+        print(f"\033[1;32m{DEFAULT_BRAND_NAME} Proxy: Starting server on {host}:{port} using Granian\033[0m\n")
         if max_requests_before_restart is not None:
             print(
-                "\033[1;33mLiteLLM: --max_requests_before_restart is not supported by Granian "
+                f"\033[1;33m{DEFAULT_BRAND_NAME}: --max_requests_before_restart is not supported by Granian "
                 "(Granian uses workers_lifetime in seconds, not a per-request limit).\033[0m\n"
             )
         if ciphers is not None:
-            print("\033[1;33mLiteLLM: --ciphers is not applied when using --run_granian.\033[0m\n")
+            print(f"\033[1;33m{DEFAULT_BRAND_NAME}: --ciphers is not applied when using --run_granian.\033[0m\n")
 
         kwargs: dict[str, Any] = {
             "target": "litellm.proxy.proxy_server:app",
@@ -378,7 +382,7 @@ class ProxyInitializationHelpers:
             kwargs["runtime_threads"] = granian_runtime_threads
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                f"\033[1;32m{DEFAULT_BRAND_NAME} Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
             )
             kwargs["ssl_cert"] = Path(ssl_certfile_path)
             kwargs["ssl_key"] = Path(ssl_keyfile_path)
@@ -432,14 +436,16 @@ class ProxyInitializationHelpers:
                 )
                 print()
                 print(
-                    '\033[1;34mLiteLLM: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
+                    f'\033[1;34m{DEFAULT_BRAND_NAME}: Test your local proxy with: "litellm --test" This runs an openai.ChatCompletion request to your proxy [In a new terminal tab]\033[0m\n'
                 )
-                print(f"\033[1;34mLiteLLM: Curl Command Test for your local proxy\n {curl_command} \033[0m\n")
+                print(
+                    f"\033[1;34m{DEFAULT_BRAND_NAME}: Curl Command Test for your local proxy\n {curl_command} \033[0m\n"
+                )
                 print("\033[1;34mDocs: https://docs.litellm.ai/docs/simple_proxy\033[0m\n")
                 print(f"\033[1;34mSee all Router/Swagger docs on http://0.0.0.0:{port} \033[0m\n")
 
             def load_config(self):
-                # note: This Loads the gunicorn config - has nothing to do with LiteLLM Proxy config
+                # note: This Loads the gunicorn config - has nothing to do with ArcheOps Proxy config
                 if self.cfg is not None:
                     config = {
                         key: value
@@ -456,7 +462,9 @@ class ProxyInitializationHelpers:
                 # gunicorn app function
                 return self.application
 
-        print(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n")
+        print(
+            f"\033[1;32m{DEFAULT_BRAND_NAME} Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n"
+        )
         gunicorn_options = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
@@ -473,7 +481,7 @@ class ProxyInitializationHelpers:
         if max_requests_before_restart_jitter is not None:
             if max_requests_before_restart is None:
                 print(
-                    "\033[1;33mLiteLLM Proxy: --max_requests_before_restart_jitter "
+                    f"\033[1;33m{DEFAULT_BRAND_NAME} Proxy: --max_requests_before_restart_jitter "
                     "has no effect without --max_requests_before_restart\033[0m\n"
                 )
             else:
@@ -490,7 +498,7 @@ class ProxyInitializationHelpers:
 
         if ssl_certfile_path is not None and ssl_keyfile_path is not None:
             print(
-                f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                f"\033[1;32m{DEFAULT_BRAND_NAME} Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
             )
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
@@ -506,7 +514,7 @@ class ProxyInitializationHelpers:
                 subprocess.Popen(command, stdout=devnull, stderr=devnull)
         except Exception as e:
             print(f"""
-                LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
+                {DEFAULT_BRAND_NAME} Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
             """)
 
     @staticmethod
@@ -564,7 +572,7 @@ class ProxyInitializationHelpers:
         os.makedirs(multiproc_dir, exist_ok=True)
         wipe_directory(multiproc_dir)
         action = "Auto-created" if auto_created else "Using existing"
-        print(f"LiteLLM: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
+        print(f"{DEFAULT_BRAND_NAME}: {action} PROMETHEUS_MULTIPROC_DIR={multiproc_dir}")
 
 
 @click.command()
@@ -679,7 +687,7 @@ class ProxyInitializationHelpers:
     default=False,
     is_flag=True,
     type=bool,
-    help="Print LiteLLM version",
+    help=f"Print {DEFAULT_BRAND_NAME} version",
 )
 @click.option(
     "--health",
@@ -814,7 +822,7 @@ class ProxyInitializationHelpers:
     help=(
         "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
         "path that can cause schema thrashing during rolling deploys where two "
-        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+        f"{DEFAULT_BRAND_NAME} versions contend for the same DB. Default is the v1 resolver."
     ),
 )
 @click.option(
@@ -1126,7 +1134,7 @@ def run_server(
                 _bad_scheme = unsupported_db_scheme(_candidate_url)
                 if _bad_scheme is not None:
                     print(
-                        f"\033[1;31mLiteLLM Proxy: {unsupported_db_scheme_message(_db_env, _bad_scheme)}\033[0m",
+                        f"\033[1;31m{DEFAULT_BRAND_NAME} Proxy: {unsupported_db_scheme_message(_db_env, _bad_scheme)}\033[0m",
                         file=sys.stderr,
                         flush=True,
                     )
@@ -1170,7 +1178,7 @@ def run_server(
                 else:
                     if not use_v2_migration_resolver:
                         print(
-                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
+                            f"\033[1;33m{DEFAULT_BRAND_NAME} Proxy: Using default (v1) migration resolver. "
                             "If your deployment has seen schema thrashing during rolling "
                             "deploys, try --use_v2_migration_resolver (safer: avoids the "
                             "diff-and-force recovery that caused the thrash).\033[0m"
@@ -1186,7 +1194,7 @@ def run_server(
                         # v1 never raises here, so this only fires when the
                         # operator opted into v2.
                         print(
-                            f"\033[1;31mLiteLLM Proxy: Database migration cannot proceed. {e}\033[0m",
+                            f"\033[1;31m{DEFAULT_BRAND_NAME} Proxy: Database migration cannot proceed. {e}\033[0m",
                             file=sys.stderr,
                             flush=True,
                         )
@@ -1194,13 +1202,13 @@ def run_server(
                     if not setup_ok:
                         if enforce_prisma_migration_check:
                             print(
-                                "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
+                                f"\033[1;31m{DEFAULT_BRAND_NAME} Proxy: Database setup failed after multiple retries. "
                                 "The proxy cannot start safely. Please check your database connection and migration status.\033[0m"
                             )
                             sys.exit(1)
                         else:
                             print(
-                                "\033[1;33mLiteLLM Proxy: Database migration failed but continuing startup. "
+                                f"\033[1;33m{DEFAULT_BRAND_NAME} Proxy: Database migration failed but continuing startup. "
                                 "Set --enforce_prisma_migration_check or ENFORCE_PRISMA_MIGRATION_CHECK=true to exit on failure.\033[0m"
                             )
             else:
@@ -1226,7 +1234,7 @@ def run_server(
 
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
-            print("LiteLLM: Setup complete. Skipping server startup as requested.")
+            print(f"{DEFAULT_BRAND_NAME}: Setup complete. Skipping server startup as requested.")
             return
 
         running_uvicorn = run_gunicorn is False and run_hypercorn is False
@@ -1249,7 +1257,7 @@ def run_server(
                 )
             if ssl_certfile_path is not None and ssl_keyfile_path is not None:
                 print(
-                    f"\033[1;32mLiteLLM Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
+                    f"\033[1;32m{DEFAULT_BRAND_NAME} Proxy: Using SSL with certfile: {ssl_certfile_path} and keyfile: {ssl_keyfile_path}\033[0m\n"
                 )
                 uvicorn_args["ssl_keyfile"] = ssl_keyfile_path
                 uvicorn_args["ssl_certfile"] = ssl_certfile_path

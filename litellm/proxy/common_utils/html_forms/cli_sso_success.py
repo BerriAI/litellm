@@ -1,4 +1,5 @@
-from litellm.proxy.common_utils.banner import LITELLM_BANNER
+from litellm.constants import DEFAULT_BRAND_NAME
+from litellm.proxy.common_utils.banner import ARCHEOPS_BANNER
 
 
 def render_cli_sso_success_page() -> str:
@@ -14,7 +15,7 @@ def render_cli_sso_success_page() -> str:
     <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <title>CLI Authentication Successful - LiteLLM</title>
+        <title>CLI Authentication Successful - {DEFAULT_BRAND_NAME}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {{
@@ -150,15 +151,15 @@ def render_cli_sso_success_page() -> str:
         <div class="container">
             <div class="logo-container">
                 <div class="logo">
-                    🚅 LiteLLM
+                    {DEFAULT_BRAND_NAME}
                 </div>
             </div>
-            
-            <div class="banner">{LITELLM_BANNER}</div>
-            
+
+            <div class="banner">{ARCHEOPS_BANNER}</div>
+
             <h1>Authentication Successful!</h1>
             <p class="subtitle">Your CLI authentication is complete.</p>
-            
+
             <div class="success-box">
                 <div class="success-header">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -167,9 +168,9 @@ def render_cli_sso_success_page() -> str:
                     </svg>
                     CLI Authentication Complete
                 </div>
-                <p>Your LiteLLM CLI has been successfully authenticated and is ready to use.</p>
+                <p>Your {DEFAULT_BRAND_NAME} CLI has been successfully authenticated and is ready to use.</p>
             </div>
-            
+
             <div class="instructions">
                 <div class="instructions-header">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -180,7 +181,7 @@ def render_cli_sso_success_page() -> str:
                     Next Steps
                 </div>
                 <p>Return to your terminal - the CLI will automatically detect the successful authentication.</p>
-                <p>You can now use LiteLLM CLI commands with your authenticated session.</p>
+                <p>You can now use {DEFAULT_BRAND_NAME} CLI commands with your authenticated session.</p>
             </div>
             
             <div class="status">You can now close this window and return to your terminal.</div>

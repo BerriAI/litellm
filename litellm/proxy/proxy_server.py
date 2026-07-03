@@ -50,6 +50,7 @@ from litellm.constants import (
     AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
     DAILY_TAG_SPEND_BATCH_MULTIPLIER,
+    DEFAULT_BRAND_NAME,
     DEFAULT_MAX_RECURSE_DEPTH,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
@@ -193,7 +194,7 @@ def generate_feedback_box():
     print("\033[1;37m" + "#" + " " * box_width + "#\033[0m")  # noqa: T201
     print("\033[1;37m" + "#" + "-" * box_width + "#\033[0m")  # noqa: T201
     print()  # noqa: T201
-    print(" Thank you for using LiteLLM! - Krrish & Ishaan")  # noqa: T201
+    print(" Thank you for using ArcheOps! - Krrish & Ishaan")  # noqa: T201
     print()  # noqa: T201
     print()  # noqa: T201
     print()  # noqa: T201
@@ -652,17 +653,17 @@ else:
 ui_link = f"{server_root_path}/ui"
 fallback_login_link = f"{server_root_path}/fallback/login"
 model_hub_link = f"{server_root_path}/ui/model_hub_table"
-ui_message = f"👉 [```LiteLLM Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
-ui_message += "\n\n💸 [```LiteLLM Model Cost Map```](https://models.litellm.ai/)."
+ui_message = f"👉 [```{DEFAULT_BRAND_NAME} Admin Panel on /ui```]({ui_link}). Create, Edit Keys with SSO. Having issues? Try [```Fallback Login```]({fallback_login_link})"
+ui_message += "\n\n💸 [```ArcheOps Model Cost Map```](https://models.litellm.ai/)."
 
-ui_message += f"\n\n🔎 [```LiteLLM Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
+ui_message += f"\n\n🔎 [```{DEFAULT_BRAND_NAME} Model Hub```]({model_hub_link}). See available models on the proxy. [**Docs**](https://docs.litellm.ai/docs/proxy/ai_hub)"
 
 custom_swagger_message = (
     "[**Customize Swagger Docs**](https://docs.litellm.ai/docs/proxy/enterprise#swagger-docs---custom-routes--branding)"
 )
 
 ### CUSTOM BRANDING [ENTERPRISE FEATURE] ###
-_title = os.getenv("DOCS_TITLE", "LiteLLM API") if premium_user else "LiteLLM API"
+_title = os.getenv("DOCS_TITLE", f"{DEFAULT_BRAND_NAME} API") if premium_user else f"{DEFAULT_BRAND_NAME} API"
 _description = (
     os.getenv(
         "DOCS_DESCRIPTION",
@@ -709,7 +710,7 @@ def cleanup_router_config_variables():
 
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
-    verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    verbose_proxy_logger.info(f"Shutting down {DEFAULT_BRAND_NAME} Proxy Server")
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
@@ -2974,7 +2975,7 @@ def run_ollama_serve():
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
         verbose_proxy_logger.debug(f"""
-            LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
+            ArcheOps Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
         """)
 
 
@@ -3879,7 +3880,7 @@ class ProxyConfig:
         search_tools_parsed: List[SearchToolTypedDict] = []
 
         print(  # noqa: T201
-            "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
+            "\033[32mArcheOps: Proxy initialized with Search Tools:\033[0m"
         )
 
         for search_tool in search_tools_raw:
@@ -4088,7 +4089,7 @@ class ProxyConfig:
                         enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
                     )
                     if litellm.cache is not None:
-                        verbose_proxy_logger.debug(f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}")
+                        verbose_proxy_logger.debug(f"{blue_color_code}Set Cache on ArcheOps Proxy{reset_color_code}")
                 elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":
@@ -4108,7 +4109,7 @@ class ProxyConfig:
 
                     set_global_prompt_directory(value)
                     verbose_proxy_logger.info(
-                        f"{blue_color_code}Set Global Prompt Directory on LiteLLM Proxy{reset_color_code}"
+                        f"{blue_color_code}Set Global Prompt Directory on ArcheOps Proxy{reset_color_code}"
                     )
                 elif key == "global_bitbucket_config":
                     from litellm.integrations.bitbucket import (
@@ -4117,14 +4118,14 @@ class ProxyConfig:
 
                     set_global_bitbucket_config(value)
                     verbose_proxy_logger.info(
-                        f"{blue_color_code}Set Global BitBucket Config on LiteLLM Proxy{reset_color_code}"
+                        f"{blue_color_code}Set Global BitBucket Config on ArcheOps Proxy{reset_color_code}"
                     )
                 elif key == "global_gitlab_config":
                     from litellm.integrations.gitlab import set_global_gitlab_config
 
                     set_global_gitlab_config(value)
                     verbose_proxy_logger.info(
-                        f"{blue_color_code}Set Global Gitlab Config on LiteLLM Proxy{reset_color_code}"
+                        f"{blue_color_code}Set Global Gitlab Config on ArcheOps Proxy{reset_color_code}"
                     )
                 elif key == "priority_reservation_settings":
                     from litellm.types.utils import PriorityReservationSettings
@@ -4370,7 +4371,7 @@ class ProxyConfig:
                 if not _pkce_no_redis_warning_emitted:
                     _pkce_no_redis_warning_emitted = True
                     verbose_proxy_logger.warning(
-                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for LiteLLM caching. "
+                        "GENERIC_CLIENT_USE_PKCE=true but Redis is not configured for ArcheOps caching. "
                         "PKCE verifiers will not be shared across instances — callbacks may land on a "
                         "different pod than the login request and fail silently. "
                         "Configure Redis via the 'cache' section in your proxy config, "
@@ -4386,7 +4387,7 @@ class ProxyConfig:
                 if not _cp_no_redis_warning_emitted:
                     _cp_no_redis_warning_emitted = True
                     verbose_proxy_logger.warning(
-                        "control_plane_url is configured but Redis is not configured for LiteLLM caching. "
+                        "control_plane_url is configured but Redis is not configured for ArcheOps caching. "
                         "Login codes (SSO and /v3/login) will not be shared across instances — "
                         "the /v3/login/exchange call may land on a different pod and fail with 401. "
                         "Configure Redis via the 'cache' section in your proxy config, "
@@ -4521,7 +4522,7 @@ class ProxyConfig:
         if model_list:
             router_params["model_list"] = model_list
             print(  # noqa: T201
-                "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
+                "\033[32mArcheOps: Proxy initialized with Config, Set models:\033[0m"
             )
             for model in model_list:
                 ### LOAD FROM os.environ/ ###
@@ -7640,7 +7641,7 @@ class ProxyStartupEvent:
             except Exception as e:
                 verbose_proxy_logger.debug(f"Failed to setup batch cost checking: {e}")
                 verbose_proxy_logger.debug(
-                    "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
+                    "Checking batch cost for ArcheOps Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
 
@@ -7670,7 +7671,7 @@ class ProxyStartupEvent:
             except Exception as e:
                 verbose_proxy_logger.debug(f"Failed to setup responses cost checking: {e}")
                 verbose_proxy_logger.debug(
-                    "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
+                    "Checking responses cost for ArcheOps Managed Files is an Enterprise Feature. Skipping..."
                 )
                 pass
 
@@ -8011,7 +8012,7 @@ class ProxyStartupEvent:
         """
         if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
             verbose_proxy_logger.debug(
-                "LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
+                "ArcheOps: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable)."
             )
             return
         try:
@@ -8069,7 +8070,7 @@ class ProxyStartupEvent:
                     raise ValueError(f"PYROSCOPE_SAMPLE_RATE must be a number, got: {sample_rate_env!r}")
             pyroscope.configure(**configure_kwargs)
             msg = (
-                f"LiteLLM: Pyroscope profiling started (app_name={app_name}, server_address={server_address}). "
+                f"ArcheOps: Pyroscope profiling started (app_name={app_name}, server_address={server_address}). "
                 f"View CPU profiles at the Pyroscope UI and select application '{app_name}'."
             )
             if "sample_rate" in configure_kwargs:
@@ -8077,7 +8078,7 @@ class ProxyStartupEvent:
             verbose_proxy_logger.info(msg)
         except ImportError:
             verbose_proxy_logger.warning(
-                "LiteLLM: LITELLM_ENABLE_PYROSCOPE is set but the 'pyroscope-io' package is not installed. "
+                "ArcheOps: LITELLM_ENABLE_PYROSCOPE is set but the 'pyroscope-io' package is not installed. "
                 "Pyroscope profiling will not run. Install with: pip install pyroscope-io"
             )
 
@@ -12335,7 +12336,7 @@ async def model_info_v1(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the ArcheOps Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
             },
         )
 
@@ -12343,7 +12344,7 @@ async def model_info_v1(
         raise HTTPException(
             status_code=500,
             detail={
-                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+                "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the ArcheOps Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
             },
         )
 
@@ -13565,46 +13566,27 @@ def get_logo_url():
     return {"logo_url": ""}
 
 
+def _default_brand_logo_svg() -> str:
+    """Return an SVG containing the brand name for use when no custom logo is set."""
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="200" height="40" viewBox="0 0 200 40">
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="20" font-weight="600" fill="#1e293b">{DEFAULT_BRAND_NAME}</text>
+</svg>"""
+
+
 @app.get("/get_image", include_in_schema=False)
 async def get_image():
     """Get logo to show on admin UI"""
 
-    # get current_dir
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    default_site_logo = os.path.join(current_dir, "logo.jpg")
-
-    is_non_root = os.getenv("LITELLM_NON_ROOT", "").lower() == "true"
-
-    # Determine assets directory
-    # Priority: LITELLM_ASSETS_PATH env var > default based on is_non_root
-    default_assets_dir = "/var/lib/litellm/assets" if is_non_root else current_dir
-    assets_dir = os.getenv("LITELLM_ASSETS_PATH", default_assets_dir)
-
-    # Try to create assets_dir if it doesn't exist (simple try/except approach)
-    if not os.path.exists(assets_dir):
-        try:
-            os.makedirs(assets_dir, exist_ok=True)
-            verbose_proxy_logger.debug(f"Created assets directory at {assets_dir}")
-        except (PermissionError, OSError) as e:
-            verbose_proxy_logger.warning(
-                f"Cannot create assets directory at {assets_dir}: {e}. "
-                f"Logo caching may not work. Using current directory for assets."
-            )
-            assets_dir = current_dir
-
-    # Determine default logo path
-    default_logo = os.path.join(assets_dir, "logo.jpg") if assets_dir != current_dir else default_site_logo
-    if assets_dir != current_dir and not os.path.exists(default_logo):
-        default_logo = default_site_logo
-
-    logo_path = os.getenv("UI_LOGO_PATH", default_logo)
-    verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
+    # If no custom logo is configured, return a text-based SVG logo.
+    logo_path = os.getenv("UI_LOGO_PATH", "")
+    if not logo_path:
+        return Response(content=_default_brand_logo_svg(), media_type="image/svg+xml")
 
     from litellm.proxy.common_utils.static_asset_utils import (
         resolve_validated_local_image_path,
     )
 
-    if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
+    if not logo_path.startswith(("http://", "https://")):
         safe_logo = resolve_validated_local_image_path(logo_path)
         if safe_logo is not None:
             safe_logo_path, media_type = safe_logo
@@ -13613,19 +13595,19 @@ async def get_image():
             "UI_LOGO_PATH %r is not a supported image file or does not exist, falling back to default logo",
             logo_path,
         )
-        logo_path = default_logo
+        return Response(content=_default_brand_logo_svg(), media_type="image/svg+xml")
 
     # Remote logo URLs are loaded by the browser. The proxy should not fetch
     # arbitrary admin-configured URLs server-side.
-    if logo_path.startswith(("http://", "https://")):
-        return RedirectResponse(url=logo_path)
+    return RedirectResponse(url=logo_path)
 
-    # Default logo (resolved from the bundled asset, not user-controlled).
-    safe_logo = resolve_validated_local_image_path(logo_path)
-    if safe_logo is not None:
-        safe_logo_path, media_type = safe_logo
-        return FileResponse(safe_logo_path, media_type=media_type)
-    return FileResponse(default_site_logo, media_type="image/jpeg")
+
+def _default_brand_favicon_svg() -> str:
+    """Return an SVG favicon containing the brand initial for use when no custom favicon is set."""
+    return """<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <rect width="32" height="32" rx="6" fill="#6366f1"/>
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="18" font-weight="700" fill="white">A</text>
+</svg>"""
 
 
 @app.get("/get_favicon", include_in_schema=False)
@@ -13635,32 +13617,23 @@ async def get_favicon():
         resolve_validated_local_image_path,
     )
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    built_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
-    bundled_favicon = os.path.join(current_dir, "swagger", "favicon.ico")
-    default_favicon = built_favicon if os.path.exists(built_favicon) else bundled_favicon
-
     favicon_url = os.getenv("LITELLM_FAVICON_URL", "")
 
     if not favicon_url:
-        if os.path.exists(default_favicon):
-            return FileResponse(default_favicon, media_type="image/x-icon")
-        raise HTTPException(status_code=404, detail="Default favicon not found")
+        return Response(content=_default_brand_favicon_svg(), media_type="image/svg+xml")
 
     if favicon_url.startswith(("http://", "https://")):
         return RedirectResponse(url=favicon_url)
-    else:
-        safe_favicon = resolve_validated_local_image_path(favicon_url)
-        if safe_favicon is not None:
-            safe_favicon_path, media_type = safe_favicon
-            return FileResponse(safe_favicon_path, media_type=media_type)
-        verbose_proxy_logger.warning(
-            "LITELLM_FAVICON_URL %r is not a supported image file or does not exist, falling back to default favicon",
-            favicon_url,
-        )
-        if os.path.exists(default_favicon):
-            return FileResponse(default_favicon, media_type="image/x-icon")
-        raise HTTPException(status_code=404, detail="Favicon not found")
+
+    safe_favicon = resolve_validated_local_image_path(favicon_url)
+    if safe_favicon is not None:
+        safe_favicon_path, media_type = safe_favicon
+        return FileResponse(safe_favicon_path, media_type=media_type)
+    verbose_proxy_logger.warning(
+        "LITELLM_FAVICON_URL %r is not a supported image file or does not exist, falling back to default favicon",
+        favicon_url,
+    )
+    return Response(content=_default_brand_favicon_svg(), media_type="image/svg+xml")
 
 
 #### INVITATION MANAGEMENT ####
@@ -15472,7 +15445,7 @@ async def get_anthropic_beta_headers_reload_status(
 
 @router.get("/", dependencies=[Depends(user_api_key_auth)])
 async def home(request: Request):
-    return "LiteLLM: RUNNING"
+    return "ArcheOps: RUNNING"
 
 
 @router.get(

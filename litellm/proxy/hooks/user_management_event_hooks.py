@@ -90,7 +90,7 @@ class UserManagementEventHooks:
         event = WebhookEvent(
             event="internal_user_created",
             event_group=Litellm_EntityType.USER,
-            event_message="Welcome to LiteLLM Proxy",
+            event_message="Welcome to ArcheOps Proxy",
             token=response.token,
             spend=response.spend or 0.0,
             max_budget=response.max_budget,

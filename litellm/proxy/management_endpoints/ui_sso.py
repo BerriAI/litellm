@@ -2,7 +2,7 @@
 Has all /sso/* routes
 
 /sso/key/generate - handles user signing in with SSO and redirects to /sso/callback
-/sso/callback - returns JWT Redirect Response that redirects to LiteLLM UI
+/sso/callback - returns JWT Redirect Response that redirects to ArcheOps UI
 
 /sso/debug/login - handles user signing in with SSO and redirects to /sso/debug/callback
 /sso/debug/callback - returns the OpenID object returned by the SSO provider
@@ -47,6 +47,7 @@ from litellm.constants import (
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
     CLI_SSO_SESSION_CACHE_KEY_PREFIX,
     CLI_SSO_SESSION_TTL_SECONDS,
+    DEFAULT_BRAND_NAME,
     LITELLM_CLI_SOURCE_IDENTIFIER,
     LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
@@ -503,7 +504,7 @@ def _render_cli_sso_verification_page(
     <!doctype html>
     <html>
       <head>
-        <title>LiteLLM CLI Login</title>
+        <title>{DEFAULT_BRAND_NAME} CLI Login</title>
         <style>
           body {{
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -861,7 +862,7 @@ async def google_login(
                 billable_users = await UserRepository(prisma_client).count_billable_users()
                 if billable_users and billable_users > 5:
                     raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                        message="You must be a ArcheOps Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                         type=ProxyErrorTypes.auth_error,
                         param="premium_user",
                         code=status.HTTP_403_FORBIDDEN,
@@ -907,7 +908,7 @@ async def google_login(
             )
         except ImportError:
             raise ValueError(
-                "Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise."
+                "Enterprise features are not available. Custom UI SSO sign-in requires ArcheOps Enterprise."
             )
 
     # Check if we should use SSO handler
@@ -1250,7 +1251,7 @@ def _handle_generic_sso_error(
 
         detailed_message = (
             f"SSO authentication failed: {provider_name} requires PKCE (Proof Key for Code Exchange) "
-            f"but it's not enabled in your LiteLLM configuration.\n\n"
+            f"but it's not enabled in your ArcheOps configuration.\n\n"
             f"SOLUTION: Add this environment variable and restart your proxy:\n"
             f"  GENERIC_CLIENT_USE_PKCE=true\n\n"
         )
@@ -4123,7 +4124,7 @@ async def debug_sso_login(request: Request):
     if microsoft_client_id is not None or google_client_id is not None or generic_client_id is not None:
         if premium_user is not True:
             raise ProxyException(
-                message="You must be a LiteLLM Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                message="You must be a ArcheOps Enterprise user to use SSO. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
                 type=ProxyErrorTypes.auth_error,
                 param="premium_user",
                 code=status.HTTP_403_FORBIDDEN,

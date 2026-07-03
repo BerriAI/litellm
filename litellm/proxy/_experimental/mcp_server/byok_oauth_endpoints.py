@@ -2,7 +2,7 @@
 BYOK (Bring Your Own Key) OAuth 2.1 Authorization Server endpoints for MCP servers.
 
 When an MCP client connects to a BYOK-enabled server and no stored credential exists,
-LiteLLM runs a minimal OAuth 2.1 authorization code flow.  The "authorization page" is
+ArcheOps runs a minimal OAuth 2.1 authorization code flow.  The "authorization page" is
 just a form that asks the user for their API key — not a full identity-provider OAuth.
 
 Endpoints implemented here:
@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_BRAND_NAME
 from litellm.proxy._experimental.mcp_server.db import store_user_credential
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
@@ -183,7 +184,7 @@ def _build_authorize_html(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Connect {server_name} &mdash; LiteLLM</title>
+<title>Connect {server_name} &mdash; {DEFAULT_BRAND_NAME}</title>
 <style>
   *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{
@@ -453,13 +454,13 @@ def _build_authorize_html(
     <button class="close-btn" type="button" onclick="doCancel()" title="Close">&times;</button>
 
     <div class="logos">
-      <img src="/ui/assets/logos/litellm_logo.jpg" class="logo-img" alt="LiteLLM">
+      <img src="/get_image" class="logo-img" alt="{DEFAULT_BRAND_NAME}">
       <span class="logo-arrow">&#8594;</span>
       <div class="logo logo-s">{server_initial}</div>
     </div>
 
     <h2 class="step-title">Connect {server_name} MCP</h2>
-    <p class="step-subtitle">LiteLLM needs access to {server_name} to complete your request.</p>
+    <p class="step-subtitle">{DEFAULT_BRAND_NAME} needs access to {server_name} to complete your request.</p>
 
     <div class="info-box">
       <span class="info-icon">
@@ -467,7 +468,7 @@ def _build_authorize_html(
       </span>
       <div>
         <h4>How it works</h4>
-        <p>LiteLLM acts as a secure bridge. Your requests are routed through our MCP client directly to {server_name}&rsquo;s API.</p>
+        <p>{DEFAULT_BRAND_NAME} acts as a secure bridge. Your requests are routed through our MCP client directly to {server_name}&rsquo;s API.</p>
       </div>
     </div>
 

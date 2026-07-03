@@ -5,12 +5,13 @@ import "./globals.css";
 import AntdGlobalProvider from "@/contexts/AntdGlobalProvider";
 import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
+import { BRAND_NAME } from "@/lib/brand";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "LiteLLM Dashboard",
-  description: "LiteLLM Proxy Admin UI",
+  title: `${BRAND_NAME} Dashboard`,
+  description: `${BRAND_NAME} Proxy Admin UI`,
   icons: { icon: "/get_favicon" },
 };
 

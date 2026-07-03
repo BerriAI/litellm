@@ -1,10 +1,12 @@
 # JWT display template for SSO debug callback
-jwt_display_template = """
+from litellm.constants import DEFAULT_BRAND_NAME
+
+_JWT_DISPLAY_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>LiteLLM SSO Debug - JWT Information</title>
+    <title>{{BRAND_NAME}} SSO Debug - JWT Information</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
@@ -197,7 +199,7 @@ jwt_display_template = """
     <div class="container">
         <div class="logo-container">
             <div class="logo">
-                🚅 LiteLLM
+                {{BRAND_NAME}}
             </div>
         </div>
         <h2>SSO Debug Information</h2>
@@ -351,3 +353,12 @@ jwt_display_template = """
 </body>
 </html>
 """
+
+
+def render_jwt_display_template(brand_name: str = DEFAULT_BRAND_NAME) -> str:
+    """Return the JWT debug HTML with the brand name substituted."""
+    return _JWT_DISPLAY_TEMPLATE.replace("{{BRAND_NAME}}", brand_name)
+
+
+# Backward-compatible alias for code that imports the raw template.
+jwt_display_template = render_jwt_display_template()

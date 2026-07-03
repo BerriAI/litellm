@@ -1149,7 +1149,7 @@ Model Info:
             key_budget = webhook_event.max_budget
             base_url = os.getenv("PROXY_BASE_URL", "http://0.0.0.0:4000")
 
-            email_html_content = "Alert from LiteLLM Server"
+            email_html_content = "Alert from ArcheOps Server"
             if recipient_email is None:
                 verbose_proxy_logger.error(
                     "Trying to send email alert to no recipient",
@@ -1189,7 +1189,7 @@ Model Info:
             webhook_event.model_dump_json()
             email_event = {
                 "to": recipient_email,
-                "subject": f"LiteLLM: {event_name}",
+                "subject": f"ArcheOps: {event_name}",
                 "html": email_html_content,
             }
 
@@ -1229,13 +1229,13 @@ Model Info:
         recipient_email = webhook_event.user_email
         user_name = webhook_event.user_id
         max_budget = webhook_event.max_budget
-        email_html_content = "Alert from LiteLLM Server"
+        email_html_content = "Alert from ArcheOps Server"
         if recipient_email is None:
             verbose_proxy_logger.error("Trying to send email alert to no recipient", extra=webhook_event.dict())
 
         if webhook_event.event == "budget_crossed":
             email_html_content = f"""
-            <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
+            <img src="{email_logo_url}" alt="ArcheOps Logo" width="150" height="50" />
 
             <p> Hi {user_name}, <br/>
 
@@ -1246,13 +1246,13 @@ Model Info:
             If you have any questions, please send an email to {email_support_contact} <br /> <br />
 
             Best, <br />
-            The LiteLLM team <br />
+            The ArcheOps team <br />
             """
 
         webhook_event.model_dump_json()
         email_event = {
             "to": recipient_email,
-            "subject": f"LiteLLM: {event_name}",
+            "subject": f"ArcheOps: {event_name}",
             "html": email_html_content,
         }
 
