@@ -2474,13 +2474,20 @@ class Logging(LiteLLMLoggingBaseClass):
                 # failure-path fallback. See #32019.
                 verbose_logger.error(
                     "standard_logging_object build failed for streaming call_id=%s call_type=%s; "
-                    "rebuilding a degraded payload so success loggers still fire",
+                    "retrying with an empty response object",
                     self.litellm_call_id,
                     self.call_type,
                 )
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
                     {}, start_time, end_time
                 )
+                if self.model_call_details["standard_logging_object"] is None:
+                    verbose_logger.error(
+                        "standard_logging_object rebuild failed for streaming call_id=%s call_type=%s; "
+                        "loggers gated on standard_logging_object will skip this request",
+                        self.litellm_call_id,
+                        self.call_type,
+                    )
 
             # print standard logging payload
             if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
