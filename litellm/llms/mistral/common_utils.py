@@ -7,7 +7,6 @@ import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import ProviderSpecificModelInfo
 
 WEB_SEARCH_TOOL_TYPES: tuple[str, ...] = ("web_search", "web_search_premium")
 
@@ -30,16 +29,6 @@ def is_web_search_request(optional_params: dict) -> bool:
 
 
 class MistralModelInfo(BaseLLMModelInfo):
-    def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
-        """
-        Capabilities shared by all Mistral models. Web search is available to
-        every chat model through the Conversations API connector, so advertise
-        it at the provider level rather than per model.
-        """
-        return {
-            "supports_web_search": True,
-        }
-
     def validate_environment(
         self,
         headers: dict,
