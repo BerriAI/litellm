@@ -180,7 +180,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     truncateFromMessage,
     deleteConversation,
     renameConversation,
-  } = useChatHistory(activeConversationId);
+  } = useChatHistory(activeConversationId, userId);
 
   // Clean up the OAuth return param after it's been consumed
   useEffect(() => {

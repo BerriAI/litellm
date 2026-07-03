@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatMessage, Conversation } from "./types";
 
-const STORAGE_KEY = "litellm_chat_history_v1";
+const STORAGE_KEY_PREFIX = "litellm_chat_history_v1";
 const MAX_CONVERSATIONS = 100;
 const TITLE_MAX_LENGTH = 40;
 
@@ -13,9 +13,13 @@ function generateTitle(firstUserMessage: string): string {
   return trimmed.slice(0, TITLE_MAX_LENGTH) + "…";
 }
 
-function loadFromStorage(): { conversations: Conversation[]; storageUnavailable: boolean } {
+function storageKeyFor(userId: string): string {
+  return `${STORAGE_KEY_PREFIX}:${encodeURIComponent(userId)}`;
+}
+
+function loadFromStorage(storageKey: string): { conversations: Conversation[]; storageUnavailable: boolean } {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (!raw) {
       return { conversations: [], storageUnavailable: false };
     }
@@ -26,9 +30,9 @@ function loadFromStorage(): { conversations: Conversation[]; storageUnavailable:
   }
 }
 
-function saveToStorage(conversations: Conversation[]): boolean {
+function saveToStorage(storageKey: string, conversations: Conversation[]): boolean {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
+    localStorage.setItem(storageKey, JSON.stringify(conversations));
     return true;
   } catch {
     return false;
@@ -42,7 +46,10 @@ function trimConversations(conversations: Conversation[]): Conversation[] {
   return [...conversations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_CONVERSATIONS);
 }
 
-export function useChatHistory(activeConversationId: string | null): {
+export function useChatHistory(
+  activeConversationId: string | null,
+  userId: string,
+): {
   conversations: Conversation[];
   activeConversation: Conversation | null;
   storageUnavailable: boolean;
@@ -74,7 +81,8 @@ export function useChatHistory(activeConversationId: string | null): {
   }, [activeConversationId]);
 
   useEffect(() => {
-    const { conversations: loaded, storageUnavailable: unavailable } = loadFromStorage();
+    initializedRef.current = false;
+    const { conversations: loaded, storageUnavailable: unavailable } = loadFromStorage(storageKeyFor(userId));
     storageUnavailableRef.current = unavailable;
     setConversations(loaded);
     setStorageUnavailable(unavailable);
@@ -86,18 +94,19 @@ export function useChatHistory(activeConversationId: string | null): {
         setStaleId(true);
       }
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   // Persist to localStorage after every conversations change (pure effect, no setState inside updaters)
   useEffect(() => {
     if (!initializedRef.current) return;
     if (storageUnavailableRef.current) return;
-    const success = saveToStorage(conversations);
+    const success = saveToStorage(storageKeyFor(userId), conversations);
     if (!success) {
       storageUnavailableRef.current = true;
       setStorageUnavailable(true);
     }
-  }, [conversations]);
+  }, [conversations, userId]);
 
   const createConversation = useCallback((model: string): string => {
     const id = crypto.randomUUID();
