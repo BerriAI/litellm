@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Spin, Input, Button, Skeleton } from "antd";
 import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import {
@@ -112,8 +113,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
   const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
-  const [detailTools, setDetailTools] = useState<MCPTool[]>([]);
-  const [loadingTools, setLoadingTools] = useState(false);
   // tool counts per server name, preloaded in background
   const [toolCounts, setToolCounts] = useState<Record<string, number>>({});
   const [loadingCounts, setLoadingCounts] = useState(false);
@@ -138,14 +137,44 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
   const nameOf = (s: MCPServer) => s.server_name ?? s.alias ?? s.server_id;
 
+  const fetchLoadCancelledRef = useRef(false);
+
+  const fetchToolCount = useCallback(
+    async (server: MCPServer) => {
+      try {
+        const toolsData = await listMCPTools(accessToken, server.server_id);
+        if (fetchLoadCancelledRef.current) return;
+        const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
+        setToolCounts((prev) => ({ ...prev, [nameOf(server)]: tools.length }));
+      } catch {
+        // ignore — this server's tool count just stays unset
+      }
+    },
+    [accessToken],
+  );
+
+  const checkOauthCredential = useCallback(
+    async (server: MCPServer) => {
+      try {
+        const status = await getMCPOAuthUserCredentialStatus(accessToken, server.server_id);
+        if (fetchLoadCancelledRef.current) return;
+        if (status.has_credential && !status.is_expired) {
+          setOauthConnected((prev) => new Set(prev).add(server.server_id));
+        }
+      } catch {
+        // ignore — server just shows as not connected
+      }
+    },
+    [accessToken],
+  );
+
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
+    fetchLoadCancelledRef.current = false;
 
     // 1. Load servers first — show the list immediately
     fetchMCPServers(accessToken)
       .then(async (serverData) => {
-        if (cancelled) return;
+        if (fetchLoadCancelledRef.current) return;
         const list: MCPServer[] = Array.isArray(serverData) ? serverData : serverData?.data ?? [];
         setServers(list);
         setLoading(false);
@@ -156,44 +185,25 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           list.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
         );
         for (const chunk of chunks) {
-          if (cancelled) return;
-          await Promise.allSettled(
-            chunk.map((s) =>
-              listMCPTools(accessToken, s.server_id)
-                .then((toolsData) => {
-                  if (cancelled) return;
-                  const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
-                  setToolCounts((prev) => ({ ...prev, [nameOf(s)]: tools.length }));
-                })
-                .catch(() => {}),
-            ),
-          );
+          if (fetchLoadCancelledRef.current) return;
+          await Promise.allSettled(chunk.map((s) => fetchToolCount(s)));
         }
-        if (!cancelled) setLoadingCounts(false);
+        if (!fetchLoadCancelledRef.current) setLoadingCounts(false);
 
         // 3. Check OAuth credential status for OAuth2 servers in parallel
         const oauthServers = list.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
-        oauthServers.forEach((s) => {
-          getMCPOAuthUserCredentialStatus(accessToken, s.server_id)
-            .then((status) => {
-              if (cancelled) return;
-              if (status.has_credential && !status.is_expired) {
-                setOauthConnected((prev) => new Set(prev).add(s.server_id));
-              }
-            })
-            .catch(() => {});
-        });
+        oauthServers.forEach((s) => checkOauthCredential(s));
       })
       .catch(() => {
-        if (!cancelled) {
+        if (!fetchLoadCancelledRef.current) {
           setServers([]);
           setLoading(false);
         }
       });
     return () => {
-      cancelled = true;
+      fetchLoadCancelledRef.current = true;
     };
-  }, [accessToken]);
+  }, [accessToken, fetchToolCount, checkOauthCredential]);
 
   // Auto-enable oauth2 servers for the current chat session when a valid
   // credential is detected (either on mount or after a fresh OAuth sign-in).
@@ -248,30 +258,12 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   };
 
   // Fetch tools for the detail view — server_id must be the UUID
-  useEffect(() => {
-    if (!detailServer) {
-      setDetailTools([]);
-      return;
-    }
-    let cancelled = false;
-    setLoadingTools(true);
-    listMCPTools(accessToken, detailServer.server_id)
-      .then((result) => {
-        if (cancelled) return;
-        // API returns { tools: [...], error: null }
-        const tools: MCPTool[] = Array.isArray(result?.tools) ? result.tools : [];
-        setDetailTools(tools);
-      })
-      .catch(() => {
-        if (!cancelled) setDetailTools([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingTools(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [detailServer, accessToken]);
+  const { data: detailToolsResult, isLoading: loadingTools } = useQuery({
+    queryKey: ["mcp-apps-panel-detail-tools", detailServer?.server_id],
+    queryFn: () => listMCPTools(accessToken, detailServer!.server_id),
+    enabled: !!detailServer,
+  });
+  const detailTools: MCPTool[] = Array.isArray(detailToolsResult?.tools) ? detailToolsResult.tools : [];
 
   const filtered = servers.filter((s) => {
     const name = nameOf(s);

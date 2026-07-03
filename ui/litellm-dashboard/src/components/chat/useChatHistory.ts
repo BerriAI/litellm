@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ChatMessage, Conversation } from "./types";
 
 const STORAGE_KEY_PREFIX = "litellm_chat_history_v1";
@@ -66,47 +66,46 @@ export function useChatHistory(
   renameConversation: (id: string, newTitle: string) => void;
   setActiveConversationId: (id: string | null) => void;
 } {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [storageUnavailable, setStorageUnavailable] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>(
+    () => loadFromStorage(storageKeyFor(userId)).conversations,
+  );
+  const [storageUnavailable, setStorageUnavailable] = useState<boolean>(
+    () => loadFromStorage(storageKeyFor(userId)).storageUnavailable,
+  );
   const [staleId, setStaleId] = useState(false);
   const [currentActiveId, setCurrentActiveId] = useState<string | null>(activeConversationId);
-  // Ref so updater functions stay pure (no state setter calls inside setConversations)
-  const storageUnavailableRef = useRef(false);
-  const initializedRef = useRef(false);
 
   // Sync internal active id whenever the URL-derived prop changes (e.g. "New chat" → null)
-  useEffect(() => {
+  const [prevActiveConversationId, setPrevActiveConversationId] = useState(activeConversationId);
+  if (activeConversationId !== prevActiveConversationId) {
+    setPrevActiveConversationId(activeConversationId);
     setCurrentActiveId(activeConversationId);
     setStaleId(false);
-  }, [activeConversationId]);
+  }
 
-  useEffect(() => {
-    initializedRef.current = false;
+  // Reload conversations from storage whenever userId changes (e.g. auth resolving after mount)
+  const [prevUserId, setPrevUserId] = useState(userId);
+  if (userId !== prevUserId) {
+    setPrevUserId(userId);
     const { conversations: loaded, storageUnavailable: unavailable } = loadFromStorage(storageKeyFor(userId));
-    storageUnavailableRef.current = unavailable;
     setConversations(loaded);
     setStorageUnavailable(unavailable);
-    initializedRef.current = true;
 
-    if (activeConversationId !== null) {
-      const found = loaded.some((c) => c.id === activeConversationId);
-      if (!found) {
-        setStaleId(true);
-      }
+    if (activeConversationId !== null && !loaded.some((c) => c.id === activeConversationId)) {
+      setStaleId(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }
 
-  // Persist to localStorage after every conversations change (pure effect, no setState inside updaters)
+  // Persist to localStorage after every conversations change
   useEffect(() => {
-    if (!initializedRef.current) return;
-    if (storageUnavailableRef.current) return;
+    if (storageUnavailable) return;
     const success = saveToStorage(storageKeyFor(userId), conversations);
     if (!success) {
-      storageUnavailableRef.current = true;
-      setStorageUnavailable(true);
+      // Defer: a setState call directly in an effect body causes a synchronous
+      // cascading render; queuing it as a microtask callback avoids that.
+      queueMicrotask(() => setStorageUnavailable(true));
     }
-  }, [conversations, userId]);
+  }, [conversations, userId, storageUnavailable]);
 
   const createConversation = useCallback((model: string): string => {
     const id = crypto.randomUUID();

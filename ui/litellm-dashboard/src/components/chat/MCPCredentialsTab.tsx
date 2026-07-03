@@ -7,12 +7,15 @@
  * Lives in the Chat sidebar's "Credentials" tab.
  */
 
-import React, { useCallback, useEffect, useState } from "react";
-import { Spin } from "antd";
+import React, { useState } from "react";
+import { Spin, Table, Tag } from "antd";
+import type { ColumnsType } from "antd/es/table";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import MessageManager from "@/components/molecules/message_manager";
 import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
-import { Badge, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { deleteMCPOAuthUserCredential, listMCPUserCredentials, MCPUserCredentialListItem } from "../networking";
+
+const MCP_CREDENTIALS_QUERY_KEY = "mcp-user-credentials";
 
 interface Props {
   accessToken: string;
@@ -54,27 +57,22 @@ function expiryLabel(isoString: string | null | undefined): string {
 }
 
 const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
-  const [credentials, setCredentials] = useState<MCPUserCredentialListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [revoking, setRevoking] = useState<Set<string>>(new Set());
 
-  const load = useCallback(() => {
-    setLoading(true);
-    listMCPUserCredentials(accessToken)
-      .then(setCredentials)
-      .catch(() => setCredentials([]))
-      .finally(() => setLoading(false));
-  }, [accessToken]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data: credentials = [], isLoading: loading } = useQuery({
+    queryKey: [MCP_CREDENTIALS_QUERY_KEY, accessToken],
+    queryFn: () => listMCPUserCredentials(accessToken),
+    enabled: !!accessToken,
+  });
 
   const handleRevoke = async (serverId: string) => {
     setRevoking((prev) => new Set(prev).add(serverId));
     try {
       await deleteMCPOAuthUserCredential(accessToken, serverId);
-      setCredentials((prev) => prev.filter((c) => c.server_id !== serverId));
+      queryClient.setQueryData<MCPUserCredentialListItem[]>([MCP_CREDENTIALS_QUERY_KEY, accessToken], (prev) =>
+        (prev ?? []).filter((c) => c.server_id !== serverId),
+      );
     } catch {
       MessageManager.error("Failed to revoke connection. Please try again.");
     } finally {
@@ -87,6 +85,46 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
   };
 
   const displayName = (c: MCPUserCredentialListItem) => c.alias || c.server_name || c.server_id;
+
+  const columns: ColumnsType<MCPUserCredentialListItem> = [
+    {
+      title: "App",
+      key: "app",
+      render: (_, cred) => <span className="text-sm font-medium text-gray-900">{displayName(cred)}</span>,
+    },
+    {
+      title: "Connected",
+      key: "connected",
+      render: (_, cred) => <span className="text-sm text-gray-500">{relativeTime(cred.connected_at) || "—"}</span>,
+    },
+    {
+      title: "Status",
+      key: "status",
+      render: (_, cred) => {
+        const exp = expiryLabel(cred.expires_at);
+        return <Tag color={exp === "Expired" ? "red" : "green"}>{exp}</Tag>;
+      },
+    },
+    {
+      title: "Actions",
+      key: "actions",
+      align: "right",
+      render: (_, cred) => {
+        const isRevoking = revoking.has(cred.server_id);
+        return (
+          <button
+            onClick={() => handleRevoke(cred.server_id)}
+            disabled={isRevoking}
+            title="Revoke connection"
+            className={`inline-flex items-center justify-center rounded-md border border-gray-200 px-2 py-1 text-gray-400 hover:text-red-500 hover:border-red-200 transition-colors ${isRevoking ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+            style={{ background: "none" }}
+          >
+            {isRevoking ? <Spin size="small" /> : <DeleteOutlined className="text-sm" />}
+          </button>
+        );
+      },
+    },
+  ];
 
   return (
     <div className="w-full">
@@ -109,54 +147,7 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
         </div>
       ) : (
         <div className="rounded-lg border border-gray-200 overflow-hidden">
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">App</TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">Connected</TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">Status</TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4 text-right">
-                  Actions
-                </TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {credentials.map((cred) => {
-                const name = displayName(cred);
-                const isRevoking = revoking.has(cred.server_id);
-                const exp = expiryLabel(cred.expires_at);
-                const connected = relativeTime(cred.connected_at);
-                const isExpired = exp === "Expired";
-
-                return (
-                  <TableRow key={cred.server_id} className="h-10 hover:bg-gray-50">
-                    <TableCell className="py-2 px-4">
-                      <span className="text-sm font-medium text-gray-900">{name}</span>
-                    </TableCell>
-                    <TableCell className="py-2 px-4">
-                      <span className="text-sm text-gray-500">{connected || "—"}</span>
-                    </TableCell>
-                    <TableCell className="py-2 px-4">
-                      <Badge color={isExpired ? "red" : "green"} size="xs">
-                        {exp}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="py-2 px-4 text-right">
-                      <button
-                        onClick={() => handleRevoke(cred.server_id)}
-                        disabled={isRevoking}
-                        title="Revoke connection"
-                        className={`inline-flex items-center justify-center rounded-md border border-gray-200 px-2 py-1 text-gray-400 hover:text-red-500 hover:border-red-200 transition-colors ${isRevoking ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
-                        style={{ background: "none" }}
-                      >
-                        {isRevoking ? <Spin size="small" /> : <DeleteOutlined className="text-sm" />}
-                      </button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+          <Table columns={columns} dataSource={credentials} rowKey="server_id" pagination={false} size="small" />
         </div>
       )}
     </div>

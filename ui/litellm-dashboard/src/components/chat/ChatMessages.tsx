@@ -267,19 +267,14 @@ interface AssistantBubbleProps {
 }
 
 function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicator, mcpEvents }: AssistantBubbleProps) {
-  // Ref to control ReasoningContent collapse on streaming end.
-  // ReasoningContent manages its own expanded state; we use a key to
+  // ReasoningContent manages its own expanded state; we bump this key to
   // remount it (collapsed by default) when streaming finishes.
-  const reasoningKeyRef = useRef<number>(0);
+  const [reasoningKey, setReasoningKey] = useState(0);
   const prevStreamingRef = useRef<boolean>(isStreaming);
 
   useEffect(() => {
     if (prevStreamingRef.current && !isStreaming) {
-      // Streaming just stopped — bump the key to remount ReasoningContent
-      // with isExpanded default (false won't work since it starts expanded).
-      // ReasoningContent always starts expanded on mount; we accept that
-      // behaviour and leave collapse-on-finish as a best-effort remount.
-      reasoningKeyRef.current += 1;
+      setReasoningKey((k) => k + 1);
     }
     prevStreamingRef.current = isStreaming;
   }, [isStreaming]);
@@ -312,7 +307,7 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
         (showReasoningPlaceholder ? (
           <ThinkingPlaceholder />
         ) : (
-          <ReasoningContent key={reasoningKeyRef.current} reasoningContent={message.reasoningContent!} />
+          <ReasoningContent key={reasoningKey} reasoningContent={message.reasoningContent!} />
         ))}
 
       <div

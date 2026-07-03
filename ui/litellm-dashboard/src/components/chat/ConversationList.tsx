@@ -225,10 +225,12 @@ interface SearchModalProps {
 
 const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect, onClose }) => {
   const [query, setQuery] = useState("");
+  const [wasOpen, setWasOpen] = useState(open);
 
-  useEffect(() => {
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (!open) setQuery("");
-  }, [open]);
+  }
 
   const filtered = query.trim()
     ? conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()))

@@ -15,7 +15,6 @@ import {
   KeyOutlined,
   ArrowLeftOutlined,
   DownOutlined,
-  CloseOutlined,
   CheckOutlined,
 } from "@ant-design/icons";
 import ReactMarkdown from "react-markdown";
@@ -88,16 +87,26 @@ interface ComparisonExchange {
   responses: Record<string, string>; // model → accumulated response text
 }
 
+interface StreamToModelArgs {
+  model: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  accessToken: string;
+  mcpServers: string[];
+  signal: AbortSignal;
+  onChunk: (model: string, chunk: string) => void;
+  onDone: (model: string) => void;
+}
+
 // Module-level async helper — each model gets its own independent Promise so they all run in parallel.
-async function streamToModel(
-  model: string,
-  messages: Array<{ role: "user" | "assistant"; content: string }>,
-  accessToken: string,
-  mcpServers: string[],
-  signal: AbortSignal,
-  onChunk: (model: string, chunk: string) => void,
-  onDone: (model: string) => void,
-): Promise<void> {
+async function streamToModel({
+  model,
+  messages,
+  accessToken,
+  mcpServers,
+  signal,
+  onChunk,
+  onDone,
+}: StreamToModelArgs): Promise<void> {
   try {
     await makeOpenAIChatCompletionRequest(
       messages,
@@ -146,6 +155,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
   const [selectedMCPServers, setSelectedMCPServers] = useState<string[]>([]);
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
+  const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
   const [isStreaming, setIsStreaming] = useState(false);
   const [inputText, setInputText] = useState("");
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
@@ -193,7 +203,6 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   // Load models
   useEffect(() => {
     if (!accessToken) return;
-    setIsLoadingModels(true);
     fetchAvailableModels(accessToken)
       .then((data) => {
         const names = (data || []).map((m: { model_group?: string }) => m.model_group ?? "").filter(Boolean);
@@ -228,9 +237,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
   // Reset the responses session when switching between conversations so that
   // previous_response_id from conversation A is never sent for conversation B.
-  useEffect(() => {
+  if (activeConversationId !== prevConversationIdForSessionReset) {
+    setPrevConversationIdForSessionReset(activeConversationId);
     setResponsesSessionId(null);
-  }, [activeConversationId]);
+  }
 
   const toggleModel = useCallback((model: string) => {
     setSelectedModels((prev) => {
@@ -406,13 +416,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           }
           history.push({ role: "user", content: trimmed });
 
-          return streamToModel(
+          return streamToModel({
             model,
-            history,
+            messages: history,
             accessToken,
-            selectedMCPServers,
-            controllers[model].signal,
-            (m, chunk) =>
+            mcpServers: selectedMCPServers,
+            signal: controllers[model].signal,
+            onChunk: (m, chunk) =>
               setComparisonExchanges((prev) => {
                 const updated = [...prev];
                 const ex = { ...updated[newExchangeIdx] };
@@ -420,13 +430,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 updated[newExchangeIdx] = ex;
                 return updated;
               }),
-            (m) =>
+            onDone: (m) =>
               setComparisonStreamingSet((prev) => {
                 const next = new Set(prev);
                 next.delete(m);
                 return next;
               }),
-          );
+          });
         }),
       );
     },
@@ -641,7 +651,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   );
 
   // ---- Sidebar nav item renderer ----
-  const sidebarNavItem = (icon: React.ReactNode, label: string, onClick: () => void, active = false, kbd?: string) => (
+  const sidebarNavItem = ({
+    icon,
+    label,
+    onClick,
+    active = false,
+    kbd,
+  }: {
+    icon: React.ReactNode;
+    label: string;
+    onClick: () => void;
+    active?: boolean;
+    kbd?: string;
+  }) => (
     <Tooltip title={sidebarCollapsed ? label : undefined} placement="right" key={label}>
       <button
         onClick={onClick}
@@ -990,22 +1012,40 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
         {/* Sidebar nav buttons */}
         <div style={{ padding: "0 8px 4px", flexShrink: 0 }}>
-          {sidebarNavItem(<EditOutlined />, "New chat", () => router.push(getChatUrl(uiRoot)))}
-          {sidebarNavItem(<SearchOutlined />, "Search chats", () => setSidebarView("chats"))}
+          {sidebarNavItem({
+            icon: <EditOutlined />,
+            label: "New chat",
+            onClick: () => router.push(getChatUrl(uiRoot)),
+          })}
+          {sidebarNavItem({
+            icon: <SearchOutlined />,
+            label: "Search chats",
+            onClick: () => setSidebarView("chats"),
+          })}
         </div>
 
         <div style={{ height: 1, background: "#e5e7eb", margin: "4px 8px", flexShrink: 0 }} />
 
         {/* Chats / Apps tabs + Back to console */}
         <div style={{ padding: "4px 8px", flexShrink: 0 }}>
-          {sidebarNavItem(<MessageOutlined />, "Chats", () => setSidebarView("chats"), sidebarView === "chats")}
-          {sidebarNavItem(<AppstoreOutlined />, "Apps", () => setSidebarView("apps"), sidebarView === "apps")}
-          {sidebarNavItem(
-            <KeyOutlined />,
-            "Credentials",
-            () => setSidebarView("credentials"),
-            sidebarView === "credentials",
-          )}
+          {sidebarNavItem({
+            icon: <MessageOutlined />,
+            label: "Chats",
+            onClick: () => setSidebarView("chats"),
+            active: sidebarView === "chats",
+          })}
+          {sidebarNavItem({
+            icon: <AppstoreOutlined />,
+            label: "Apps",
+            onClick: () => setSidebarView("apps"),
+            active: sidebarView === "apps",
+          })}
+          {sidebarNavItem({
+            icon: <KeyOutlined />,
+            label: "Credentials",
+            onClick: () => setSidebarView("credentials"),
+            active: sidebarView === "credentials",
+          })}
           <Tooltip title={sidebarCollapsed ? "Back to Developer Console UI" : undefined} placement="right">
             <a
               href={dashboardUrl}
