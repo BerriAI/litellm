@@ -5,6 +5,7 @@ from litellm.caching.caching import DualCache
 from litellm.proxy._types import UpdateTeamRequest
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    _to_internal_model_max_budget,
     build_effective_model_max_budget_usage,
     resolve_effective_model_max_budget,
 )
@@ -63,6 +64,68 @@ async def test_build_effective_model_max_budget_usage_uses_key_spend_for_service
     mock_key_spend.assert_awaited_once()
     assert usage["claude-sonnet-4-6"]["current_spend"] == 8.0
     assert usage["claude-sonnet-4-6"]["scope"] == "key"
+
+
+def test_match_budget_model_key_maps_bedrock_deployment_to_alias(budget_limiter) -> None:
+    internal = _to_internal_model_max_budget(
+        {"claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"}}
+    )
+
+    assert (
+        budget_limiter._match_budget_model_key(
+            model="bedrock/us.anthropic.claude-sonnet-4-6",
+            internal_model_max_budget=internal,
+        )
+        == "claude-sonnet-4-6"
+    )
+    assert (
+        budget_limiter._match_budget_model_key(
+            model="us.anthropic.claude-sonnet-4-6",
+            internal_model_max_budget=internal,
+        )
+        == "claude-sonnet-4-6"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_team_default_increments_bedrock_model_alias(budget_limiter):
+    from unittest.mock import AsyncMock, patch
+
+    virtual_key = "sa-key-hash"
+    team_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.04,
+            "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+            "model_group": None,
+            "metadata": {"user_api_key_hash": virtual_key},
+            "end_user": "",
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_model_max_budget": {},
+                "user_api_key_team_model_max_budget": team_budget,
+                "user_api_key_team_id": "team-systems",
+            },
+        },
+    }
+
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+
+    mock_increment.assert_awaited_once()
+    assert (
+        mock_increment.call_args.kwargs["spend_key"]
+        == "virtual_key_spend:sa-key-hash:claude-sonnet-4-6:1d"
+    )
 
 
 def test_update_team_request_accepts_model_max_budget() -> None:

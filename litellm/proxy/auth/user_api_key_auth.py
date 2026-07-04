@@ -1832,22 +1832,26 @@ async def _user_api_key_auth_builder(
                     model_type=LiteLLM_TeamTableCachedObj,
                 )
 
-            if not skip_budget_checks:
-                team_model_max_budget = _team_obj.model_max_budget if _team_obj is not None else None
-                team_member_model_max_budget = await _resolve_team_member_model_max_budget_for_auth(
+            team_model_max_budget = _team_obj.model_max_budget if _team_obj is not None else None
+            team_member_model_max_budget = (
+                await _resolve_team_member_model_max_budget_for_auth(
                     valid_token=valid_token,
                     team_metadata=_team_obj.metadata if _team_obj is not None else None,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                 )
-                await _check_virtual_key_model_max_budgets(
-                    valid_token=valid_token,
-                    current_models=current_models,
-                    model_max_budget_limiter=model_max_budget_limiter,
-                    team_model_max_budget=team_model_max_budget,
-                    team_member_model_max_budget=team_member_model_max_budget,
-                    prisma_client=prisma_client,
-                )
+                if _team_obj is not None
+                else None
+            )
+            await _check_virtual_key_model_max_budgets(
+                valid_token=valid_token,
+                current_models=current_models,
+                model_max_budget_limiter=model_max_budget_limiter,
+                team_model_max_budget=team_model_max_budget,
+                team_member_model_max_budget=team_member_model_max_budget,
+                prisma_client=prisma_client,
+                enforce_budget=not skip_budget_checks,
+            )
 
             # Fetch project object if key belongs to a project
             _project_obj = None
@@ -2017,6 +2021,7 @@ async def _check_virtual_key_model_max_budgets(
     team_model_max_budget: Optional[dict],
     team_member_model_max_budget: Optional[dict],
     prisma_client: Any,
+    enforce_budget: bool = True,
 ) -> None:
     from litellm.proxy.hooks.model_max_budget_limiter import resolve_effective_model_max_budget
 
@@ -2028,7 +2033,8 @@ async def _check_virtual_key_model_max_budgets(
     valid_token.auth_team_model_max_budget = team_model_max_budget
     valid_token.auth_team_member_model_max_budget = team_member_model_max_budget
     if (
-        effective_budget is not None
+        enforce_budget
+        and effective_budget is not None
         and isinstance(effective_budget, dict)
         and len(effective_budget) > 0
         and prisma_client is not None
