@@ -435,9 +435,6 @@ async def route_request(
             "aget_run",
             "acancel_run",
             "adelete_run",
-            "acreate_realtime_client_secret",
-            "arealtime_calls",
-            "acreate_realtime_transcription_session",
         ]:
             # If a model is provided, get its credentials from the router
             model = data.get("model")
