@@ -1,0 +1,21 @@
+name: Sync Upstream
+
+# This runs every day on 1801 UTC
+on:
+  schedule:
+    - cron: '59 23 * * 0'
+  # Allows manual workflow run (must in default branch to work)
+  workflow_dispatch:
+
+jobs:
+  build:
+    if: github.repository == 'DataReply/litellm'
+    runs-on: ubuntu-latest
+    steps:
+      - name: GitHub Sync to Upstream Repository
+        uses: rovast/sync-upstream-repo@v0.0.1
+        with: 
+          upstream_repo: https://github.com/BerriAI/litellm
+          upstream_branch: litellm_internal_staging
+          downstream_branch: litellm_internal_staging # change this
+          token: ${{ secrets.PAT_TOKEN }}
