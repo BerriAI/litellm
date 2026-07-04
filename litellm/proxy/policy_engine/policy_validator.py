@@ -176,10 +176,10 @@ class PolicyValidator:
     async def find_invalid_scope_entries(
         self,
         policy_name: str,
-        teams: Optional[List[str]] = None,
-        keys: Optional[List[str]] = None,
-        models: Optional[List[str]] = None,
-    ) -> List[PolicyValidationError]:
+        teams: list[str] | None = None,
+        keys: list[str] | None = None,
+        models: list[str] | None = None,
+    ) -> list[PolicyValidationError]:
         """
         Validate the concrete scope entries of a policy attachment.
 
