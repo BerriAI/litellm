@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ViewSwitcher from "./ViewSwitcher";
 
-const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
+const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hoisted(() => {
   const state = {
     mode: "ai-gateway" as string,
     setMode: vi.fn(),
     plugins: [] as { name: string; display_name: string; url: string }[],
     activePlugin: null as { name: string; display_name: string; url: string } | null,
     enableChatUI: false,
+    pathname: "/ui/",
   };
   return {
     state,
@@ -19,11 +20,13 @@ const { mockUsePluginMode, mockUseUISettings, state } = vi.hoisted(() => {
       activePlugin: state.activePlugin,
     })),
     mockUseUISettings: vi.fn(() => ({ data: { values: { enable_chat_ui: state.enableChatUI } } })),
+    mockUsePathname: vi.fn(() => state.pathname),
   };
 });
 
 vi.mock("@/contexts/PluginModeContext", () => ({ usePluginMode: mockUsePluginMode }));
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: mockUseUISettings }));
+vi.mock("next/navigation", () => ({ usePathname: mockUsePathname }));
 // Deterministic hrefs so navigation assertions don't depend on server_root_path.
 vi.mock("@/utils/migratedPages", () => ({ migratedHref: (seg: string) => `/ui/${seg}` }));
 
@@ -42,6 +45,7 @@ describe("ViewSwitcher", () => {
     state.mode = "ai-gateway";
     state.plugins = [];
     state.enableChatUI = false;
+    state.pathname = "/ui/";
     state.setMode.mockClear();
   });
 
@@ -98,6 +102,23 @@ describe("ViewSwitcher", () => {
     });
     expect(assignSpy).toHaveBeenCalledWith("/ui/chat");
     expect(state.setMode).not.toHaveBeenCalled();
+  });
+
+  it("navigates back to the dashboard when a mode entry is picked from the chat route", async () => {
+    state.enableChatUI = true;
+    state.pathname = "/ui/chat";
+    state.plugins = [{ name: "litellm-platform-plugin", display_name: "Chat UI", url: "http://localhost:3300" }];
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    await waitFor(() => expect(screen.getByText("AI Gateway")).toBeInTheDocument());
+    act(() => {
+      fireEvent.click(screen.getByText("AI Gateway"));
+    });
+    expect(state.setMode).toHaveBeenCalledWith("ai-gateway");
+    expect(assignSpy).toHaveBeenCalledWith("/ui/");
   });
 
   it("hides the Chat entry from everyone when disabled", async () => {
