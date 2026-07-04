@@ -1118,6 +1118,13 @@ class Router:
         self.adelete_responses = self.factory_function(litellm.adelete_responses, call_type="adelete_responses")
         self.alist_input_items = self.factory_function(litellm.alist_input_items, call_type="alist_input_items")
         self._arealtime = self.factory_function(litellm._arealtime, call_type="_arealtime")
+        self.acreate_realtime_client_secret = self.factory_function(
+            litellm.acreate_realtime_client_secret, call_type="acreate_realtime_client_secret"
+        )
+        self.arealtime_calls = self.factory_function(litellm.arealtime_calls, call_type="arealtime_calls")
+        self.acreate_realtime_transcription_session = self.factory_function(
+            litellm.acreate_realtime_transcription_session, call_type="acreate_realtime_transcription_session"
+        )
         self._aresponses_websocket = self.factory_function(
             litellm._aresponses_websocket, call_type="_aresponses_websocket"
         )
@@ -5350,6 +5357,9 @@ class Router:
             "afile_delete",
             "afile_content",
             "_arealtime",
+            "acreate_realtime_client_secret",
+            "arealtime_calls",
+            "acreate_realtime_transcription_session",
             "_aresponses_websocket",
             "acreate_fine_tuning_job",
             "acancel_fine_tuning_job",
@@ -5587,6 +5597,16 @@ class Router:
             elif call_type == "aresponses":
                 return await self._aresponses_with_streaming_fallbacks(
                     original_function=original_function,
+                    **kwargs,
+                )
+            elif call_type in (
+                "acreate_realtime_client_secret",
+                "arealtime_calls",
+                "acreate_realtime_transcription_session",
+            ):
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    client=client,
                     **kwargs,
                 )
             elif call_type in (
