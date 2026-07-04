@@ -423,6 +423,64 @@ def test_handle_realtime_stream_cost_calculation():
     assert cost == 0.0  # No usage, no cost
 
 
+def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
+    """Regression: realtime cost must populate logging_obj.cost_breakdown so the
+    spend logs / UI show input vs output cost (issue: cost_breakdown was None for
+    /v1/realtime even though a total spend was computed)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    logging_obj = Logging(
+        model="gpt-4o-realtime-preview",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-cost-breakdown-test",
+        function_id="realtime-cost-breakdown-test",
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-4o-realtime-preview",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert total_cost > 0
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] > 0
+    assert logging_obj.cost_breakdown["output_cost"] > 0
+    assert (
+        abs(
+            logging_obj.cost_breakdown["input_cost"]
+            + logging_obj.cost_breakdown["output_cost"]
+            - total_cost
+        )
+        < 1e-9
+    )
+    assert abs(logging_obj.cost_breakdown["total_cost"] - total_cost) < 1e-9
+
+
 def test_realtime_stream_combines_text_and_audio_token_details():
     """Realtime response.done usage with input_token_details / output_token_details."""
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
@@ -579,6 +637,10 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     ($0.017/min). The .completed events carry usage {type: duration, seconds: N};
     cost must equal total_seconds * input_cost_per_second.
     """
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -609,17 +671,41 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
         results=results
     )
+    logging_obj = Logging(
+        model="gpt-realtime-whisper",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-transcription-cost-breakdown-test",
+        function_id="realtime-transcription-cost-breakdown-test",
+    )
     cost = handle_realtime_stream_cost_calculation(
         results=results,
         combined_usage_object=combined,
         custom_llm_provider="openai",
         litellm_model_name="gpt-realtime-whisper",
+        litellm_logging_obj=logging_obj,
     )
 
     # 90 seconds at $0.017/minute.
     expected = 90.0 * (0.017 / 60)
     assert abs(cost - expected) < 1e-9
     assert cost > 0  # guards against the duration branch being dropped
+    assert logging_obj.cost_breakdown is not None
+    assert abs(logging_obj.cost_breakdown["total_cost"] - cost) < 1e-9
+
+    # The transcription cost must be attributed in the breakdown, not just folded
+    # into total_cost, or input_cost + output_cost + additional_costs won't sum to total_cost.
+    additional_costs = logging_obj.cost_breakdown.get("additional_costs")
+    assert additional_costs is not None
+    assert abs(additional_costs["transcription_cost"] - expected) < 1e-9
+    attributed_total = (
+        logging_obj.cost_breakdown["input_cost"]
+        + logging_obj.cost_breakdown["output_cost"]
+        + additional_costs["transcription_cost"]
+    )
+    assert abs(attributed_total - logging_obj.cost_breakdown["total_cost"]) < 1e-9
 
 
 def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
