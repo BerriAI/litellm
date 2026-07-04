@@ -1,3 +1,4 @@
+import json
 import re
 from copy import deepcopy
 from enum import Enum
@@ -1152,6 +1153,15 @@ class VertexAITokenCounter(BaseTokenCounter):
             # Use standard Vertex AI (Gemini) token counter
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
+            contents = self._build_gemini_contents_for_counting(
+                contents=contents,
+                messages=messages,
+                system=system,
+                tools=tools,
+                model_to_use=model_to_use,
+                litellm_params=count_tokens_params_request,
+            )
+
             count_tokens_params = {
                 "model": model_to_use,
                 "contents": contents,
@@ -1171,3 +1181,71 @@ class VertexAITokenCounter(BaseTokenCounter):
                 )
 
         return None
+
+    def _build_gemini_contents_for_counting(
+        self,
+        contents: Optional[List[Dict[str, Any]]],
+        messages: Optional[List[Dict[str, Any]]],
+        system: Optional[Any],
+        tools: Optional[List[Dict[str, Any]]],
+        model_to_use: str,
+        litellm_params: Dict[str, Any],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Build the Gemini-format `contents` payload sent to Vertex AI's countTokens API.
+
+        Callers that go through the Anthropic-compatible `/v1/messages/count_tokens`
+        proxy endpoint (e.g. Claude Code, or any Anthropic SDK client pointed at a
+        Vertex/Gemini deployment) only ever populate `messages`/`system`/`tools`
+        (Anthropic Messages API format) -- they never populate `contents` (Gemini's
+        native format). Previously, `contents` stayed `None` in that case, and
+        Vertex's countTokens endpoint treats an empty/null `contents` body as a
+        *valid* request and returns `{"totalTokens": 0}` instead of erroring -- so
+        callers silently got a confidently-wrong 0 instead of a real count.
+
+        This converts `messages` to Gemini `contents` using the same transform used
+        for real completion requests, and folds `system`/`tools` in as plain text
+        (not `systemInstruction`/`functionDeclarations`) since an exact schema-aware
+        conversion isn't required for a token *count* and risks a 400 on
+        Anthropic/OpenAI-shaped JSON Schema that Vertex's function-declaration
+        validation doesn't accept as-is.
+        """
+        if not contents and messages:
+            try:
+                from litellm.llms.vertex_ai.gemini.transformation import (
+                    _gemini_convert_messages_with_history,
+                )
+
+                contents = _gemini_convert_messages_with_history(
+                    messages=messages,  # type: ignore[arg-type]
+                    model=model_to_use,
+                    litellm_params=litellm_params,
+                    custom_llm_provider="vertex_ai",
+                )
+            except Exception:
+                verbose_logger.exception(
+                    "VertexAITokenCounter._build_gemini_contents_for_counting(): "
+                    "failed to convert Anthropic-format messages to Gemini contents "
+                    "for token counting; falling back to the original contents."
+                )
+
+        try:
+            extra_text_parts = []
+            if system:
+                extra_text_parts.append(system if isinstance(system, str) else json.dumps(system))
+            if tools:
+                extra_text_parts.append(json.dumps(tools))
+            if extra_text_parts:
+                extra_content = {
+                    "role": "user",
+                    "parts": [{"text": "\n".join(extra_text_parts)}],
+                }
+                contents = [extra_content, *contents] if contents else [extra_content]
+        except Exception:
+            verbose_logger.exception(
+                "VertexAITokenCounter._build_gemini_contents_for_counting(): "
+                "failed to fold system/tools into contents for token counting; "
+                "those will be undercounted."
+            )
+
+        return contents
