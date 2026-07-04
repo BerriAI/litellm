@@ -838,6 +838,86 @@ class TestMCPServerManager:
         assert "authorization" not in {k.lower() for k in (client.extra_headers or {})}
 
     @pytest.mark.asyncio
+    async def test_preflight_token_exchange_challenges_on_rejected_subject(self):
+        """A subject the IdP rejects must raise the RFC 9728 401 challenge from the preflight, so a
+        single-server route fails observably at the transport edge instead of the old behavior of
+        the session opening and list_tools masking the failed exchange as an empty tool list."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_unauthorized("subject token rejected by the IdP"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-401")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer rejected-subject"},
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 401
+        headers = exc_info.value.headers or {}
+        www_authenticate = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+        assert "resource_metadata" in www_authenticate
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_maps_gateway_fault_to_public_status(self):
+        """A gateway-fault CredError (e.g. invalid_client) must surface its public status (500)
+        from the preflight, not the OBO 401 challenge and not an empty-success session."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                return Error(CredError.of_misconfigured("token exchange configuration error"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-500")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer subj"},
+                user_api_key_auth=None,
+            )
+        assert exc_info.value.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_preflight_token_exchange_noop_on_success_and_without_subject(self):
+        """A successful exchange returns without raising, and a request with no bearer never
+        reaches the resolver (the no-subject case is the existing preemptive challenge's job)."""
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
+            StaticHeaderAuth,
+        )
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Ok
+
+        resolved = []
+
+        class _FakeProvider:
+            async def resolve_credentials(self, subject, server):
+                resolved.append(subject.inbound_token.get_secret_value() if subject.inbound_token else None)
+                return Ok(StaticHeaderAuth("Bearer MINTED", header_name="Authorization"))
+
+        manager = MCPServerManager(cred_provider=_FakeProvider())
+        server = self._token_exchange_server("te-preflight-ok")
+
+        assert (
+            await manager.preflight_token_exchange(
+                server=server,
+                oauth2_headers={"Authorization": "Bearer good-subject"},
+                user_api_key_auth=None,
+            )
+            is None
+        )
+        assert resolved == ["good-subject"]
+
+        await manager.preflight_token_exchange(server=server, oauth2_headers=None, user_api_key_auth=None)
+        assert resolved == ["good-subject"]
+
+    @pytest.mark.asyncio
     async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
         self,
     ):
@@ -1509,8 +1589,10 @@ class TestMCPServerManager:
             registration_url="https://discovered.example.com/register",
         )
 
-        async def fake_discovery(server_url: str):
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
             assert server_url == "https://example.com/mcp"
+            # oauth2 (browser flow) keeps the origin fallback; only OBO disables it.
+            assert allow_origin_fallback is True
             return discovered_metadata
 
         manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
@@ -3467,6 +3549,180 @@ class TestMCPServerTimestamps:
         default_server = await manager.build_mcp_server_from_table(default_record, credentials_are_encrypted=False)
         assert default_server.token_endpoint_auth_method is None
 
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_discovers_obo_token_url_when_unset(self):
+        """DB path: an OBO server with no token_exchange_endpoint in credentials and no token_url
+        column runs discovery, and the resolved endpoint lands on the returned MCPServer."""
+        manager = MCPServerManager()
+        calls: list[bool] = []
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            calls.append(allow_origin_fallback)
+            return MCPOAuthMetadata(
+                scopes=None,
+                authorization_url=None,
+                token_url="https://discovered.example.com/token",
+                registration_url=None,
+            )
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        record = LiteLLM_MCPServerTable(
+            server_id="obo-discover-db-1",
+            server_name="obo_discover_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={"client_id": "cid", "client_secret": "csec"},
+        )
+
+        # prisma_client None -> the write-back no-ops; this test isolates the discovery behavior.
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert calls == [False]  # discovery ran once, origin fallback disabled for OBO
+        assert server.token_url == "https://discovered.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_skips_discovery_when_obo_endpoint_configured(self):
+        """DB path: a configured token_exchange_endpoint in the credentials JSON wins and skips
+        discovery entirely, even though the token_url column is empty (the DB-specific lookup uses
+        credentials_dict["token_exchange_endpoint"], not the column)."""
+        manager = MCPServerManager()
+        calls: list[str] = []
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            calls.append(server_url)
+            raise AssertionError("discovery must not run when token_exchange_endpoint is configured")
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        record = LiteLLM_MCPServerTable(
+            server_id="obo-configured-db-1",
+            server_name="obo_configured_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_exchange_endpoint": "https://idp.example.com/token",
+            },
+        )
+
+        server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert calls == []  # discovery never ran
+        assert server.token_exchange_endpoint == "https://idp.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_persists_discovered_obo_token_url(self):
+        """A DB-backed OBO server with no configured endpoint discovers token_url and must write it
+        back to the row, so the next rebuild skips discovery instead of re-running it every time."""
+        manager = MCPServerManager()
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            assert server_url == "https://example.com/mcp"
+            assert allow_origin_fallback is False  # OBO never guesses the origin
+            return MCPOAuthMetadata(
+                scopes=None,
+                authorization_url=None,
+                token_url="https://discovered.example.com/token",
+                registration_url=None,
+            )
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        record = LiteLLM_MCPServerTable(
+            server_id="obo-persist-1",
+            server_name="obo_persist",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={"client_id": "cid", "client_secret": "csec", "audience": "aud"},
+        )
+
+        update_mock = AsyncMock()
+        repo_instance = MagicMock()
+        repo_instance.table.update = update_mock
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repo_instance,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            server = await manager.build_mcp_server_from_table(record, credentials_are_encrypted=False)
+
+        assert server.token_url == "https://discovered.example.com/token"
+        update_mock.assert_awaited_once()
+        assert update_mock.call_args.kwargs["where"] == {"server_id": "obo-persist-1"}
+        assert update_mock.call_args.kwargs["data"] == {"token_url": "https://discovered.example.com/token"}
+
+    @pytest.mark.asyncio
+    async def test_persist_discovered_obo_token_url_skips_when_not_needed(self):
+        """The write-back fires only for an OBO server that discovered a new endpoint: a row that
+        already has token_url, a non-OBO auth_type, or a discovery that found nothing all no-op."""
+        manager = MCPServerManager()
+        update_mock = AsyncMock()
+        repo_instance = MagicMock()
+        repo_instance.table.update = update_mock
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repo_instance,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            # already populated -> no write
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2_token_exchange,
+                existing_token_url="https://already.example.com/token",
+                discovered_token_url="https://new.example.com/token",
+            )
+            # not an OBO server -> no write
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2,
+                existing_token_url=None,
+                discovered_token_url="https://new.example.com/token",
+            )
+            # discovery found nothing -> no write
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2_token_exchange,
+                existing_token_url=None,
+                discovered_token_url=None,
+            )
+
+        update_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_persist_discovered_obo_token_url_is_best_effort(self):
+        """A write-back failure must not propagate; discovery just re-runs on the next build."""
+        manager = MCPServerManager()
+        update_mock = AsyncMock(side_effect=Exception("db unavailable"))
+        repo_instance = MagicMock()
+        repo_instance.table.update = update_mock
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repo_instance,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        ):
+            await manager._persist_discovered_obo_token_url(
+                server_id="s",
+                auth_type=MCPAuth.oauth2_token_exchange,
+                existing_token_url=None,
+                discovered_token_url="https://new.example.com/token",
+            )
+
+        update_mock.assert_awaited_once()
+
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
         manager = MCPServerManager()
@@ -5043,9 +5299,7 @@ def _upstream_status_error(status_code: int, challenge: str) -> httpx.HTTPStatus
         headers={"WWW-Authenticate": challenge},
         request=request,
     )
-    return httpx.HTTPStatusError(
-        "upstream rejected token", request=request, response=response
-    )
+    return httpx.HTTPStatusError("upstream rejected token", request=request, response=response)
 
 
 class TestMCPToolsListAuthSurfacing:
@@ -5105,9 +5359,7 @@ class TestMCPToolsListAuthSurfacing:
         )
 
         manager = MCPServerManager()
-        server = MCPServer(
-            server_id="oauth-srv", name="oauth-srv", transport=MCPTransport.http
-        )
+        server = MCPServer(server_id="oauth-srv", name="oauth-srv", transport=MCPTransport.http)
         challenge = 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/oauth-srv"'
         manager._create_mcp_client = AsyncMock(
             side_effect=HTTPException(
@@ -5129,9 +5381,7 @@ class TestMCPToolsListAuthSurfacing:
         """A non-auth HTTPException (500) stays absorbed so one misconfigured server cannot blank
         the listing; 401/403 are the challenge-class statuses routed to MCPUpstreamAuthError."""
         manager = MCPServerManager()
-        server = MCPServer(
-            server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http
-        )
+        server = MCPServer(server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http)
         manager._create_mcp_client = AsyncMock(
             side_effect=HTTPException(
                 status_code=500,
@@ -5170,6 +5420,8 @@ class TestMCPToolsListAuthSurfacing:
         result = await manager.list_tools()
 
         assert [t.name for t in result] == ["good-do_thing"]
+
+
 def test_should_strip_caller_authorization_for_token_exchange():
     """OBO: the inbound bearer is the subject token (exchanged), never forwarded upstream raw."""
     server = MCPServer(
@@ -5306,6 +5558,119 @@ class TestOBOCallToolRetry:
         assert result.isError is True
         manager._create_mcp_client.assert_awaited_once()
         assert first.attempts == 1 and retry.attempts == 1
+
+
+class TestOBOEndpointDiscovery:
+    """An oauth2_token_exchange server with no configured token endpoint discovers it (RFC 9728 ->
+    RFC 8414) like the oauth2 flow does; an explicitly configured endpoint skips discovery."""
+
+    @pytest.mark.parametrize(
+        "auth_type, endpoint, token_url, expected",
+        [
+            (MCPAuth.oauth2_token_exchange, None, None, True),  # OBO, nothing configured -> discover
+            (MCPAuth.oauth2_token_exchange, "https://idp/token", None, False),  # endpoint set -> skip
+            (MCPAuth.oauth2_token_exchange, None, "https://idp/token", False),  # token_url set -> skip
+            (MCPAuth.oauth2, None, None, False),  # not OBO
+            (MCPAuth.none, None, None, False),
+            (None, None, None, False),
+        ],
+    )
+    def test_decision(self, auth_type, endpoint, token_url, expected):
+        assert MCPServerManager._obo_needs_endpoint_discovery(auth_type, endpoint, token_url) is expected
+
+    @pytest.mark.asyncio
+    async def test_config_obo_without_endpoint_discovers_token_endpoint(self):
+        manager = MCPServerManager()
+        discovered = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url=None,
+            token_url="https://discovered.example.com/token",
+            registration_url=None,
+        )
+        seen = []
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            seen.append((server_url, allow_origin_fallback))
+            return discovered
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        await manager.load_servers_from_config(
+            {
+                "obo": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2_token_exchange,
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                }
+            }
+        )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        # OBO discovery runs, and never guesses the resource origin as the IdP (origin fallback off).
+        assert seen == [("https://example.com/mcp", False)]
+        # The discovered token endpoint lands on token_url, which _token_exchange_spec reads.
+        assert server.token_url == "https://discovered.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_config_obo_with_configured_endpoint_skips_discovery(self):
+        manager = MCPServerManager()
+
+        async def fake_discovery(server_url: str, *, allow_origin_fallback: bool = True):
+            raise AssertionError("discovery must not run when the endpoint is configured")
+
+        manager._descovery_metadata = fake_discovery  # type: ignore[attr-defined]
+
+        await manager.load_servers_from_config(
+            {
+                "obo": {
+                    "url": "https://example.com/mcp",
+                    "transport": MCPTransport.http,
+                    "auth_type": MCPAuth.oauth2_token_exchange,
+                    "token_exchange_endpoint": "https://configured.example.com/token",
+                    "client_id": "cid",
+                    "client_secret": "csec",
+                }
+            }
+        )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.token_exchange_endpoint == "https://configured.example.com/token"
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_does_not_guess_origin_when_disallowed(self):
+        # The authoritative RFC 9728 -> RFC 8414 chain stays, but with allow_origin_fallback=False the
+        # resource origin is never assumed to be the IdP, so no token endpoint is invented.
+        manager = MCPServerManager()
+        server_url = "https://example.com/public/mcp"
+        request = httpx.Request("GET", server_url)
+        response_obj = httpx.Response(
+            status_code=401, request=request, headers={"WWW-Authenticate": 'Bearer scope="read"'}
+        )
+        response_obj.raise_for_status = MagicMock(
+            side_effect=lambda: (_ for _ in ()).throw(
+                httpx.HTTPStatusError("unauthorized", request=request, response=response_obj)
+            )
+        )
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=response_obj)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(manager, "_fetch_oauth_metadata_from_resource", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_attempt_well_known_discovery", AsyncMock(return_value=([], None))),
+            patch.object(manager, "_fetch_authorization_server_metadata", AsyncMock()) as mock_fetch_auth,
+        ):
+            result = await manager._descovery_metadata(server_url, allow_origin_fallback=False)
+
+        # No advertised AS -> with the guess disabled, the AS-metadata fetch is never attempted, so no
+        # token endpoint is discovered (only the scopes parsed from the challenge survive).
+        mock_fetch_auth.assert_not_awaited()
+        assert result is None or result.token_url is None
 
 
 if __name__ == "__main__":
