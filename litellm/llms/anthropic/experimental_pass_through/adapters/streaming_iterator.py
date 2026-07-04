@@ -78,8 +78,42 @@ class _CombinedChunkSplitter:
         self._buffer: deque = deque()
 
     @staticmethod
+    def _thinking_blocks_have_content(thinking_blocks: Any) -> bool:
+        if not thinking_blocks:
+            return False
+        for thinking_block in thinking_blocks:
+            if not isinstance(thinking_block, dict):
+                continue
+            if thinking_block.get("thinking") or thinking_block.get("signature") or thinking_block.get("data"):
+                return True
+        return False
+
+    @staticmethod
+    def _delta_has_response_payload(delta: Any) -> bool:
+        return bool(getattr(delta, "content", None) or getattr(delta, "tool_calls", None))
+
+    @staticmethod
+    def _delta_has_reasoning_payload(delta: Any) -> bool:
+        return bool(
+            getattr(delta, "reasoning_content", None)
+            or _CombinedChunkSplitter._thinking_blocks_have_content(getattr(delta, "thinking_blocks", None))
+        )
+
+    @staticmethod
+    def _clear_response_payload(delta: Any) -> None:
+        delta.content = None
+        if hasattr(delta, "tool_calls"):
+            delta.tool_calls = None
+
+    @staticmethod
+    def _clear_reasoning_payload(delta: Any) -> None:
+        if hasattr(delta, "reasoning_content"):
+            delta.reasoning_content = None
+        if hasattr(delta, "thinking_blocks"):
+            delta.thinking_blocks = None
+
+    @staticmethod
     def _is_combined(chunk: Any) -> bool:
-        """True if ``chunk`` carries response content AND a finish_reason."""
         choices = getattr(chunk, "choices", None)
         if not choices:
             return False
@@ -89,34 +123,52 @@ class _CombinedChunkSplitter:
         delta = getattr(choice, "delta", None)
         if delta is None:
             return False
-        return bool(
-            getattr(delta, "content", None)
-            or getattr(delta, "tool_calls", None)
-            or getattr(delta, "reasoning_content", None)
-            or getattr(delta, "thinking_blocks", None)
-        )
+        return _CombinedChunkSplitter._delta_has_response_payload(
+            delta
+        ) or _CombinedChunkSplitter._delta_has_reasoning_payload(delta)
 
     @staticmethod
     def _split(chunk: Any) -> List[Any]:
-        """Return ``[chunk]``, or ``[content_chunk, finish_chunk]`` if combined."""
-        if not _CombinedChunkSplitter._is_combined(chunk):
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            return [chunk]
+        choice = choices[0]
+        delta = getattr(choice, "delta", None)
+        if delta is None:
             return [chunk]
 
-        # Content chunk: keep the delta payload, clear the finish_reason.
-        content_chunk = copy.deepcopy(chunk)
-        content_chunk.choices[0].finish_reason = None
+        has_response_payload = _CombinedChunkSplitter._delta_has_response_payload(delta)
+        has_reasoning_payload = _CombinedChunkSplitter._delta_has_reasoning_payload(delta)
+        has_finish_reason = getattr(choice, "finish_reason", None) is not None
+        has_mixed_payload = has_response_payload and has_reasoning_payload
 
-        # Finish chunk: keep finish_reason (and usage), clear the delta payload.
-        finish_chunk = copy.deepcopy(chunk)
-        finish_delta = finish_chunk.choices[0].delta
-        finish_delta.content = None
-        if hasattr(finish_delta, "tool_calls"):
-            finish_delta.tool_calls = None
-        if hasattr(finish_delta, "reasoning_content"):
-            finish_delta.reasoning_content = None
-        if hasattr(finish_delta, "thinking_blocks"):
-            finish_delta.thinking_blocks = None
-        return [content_chunk, finish_chunk]
+        if not has_mixed_payload and not _CombinedChunkSplitter._is_combined(chunk):
+            return [chunk]
+
+        split_chunks: list[Any] = []
+        if has_mixed_payload:
+            reasoning_chunk = copy.deepcopy(chunk)
+            reasoning_chunk.choices[0].finish_reason = None
+            _CombinedChunkSplitter._clear_response_payload(reasoning_chunk.choices[0].delta)
+            split_chunks.append(reasoning_chunk)
+
+            response_chunk = copy.deepcopy(chunk)
+            response_chunk.choices[0].finish_reason = None
+            _CombinedChunkSplitter._clear_reasoning_payload(response_chunk.choices[0].delta)
+            split_chunks.append(response_chunk)
+        elif has_finish_reason:
+            content_chunk = copy.deepcopy(chunk)
+            content_chunk.choices[0].finish_reason = None
+            split_chunks.append(content_chunk)
+
+        if has_finish_reason:
+            finish_chunk = copy.deepcopy(chunk)
+            finish_delta = finish_chunk.choices[0].delta
+            _CombinedChunkSplitter._clear_response_payload(finish_delta)
+            _CombinedChunkSplitter._clear_reasoning_payload(finish_delta)
+            split_chunks.append(finish_chunk)
+
+        return split_chunks
 
     def __iter__(self) -> "Iterator[Any]":
         return self
