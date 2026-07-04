@@ -886,6 +886,25 @@ def test_resolve_advisor_credentials_rejects_non_https_api_base():
             _resolve_advisor_credentials(tool)
 
 
+def test_resolve_advisor_credentials_rejects_api_base_when_ssl_verify_disabled():
+    import litellm
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
+        _resolve_advisor_credentials,
+    )
+
+    tool = {**ADVISOR_TOOL, "api_key": "sk-other", "api_base": "https://8.8.8.8"}
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._allow_client_side_advisor_credentials",
+            return_value=True,
+        ),
+        patch.object(litellm, "ssl_verify", False),
+    ):
+        with pytest.raises(ValueError, match="ssl_verify"):
+            _resolve_advisor_credentials(tool)
+
+
 def test_resolve_advisor_credentials_allows_real_public_ip_address():
     """End-to-end (no mocked validate_url): a globally-routable literal IP
     api_base is honored when paired with an api_key."""

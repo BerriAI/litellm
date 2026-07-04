@@ -186,12 +186,15 @@ def _resolve_advisor_credentials(advisor_tool: dict) -> tuple[Optional[str], Opt
     ``api_key``: without one, ``AnthropicModelInfo.get_auth_header()`` falls
     back to the proxy's own Anthropic credentials, which would then be sent to
     the caller-chosen ``api_base``. A caller-supplied ``api_base`` is also
-    required to be https and SSRF-validated so it can't target a
-    private/internal/cloud-metadata address, mirroring
-    ``proxy.auth.auth_utils.check_complete_credentials``. https is required
-    because ``validate_url`` only rewrites the connection to a DNS-pinned IP
-    for http; for https with TLS verification on, it returns the URL
-    unchanged and relies on certificate validation to block DNS rebinding.
+    required to be https with TLS verification on, and SSRF-validated so it
+    can't target a private/internal/cloud-metadata address, mirroring
+    ``proxy.auth.auth_utils.check_complete_credentials``. https with TLS
+    verification is required because ``validate_url`` only rewrites the
+    connection to a DNS-pinned IP for http, or for https with
+    ``litellm.ssl_verify`` disabled; otherwise it returns the URL unchanged
+    and relies on certificate validation to block DNS rebinding, so this
+    closes the same gap without threading the pinned URL through the whole
+    ``anthropic_messages()`` call chain.
     """
     if not _allow_client_side_advisor_credentials():
         return None, None
@@ -208,6 +211,12 @@ def _resolve_advisor_credentials(advisor_tool: dict) -> tuple[Optional[str], Opt
         )
     if not api_base.startswith("https://"):
         raise ValueError(f"advisor tool definition sets 'api_base'={api_base!r}, which must use the https scheme.")
+    if getattr(litellm, "ssl_verify", True) is False:
+        raise ValueError(
+            "advisor tool definition sets 'api_base' but the proxy has TLS verification "
+            "disabled (litellm.ssl_verify=False), so a caller-supplied api_base can't be "
+            "safely validated against DNS rebinding."
+        )
     if getattr(litellm, "user_url_validation", True):
         validate_url(api_base)
     return api_key, api_base
