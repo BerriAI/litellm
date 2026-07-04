@@ -257,31 +257,27 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         </div>
       )}
 
-      {isModalOpen &&
-        selectedKey &&
-        keyData &&
-        (console.log("Rendering modal with:", { isModalOpen, selectedKey, keyData }),
-        (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleOutsideClick}>
-            <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
-              {/* Close button */}
-              <button
-                onClick={handleClose}
-                className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-hidden"
-                aria-label="Close"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+      {isModalOpen && selectedKey && keyData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleOutsideClick}>
+          <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
+            {/* Close button */}
+            <button
+              onClick={handleClose}
+              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-hidden"
+              aria-label="Close"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
 
-              {/* Content */}
-              <div className="p-6 h-full">
-                <KeyInfoView keyId={selectedKey} onClose={handleClose} keyData={keyData} teams={teams} />
-              </div>
+            {/* Content */}
+            <div className="p-6 h-full">
+              <KeyInfoView keyId={selectedKey} onClose={handleClose} keyData={keyData} teams={teams} />
             </div>
           </div>
-        ))}
+        </div>
+      )}
     </>
   );
 };

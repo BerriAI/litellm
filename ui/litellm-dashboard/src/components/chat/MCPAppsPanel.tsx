@@ -2,8 +2,11 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Spin, Input, Button, Skeleton } from "antd";
-import { SearchOutlined, ArrowLeftOutlined, RightOutlined, ToolOutlined, CheckCircleOutlined } from "@ant-design/icons";
+import { Search, ArrowLeft, ChevronRight, Wrench, CheckCircle, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   deleteMCPOAuthUserCredential,
   fetchMCPServers,
@@ -14,13 +17,10 @@ import { AUTH_TYPE, MCPServer, MCPTool, handleTransport } from "../mcp_tools/typ
 import MessageManager from "@/components/molecules/message_manager";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 
-// ── OAuth2 connect button ─────────────────────────────────────────────────────
-// Wraps useUserMcpOAuthFlow so each server card can hold its own hook instance.
 interface OAuth2ConnectButtonProps {
   server: MCPServer;
   accessToken: string;
   onConnect: (serverId: string) => void;
-  /** "badge" = small inline chip (grid card), "button" = full Ant Button (detail view) */
   variant?: "badge" | "button";
 }
 
@@ -42,13 +42,9 @@ const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
 
   if (variant === "button") {
     return (
-      <Button
-        type="primary"
-        loading={loading}
-        onClick={startOAuthFlow}
-        style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
-      >
-        {loading ? "Connecting…" : "Connect"}
+      <Button onClick={startOAuthFlow} disabled={loading} className="font-semibold h-[38px] min-w-[110px]">
+        {loading && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
+        {loading ? "Connecting\u2026" : "Connect"}
       </Button>
     );
   }
@@ -59,23 +55,16 @@ const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
         e.stopPropagation();
         if (!loading) startOAuthFlow();
       }}
-      style={{
-        fontSize: 11,
-        fontWeight: 600,
-        color: loading ? "#9ca3af" : "#fff",
-        background: loading ? "#e5e7eb" : "#1677ff",
-        borderRadius: 6,
-        padding: "2px 8px",
-        cursor: loading ? "default" : "pointer",
-        flexShrink: 0,
-        whiteSpace: "nowrap",
-      }}
+      className={`text-[11px] font-semibold rounded-md px-2 py-0.5 shrink-0 whitespace-nowrap ${
+        loading
+          ? "text-muted-foreground bg-muted cursor-default"
+          : "text-primary-foreground bg-primary cursor-pointer hover:bg-primary/90"
+      }`}
     >
-      {loading ? "Connecting…" : "Connect"}
+      {loading ? "Connecting\u2026" : "Connect"}
     </span>
   );
 };
-// ─────────────────────────────────────────────────────────────────────────────
 
 interface Props {
   accessToken: string;
@@ -113,15 +102,10 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   const [activeTab, setActiveTab] = useState<TabKey>("all");
   const [togglingOn, setTogglingOn] = useState<Set<string>>(new Set());
   const [detailServer, setDetailServer] = useState<MCPServer | null>(null);
-  // tool counts per server name, preloaded in background
   const [toolCounts, setToolCounts] = useState<Record<string, number>>({});
   const [loadingCounts, setLoadingCounts] = useState(false);
-  // OAuth2 connect state — tracks which server_ids have a stored user credential
   const [oauthConnected, setOauthConnected] = useState<Set<string>>(new Set());
 
-  // Refs keep the latest values for the auto-enable effect so it always reads
-  // the current servers/selectedServers/onChange without needing them as
-  // dependencies (which would cause the effect to fire on every render).
   const serversRef = useRef<MCPServer[]>([]);
   useEffect(() => {
     serversRef.current = servers;
@@ -147,7 +131,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
         setToolCounts((prev) => ({ ...prev, [nameOf(server)]: tools.length }));
       } catch {
-        // ignore — this server's tool count just stays unset
+        // ignore
       }
     },
     [accessToken],
@@ -162,7 +146,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           setOauthConnected((prev) => new Set(prev).add(server.server_id));
         }
       } catch {
-        // ignore — server just shows as not connected
+        // ignore
       }
     },
     [accessToken],
@@ -171,7 +155,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   useEffect(() => {
     fetchLoadCancelledRef.current = false;
 
-    // 1. Load servers first — show the list immediately
     fetchMCPServers(accessToken)
       .then(async (serverData) => {
         if (fetchLoadCancelledRef.current) return;
@@ -179,7 +162,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         setServers(list);
         setLoading(false);
 
-        // 2. Fetch tools per server, at most TOOLS_FETCH_CONCURRENCY at a time
         setLoadingCounts(true);
         const chunks = Array.from({ length: Math.ceil(list.length / TOOLS_FETCH_CONCURRENCY) }, (_, i) =>
           list.slice(i * TOOLS_FETCH_CONCURRENCY, (i + 1) * TOOLS_FETCH_CONCURRENCY),
@@ -190,7 +172,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         }
         if (!fetchLoadCancelledRef.current) setLoadingCounts(false);
 
-        // 3. Check OAuth credential status for OAuth2 servers in parallel
         const oauthServers = list.filter((s) => s.auth_type === AUTH_TYPE.OAUTH2);
         oauthServers.forEach((s) => checkOauthCredential(s));
       })
@@ -205,10 +186,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     };
   }, [accessToken, fetchToolCount, checkOauthCredential]);
 
-  // Auto-enable oauth2 servers for the current chat session when a valid
-  // credential is detected (either on mount or after a fresh OAuth sign-in).
-  // Uses refs for servers/selectedServers/onChange to avoid stale closures
-  // without adding them as dependencies (which would re-fire on every render).
   useEffect(() => {
     if (oauthConnected.size === 0) return;
     const namesToAdd = serversRef.current
@@ -222,7 +199,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   const handleToggle = async (serverName: string, checked: boolean, serverId?: string) => {
     if (!checked) {
       onChange(selectedServers.filter((s) => s !== serverName));
-      // Also clear from oauthConnected so the auto-enable effect doesn't re-add it.
       if (serverId) {
         setOauthConnected((prev) => {
           const next = new Set(prev);
@@ -234,15 +210,12 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     }
     setTogglingOn((prev) => new Set(prev).add(serverName));
     try {
-      // Use UUID if available, fall back to name (for connectivity check only)
       const idToFetch = serverId ?? serverName;
       const result = await listMCPTools(accessToken, idToFetch);
       if (result?.error) {
         MessageManager.warning(`Could not load tools for ${serverName}`);
         return;
       }
-      // Use the ref so we read the most up-to-date list; guard against duplicates
-      // that the oauthConnected effect may have already added while we awaited.
       if (!selectedServersRef.current.includes(serverName)) {
         onChange([...selectedServersRef.current, serverName]);
       }
@@ -257,7 +230,6 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     }
   };
 
-  // Fetch tools for the detail view — server_id must be the UUID
   const { data: detailToolsResult, isLoading: loadingTools } = useQuery({
     queryKey: ["mcp-apps-panel-detail-tools", detailServer?.server_id],
     queryFn: () => listMCPTools(accessToken, detailServer!.server_id),
@@ -276,11 +248,8 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
   });
 
   const connectedCount = servers.filter((s) => selectedServers.includes(nameOf(s))).length;
-
-  // Total tools available across all servers (based on preloaded counts)
   const totalTools = Object.values(toolCounts).reduce((sum, n) => sum + n, 0);
 
-  // ── Detail view ──
   if (detailServer) {
     const name = nameOf(detailServer);
     const isConnected = selectedServers.includes(name);
@@ -288,40 +257,23 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     const color = getAvatarColor(name);
 
     return (
-      <div style={{ width: "100%" }}>
-        {/* Back */}
-        <button
+      <div className="w-full">
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setDetailServer(null)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: "#6b7280",
-            fontSize: 13,
-            padding: "0 0 20px 0",
-          }}
+          className="-ml-3 mb-5 gap-1.5 text-muted-foreground hover:text-foreground"
         >
-          <ArrowLeftOutlined style={{ fontSize: 12 }} />
+          <ArrowLeft className="h-3 w-3" />
           Back
-        </button>
+        </Button>
 
-        {/* Avatar + name + connect */}
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginBottom: 28 }}>
+        <div className="flex items-start gap-5 mb-7">
           {detailServer.mcp_info?.logo_url ? (
             <img
               src={detailServer.mcp_info.logo_url}
               alt={`${name} logo`}
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: 16,
-                objectFit: "contain",
-                flexShrink: 0,
-                background: "#f9fafb",
-              }}
+              className="w-16 h-16 rounded-2xl object-contain shrink-0 bg-muted/50"
               onError={(e) => {
                 const el = e.target as HTMLImageElement;
                 el.style.display = "none";
@@ -330,36 +282,27 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             />
           ) : null}
           <div
+            className="w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-[28px] shrink-0"
             style={{
-              width: 64,
-              height: 64,
-              borderRadius: 16,
               background: color,
               display: detailServer.mcp_info?.logo_url ? "none" : "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: 28,
-              flexShrink: 0,
             }}
           >
             {name.charAt(0).toUpperCase()}
           </div>
-          <div style={{ flex: 1 }}>
-            <h2 style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 700, color: "#111827" }}>{name}</h2>
-            <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>{detailServer.description ?? "MCP server"}</p>
+          <div className="flex-1">
+            <h2 className="m-0 mb-1 text-[22px] font-bold text-foreground">{name}</h2>
+            <p className="m-0 text-sm text-muted-foreground">{detailServer.description ?? "MCP server"}</p>
           </div>
           {detailServer.auth_type === AUTH_TYPE.OAUTH2 ? (
             oauthConnected.has(detailServer.server_id) ? (
               <Button
-                type="default"
-                danger
+                variant="destructive"
                 onClick={async () => {
                   try {
                     await deleteMCPOAuthUserCredential(accessToken, detailServer.server_id);
                   } catch (_) {
-                    // Ignore — credential may already be gone; update UI regardless.
+                    // Ignore
                   }
                   setOauthConnected((prev) => {
                     const n = new Set(prev);
@@ -368,7 +311,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                   });
                   onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
                 }}
-                style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
+                className="font-semibold h-[38px] min-w-[110px]"
               >
                 Disconnect
               </Button>
@@ -384,19 +327,19 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
             )
           ) : (
             <Button
-              type={isConnected ? "default" : "primary"}
-              loading={isTogglingOn}
+              variant={isConnected ? "outline" : "default"}
+              disabled={isTogglingOn}
               onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
-              style={{ borderRadius: 8, fontWeight: 600, height: 38, minWidth: 110 }}
+              className="font-semibold h-[38px] min-w-[110px]"
             >
+              {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
               {isConnected ? "Disconnect" : "Connect"}
             </Button>
           )}
         </div>
 
-        {/* Info table */}
-        <h3 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 600, color: "#111827" }}>Information</h3>
-        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", marginBottom: 28 }}>
+        <h3 className="m-0 mb-3 text-[15px] font-semibold text-foreground">Information</h3>
+        <div className="border rounded-lg overflow-hidden mb-7">
           {[
             ["Server ID", detailServer.server_id],
             ["Transport", handleTransport(detailServer.transport, detailServer.spec_path)],
@@ -404,66 +347,41 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           ]
             .filter(([, v]) => v)
             .map(([label, value], i, arr) => (
-              <div
-                key={label}
-                style={{
-                  display: "flex",
-                  padding: "12px 16px",
-                  borderBottom: i < arr.length - 1 ? "1px solid #f3f4f6" : "none",
-                  fontSize: 13,
-                }}
-              >
-                <span style={{ width: 140, color: "#9ca3af", flexShrink: 0 }}>{label}</span>
-                <span style={{ color: "#111827", fontWeight: 500 }}>{value}</span>
+              <div key={label} className={`flex px-4 py-3 text-[13px] ${i < arr.length - 1 ? "border-b" : ""}`}>
+                <span className="w-[140px] text-muted-foreground shrink-0">{label}</span>
+                <span className="text-foreground font-medium">{value}</span>
               </div>
             ))}
         </div>
 
-        {/* Tools section */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: "#111827" }}>Available Tools</h3>
+        <div className="flex items-center gap-2 mb-3">
+          <h3 className="m-0 text-[15px] font-semibold text-foreground">Available Tools</h3>
           {!loadingTools && (
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 600,
-                color: "#6b7280",
-                background: "#f3f4f6",
-                borderRadius: 4,
-                padding: "1px 6px",
-              }}
-            >
+            <span className="text-[11px] font-semibold text-muted-foreground bg-muted rounded px-1.5 py-0.5">
               {detailTools.length}
             </span>
           )}
         </div>
         {loadingTools ? (
-          <div style={{ display: "flex", justifyContent: "center", padding: "24px 0" }}>
-            <Spin size="small" />
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="border rounded-lg px-3.5 py-2.5 bg-muted/30 flex flex-col gap-1.5">
+                <Skeleton className="h-3.5 w-1/3" />
+                <Skeleton className="h-3 w-2/3" />
+              </div>
+            ))}
           </div>
         ) : detailTools.length === 0 ? (
-          <div style={{ color: "#9ca3af", fontSize: 13, padding: "8px 0" }}>No tools available</div>
+          <div className="text-muted-foreground text-[13px] py-2">No tools available</div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div className="flex flex-col gap-2">
             {detailTools.map((tool) => (
-              <div
-                key={tool.name}
-                style={{
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 8,
-                  padding: "10px 14px",
-                  background: "#fafafa",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: tool.description ? 4 : 0 }}>
-                  <ToolOutlined style={{ fontSize: 13, color: "#6b7280" }} />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: "#111827", fontFamily: "monospace" }}>
-                    {tool.name}
-                  </span>
+              <div key={tool.name} className="border rounded-lg px-3.5 py-2.5 bg-muted/30">
+                <div className={`flex items-center gap-2 ${tool.description ? "mb-1" : ""}`}>
+                  <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="text-[13px] font-semibold text-foreground font-mono">{tool.name}</span>
                 </div>
-                {tool.description && (
-                  <p style={{ margin: 0, fontSize: 12, color: "#6b7280", paddingLeft: 21 }}>{tool.description}</p>
-                )}
+                {tool.description && <p className="m-0 text-xs text-muted-foreground pl-[21px]">{tool.description}</p>}
               </div>
             ))}
           </div>
@@ -472,113 +390,78 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
     );
   }
 
-  // ── List view ──
   return (
-    <div style={{ width: "100%" }}>
-      {/* Header row */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 20,
-          gap: 16,
-          flexWrap: "wrap",
-        }}
-      >
+    <div className="w-full">
+      <div className="flex items-center justify-between mb-5 gap-4 flex-wrap">
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#111827" }}>MCP Servers</h2>
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 600,
-                color: "#1677ff",
-                background: "#e8f4ff",
-                borderRadius: 4,
-                padding: "1px 6px",
-                letterSpacing: "0.05em",
-                textTransform: "uppercase",
-              }}
-            >
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="m-0 text-lg font-semibold text-foreground">MCP Servers</h2>
+            <span className="text-[10px] font-semibold text-primary bg-primary/10 rounded px-1.5 py-0.5 uppercase tracking-wider">
               Beta
             </span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>
-              Browse tools, authenticate once, use in chat — no setup needed.
-            </p>
+          <div className="flex items-center gap-3">
+            <p className="m-0 text-[13px] text-muted-foreground">Browse tools, authenticate once, use in chat</p>
             {loadingCounts ? (
-              <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#9ca3af" }}>
-                <Spin size="small" style={{ transform: "scale(0.7)" }} />
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Loader2 className="h-3 w-3 animate-spin" />
                 Loading tools...
               </span>
             ) : totalTools > 0 ? (
-              <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#6b7280" }}>
-                <ToolOutlined style={{ fontSize: 11 }} />
+              <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Wrench className="h-3 w-3" />
                 {totalTools} tool{totalTools !== 1 ? "s" : ""} available
               </span>
             ) : null}
           </div>
         </div>
-        <Input
-          prefix={<SearchOutlined style={{ color: "#9ca3af", fontSize: 13 }} />}
-          placeholder="Search servers..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          allowClear
-          style={{ width: 220, borderRadius: 8, fontSize: 13 }}
-          size="middle"
-        />
+        <div className="relative w-[220px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            placeholder="Search servers..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="pl-9 text-[13px] h-9"
+          />
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", marginBottom: 16 }}>
-        {(["all", "connected"] as TabKey[]).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            style={{
-              padding: "8px 16px",
-              border: "none",
-              borderBottom: activeTab === tab ? "2px solid #1677ff" : "2px solid transparent",
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: activeTab === tab ? 600 : 400,
-              background: "transparent",
-              color: activeTab === tab ? "#1677ff" : "#6b7280",
-              marginBottom: -1,
-            }}
-          >
-            {tab === "all" ? "All" : `Connected${connectedCount > 0 ? ` (${connectedCount})` : ""}`}
-          </button>
-        ))}
-      </div>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as TabKey)} className="mb-4">
+        <TabsList variant="line" className="border-b rounded-none w-full justify-start h-auto p-0">
+          <TabsTrigger value="all" className="rounded-none px-4 py-2 text-[13px]">
+            All
+          </TabsTrigger>
+          <TabsTrigger value="connected" className="rounded-none px-4 py-2 text-[13px]">
+            Connected{connectedCount > 0 ? ` (${connectedCount})` : ""}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
-      {/* Grid */}
       {loading ? (
-        <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
-          <Spin />
+        <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
+          {Array.from({ length: 6 }, (_, idx) => (
+            <div
+              key={idx}
+              className={`flex items-center gap-3 p-4 ${idx % 2 === 0 ? "border-r" : ""} ${idx < 4 ? "border-b" : ""}`}
+            >
+              <Skeleton className="w-[38px] h-[38px] rounded-xl shrink-0" />
+              <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                <Skeleton className="h-3.5 w-2/3" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+            </div>
+          ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, padding: "48px 12px" }}>
+        <div className="text-center text-muted-foreground text-[13px] py-12 px-3">
           {servers.length === 0
-            ? "No MCP servers configured. Add servers in Tools → MCP Servers."
+            ? "No MCP servers configured. Add servers in Tools -> MCP Servers."
             : activeTab === "connected"
               ? "No servers connected yet."
               : "No servers match your search."}
         </div>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: 0,
-            border: "1px solid #e5e7eb",
-            borderRadius: 10,
-            overflow: "hidden",
-          }}
-        >
+        <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
           {filtered.map((server, idx) => {
             const name = nameOf(server);
             const isConnected = selectedServers.includes(name);
@@ -590,38 +473,15 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               <div
                 key={server.server_id}
                 onClick={() => setDetailServer(server)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "14px 16px",
-                  background: "#fff",
-                  borderRight: isLeftCol ? "1px solid #f3f4f6" : "none",
-                  borderBottom:
-                    Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "1px solid #f3f4f6" : "none",
-                  cursor: "pointer",
-                  minWidth: 0,
-                  transition: "background 0.1s",
-                }}
-                onMouseEnter={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background = "#fafafa";
-                }}
-                onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLDivElement).style.background = "#fff";
-                }}
+                className={`flex items-center gap-3 p-4 bg-card cursor-pointer transition-colors hover:bg-accent/30 min-w-0 ${
+                  isLeftCol ? "border-r" : ""
+                } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""}`}
               >
                 {server.mcp_info?.logo_url ? (
                   <img
                     src={server.mcp_info.logo_url}
                     alt={`${name} logo`}
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 10,
-                      objectFit: "contain",
-                      flexShrink: 0,
-                      background: "#f9fafb",
-                    }}
+                    className="w-[38px] h-[38px] rounded-xl object-contain shrink-0 bg-muted/50"
                     onError={(e) => {
                       const el = e.target as HTMLImageElement;
                       el.style.display = "none";
@@ -630,68 +490,32 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                   />
                 ) : null}
                 <div
+                  className="w-[38px] h-[38px] rounded-xl flex items-center justify-center text-white font-bold text-base shrink-0"
                   style={{
-                    width: 38,
-                    height: 38,
-                    borderRadius: 10,
                     background: color,
                     display: server.mcp_info?.logo_url ? "none" : "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: "#fff",
-                    fontWeight: 700,
-                    fontSize: 16,
-                    flexShrink: 0,
                   }}
                 >
                   {name.charAt(0).toUpperCase()}
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 14,
-                      fontWeight: 500,
-                      color: "#111827",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {name}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: "#9ca3af",
-                      marginTop: 1,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
-                  >
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {server.description ?? "MCP server"}
-                    </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium text-foreground truncate">{name}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                    <span className="truncate">{server.description ?? "MCP server"}</span>
                     {count !== undefined ? (
                       count > 0 ? (
-                        <span
-                          style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 3, color: "#9ca3af" }}
-                        >
-                          · <ToolOutlined style={{ fontSize: 10 }} /> {count}
+                        <span className="shrink-0 flex items-center gap-1 text-muted-foreground">
+                          · <Wrench className="h-2.5 w-2.5" /> {count}
                         </span>
                       ) : null
                     ) : loadingCounts ? (
-                      <Skeleton.Input
-                        active
-                        size="small"
-                        style={{ width: 28, height: 12, minWidth: 28, flexShrink: 0 }}
-                      />
+                      <Skeleton className="w-7 h-3 shrink-0" />
                     ) : null}
                   </div>
                 </div>
                 {server.auth_type === AUTH_TYPE.OAUTH2 ? (
                   oauthConnected.has(server.server_id) ? (
-                    <CheckCircleOutlined style={{ fontSize: 14, color: "#52c41a", flexShrink: 0 }} />
+                    <CheckCircle className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
                   ) : (
                     <OAuth2ConnectButton
                       server={server}
@@ -703,9 +527,9 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     />
                   )
                 ) : isConnected ? (
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#1677ff", flexShrink: 0 }} />
+                  <span className="w-[7px] h-[7px] rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
                 ) : null}
-                <RightOutlined style={{ fontSize: 11, color: "#d1d5db", flexShrink: 0 }} />
+                <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
               </div>
             );
           })}

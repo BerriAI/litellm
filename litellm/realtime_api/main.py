@@ -40,6 +40,12 @@ vertex_llm_base = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
 
+def _with_resolved_session_model(session: dict[str, Any], model_name: str) -> dict[str, Any]:
+    if "model" not in session:
+        return session
+    return {**session, "model": model_name}
+
+
 def _build_litellm_metadata(kwargs: dict) -> dict:
     """Build the litellm_metadata dict for guardrail checking (internal only, not forwarded to provider)."""
     metadata: dict = {**(kwargs.get("litellm_metadata") or {})}
@@ -134,6 +140,8 @@ async def acreate_realtime_client_secret(
         custom_llm_provider=custom_llm_provider,
     )
     request_data = req.model_dump(exclude_none=True, exclude={"model"})
+    if isinstance(request_data.get("session"), dict):
+        request_data["session"] = _with_resolved_session_model(request_data["session"], model_name)
     return await base_llm_http_handler.async_realtime_client_secret_handler(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
@@ -249,6 +257,8 @@ async def arealtime_calls(
         dynamic_api_key=dynamic_api_key,
         litellm_params=litellm_params,
     )
+    if session is not None:
+        session = _with_resolved_session_model(session, model_name)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model_name,

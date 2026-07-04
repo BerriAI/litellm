@@ -32,7 +32,6 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
         });
       });
 
-    console.log("updatedVariables", updatedVariables);
     //filter out null / undefined values for updatedVariables
 
     const payload = {

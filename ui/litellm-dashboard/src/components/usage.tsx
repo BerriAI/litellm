@@ -51,7 +51,6 @@ import {
 } from "./networking";
 import TopKeyView from "./UsagePage/components/EntityUsage/TopKeyView";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-console.log("process.env.NODE_ENV", process.env.NODE_ENV);
 
 interface UsagePageProps {
   accessToken: string | null;
@@ -121,7 +120,6 @@ function getTopKeys(data: Array<{ [key: string]: unknown }>): any[] {
   spendKeys.sort((a, b) => Number(b.spend) - Number(a.spend));
 
   const topKeys = spendKeys.slice(0, 5).map((k) => k.key);
-  console.log(`topKeys: ${Object.keys(topKeys[0])}`);
   return topKeys;
 }
 type DataDict = { [key: string]: unknown };
@@ -161,9 +159,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
   let startTime = formatDate(firstDay);
   let endTime = formatDate(lastDay);
 
-  console.log("keys in usage", keys);
-  console.log("premium user in usage", premiumUser);
-
   function valueFormatterNumbers(number: number) {
     const formatter = new Intl.NumberFormat("en-US", {
       maximumFractionDigits: 0,
@@ -178,7 +173,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
     if (accessToken) {
       try {
         const proxy_settings: ProxySettings = await getProxyUISettings(accessToken);
-        console.log("usage tab: proxy_settings", proxy_settings);
         return proxy_settings;
       } catch (error) {
         console.error("Error fetching proxy settings:", error);
@@ -199,15 +193,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
       return;
     }
 
-    console.log("uiSelectedKey", uiSelectedKey);
-
     let newTopUserData = await adminTopEndUsersCall(
       accessToken,
       uiSelectedKey,
       startTime.toISOString(),
       endTime.toISOString(),
     );
-    console.log("End user data updated successfully", newTopUserData);
     setTopUsers(newTopUserData);
   };
 
@@ -230,7 +221,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
       selectedTags.length === 0 ? undefined : selectedTags,
     );
     setTopTagsData(top_tags.spend_per_tag);
-    console.log("Tag spend data updated successfully");
   };
 
   function formatDate(date: Date) {
@@ -244,9 +234,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
 
     return `${year}-${monthStr}-${dayStr}`;
   }
-
-  console.log(`Start date is ${startTime}`);
-  console.log(`End date is ${endTime}`);
 
   const valueFormatter = (number: number) => `$ ${formatNumberWithCommas(number, 2)}`;
 
@@ -515,8 +502,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
           }
         }
 
-        console.log("fetching data - valiue of proxySettings", proxySettings);
-
         fetchOverallSpend();
         fetchProviderSpend();
         fetchTopKeys();
@@ -690,7 +675,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                             index="date"
                             colors={["cyan"]}
                             categories={["api_requests"]}
-                            onValueChange={(v) => console.log(v)}
                           />
                         </Col>
                         <Col>
@@ -704,7 +688,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                             index="date"
                             colors={["cyan"]}
                             categories={["total_tokens"]}
-                            onValueChange={(v) => console.log(v)}
                           />
                         </Col>
                       </Grid>
@@ -726,7 +709,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                                 colors={["cyan"]}
                                 categories={["api_requests"]}
                                 valueFormatter={valueFormatterNumbers}
-                                onValueChange={(v) => console.log(v)}
                               />
                             </Col>
                             <Col>
@@ -740,7 +722,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ accessToken, token, userRole, use
                                 colors={["cyan"]}
                                 categories={["total_tokens"]}
                                 valueFormatter={valueFormatterNumbers}
-                                onValueChange={(v) => console.log(v)}
                               />
                             </Col>
                           </Grid>

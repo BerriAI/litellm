@@ -349,14 +349,11 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
           cleanUser.metadata = user.metadata.trim();
         }
 
-        console.log("Sending user data:", cleanUser);
         const response = await userCreateCall(accessToken, null, cleanUser);
-        console.log("Full response:", response);
 
         // Check if response has key or user_id, indicating success
         if (response && (response.key || response.user_id)) {
           anySuccessful = true;
-          console.log("Success case triggered");
           const user_id = response.data?.user_id || response.user_id;
 
           // Create invitation link for the user
@@ -411,9 +408,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
             );
           }
         } else {
-          console.log("Error case triggered");
           const errorMessage = response?.error || "Failed to create user";
-          console.log("Error message:", errorMessage);
           setParsedData((current) =>
             current.map((u, i) => (i === index ? { ...u, status: "failed", error: errorMessage } : u)),
           );
