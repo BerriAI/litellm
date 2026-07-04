@@ -54,6 +54,10 @@ class _ENTERPRISE_BlockedUserList(CustomLogger):
 
             return global_prisma_client
         except Exception:
+            verbose_proxy_logger.debug(
+                "blocked_user_list: could not resolve global prisma_client",
+                exc_info=True,
+            )
             return None
 
     def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
