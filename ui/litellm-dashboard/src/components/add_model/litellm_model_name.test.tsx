@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { render } from "@testing-library/react";
 import { Form } from "antd";
 import { describe, expect, it } from "vitest";
@@ -15,7 +16,7 @@ describe("LitellmModelNameField", () => {
         />
       </Form>,
     );
-    expect(getByText("LiteLLM Model Name(s)")).toBeInTheDocument();
+    expect(getByText(`${BRAND_NAME} Model Name(s)`)).toBeInTheDocument();
   });
 
   it("should show Azure placeholder as 'my-deployment'", () => {

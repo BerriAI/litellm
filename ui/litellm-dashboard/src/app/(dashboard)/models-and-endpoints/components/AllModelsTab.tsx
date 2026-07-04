@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -581,7 +582,7 @@ const AllModelsTab = ({
                   value: modelToDelete.model_name || "Not Set",
                 },
                 {
-                  label: "LiteLLM Model Name",
+                  label: `${BRAND_NAME} Model Name`,
                   value: modelToDelete.litellm_model_name || "Not Set",
                 },
                 {

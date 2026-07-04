@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import React from "react";
 import { Form, Switch, Select, Typography } from "antd";
 import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
@@ -82,7 +83,7 @@ const CacheControlSettings: React.FC<CacheControlSettingsProps> = ({
                       name={[field.name, "role"]}
                       className="mb-0"
                       style={{ width: "180px" }}
-                      tooltip="LiteLLM will mark all messages of this role as cacheable"
+                      tooltip={`${BRAND_NAME} will mark all messages of this role as cacheable`}
                     >
                       <Select
                         placeholder="Select a role"

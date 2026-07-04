@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { useGuardrails } from "@/app/(dashboard)/hooks/guardrails/useGuardrails";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
@@ -219,7 +220,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   <Col span={10}></Col>
                   <Col span={10}>
                     <Text className="mb-5 mt-1">
-                      <strong>Optional</strong> - LiteLLM endpoint to use when health checking this model{" "}
+                      <strong>Optional</strong> - {BRAND_NAME} endpoint to use when health checking this model{" "}
                       <Link href="https://docs.litellm.ai/docs/proxy/health#health" target="_blank">
                         Learn more
                       </Link>

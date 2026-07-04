@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import React from "react";
 import { Card, Title, Subtitle, Text } from "@tremor/react";
 import { Form, Switch } from "antd";
@@ -21,7 +22,7 @@ const PassThroughSecuritySection: React.FC<PassThroughSecuritySectionProps> = ({
     <Card className="p-6">
       <Title className="text-lg font-semibold text-gray-900 mb-2">Security</Title>
       <Subtitle className="text-gray-600 mb-4">
-        When enabled, requests to this endpoint will require a valid LiteLLM Virtual Key
+        When enabled, requests to this endpoint will require a valid {BRAND_NAME} Virtual Key
       </Subtitle>
       {premiumUser ? (
         <Form.Item name="auth" valuePropName="checked" className="mb-0">
@@ -40,7 +41,7 @@ const PassThroughSecuritySection: React.FC<PassThroughSecuritySectionProps> = ({
           </div>
           <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
             <Text className="text-sm text-yellow-800">
-              Setting authentication for pass-through endpoints is a LiteLLM Enterprise feature. Get a trial key{" "}
+              Setting authentication for pass-through endpoints is a {BRAND_NAME} Enterprise feature. Get a trial key{" "}
               <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
                 here
               </a>

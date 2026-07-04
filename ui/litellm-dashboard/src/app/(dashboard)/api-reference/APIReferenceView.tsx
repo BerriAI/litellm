@@ -4,6 +4,8 @@ import { Text, Tab, TabGroup, TabList, TabPanel, TabPanels, Grid } from "@tremor
 import CodeBlock from "./components/CodeBlock";
 import DocLink from "@/app/(dashboard)/api-reference/components/DocLink";
 
+import { BRAND_NAME } from "@/lib/brand";
+
 interface ApiRefProps {
   proxySettings: {
     PROXY_BASE_URL?: string;
@@ -33,8 +35,8 @@ const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
           </div>
 
           <Text className="mt-2 mb-2">
-            LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url
-            to point to your litellm proxy. Example Below{" "}
+            {BRAND_NAME} is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the
+            base_url to point to your {BRAND_NAME.toLowerCase()} proxy. Example{" "}
           </Text>
 
           <TabGroup>
@@ -50,7 +52,7 @@ const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
                   code={`import openai
 client = openai.OpenAI(
     api_key="your_api_key",
-    base_url="${base_url}" # LiteLLM Proxy is OpenAI compatible, Read More: https://docs.litellm.ai/docs/proxy/user_keys
+    base_url="${base_url}" # ${BRAND_NAME} Proxy is OpenAI compatible, Read More: https://docs.litellm.ai/docs/proxy/user_keys
 )
 
 response = client.chat.completions.create(

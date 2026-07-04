@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import {
   CheckCircleOutlined,
   CodeOutlined,
@@ -124,7 +125,7 @@ export function GuardrailConfig({ guardrailName, guardrailType, provider }: Guar
               options={[
                 { value: "bedrock", label: "AWS Bedrock Guardrails" },
                 { value: "google", label: "Google Cloud AI Safety" },
-                { value: "litellm", label: "LiteLLM Built-in" },
+                { value: "litellm", label: `${BRAND_NAME} Built-in` },
                 { value: "custom", label: "Custom Code" },
               ]}
             />

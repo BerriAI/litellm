@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
@@ -112,7 +113,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken, userRole, us
       <div className="space-y-6">
         <div className="max-w-3xl">
           <h3 className="text-sm font-medium text-gray-900">Cache Settings</h3>
-          <p className="text-xs text-gray-500 mt-1">Configure Redis cache for LiteLLM</p>
+          <p className="text-xs text-gray-500 mt-1">Configure Redis cache for {BRAND_NAME}</p>
         </div>
 
         {/* Redis Type Selector */}

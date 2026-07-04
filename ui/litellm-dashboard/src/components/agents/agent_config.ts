@@ -1,3 +1,5 @@
+import { BRAND_NAME } from "@/lib/brand";
+
 /**
  * Shared configuration for agent form fields
  * Used across create, view, and update operations
@@ -74,10 +76,8 @@ export const AGENT_FORM_CONFIG: {
         type: "select",
         options: ["1.0", "0.3"],
         defaultValue: "1.0",
-        tooltip:
-          "The A2A protocol version LiteLLM serves to clients for this agent. LiteLLM converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version.",
-        helpText:
-          "LiteLLM serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's version.",
+        tooltip: `The A2A protocol version ${BRAND_NAME} serves to clients for this agent. ${BRAND_NAME} converts the upstream agent's responses to this version, so clients always see the version you pick here regardless of the original agent's version.`,
+        helpText: `${BRAND_NAME} serves this version to clients and converts the upstream agent's responses to match it, regardless of the original agent's response version.`,
       },
     ],
   },
@@ -140,7 +140,7 @@ export const AGENT_FORM_CONFIG: {
   },
   litellm: {
     key: "litellm",
-    title: "LiteLLM Parameters",
+    title: `${BRAND_NAME} Parameters`,
     fields: [
       {
         name: "model",

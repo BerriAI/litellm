@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { render, screen } from "@testing-library/react";
 import { Form } from "antd";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,6 @@ describe("ConditionalPublicModelName", () => {
 
     expect(screen.getByText("Model Mappings")).toBeInTheDocument();
     expect(screen.getByText("Public Model Name")).toBeInTheDocument();
-    expect(screen.getByText("LiteLLM Model Name")).toBeInTheDocument();
+    expect(screen.getByText(`${BRAND_NAME} Model Name`)).toBeInTheDocument();
   });
 });

@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { describe, expect, it, vi } from "vitest";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
 
@@ -56,7 +57,7 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.custom_llm_provider).toBe("petals");
   });
 
-  it("ignores litellm_credential_name inside LiteLLM Params JSON", async () => {
+  it(`ignores litellm_credential_name inside ${BRAND_NAME} Params JSON`, async () => {
     const formValues = {
       model_mappings: [
         {

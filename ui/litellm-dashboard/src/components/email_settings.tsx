@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import React from "react";
 import { Card, Text, Grid, Button, TextInput, TableCell } from "@tremor/react";
 import { Typography } from "antd";
@@ -59,7 +60,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
         <Text>
           <a href="https://docs.litellm.ai/docs/proxy/email" target="_blank" style={{ color: "blue" }}>
             {" "}
-            LiteLLM Docs: email alerts
+            {BRAND_NAME} Docs: email alerts
           </a>{" "}
           <br />
         </Text>

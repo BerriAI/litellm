@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import React, { useState } from "react";
 import { Button } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
@@ -130,7 +131,7 @@ ${formattedBody}
   return (
     <div className="w-full m-2" style={{ overflow: "hidden" }}>
       <Title>Playground</Title>
-      <p className="text-sm text-gray-500">See how LiteLLM transforms your request for the specified provider.</p>
+      <p className="text-sm text-gray-500">See how {BRAND_NAME} transforms your request for the specified provider.</p>
       <div
         style={{
           display: "flex",
@@ -158,7 +159,7 @@ ${formattedBody}
           <div style={{ marginBottom: "24px" }}>
             <h2 style={{ fontSize: "24px", fontWeight: "bold", margin: "0 0 4px 0" }}>Original Request</h2>
             <p style={{ color: "#666", margin: 0 }}>
-              The request you would send to LiteLLM /chat/completions endpoint.
+              The request you would send to {BRAND_NAME} /chat/completions endpoint.
             </p>
           </div>
 
@@ -222,7 +223,9 @@ ${formattedBody}
         >
           <div style={{ marginBottom: "24px" }}>
             <h2 style={{ fontSize: "24px", fontWeight: "bold", margin: "0 0 4px 0" }}>Transformed Request</h2>
-            <p style={{ color: "#666", margin: 0 }}>How LiteLLM transforms your request for the specified provider.</p>
+            <p style={{ color: "#666", margin: 0 }}>
+              How {BRAND_NAME} transforms your request for the specified provider.
+            </p>
             <br />
             <p style={{ color: "#666", margin: 0 }} className="text-xs">
               Note: Sensitive headers are not shown.

@@ -4,6 +4,7 @@ import { Text, Accordion, AccordionHeader, AccordionBody, TextInput } from "@tre
 import { Row, Col, Typography } from "antd";
 import TextArea from "antd/es/input/TextArea";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { BRAND_NAME } from "@/lib/brand";
 import { Team } from "../key_team_helpers/key_list";
 import CacheControlSettings from "./cache_control_settings";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
@@ -268,9 +269,9 @@ const AdvancedSettings: React.FC<AdvancedSettingsProps> = ({
               onCacheControlChange={handleCacheControlChange}
             />
             <Form.Item
-              label="LiteLLM Params"
+              label={`${BRAND_NAME} Params`}
               name="litellm_extra_params"
-              tooltip="Optional litellm params used for making a litellm.completion() call."
+              tooltip={`Optional ${BRAND_NAME.toLowerCase()} params used for making a litellm.completion() call.`}
               className="mb-4 mt-4"
               rules={[{ validator: formItemValidateJSON }]}
             >

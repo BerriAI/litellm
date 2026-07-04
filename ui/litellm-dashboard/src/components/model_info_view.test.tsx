@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -377,7 +378,7 @@ describe("ModelInfoView", () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
       expect(screen.getByText("Provider")).toBeInTheDocument();
-      expect(screen.getByText("LiteLLM Model")).toBeInTheDocument();
+      expect(screen.getByText(`${BRAND_NAME} Model`)).toBeInTheDocument();
       expect(screen.getByText("Pricing")).toBeInTheDocument();
     });
   });
@@ -442,7 +443,7 @@ describe("ModelInfoView", () => {
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText("Enter model name")).toBeInTheDocument();
-      expect(screen.getByPlaceholderText("Enter LiteLLM model name")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(`Enter ${BRAND_NAME} model name`)).toBeInTheDocument();
     });
   });
 
@@ -524,7 +525,7 @@ describe("ModelInfoView", () => {
   it("should display LiteLLM Params section", async () => {
     render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
     await waitFor(() => {
-      expect(screen.getByText("LiteLLM Params")).toBeInTheDocument();
+      expect(screen.getByText(`${BRAND_NAME} Params`)).toBeInTheDocument();
     });
   });
 

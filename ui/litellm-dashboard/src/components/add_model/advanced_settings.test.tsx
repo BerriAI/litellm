@@ -1,3 +1,4 @@
+import { BRAND_NAME } from "@/lib/brand";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdvancedSettings from "./advanced_settings";
@@ -48,7 +49,7 @@ describe("AdvancedSettings", () => {
       fireEvent.click(getByText("Advanced Settings"));
     });
     await waitFor(() => {
-      expect(getByText("LiteLLM Params")).toBeInTheDocument();
+      expect(getByText(`${BRAND_NAME} Params`)).toBeInTheDocument();
     });
   });
 });
