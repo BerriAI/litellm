@@ -3689,21 +3689,90 @@ async def test_pass_through_request_non_streaming_upstream_error_returned_unchan
     # not stringified into a ProxyException's `error.message` field.
     assert body == _UPSTREAM_ERROR_BODY
     assert set(body.keys()) != {"error"} or not isinstance(body["error"], dict)
-    mock_success_handler.assert_called_once()
+
+    # Regression: the success handler has no status-code awareness, so it must
+    # never be called for a 4xx/5xx upstream response - otherwise the same
+    # request gets recorded as both a failure and a success in SpendLogs.
+    mock_success_handler.assert_not_called()
 
     # Regression: post_call_failure_hook (spend-tracking, alerting callbacks)
     # must still fire for upstream errors even though the client-facing
     # response is unchanged and no ProxyException is raised.
+    from fastapi import HTTPException
+
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     failure_call_kwargs = mock_proxy_logging.post_call_failure_hook.call_args.kwargs
-    assert isinstance(failure_call_kwargs["original_exception"], httpx.HTTPStatusError)
-    assert failure_call_kwargs["original_exception"].response.status_code == 403
+    # Must be reported as HTTPException, not the raw httpx error: ProxyLogging's
+    # alerting only excludes HTTPException/ProxyException from its "High"
+    # severity llm_exceptions alert, so a raw HTTPStatusError here would page
+    # ops for every routine upstream 4xx returned through passthrough.
+    assert isinstance(failure_call_kwargs["original_exception"], HTTPException)
+    assert failure_call_kwargs["original_exception"].status_code == 403
 
-    # Regression: the log payload's response_body must reflect the upstream
-    # error JSON, not None, so downstream spend-tracking/logging integrations
-    # can see what the upstream actually returned.
-    success_call_kwargs = mock_success_handler.call_args.kwargs
-    assert success_call_kwargs["response_body"] == _UPSTREAM_ERROR_BODY
+    # Regression: the failure-hook log payload's response_body must reflect
+    # the upstream error JSON, not None, so downstream spend-tracking/logging
+    # integrations can see what the upstream actually returned.
+    assert failure_call_kwargs["request_data"]["response_body"] == _UPSTREAM_ERROR_BODY
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_upstream_error_failure_hook_exception_is_swallowed():
+    """
+    A broken failure-hook callback (e.g. a misconfigured alerting integration)
+    must never take down the passthrough response - the upstream error body
+    must still reach the client unchanged, and the callback's exception must
+    only be logged, not raised.
+    """
+    upstream_content = json.dumps(_UPSTREAM_ERROR_BODY).encode("utf-8")
+    upstream_response = httpx.Response(
+        status_code=403,
+        headers={"content-type": "application/json"},
+        content=upstream_content,
+        request=httpx.Request("POST", "http://target-api.com/api/denied"),
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+            ) as mock_processing:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock(
+                        side_effect=RuntimeError("alerting integration misconfigured")
+                    )
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                        return_value=None
+                    )
+                    mock_processing.get_custom_headers.return_value = {}
+                    mock_success_handler.return_value = None
+
+                    async_client = MagicMock()
+                    async_client.request = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    mock_request = MagicMock(spec=Request)
+                    mock_request.method = "POST"
+                    mock_request.url = "http://test-proxy.com/mock-upstream/api/denied"
+                    mock_request.body = AsyncMock(return_value=b'{"action": "read"}')
+                    mock_request.headers = Headers({"content-type": "application/json"})
+                    mock_request.query_params = QueryParams({})
+
+                    response = await pass_through_request(
+                        request=mock_request,
+                        target="http://target-api.com/api/denied",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                    )
+                    await asyncio.sleep(0)
+
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
+    assert response.status_code == 403
+    assert json.loads(response.body) == _UPSTREAM_ERROR_BODY
 
 
 @pytest.mark.asyncio
@@ -3764,12 +3833,22 @@ async def test_pass_through_request_streaming_upstream_error_returned_unchanged(
     assert streamed_bytes == upstream_content
     assert json.loads(streamed_bytes) == _UPSTREAM_ERROR_BODY
 
+    # Regression: chunk_processor's end-of-stream success logging has no
+    # status-code awareness, so it must never fire for a 4xx/5xx upstream
+    # response - otherwise the same request gets recorded as both a failure
+    # (via the hook below) and a success in SpendLogs.
+    mock_success_handler.assert_not_called()
+
     # Regression: post_call_failure_hook must still fire for streaming
-    # upstream errors, mirroring the non-streaming behavior.
+    # upstream errors, mirroring the non-streaming behavior, and must also
+    # report an HTTPException (not the raw httpx error) to avoid triggering
+    # a "High" severity llm_exceptions alert for a routine upstream 4xx.
+    from fastapi import HTTPException
+
     mock_proxy_logging.post_call_failure_hook.assert_called_once()
     failure_call_kwargs = mock_proxy_logging.post_call_failure_hook.call_args.kwargs
-    assert isinstance(failure_call_kwargs["original_exception"], httpx.HTTPStatusError)
-    assert failure_call_kwargs["original_exception"].response.status_code == 403
+    assert isinstance(failure_call_kwargs["original_exception"], HTTPException)
+    assert failure_call_kwargs["original_exception"].status_code == 403
 
 
 @pytest.mark.asyncio
@@ -3826,6 +3905,9 @@ async def test_pass_through_request_non_streaming_success_unchanged():
     # Regression guard: the failure hook must only fire for upstream errors,
     # never for a successful upstream response.
     mock_proxy_logging.post_call_failure_hook.assert_not_called()
+    # ...and the success handler must still fire exactly once for a 2xx,
+    # proving the status_code gate doesn't also swallow real successes.
+    mock_success_handler.assert_called_once()
 
 
 @pytest.mark.asyncio
