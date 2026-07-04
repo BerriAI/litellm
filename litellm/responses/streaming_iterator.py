@@ -612,7 +612,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     if not self._completion_start_time_set:
                         self._completion_start_time_set = True
                         _now = datetime.now()
-                        if getattr(self.logging_obj, "completion_start_time", None) is None:
+                        if (
+                            getattr(self.logging_obj, "completion_start_time", None)
+                            is None
+                        ):
                             self.logging_obj.completion_start_time = _now
                         self.logging_obj.model_call_details.setdefault(
                             "completion_start_time", _now

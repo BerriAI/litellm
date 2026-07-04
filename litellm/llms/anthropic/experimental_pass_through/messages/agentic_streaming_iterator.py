@@ -184,7 +184,10 @@ class AgenticAnthropicStreamingIterator:
                 if not self._completion_start_time_set:
                     self._completion_start_time_set = True
                     _now = datetime.now()
-                    if getattr(self._logging_obj, "completion_start_time", None) is None:
+                    if (
+                        getattr(self._logging_obj, "completion_start_time", None)
+                        is None
+                    ):
                         self._logging_obj.completion_start_time = _now
                     if hasattr(self._logging_obj, "model_call_details"):
                         self._logging_obj.model_call_details.setdefault(
