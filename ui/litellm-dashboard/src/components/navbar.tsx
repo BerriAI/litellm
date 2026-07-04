@@ -79,11 +79,15 @@ const Navbar: React.FC<NavbarProps> = ({
               <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
-                    <img
-                      src={imageUrl}
-                      alt={`${BRAND_NAME} Brand`}
-                      className="h-auto max-h-full w-auto max-w-full object-contain"
-                    />
+                    {logoUrl ? (
+                      <img
+                        src={imageUrl}
+                        alt={`${BRAND_NAME} Brand`}
+                        className="h-auto max-h-full w-auto max-w-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-2xl font-semibold text-slate-800 whitespace-nowrap">{BRAND_NAME}</span>
+                    )}
                   </div>
                 </div>
               </Link>
