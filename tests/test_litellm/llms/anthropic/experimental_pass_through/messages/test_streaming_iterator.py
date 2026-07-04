@@ -16,6 +16,15 @@ from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterato
 )
 
 
+class _RecordingLoggingIterator(BaseAnthropicMessagesStreamingIterator):
+    def __init__(self, litellm_logging_obj: LiteLLMLoggingObj, request_body: dict):
+        super().__init__(litellm_logging_obj=litellm_logging_obj, request_body=request_body)
+        self.logged_chunks: list = []
+
+    async def _handle_streaming_logging(self, collected_chunks):
+        self.logged_chunks = list(collected_chunks)
+
+
 def _make_logging_obj(test_name: str) -> LiteLLMLoggingObj:
     return LiteLLMLoggingObj(
         model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
@@ -205,6 +214,23 @@ async def test_async_sse_wrapper_does_not_double_error_on_provider_error_bytes()
     assert len(chunks) == 2
     error_frames = [c for c in chunks if c.startswith(b"event: error\n")]
     assert len(error_frames) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_excludes_synthetic_error_event_from_logged_chunks():
+    async def _truncated_stream():
+        for event in TRUNCATED_TOOL_USE_EVENTS:
+            yield event
+
+    iterator = _RecordingLoggingIterator(
+        litellm_logging_obj=_make_logging_obj("test_synthetic_error_not_logged"),
+        request_body={},
+    )
+    chunks = await _collect(iterator, _truncated_stream())
+
+    assert chunks[-1].startswith(b"event: error\n")
+    assert iterator.logged_chunks == chunks[:-1]
+    assert not any(chunk.startswith(b"event: error\n") for chunk in iterator.logged_chunks)
 
 
 def test_incomplete_stream_error_sse_event_is_valid_anthropic_error():
