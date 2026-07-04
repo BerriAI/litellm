@@ -390,8 +390,6 @@ class HeadroomGuardrail(CustomGuardrail):
             body.get("compression_ratio", 0),
         )
 
-        # Token/compression stats only - deliberately excludes 'messages' so
-        # raw request/response content never lands in spend logs.
         stats = {
             key: body[key]
             for key in (
