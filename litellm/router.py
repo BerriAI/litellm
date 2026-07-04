@@ -845,6 +845,8 @@ class Router:
                     router_cache=self.cache,
                     routing_args={},
                 )
+            case _:
+                pass
 
         if selector is not None and register_callbacks and isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(selector)  # type: ignore
