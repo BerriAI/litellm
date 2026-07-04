@@ -320,6 +320,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         ? `${backendLabel(c.credential_info?.description)} · ${c.credential_info.host}`
         : backendLabel(c.credential_info?.description),
       access: c.credential_info?.access,
+      autoEnable: c.credential_info?.auto_enable === true,
       resolvedScope: resolveScope(c.credential_name, c.credential_info?.access),
     }));
 

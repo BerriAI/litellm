@@ -650,7 +650,14 @@ async def _resolve_logging_exporters(
         if info is None or info.credential_type != "logging":
             return False
         if info.auto_enable:
-            return True
+            # auto_enable is scoped by access: if access has explicit grants,
+            # the request identity must fall within them. Empty access = proxy-wide.
+            from litellm.proxy.management_endpoints.logging_exporter_access import (
+                _has_explicit_access_grants,
+            )
+            if _has_explicit_access_grants(info.access):
+                return access_grants(info.access, team_ids, org_ids)
+            return True  # no grants = proxy-wide auto
         if credential.credential_name not in names:
             return False
         return access_grants(info.access, team_ids, org_ids)
