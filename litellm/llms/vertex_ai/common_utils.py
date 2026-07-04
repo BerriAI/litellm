@@ -1217,7 +1217,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 )
 
                 contents = _gemini_convert_messages_with_history(
-                    messages=messages,  # type: ignore[arg-type]
+                    messages=messages,  # type: ignore[arg-type]  # untyped count_tokens dicts
                     model=model_to_use,
                     litellm_params=litellm_params,
                     custom_llm_provider="vertex_ai",
