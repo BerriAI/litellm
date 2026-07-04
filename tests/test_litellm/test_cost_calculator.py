@@ -3262,3 +3262,35 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown():
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(3114 * 2.5e-06)
     assert logging_obj.cost_breakdown["cache_read_cost"] == pytest.approx(100 * 3e-08)
+
+
+def test_cost_per_token_per_second_pricing(monkeypatch):
+    """
+    Models priced by duration (input/output_cost_per_second) with no per-token rates
+    must be billed as cost_per_second * response_time_ms / 1000 in cost_per_token.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model = "test-per-second-pricing-model"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_second": 0.02,
+                "output_cost_per_second": 0.04,
+                "litellm_provider": "together_ai",
+                "mode": "chat",
+            }
+        }
+    )
+
+    prompt_cost, completion_cost_value = cost_per_token(
+        model=model,
+        custom_llm_provider="together_ai",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert prompt_cost == pytest.approx(0.02 * 1.5)
+    assert completion_cost_value == pytest.approx(0.04 * 1.5)
