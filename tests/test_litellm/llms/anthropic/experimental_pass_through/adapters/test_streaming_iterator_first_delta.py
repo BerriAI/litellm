@@ -289,6 +289,23 @@ def test_mixed_reasoning_and_text_chunk_with_empty_thinking_blocks_keeps_reasoni
     assert _text_deltas(events) == ["FINAL: ABC"]
 
 
+def test_reasoning_content_with_non_thinking_block_type_is_not_dropped_sync():
+    chunks = [
+        _make_chunk(Delta(reasoning_content="fallback thought", thinking_blocks=[{"type": "redacted_thinking"}])),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+    events = _drain_sync(wrapper)
+
+    start_types_by_index = {
+        e["index"]: e["content_block"]["type"] for e in events if e.get("type") == "content_block_start"
+    }
+
+    assert start_types_by_index[1] == "thinking"
+    assert _thinking_deltas(events) == ["fallback thought"]
+    assert _text_deltas(events) == []
+
+
 def test_single_first_text_token_after_tool_use_preserved_sync():
     """Minimal reproduction of the issue's example: a single short text token
     ("Hi") resuming after a tool call. Without the fix the whole answer is

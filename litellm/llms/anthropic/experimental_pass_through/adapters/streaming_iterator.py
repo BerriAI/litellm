@@ -101,7 +101,8 @@ class _CombinedChunkSplitter:
 
     @staticmethod
     def _clear_response_payload(delta: Any) -> None:
-        delta.content = None
+        if hasattr(delta, "content"):
+            delta.content = None
         if hasattr(delta, "tool_calls"):
             delta.tool_calls = None
 
@@ -141,8 +142,9 @@ class _CombinedChunkSplitter:
         has_reasoning_payload = _CombinedChunkSplitter._delta_has_reasoning_payload(delta)
         has_finish_reason = getattr(choice, "finish_reason", None) is not None
         has_mixed_payload = has_response_payload and has_reasoning_payload
+        has_combined_payload = (has_response_payload or has_reasoning_payload) and has_finish_reason
 
-        if not has_mixed_payload and not _CombinedChunkSplitter._is_combined(chunk):
+        if not has_mixed_payload and not has_combined_payload:
             return [chunk]
 
         split_chunks: list[Any] = []

@@ -1441,6 +1441,8 @@ class LiteLLMAnthropicMessagesAdapter:
                         partial_json = (partial_json or "") + tool.function.arguments
             elif isinstance(choice, StreamingChoices):
                 thinking_blocks = getattr(choice.delta, "thinking_blocks", None) or []
+                choice_reasoning_content = ""
+                choice_reasoning_signature = ""
                 if len(thinking_blocks) > 0:
                     for thinking_block in thinking_blocks:
                         if thinking_block["type"] == "thinking":
@@ -1450,8 +1452,11 @@ class LiteLLMAnthropicMessagesAdapter:
                             assert isinstance(thinking, str)
                             assert isinstance(signature, str)
 
-                            reasoning_content += thinking
-                            reasoning_signature += signature
+                            choice_reasoning_content += thinking
+                            choice_reasoning_signature += signature
+                if choice_reasoning_content or choice_reasoning_signature:
+                    reasoning_content += choice_reasoning_content
+                    reasoning_signature += choice_reasoning_signature
                 elif hasattr(choice.delta, "reasoning_content"):
                     if choice.delta.reasoning_content is not None:
                         reasoning_content += choice.delta.reasoning_content
