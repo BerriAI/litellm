@@ -241,6 +241,7 @@ export interface MCPServer {
   token_exchange_endpoint?: string | null;
   audience?: string | null;
   subject_token_type?: string | null;
+  token_exchange_profile?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;

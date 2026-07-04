@@ -1262,6 +1262,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
@@ -1355,6 +1356,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: Optional[str] = None
+    token_exchange_profile: Optional[str] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False

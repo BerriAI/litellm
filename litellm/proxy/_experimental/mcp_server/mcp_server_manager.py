@@ -1358,7 +1358,8 @@ class MCPServerManager:
             subject_token_type=mcp_server.subject_token_type
             or (credentials_dict.get("subject_token_type") if credentials_dict else None)
             or DEFAULT_SUBJECT_TOKEN_TYPE,
-            token_exchange_profile=(credentials_dict.get("token_exchange_profile") if credentials_dict else None)
+            token_exchange_profile=mcp_server.token_exchange_profile
+            or (credentials_dict.get("token_exchange_profile") if credentials_dict else None)
             or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
@@ -4637,6 +4638,7 @@ class MCPServerManager:
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
             timeout=server.timeout,
@@ -4744,6 +4746,7 @@ class MCPServerManager:
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
+            token_exchange_profile=server.token_exchange_profile,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,

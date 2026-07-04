@@ -4482,6 +4482,81 @@ class TestMCPServerTokenExchangeColumns:
         assert rebuilt_table.audience == "https://upstream.example.com"
         assert rebuilt_table.subject_token_type == "urn:ietf:params:oauth:token-type:jwt"
 
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_token_exchange_profile_column(self):
+        """The profile dialect selector (rfc8693 vs entra_obo) is read from its dedicated column
+        so a server created via the REST API/UI as entra_obo resolves to the Entra dialect."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile",
+            server_name="te_profile",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+            token_exchange_profile="entra_obo",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_profile == "entra_obo"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_token_exchange_profile_defaults_rfc8693(self):
+        """token_exchange_profile falls back to rfc8693 when neither column nor blob sets it."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile-default",
+            server_name="te_profile_default",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_endpoint="https://idp.example.com/oauth2/token",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_profile == "rfc8693"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_token_exchange_profile_blob_fallback(self):
+        """Backwards compatibility: a server with the profile only in the credentials blob still loads."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile-blob",
+            server_name="te_profile_blob",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={"token_exchange_profile": "entra_obo"},
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.token_exchange_profile == "entra_obo"
+
+    @pytest.mark.asyncio
+    async def test_round_trip_token_exchange_profile_preserved(self):
+        """token_exchange_profile survives LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="te-profile-rt",
+            server_name="te_profile_rt",
+            url="https://upstream.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            token_exchange_profile="entra_obo",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+
+        assert rebuilt_table.token_exchange_profile == "entra_obo"
+
 
 class TestInternalDelegatePkceWarningLog:
     @pytest.mark.asyncio
