@@ -22,7 +22,9 @@ from models import (
     ChatMessage,
     ChatMetadata,
     KeyGenerateBody,
+    KeyInfo,
     ModelBudgetEntry,
+    ModelMaxBudgetUsageEntry,
 )
 
 
@@ -168,6 +170,33 @@ def model_budget(model: str, limit: float, period: str = "30d") -> dict[str, Mod
     return {model: ModelBudgetEntry(budget_limit=limit, time_period=period)}
 
 
+def model_usage_entry(key_info: KeyInfo, model: str) -> ModelMaxBudgetUsageEntry | None:
+    if key_info.model_max_budget_usage is None:
+        return None
+    return key_info.model_max_budget_usage.get(model)
+
+
+def assert_model_usage(
+    key_info: KeyInfo,
+    model: str,
+    *,
+    min_spend: float = 0.0,
+    scope: str | None = None,
+) -> ModelMaxBudgetUsageEntry:
+    entry = model_usage_entry(key_info, model)
+    assert entry is not None, (
+        f"no model_max_budget_usage for {model!r}; got {key_info.model_max_budget_usage!r}"
+    )
+    assert entry.current_spend >= min_spend, (
+        f"expected current_spend >= {min_spend} for {model!r}, got {entry.current_spend}"
+    )
+    if scope is not None:
+        assert entry.scope == scope, (
+            f"expected scope {scope!r} for {model!r}, got {entry.scope!r}"
+        )
+    return entry
+
+
 @dataclass(frozen=True, slots=True)
 class BudgetClient:
     gateway: Gateway
@@ -203,6 +232,9 @@ class BudgetClient:
 
     def delete_key(self, key: str) -> None:
         self.gateway.delete_key(key)
+
+    def key_info(self, key: str) -> KeyInfo:
+        return self.gateway.key_info(key)
 
     def delete_customers(self, user_ids: list[str]) -> None:
         self.gateway.delete_customers(user_ids)

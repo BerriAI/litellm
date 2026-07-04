@@ -1,6 +1,7 @@
 """Live e2e: per-model budgets (`model_max_budget`) isolate by model.
 
-Covers key-level caps, team defaults on virtual keys, and member overrides.
+Covers key-level caps, team defaults on virtual keys, member overrides,
+human-user shared spend across keys, and service-account per-key isolation.
 Each scenario caps one model tiny and leaves another generous so enforcement
 proves the per-model budget is independent, not a key-wide budget.
 """
@@ -11,10 +12,17 @@ from dataclasses import dataclass
 
 import pytest
 
-from budget_client import BudgetClient, is_budget_block, model_budget
+from budget_client import (
+    BudgetClient,
+    assert_model_usage,
+    is_budget_block,
+    model_budget,
+    model_usage_entry,
+)
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
+from models import ModelMaxBudgetUsageEntry
 
 pytestmark = pytest.mark.e2e
 
@@ -22,6 +30,7 @@ CAPPED_MODEL = "claude-haiku-4-5"
 FREE_MODEL = "gemini-2.5-flash"
 TEAM_BUDGET = 100.0
 TINY_MODEL_BUDGET = 1e-6
+SHARED_TEAM_MODEL_BUDGET = 0.05
 
 
 def _call(client: BudgetClient, key: str, model: str):
@@ -57,6 +66,23 @@ def _budget_limit_for_model(
         if "max_budget" in entry:
             return float(entry["max_budget"])
     return None
+
+
+def _wait_for_model_spend(
+    client: BudgetClient,
+    key: str,
+    model: str,
+    *,
+    min_spend: float = 1e-9,
+    timeout: float = 45.0,
+) -> ModelMaxBudgetUsageEntry:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        entry = model_usage_entry(client.key_info(key), model)
+        if entry is not None and entry.current_spend >= min_spend:
+            return entry
+        time.sleep(1)
+    pytest.fail(f"model_max_budget_usage for {model!r} never reached min_spend {min_spend}")
 
 
 def test_model_max_budget_isolates_per_model(
@@ -162,3 +188,73 @@ class TestTeamModelMaxBudget:
             f"{FREE_MODEL} blocked by member {CAPPED_MODEL} cap; per-model member budgets not isolated"
         )
         require_successful_call(other)
+
+
+def test_team_model_max_budget_human_shared_and_sa_isolated(
+    client: BudgetClient,
+    resources: ResourceManager,
+) -> None:
+    marker = unique_marker()
+    team_id = client.create_team(alias=f"e2e-team-shared-model-budget-{marker}", max_budget=TEAM_BUDGET)
+    resources.defer(lambda: client.delete_team(team_id))
+    user_id = client.create_user(max_budget=TEAM_BUDGET)
+    resources.defer(lambda: client.delete_user(user_id))
+    client.add_team_member(team_id, user_id)
+
+    client.update_team(
+        team_id,
+        model_max_budget={
+            **model_budget(CAPPED_MODEL, SHARED_TEAM_MODEL_BUDGET, period="1d"),
+            **model_budget(FREE_MODEL, 1000.0),
+        },
+    )
+
+    human_key_a = client.generate_key(team_id=team_id, user_id=user_id)
+    human_key_b = client.generate_key(team_id=team_id, user_id=user_id)
+    sa_key_a = client.generate_key(team_id=team_id, user_id=None)
+    sa_key_b = client.generate_key(team_id=team_id, user_id=None)
+    resources.defer(lambda: client.delete_key(human_key_a))
+    resources.defer(lambda: client.delete_key(human_key_b))
+    resources.defer(lambda: client.delete_key(sa_key_a))
+    resources.defer(lambda: client.delete_key(sa_key_b))
+
+    first_human = _call(client, human_key_a, CAPPED_MODEL)
+    require_successful_call(first_human)
+
+    shared_usage = _wait_for_model_spend(client, human_key_b, CAPPED_MODEL)
+    assert shared_usage.scope == "team", (
+        f"human user should share team pool; expected scope 'team', got {shared_usage.scope!r}"
+    )
+    assert shared_usage.current_spend > 0, "key B should reflect spend from key A on shared team pool"
+
+    _exhaust_model_budget(client, human_key_a, CAPPED_MODEL)
+
+    blocked_on_sibling = _call(client, human_key_b, CAPPED_MODEL)
+    assert is_budget_block(blocked_on_sibling), (
+        f"{CAPPED_MODEL} should be blocked on key B after shared team pool exhausted on key A"
+    )
+
+    free_after_cap = _call(client, human_key_b, FREE_MODEL)
+    assert not is_budget_block(free_after_cap), (
+        f"{FREE_MODEL} blocked after {CAPPED_MODEL} cap; per-model team budgets not isolated"
+    )
+    require_successful_call(free_after_cap)
+
+    sa_first = _call(client, sa_key_a, CAPPED_MODEL)
+    require_successful_call(sa_first)
+
+    sa_usage = _wait_for_model_spend(client, sa_key_a, CAPPED_MODEL)
+    assert sa_usage.scope == "key", (
+        f"service account should use per-key pool; expected scope 'key', got {sa_usage.scope!r}"
+    )
+    assert sa_usage.current_spend > 0, "SA key should record per-model spend after chat"
+
+    _exhaust_model_budget(client, sa_key_a, CAPPED_MODEL)
+
+    sibling_sa = _call(client, sa_key_b, CAPPED_MODEL)
+    assert not is_budget_block(sibling_sa), (
+        f"{CAPPED_MODEL} blocked on second SA key; service account pools should be independent"
+    )
+    require_successful_call(sibling_sa)
+
+    assert_model_usage(client.key_info(sa_key_b), CAPPED_MODEL, min_spend=1e-9, scope="key")
