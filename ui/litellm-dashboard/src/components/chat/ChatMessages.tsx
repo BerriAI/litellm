@@ -3,6 +3,7 @@
 import { Wrench, Copy, Check, Pencil } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Button } from "@/components/ui/button";
 import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -122,27 +123,19 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
             className="w-full px-3.5 py-2.5 border-none outline-none resize-none text-sm leading-relaxed text-foreground font-[inherit] bg-transparent box-border min-h-[40px]"
           />
           <div className="flex justify-end gap-2 px-2.5 py-1.5 border-t">
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => {
                 setEditValue(message.content);
                 setEditing(false);
               }}
-              className="px-3 py-1 rounded-md border text-[13px] text-muted-foreground hover:bg-accent transition-colors"
-              style={{ background: "none" }}
             >
               Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!editValue.trim()}
-              className={`px-3 py-1 rounded-md border-none text-[13px] font-medium transition-colors ${
-                editValue.trim()
-                  ? "bg-primary text-primary-foreground cursor-pointer hover:bg-primary/90"
-                  : "bg-muted text-muted-foreground cursor-not-allowed"
-              }`}
-            >
-              Save &amp; Send
-            </button>
+            </Button>
+            <Button size="sm" onClick={handleSave} disabled={!editValue.trim()}>
+              Save & Send
+            </Button>
           </div>
         </div>
       </div>
@@ -160,16 +153,17 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
           <TooltipProvider delayDuration={300}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
                   onClick={() => {
                     setEditValue(message.content);
                     setEditing(true);
                   }}
-                  className="p-1 rounded-md text-muted-foreground hover:text-foreground transition-colors shrink-0 flex items-center"
-                  style={{ background: "none", border: "none" }}
+                  className="text-muted-foreground hover:text-foreground shrink-0"
                 >
-                  <Pencil className="h-3.5 w-3.5" />
-                </button>
+                  <Pencil className="size-3.5" />
+                </Button>
               </TooltipTrigger>
               <TooltipContent>
                 <p>Edit message</p>
@@ -274,15 +268,14 @@ function CopyButton({ text }: { text: string }) {
       <TooltipProvider delayDuration={300}>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
+            <Button
+              variant="ghost"
+              size="icon-xs"
               onClick={handleCopy}
-              className={`p-1 rounded-md flex items-center gap-1 transition-colors text-[13px] ${
-                copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"
-              }`}
-              style={{ background: "none", border: "none" }}
+              className={copied ? "text-emerald-600" : "text-muted-foreground hover:text-foreground"}
             >
-              {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            </button>
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            </Button>
           </TooltipTrigger>
           <TooltipContent>
             <p>{copied ? "Copied!" : "Copy"}</p>

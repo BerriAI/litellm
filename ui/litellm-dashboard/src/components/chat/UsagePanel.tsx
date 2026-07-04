@@ -152,7 +152,7 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
       {isLoading ? (
         <div className="grid grid-cols-2 gap-3">
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="border rounded-lg px-4 py-3.5 flex flex-col gap-2">
+            <div key={i} className="border rounded-lg p-4 bg-card flex flex-col gap-2">
               <Skeleton className="h-3 w-1/2" />
               <Skeleton className="h-5 w-2/3" />
             </div>
@@ -167,7 +167,7 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
         <div>
           <div className="grid grid-cols-2 gap-3 mb-5">
             {statCards.map((card) => (
-              <div key={card.label} className="border rounded-lg px-4 py-3.5">
+              <div key={card.label} className="border rounded-lg p-4 bg-card">
                 <div className="text-xs text-muted-foreground mb-1">{card.label}</div>
                 <div className="text-xl font-semibold text-foreground">{card.value}</div>
                 {card.sub && (
@@ -185,11 +185,11 @@ const UsagePanel: React.FC<Props> = ({ accessToken, userId }) => {
 
           {dailyData.length > 1 && (
             <div className="grid grid-cols-2 gap-3">
-              <div className="border rounded-lg px-4 py-3.5">
+              <div className="border rounded-lg p-4 bg-card">
                 <div className="text-xs text-muted-foreground mb-2">Daily Spend</div>
                 <SparklineBar data={dailySpend} maxVal={maxSpend} />
               </div>
-              <div className="border rounded-lg px-4 py-3.5">
+              <div className="border rounded-lg p-4 bg-card">
                 <div className="text-xs text-muted-foreground mb-2">Daily Requests</div>
                 <SparklineBar data={dailyRequests} maxVal={maxRequests} />
               </div>

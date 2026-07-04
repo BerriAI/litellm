@@ -4,7 +4,20 @@ import React, { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Trash2, Link } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import MessageManager from "@/components/molecules/message_manager";
 import { deleteMCPOAuthUserCredential, listMCPUserCredentials, MCPUserCredentialListItem } from "../networking";
 
@@ -33,9 +46,9 @@ function relativeTime(isoString: string | null | undefined): string {
 
 function expiryLabel(isoString: string | null | undefined): {
   text: string;
-  variant: "default" | "destructive" | "outline";
+  variant: "secondary" | "destructive" | "outline";
 } {
-  if (!isoString) return { text: "Does not expire", variant: "outline" };
+  if (!isoString) return { text: "Does not expire", variant: "secondary" };
   try {
     const exp = new Date(isoString);
     const diffMs = exp.getTime() - Date.now();
@@ -44,9 +57,9 @@ function expiryLabel(isoString: string | null | undefined): {
     const diffMin = Math.floor(diffSec / 60);
     const diffHr = Math.floor(diffMin / 60);
     const diffDay = Math.floor(diffHr / 24);
-    if (diffDay > 0) return { text: `Expires in ${diffDay}d`, variant: "default" };
-    if (diffHr > 0) return { text: `Expires in ${diffHr}h`, variant: "default" };
-    return { text: `Expires in ${diffMin}m`, variant: "default" };
+    if (diffDay > 0) return { text: `Expires in ${diffDay}d`, variant: "outline" };
+    if (diffHr > 0) return { text: `Expires in ${diffHr}h`, variant: "outline" };
+    return { text: `Expires in ${diffMin}m`, variant: "outline" };
   } catch {
     return { text: "", variant: "outline" };
   }
@@ -90,8 +103,43 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="rounded-lg border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/50">
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  App
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Connected
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Status
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground text-right">
+                  Actions
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {Array.from({ length: 3 }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell>
+                    <Skeleton className="h-4 w-24" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-16" />
+                  </TableCell>
+                  <TableCell>
+                    <Skeleton className="h-4 w-20" />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Skeleton className="h-4 w-8 ml-auto" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       ) : credentials.length === 0 ? (
         <div className="text-center text-muted-foreground text-sm py-12 border border-dashed rounded-lg">
@@ -107,10 +155,18 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/50">
-                <TableHead className="text-xs font-semibold uppercase tracking-wide">App</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wide">Connected</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wide">Status</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wide text-right">Actions</TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  App
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Connected
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Status
+                </TableHead>
+                <TableHead className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground text-right">
+                  Actions
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -127,19 +183,38 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
                       <Badge variant={exp.variant}>{exp.text}</Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <button
-                        onClick={() => handleRevoke(cred.server_id)}
-                        disabled={isRevoking}
-                        title="Revoke connection"
-                        className="inline-flex items-center justify-center rounded-md border px-2 py-1 text-muted-foreground hover:text-destructive hover:border-destructive/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        style={{ background: "none" }}
-                      >
-                        {isRevoking ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-3.5 w-3.5" />
-                        )}
-                      </button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="icon-sm"
+                            disabled={isRevoking}
+                            title="Revoke connection"
+                            className="text-muted-foreground hover:text-destructive hover:border-destructive/50"
+                          >
+                            {isRevoking ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Revoke connection?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This removes the stored OAuth credential for {displayName(cred)}. You&apos;ll need to
+                              reconnect to use it in chat again.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction variant="destructive" onClick={() => handleRevoke(cred.server_id)}>
+                              Revoke
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </TableCell>
                   </TableRow>
                 );

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import MessageManager from "@/components/molecules/message_manager";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
@@ -72,8 +73,19 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
   return (
     <div className="max-w-[320px] max-h-[400px] overflow-y-auto py-2">
       {loadingServers ? (
-        <div className="flex justify-center py-6">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="flex flex-col gap-1">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="flex items-center justify-between px-3 py-2 gap-3">
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                <Skeleton className="h-6 w-6 rounded-md shrink-0" />
+                <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                  <Skeleton className="h-3.5 w-24" />
+                  <Skeleton className="h-3 w-32" />
+                </div>
+              </div>
+              <Skeleton className="h-3.5 w-6 rounded-full shrink-0" />
+            </div>
+          ))}
         </div>
       ) : servers.length === 0 ? (
         <div className="px-3 py-4 text-muted-foreground text-[13px] text-center">No MCP servers configured</div>

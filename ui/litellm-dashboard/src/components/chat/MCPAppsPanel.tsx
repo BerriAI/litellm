@@ -42,7 +42,7 @@ const OAuth2ConnectButton: React.FC<OAuth2ConnectButtonProps> = ({
 
   if (variant === "button") {
     return (
-      <Button onClick={startOAuthFlow} disabled={loading} className="rounded-lg font-semibold h-[38px] min-w-[110px]">
+      <Button onClick={startOAuthFlow} disabled={loading} className="font-semibold h-[38px] min-w-[110px]">
         {loading && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
         {loading ? "Connecting\u2026" : "Connect"}
       </Button>
@@ -258,14 +258,15 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
 
     return (
       <div className="w-full">
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => setDetailServer(null)}
-          className="flex items-center gap-1.5 text-muted-foreground text-[13px] pb-5 hover:text-foreground transition-colors"
-          style={{ background: "none", border: "none" }}
+          className="-ml-3 mb-5 gap-1.5 text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3 w-3" />
           Back
-        </button>
+        </Button>
 
         <div className="flex items-start gap-5 mb-7">
           {detailServer.mcp_info?.logo_url ? (
@@ -310,7 +311,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                   });
                   onChangeRef.current(selectedServersRef.current.filter((s) => s !== name));
                 }}
-                className="rounded-lg font-semibold h-[38px] min-w-[110px]"
+                className="font-semibold h-[38px] min-w-[110px]"
               >
                 Disconnect
               </Button>
@@ -329,7 +330,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               variant={isConnected ? "outline" : "default"}
               disabled={isTogglingOn}
               onClick={() => handleToggle(name, !isConnected, detailServer.server_id)}
-              className="rounded-lg font-semibold h-[38px] min-w-[110px]"
+              className="font-semibold h-[38px] min-w-[110px]"
             >
               {isTogglingOn && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}
               {isConnected ? "Disconnect" : "Connect"}
@@ -338,7 +339,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
         </div>
 
         <h3 className="m-0 mb-3 text-[15px] font-semibold text-foreground">Information</h3>
-        <div className="border rounded-xl overflow-hidden mb-7">
+        <div className="border rounded-lg overflow-hidden mb-7">
           {[
             ["Server ID", detailServer.server_id],
             ["Transport", handleTransport(detailServer.transport, detailServer.spec_path)],
@@ -362,8 +363,13 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
           )}
         </div>
         {loadingTools ? (
-          <div className="flex justify-center py-6">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: 3 }, (_, i) => (
+              <div key={i} className="border rounded-lg px-3.5 py-2.5 bg-muted/30 flex flex-col gap-1.5">
+                <Skeleton className="h-3.5 w-1/3" />
+                <Skeleton className="h-3 w-2/3" />
+              </div>
+            ))}
           </div>
         ) : detailTools.length === 0 ? (
           <div className="text-muted-foreground text-[13px] py-2">No tools available</div>
@@ -432,8 +438,19 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
       </Tabs>
 
       {loading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
+          {Array.from({ length: 6 }, (_, idx) => (
+            <div
+              key={idx}
+              className={`flex items-center gap-3 p-4 ${idx % 2 === 0 ? "border-r" : ""} ${idx < 4 ? "border-b" : ""}`}
+            >
+              <Skeleton className="w-[38px] h-[38px] rounded-xl shrink-0" />
+              <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+                <Skeleton className="h-3.5 w-2/3" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+            </div>
+          ))}
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center text-muted-foreground text-[13px] py-12 px-3">
@@ -444,7 +461,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               : "No servers match your search."}
         </div>
       ) : (
-        <div className="grid grid-cols-2 border rounded-xl overflow-hidden">
+        <div className="grid grid-cols-2 border rounded-lg overflow-hidden">
           {filtered.map((server, idx) => {
             const name = nameOf(server);
             const isConnected = selectedServers.includes(name);
@@ -456,7 +473,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
               <div
                 key={server.server_id}
                 onClick={() => setDetailServer(server)}
-                className={`flex items-center gap-3 px-4 py-3.5 bg-background cursor-pointer transition-colors hover:bg-accent/30 min-w-0 ${
+                className={`flex items-center gap-3 p-4 bg-card cursor-pointer transition-colors hover:bg-accent/30 min-w-0 ${
                   isLeftCol ? "border-r" : ""
                 } ${Math.floor(idx / 2) < Math.floor((filtered.length - 1) / 2) ? "border-b" : ""}`}
               >
@@ -510,7 +527,7 @@ const MCPAppsPanel: React.FC<Props> = ({ accessToken, selectedServers, onChange 
                     />
                   )
                 ) : isConnected ? (
-                  <span className="w-[7px] h-[7px] rounded-full bg-primary shrink-0" />
+                  <span className="w-[7px] h-[7px] rounded-full bg-emerald-600 dark:bg-emerald-400 shrink-0" />
                 ) : null}
                 <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0" />
               </div>

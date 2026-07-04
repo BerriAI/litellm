@@ -1,360 +1,376 @@
-# LiteLLM Chat UI Design System
+# Chat UI Design Reference
 
-## 1. Vision
+Tactical guide for building chat UI features. Copy patterns exactly — don't improvise spacing, colors, or components.
 
-A focused, professional chat interface that puts the conversation first. Inspired by the best of Microsoft Copilot, GitHub Copilot Chat, and modern SaaS tooling: clean surfaces, tight typography, restrained color, and purposeful motion. Every pixel earns its place
+> **Agents:** Read `AGENTS.md` alongside this file. It contains decision trees, the pre-commit checklist, and the rules that govern when to use each pattern here. This file is the _what_; `AGENTS.md` is the _when and how_.
 
-## 2. Design Principles
+---
 
-**Density over decoration.** Maximize usable space. No ornamental gradients, no heavy shadows, no gratuitous whitespace. The UI should feel like a precision tool, not a marketing page
+## Stack
 
-**Quiet until needed.** Secondary controls (edit, delete, copy) appear on hover or focus. Primary actions (send, new chat) are always visible. Enterprise features (key rotation) surface only for entitled users
+- **Next.js 16** App Router, TypeScript
+- **Tailwind CSS v4** — utility classes only, no custom CSS except in `globals.css`
+- **shadcn/ui** — import from `@/components/ui/*`. Available today: `alert-dialog`, `badge`, `button`, `collapsible`, `dialog`, `input`, `label`, `popover`, `scroll-area`, `select`, `separator`, `skeleton`, `switch`, `table`, `tabs`, `tooltip`. **Not installed**: `Card`, `Textarea`, `sonner`. Don't reference them until they're actually added — see "Known gaps" below.
+- **lucide-react** — only icon library, no emoji in UI
+- System font stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`), inherited from `ChatShell`'s root
 
-**System-native feel.** Use the OS font stack. Respect prefers-reduced-motion. Match native scrollbar behavior. The chat should feel like it belongs on the user's machine
+---
 
-**One layout, many views.** The sidebar + main area split is the single structural pattern. Sidebar switches between views (Chats, Apps, Credentials, API Keys, Usage) without page transitions. The main area hosts either the chat or a full-width panel
+## Tokens
 
-## 3. Layout
+Never hardcode hex values. Use these CSS variables via Tailwind classes — all verified present in `src/app/globals.css`.
 
-```
-+--sidebar(260px)--+--------main-area--------+
-| logo + collapse  | top-bar (model selector) |
-| nav items        |                          |
-| divider          |  content area            |
-| view tabs        |  (chat / panel view)     |
-| divider          |                          |
-| [chats list]     |  input bar (chat only)   |
-+------------------+--------------------------+
-```
+### Colors
 
-### Sidebar
+| Token                         | Tailwind class                        | Use                                                            |
+| ----------------------------- | ------------------------------------- | -------------------------------------------------------------- |
+| `--background`                | `bg-background`                       | Main content area, input surfaces                              |
+| `--foreground`                | `text-foreground`                     | Primary text                                                   |
+| `--card`                      | `bg-card`                             | Popover/dialog surfaces (no `<Card>` component yet — see gaps) |
+| `--muted`                     | `bg-muted`                            | Table header rows, subtle fills                                |
+| `--muted-foreground`          | `text-muted-foreground`               | Secondary/helper text, timestamps                              |
+| `--border`                    | `border-border` (or bare `border`)    | All 1px separators                                             |
+| `--primary`                   | `bg-primary` / `text-primary`         | Send button, checkmarks, active links                          |
+| `--destructive`               | `bg-destructive` / `text-destructive` | Delete, error actions                                          |
+| `--sidebar`                   | `bg-sidebar`                          | **Left sidebar background — use this, not `bg-secondary`**     |
+| `--sidebar-foreground`        | `text-sidebar-foreground`             | Sidebar text                                                   |
+| `--sidebar-accent`            | `bg-sidebar-accent`                   | Active/hover nav item fill                                     |
+| `--sidebar-accent-foreground` | `text-sidebar-accent-foreground`      | Active nav item text                                           |
+| `--sidebar-border`            | `border-sidebar-border`               | Sidebar's own dividers/right border                            |
 
-- Width: 260px expanded, 56px collapsed
-- Background: `bg-secondary` (the shadcn muted/secondary surface)
-- Border right: `border` (1px, uses --border token)
-- Collapse animation: 200ms cubic-bezier(0.4, 0, 0.2, 1)
-- Nav items: 36px tall, 8px horizontal padding, radius-md, full-width
-- Active nav item: `bg-accent` with `text-accent-foreground`
-- Hover: `bg-accent/50`
-- Icon size in nav: 16px. Label font: 14px/500
+**Known gotcha — verified in `globals.css`:** `--accent`, `--secondary`, and `--muted` all resolve to the _identical_ OKLCH value in both light and dark themes. Using `bg-accent` for a "selected" state against a `bg-secondary` container is **invisible** — there is zero contrast. This bit us repeatedly in this exact sidebar. Rules:
 
-### Main area
+- Sidebar container: `bg-sidebar`, never `bg-secondary` or `bg-accent`.
+- Active/selected nav item: `bg-sidebar-accent text-sidebar-accent-foreground`, never `bg-accent` on its own inside the sidebar.
+- Anywhere else `bg-accent`/`bg-muted` is used for hover/selected state, confirm the container isn't _also_ `bg-accent`/`bg-secondary`/`bg-muted` before shipping — check `globals.css` values, don't assume.
 
-- Background: `bg-background` (white in light mode)
-- Top bar: 48px tall, bottom border, contains model selector left + settings right
-- Content: flex column, fills remaining space
-- Panel views (Apps, Credentials, Keys, Usage): max-width 800px, centered, 32px vertical padding, 24px horizontal
+### Status colors (semantic — don't substitute)
 
-### Responsive behavior
+| State               | Class                                                    | Use                         |
+| ------------------- | -------------------------------------------------------- | --------------------------- |
+| Success / connected | `text-emerald-600 dark:text-emerald-400`                 | Completed, connected, ready |
+| Running / warning   | `text-amber-600 dark:text-amber-400`                     | In-flight, expiring         |
+| Error               | `text-red-600 dark:text-red-400` (or `text-destructive`) | Failed, expired             |
+| Info                | `text-muted-foreground`                                  | Informational               |
 
-- Below 768px: sidebar auto-collapses to icon rail
-- Below 480px: sidebar becomes an overlay drawer
-- Input bar sticks to bottom in all viewports
+---
 
-## 4. Color
+## Typography
 
-Use the shadcn/Tailwind CSS variable system already defined in globals.css. No hardcoded hex values in components
+```tsx
+// Page/greeting heading
+<h1 className="text-[28px] font-semibold tracking-tight">Good afternoon</h1>
 
-| Token                      | Usage                                    |
-| -------------------------- | ---------------------------------------- |
-| `background`               | Main area, input surfaces                |
-| `foreground`               | Primary text                             |
-| `muted`                    | Sidebar background, disabled surfaces    |
-| `muted-foreground`         | Secondary text, timestamps, placeholders |
-| `primary`                  | Send button, active indicators, links    |
-| `primary-foreground`       | Text on primary surfaces                 |
-| `secondary`                | Sidebar surface, subtle backgrounds      |
-| `border`                   | All 1px separators                       |
-| `accent`                   | Hover states, active nav items           |
-| `destructive`              | Delete actions, error states             |
-| `card` / `card-foreground` | Elevated surfaces (modals, popovers)     |
+// Section heading (panel titles: "Your API Keys", "Your Usage")
+<h2 className="text-base font-semibold tracking-tight">Your Usage</h2>
 
-### Accent colors for status
+// Body text
+<p className="text-sm text-foreground">Body</p>
 
-- Connected/success: `text-emerald-600`
-- Warning/expiring: `text-amber-600`
-- Error/expired: `text-destructive`
-- Info/neutral: `text-muted-foreground`
+// Secondary / helper text
+<p className="text-xs text-muted-foreground">Helper</p>
 
-## 5. Typography
+// Table header
+<th className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Col</th>
 
-Font stack: system default inherited from body (defined in globals.css, `-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`)
-
-| Element                 | Size | Weight | Line Height | Color              |
-| ----------------------- | ---- | ------ | ----------- | ------------------ |
-| Page heading (greeting) | 28px | 600    | 1.2         | `foreground`       |
-| Section heading         | 18px | 600    | 1.3         | `foreground`       |
-| Subsection heading      | 15px | 600    | 1.4         | `foreground`       |
-| Body / message text     | 14px | 400    | 1.7         | `foreground`       |
-| UI label (nav, button)  | 14px | 500    | 1           | varies             |
-| Small label             | 13px | 400    | 1.4         | `muted-foreground` |
-| Timestamp               | 11px | 400    | 1           | `muted-foreground` |
-| Group header (Today)    | 11px | 600    | 1           | `muted-foreground` |
-| Code (inline)           | 13px | 400    | 1.4         | `foreground`       |
-| Code (block)            | 13px | 400    | 1.5         | `foreground`       |
-
-Monospace stack for code: `ui-monospace, SFMono-Regular, 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace`
-
-## 6. Spacing
-
-Use Tailwind's spacing scale consistently. Avoid arbitrary pixel values
-
-| Context                 | Value                                           |
-| ----------------------- | ----------------------------------------------- |
-| Sidebar padding (outer) | `p-2` (8px)                                     |
-| Nav item padding        | `px-2.5 py-2` (10px, 8px)                       |
-| Section divider margin  | `my-1 mx-2` (4px, 8px)                          |
-| Content area padding    | `p-6` (24px) horizontal, `py-8` (32px) vertical |
-| Card internal padding   | `p-3` to `p-4` (12-16px)                        |
-| Message gap             | `gap-4` (16px) between messages                 |
-| Button internal padding | `px-4 py-2` (16px, 8px) default                 |
-
-## 7. Component Specifications
-
-### 7.1 Chat Bubbles
-
-**User bubble**
-
-- Alignment: right-aligned, max-width 72%
-- Background: `bg-muted` (light gray)
-- Border radius: 16px (`rounded-2xl`)
-- Padding: 10px 14px
-- Font: 14px, line-height 1.6
-- Edit button appears on hover to the left, icon-only, `text-muted-foreground`
-
-**Assistant bubble**
-
-- Alignment: left-aligned, max-width 80%
-- No background (text renders directly)
-- Markdown rendered with syntax highlighting for code blocks
-- Copy button below, muted until hovered
-
-**Tool call card**
-
-- Collapsible (collapsed by default)
-- Border: `border`, rounded-lg
-- Background: `bg-muted/50`
-- Header: tool icon + tool name, 13px/500
-- Content sections labeled "Arguments" / "Result" in uppercase 11px/600
-
-### 7.2 Input Bar
-
-- Position: bottom of chat area, above-fold
-- Container: `border rounded-xl` with inner padding
-- Textarea: auto-growing, no visible border, inherits font
-- Bottom row: model indicator left, send button right
-- Send button: `bg-primary text-primary-foreground rounded-md px-4 py-1.5`
-- Disabled send: `bg-muted text-muted-foreground cursor-not-allowed`
-- Stop button (during streaming): circular, 32px, border only, square stop icon inside
-
-### 7.3 Model Selector
-
-- Trigger: ghost button in top bar showing model name + provider logo
-- Dropdown: popover with search input + scrollable model list
-- Selected model: checkmark icon, `text-primary`
-- Comparison mode: up to 3 models, shown as pills
-
-### 7.4 Sidebar Navigation
-
-Each nav item is a full-width row:
-
-```
-[icon 16px] [label 14px/500]
+// Monospace (keys, IDs, JSON, tool args)
+<span className="font-mono text-xs">sk-...abcd</span>
 ```
 
-- Default: `text-muted-foreground`, transparent background
-- Hover: `bg-accent/50`
-- Active: `bg-accent text-accent-foreground` with `font-medium`
-- Collapsed sidebar: icon only, centered, with tooltip on hover
+**Rules:**
 
-### 7.5 Conversation List
+- Use `tracking-tight` on headings
+- Never set `text-foreground/50` or `text-foreground/70` for secondary text — use `text-muted-foreground`
+- Monospace for: masked keys, conversation/tool-call IDs, tool arguments, JSON values
 
-- Grouped by date: Today, Yesterday, Last 7 Days, Older
-- Group headers: uppercase, 11px/600, `text-muted-foreground`, letter-spacing 0.04em
-- Row: 34px min-height, `rounded-md`, 6px 8px padding
-- Active row: `bg-accent`
-- Hover row: `bg-accent/50`
-- Action icons (edit, delete): appear on hover, opacity transition 150ms
-- Delete confirmation: shadcn AlertDialog, not a popconfirm tooltip
+---
 
-### 7.6 Cmd+K Search
+## Spacing
 
-- Trigger: Ctrl/Cmd + K globally
-- Dialog (shadcn Dialog, not Modal): 480px wide, centered vertically
-- Search input at top with search icon prefix
-- Results list: scrollable, max-height 320px
-- Each result: message icon, truncated title, date badge right-aligned
-- Click selects and closes
+4px base grid.
 
-### 7.7 Data Tables (Keys, Credentials)
+| Context                            | Value                                       |
+| ---------------------------------- | ------------------------------------------- |
+| Sidebar outer padding              | `p-2` (8px)                                 |
+| Nav item padding                   | `px-2.5 py-2`                               |
+| Inline icon-to-label gap           | `gap-2.5` in nav items, `gap-1.5` elsewhere |
+| Section divider margin             | `mx-2`                                      |
+| Panel content padding              | `px-8 py-8`                                 |
+| Card/bordered-div internal padding | `p-4`                                       |
+| Dialog body padding                | `px-6 pb-6`                                 |
 
-Use shadcn's table primitives (Table, TableHeader, TableBody, TableRow, TableCell) with Tailwind styling, not antd Table
+---
 
-- Border: `border rounded-lg overflow-hidden`
-- Header row: `bg-muted/50`, uppercase 11px/600 labels
-- Body rows: 44px min-height, `border-b last:border-0`
-- Hover: `bg-accent/30`
-- Cell text: 13-14px
-- Action buttons: ghost/outline variant, icon-only where possible
+## Border Radius
 
-### 7.8 Dialogs and Modals
+```tsx
+rounded-md // 8px — buttons, inputs, nav items, bordered divs
+rounded-lg // 10px — panel cards, table containers
+rounded-xl // 14px — chat input composer
+rounded-2xl // 16px — chat message bubbles
+rounded-full // pills, avatars, status dots
+```
 
-Use shadcn Dialog component
+---
 
-- Overlay: black at 50% opacity
-- Content: `bg-card`, rounded-xl, max-width varies (480px for search, 520px for forms)
-- Header: title left, close X right
-- Footer: action buttons right-aligned, primary action on the right
-- Form inputs: shadcn Input with label above
-- Spacing: 24px padding, 16px between form fields
+## Components
 
-### 7.9 Status Badges
+### Button
 
-Use shadcn Badge component
+Always the shadcn `Button` — never a raw `<button>` with hand-rolled Tailwind, even for icon-only triggers. If it's borderline whether something is a "button" (e.g. a nav row, a suggestion pill), it still gets a `variant`.
 
-- Default (neutral): `bg-secondary text-secondary-foreground`
-- Active/connected: green outline variant
-- Warning/expiring: amber outline variant
-- Error/expired: destructive variant
-- Enterprise: primary variant with lock icon
+```tsx
+import { Button } from "@/components/ui/button"
 
-### 7.10 Loading States
+<Button>Send</Button>
+<Button variant="outline">Cancel</Button>
+<Button variant="ghost">Nav item / low-emphasis</Button>
+<Button variant="destructive">Delete</Button>
+<Button variant="ghost" size="icon"><Settings className="size-4" /></Button>
 
-- Spinner: use a simple CSS spinner or Lucide `Loader2` icon with `animate-spin`, not antd Spin
-- Skeleton: use shadcn Skeleton (pulsing gray bars)
-- Typing indicator: three bouncing dots (keep existing CSS animation)
-- Thinking placeholder: pulsing "Thinking..." text
+// Loading
+<Button disabled={loading}>
+  {loading && <Loader2 className="size-4 animate-spin" />}
+  Save
+</Button>
+```
 
-### 7.11 MCP Server Cards (Apps Panel)
+Sizes: `default` (h-9), `sm` (h-8), `xs` (h-6), `lg` (h-10), `icon` (size-9), `icon-sm` (size-8), `icon-xs` (size-6).
 
-- Grid: 2-column on desktop, 1-column below 640px
-- Card: `border rounded-lg` with padding 14px 16px
-- Avatar: 38px, rounded-xl, either logo image or initial with hash-based color
-- Hover: `bg-accent/30` transition 100ms
-- Detail view: back button, larger avatar (64px), info table, tools list
+### Sidebar nav item
 
-### 7.12 Keys Panel
+No dedicated shadcn `Sidebar` block is installed (see gaps). Build nav items from `Button variant="ghost"`, full width, left-aligned, with the sidebar-specific active state:
 
-- Table with columns: Key Alias, Key (masked), Spend/Budget, Expires, Created
-- Masked key format: `sk-...XXXX` (last 4 chars)
-- Rotate button: outline variant, only rendered when `premiumUser === true`
-- Non-premium users see a muted "Enterprise" badge where rotate would be
-- Rotation modal: form with duration, key alias, max budget, grace period fields
-- After rotation: show new key in a mono-font box with copy button
+```tsx
+<Button
+  variant="ghost"
+  aria-current={active ? "page" : undefined}
+  className={`w-full justify-start gap-2.5 px-2.5 font-medium hover:bg-sidebar-accent ${
+    active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-muted-foreground"
+  }`}
+>
+  <Icon className="size-4 shrink-0" />
+  <span className="flex-1 text-left">{label}</span>
+</Button>
+```
 
-### 7.13 Usage Panel
+There is no collapsible/icon-rail sidebar mode — it was removed (added complexity, no real use case, and its collapse toggle button had nowhere sensible to live). Don't reintroduce collapse state without a concrete reason.
 
-- Time range selector: segmented control (7d / 30d / 90d)
-- Stat cards row: 4 cards showing Total Spend, API Requests, Tokens, Success Rate
-- Each card: `border rounded-lg p-4`, label above, large number below, subtitle
-- Charts: simple inline bar charts using divs with percentage widths
-- Colors: `bg-primary` for spend bars, `bg-chart-2` for request bars
+### ScrollArea
 
-### 7.14 Toggle/Switch (MCP Connect Picker)
+**Known gotcha — cost real debugging time:** a `ScrollArea` won't actually scroll if its container is sized with `max-height` instead of `height`, even though the box _looks_ correctly capped. Radix's `ScrollArea` viewport is `size-full` (`height: 100%`), and CSS percentage-height resolution requires the ancestor chain to have a genuinely _definite_ height — `max-height` on a flex container doesn't count as definite for this purpose, even though the browser renders the box at the capped size. The result: the viewport silently grows to its full content height instead of 100% of the visible box, `scrollHeight === clientHeight` is reported (no overflow, so no scrollbar), and scroll events fall through to whatever's behind the popover/panel instead of scrolling the list.
 
-Use shadcn Switch component
+```tsx
+// Wrong — looks capped, doesn't scroll (max-height isn't a definite height)
+<div className="w-[280px] max-h-[400px] flex flex-col overflow-hidden">
+  <ScrollArea className="flex-1 min-h-0">{items}</ScrollArea>
+</div>
 
-- Size: small (16px height)
-- Track: `bg-input` unchecked, `bg-primary` checked
-- Loading state: spinner overlaid
+// Right — explicit height propagates as definite through the whole chain
+<div className="w-[280px] h-[400px] flex flex-col overflow-hidden">
+  <ScrollArea className="flex-1 h-0">{items}</ScrollArea>
+</div>
+```
 
-## 8. Interaction & Motion
+If you need "shrink to fit content, cap at N px" rather than "always N px," you cannot get both with pure CSS here — pick the fixed height (the common case: any list that can realistically exceed the cap, e.g. a model picker with hundreds of entries) over one that only works when short.
 
-| Interaction         | Timing      | Easing                       |
-| ------------------- | ----------- | ---------------------------- |
-| Hover background    | 150ms       | ease                         |
-| Sidebar collapse    | 200ms       | cubic-bezier(0.4, 0, 0.2, 1) |
-| Modal open/close    | 150ms       | ease-out / ease-in           |
-| Icon opacity reveal | 150ms       | ease                         |
-| Tooltip appear      | 200ms delay | ease                         |
-| Button press        | 100ms       | ease                         |
+### Input / Textarea
 
-All motion respects `prefers-reduced-motion: reduce` by collapsing to 0ms
+`Input` exists; `Textarea` does not (see gaps — until added, a plain `<textarea>` with `border-none outline-none resize-none` inside a bordered container, as in the chat composer, is the accepted exception).
 
-## 9. Accessibility
+```tsx
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
-- All interactive elements have visible focus rings (shadcn default: `ring-ring/50`)
-- Keyboard navigation: Tab through nav items, Enter/Space to activate
-- Cmd+K search is keyboard-accessible end-to-end
-- Tooltip content duplicated in aria-label for icon-only buttons
-- Color contrast: all text meets WCAG 2.1 AA (4.5:1 for body text, 3:1 for large text)
-- Screen reader: conversation list items use role="listbox" + role="option"
+<div className="flex flex-col gap-1.5">
+  <Label htmlFor="alias">Key alias</Label>
+  <Input id="alias" disabled />
+  {error && <p className="text-xs text-destructive">{error}</p>}
+</div>;
+```
 
-## 10. shadcn Components Used
+Errors go **below** the field. Never a toast for form validation.
 
-Components to install and use across the chat UI:
+### Bordered surfaces (Card substitute)
 
-| Component   | Replaces (antd)      | Used in                       |
-| ----------- | -------------------- | ----------------------------- |
-| Button      | antd Button          | All buttons                   |
-| Input       | antd Input           | Search, rename, form fields   |
-| Dialog      | antd Modal           | Search, key rotation, delete  |
-| AlertDialog | antd Popconfirm      | Delete confirmation           |
-| Popover     | antd Popover         | Model selector, MCP picker    |
-| Tooltip     | antd Tooltip         | Icon tooltips                 |
-| Table\*     | antd Table           | Keys, credentials             |
-| Badge       | antd Tag             | Status indicators             |
-| Switch      | antd Switch          | MCP server toggles            |
-| Select      | antd Select          | Time range, form selects      |
-| Skeleton    | antd Skeleton        | Loading placeholders          |
-| ScrollArea  | native overflow-auto | Conversation list, model list |
-| Collapsible | antd Collapse        | Tool call cards               |
-| Separator   | div with border      | Sidebar dividers              |
-| Label       | (none)               | Form field labels             |
-| Tabs        | custom tab buttons   | Apps panel tabs               |
+No `Card` component is installed. Use a bordered div — this is already the documented pattern here, keep it:
 
-\*For tables, use the shadcn table primitives (Table, TableHeader, TableRow, etc.) which are thin wrappers around native `<table>` with Tailwind classes, not a heavy data-table library
+```tsx
+<div className="border rounded-lg p-4 bg-card">{/* content */}</div>
+```
 
-## 11. File Structure
+### Badge
+
+```tsx
+import { Badge } from "@/components/ui/badge"
+
+<Badge variant="secondary">connected</Badge>
+<Badge variant="outline">expiring</Badge>
+<Badge variant="destructive">expired</Badge>
+```
+
+### Dialog / AlertDialog
+
+```tsx
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+
+<Dialog open={open} onOpenChange={setOpen}>
+  <DialogContent className="sm:max-w-lg">
+    <DialogHeader>
+      <DialogTitle>Rotate key</DialogTitle>
+    </DialogHeader>
+    <div className="flex flex-col gap-4">{/* form */}</div>
+    <DialogFooter>
+      <Button variant="outline" onClick={() => setOpen(false)}>
+        Cancel
+      </Button>
+      <Button onClick={handleSubmit} disabled={loading}>
+        {loading && <Loader2 className="size-4 animate-spin" />}
+        Rotate
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>;
+```
+
+Use `AlertDialog` (not a manual confirm) for any destructive action — delete conversation, revoke credential.
+
+### Table
+
+```tsx
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+
+<div className="border rounded-lg overflow-hidden">
+  <Table>
+    <TableHeader>
+      <TableRow className="bg-muted/50">
+        <TableHead className="text-[11px] font-medium uppercase tracking-wide">Key</TableHead>
+      </TableRow>
+    </TableHeader>
+    <TableBody>
+      <TableRow>
+        <TableCell className="font-mono text-xs">sk-...abcd</TableCell>
+      </TableRow>
+    </TableBody>
+  </Table>
+</div>;
+```
+
+### Tabs
+
+Always pass `variant="line"` for section tabs (Apps: All/Connected). The default variant renders a boxed pill with a background/shadow meant for compact toggle groups, not section tabs, and combining it with hand-added `border-b-2` classes produces a broken double-border look.
+
+```tsx
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+<Tabs value={tab} onValueChange={setTab}>
+  <TabsList variant="line" className="w-full justify-start border-b rounded-none h-auto p-0">
+    <TabsTrigger value="all" className="rounded-none px-4 py-2 text-[13px]">
+      All
+    </TabsTrigger>
+  </TabsList>
+</Tabs>;
+```
+
+### Loading states
+
+Skeleton loaders while fetching — never a bare spinner or blank screen for list/table content. `Loader2` + `animate-spin` is reserved for **inside a button** during a submit action, not as a page/panel loading state.
+
+```tsx
+import { Skeleton } from "@/components/ui/skeleton";
+
+<div className="flex flex-col gap-3">
+  <div className="border rounded-lg p-4 flex flex-col gap-2">
+    <Skeleton className="h-4 w-1/3" />
+    <Skeleton className="h-3 w-2/3" />
+  </div>
+</div>;
+```
+
+### Toast / notifications
+
+**Gap:** `sonner` is not installed. This codebase currently uses `MessageManager` (antd-message-based) for toasts across the chat UI. Don't introduce a second toast mechanism — keep using `MessageManager` until `sonner` is added as a deliberate, separate change (see `AGENTS.md`).
+
+---
+
+## Page Layout Patterns
+
+### Chat shell (sidebar + routed content)
+
+```tsx
+<div className="flex h-full w-full flex-col bg-background overflow-hidden">
+  {/* optional full-width banner */}
+  <div className="flex flex-1 min-h-0 overflow-hidden">
+    <aside
+      className="shrink-0 bg-sidebar border-r flex flex-col overflow-hidden"
+      style={{ width: collapsed ? 56 : 260 }}
+    >
+      {/* nav items, conversation list */}
+    </aside>
+    <main className="flex-1 flex flex-col overflow-hidden min-w-0">{children}</main>
+  </div>
+</div>
+```
+
+### Routed panel (Integrations, Credentials, API Keys, Usage)
+
+```tsx
+<div className="flex-1 min-h-0 overflow-auto w-full py-8 px-8">
+  <PanelComponent />
+</div>
+```
+
+No max-width cap on panel content — matches the rest of the dashboard's own pages (verified: `(dashboard)/api-keys/ApiKeysDashboard.tsx` has no width cap). A narrow `max-w-[800px]` here previously made wide tables (Keys) look cramped on real monitors; don't reintroduce it.
+
+---
+
+## Icons
+
+`lucide-react` only. `size-4` (16px) inline/nav, `size-5` (20px) standalone actions, `size-3.5` (14px) inside badges/small buttons.
+
+---
+
+## Dos and Don'ts
+
+| Do                                                                    | Don't                                                                               |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `Button` (any variant) for every clickable control                    | Raw `<button>` with hand-rolled Tailwind                                            |
+| `bg-sidebar` / `bg-sidebar-accent` for sidebar surfaces               | `bg-secondary` / `bg-accent` for sidebar surfaces (identical values, zero contrast) |
+| `Tabs variant="line"` for section tabs                                | Default `Tabs` variant + manual `border-b-2` overrides                              |
+| Skeleton loaders for panel/list content                               | Spinner or blank screen while fetching                                              |
+| `text-muted-foreground` for secondary text                            | `text-foreground/50`, `text-foreground/60`, `text-foreground/70`                    |
+| `AlertDialog` for destructive confirmations                           | Instant delete, or a hand-rolled confirm                                            |
+| Verify a prop/variant exists in `components/ui/*.tsx` before using it | Assume a shadcn prop exists because another shadcn app has it                       |
+| `MessageManager` for toasts (until sonner lands)                      | Introduce a second, competing toast library                                         |
+
+---
+
+## Known gaps (tracked, not blockers)
+
+These are real, current gaps in this codebase's shadcn setup — don't silently work around them by reinventing the missing piece with raw Tailwind; either use the documented substitute above or flag the addition as its own change:
+
+1. **No `Card` component.** Substitute: bordered div (`border rounded-lg p-4 bg-card`), already the established pattern.
+2. **No `Textarea` component.** Substitute: raw `<textarea>` with `border-none outline-none resize-none`, only inside an already-bordered container (chat composer).
+3. **No `sonner`.** Substitute: existing `MessageManager`.
+4. **No shadcn `Sidebar` primitive block** (`SidebarProvider`/`SidebarMenu`/etc). Substitute: the "Sidebar nav item" pattern above, built from `Button variant="ghost"` + the `sidebar-*` tokens.
+
+## File Structure
 
 ```
 src/components/chat/
-  ChatPage.tsx          # Layout shell, routing, state orchestration
-  ConversationList.tsx  # Sidebar chat list with date grouping
-  ChatMessages.tsx      # Message rendering (user, assistant, tool)
-  MCPAppsPanel.tsx      # Apps grid + detail view
-  MCPConnectPicker.tsx  # MCP server toggle popover
-  MCPCredentialsTab.tsx # OAuth credentials table
-  KeysPanel.tsx         # API key viewing + rotation
-  UsagePanel.tsx        # Spend/usage analytics
-  types.ts              # Shared TypeScript types
-  useChatHistory.ts     # Chat persistence hook
-  design.md             # This file
+  ChatShell.tsx          # Sidebar chrome (nav, collapse, conversation list), shared across all /chat/* routes
+  ConversationList.tsx   # Date-grouped chat list + Cmd+K search
+  ChatMessages.tsx       # Message rendering (user, assistant, tool)
+  MCPAppsPanel.tsx       # Integrations grid + detail view
+  MCPConnectPicker.tsx   # MCP server toggle popover
+  MCPCredentialsTab.tsx  # OAuth credentials table
+  KeysPanel.tsx          # API key viewing + rotation
+  UsagePanel.tsx         # Spend/usage analytics
+  types.ts               # Shared TypeScript types
+  useChatHistory.ts      # Chat persistence hook
+  design.md              # This file
+  AGENTS.md              # When/how to apply this file
+../../contexts/ChatShellContext.tsx  # Cross-route state: MCP server selection, conversation history
+../../app/chat/                      # Route tree: page.tsx (chats), layout.tsx (auth gate + shell),
+                                      # integrations/, credentials/, api-keys/, usage/
 ```
-
-## 12. Migration Notes
-
-The migration from antd to shadcn is component-by-component. Each file should:
-
-1. Replace antd imports with shadcn component imports + Lucide icons
-2. Convert inline `style={{}}` objects to Tailwind classes where practical
-3. Use CSS variables via Tailwind tokens (`bg-primary`, `text-muted-foreground`) instead of hardcoded hex
-4. Keep the same prop interfaces and behavioral contracts
-5. Preserve all keyboard shortcuts and accessibility features
-
-antd's `@ant-design/icons` are replaced by Lucide React icons (already the shadcn default icon library per components.json). Mapping:
-
-| antd icon           | Lucide equivalent |
-| ------------------- | ----------------- |
-| EditOutlined        | Pencil            |
-| DeleteOutlined      | Trash2            |
-| PlusOutlined        | Plus              |
-| SearchOutlined      | Search            |
-| MenuFoldOutlined    | PanelLeftClose    |
-| MenuUnfoldOutlined  | PanelLeftOpen     |
-| MessageOutlined     | MessageSquare     |
-| AppstoreOutlined    | LayoutGrid        |
-| KeyOutlined         | KeyRound          |
-| LockOutlined        | Lock              |
-| BarChartOutlined    | BarChart3         |
-| SettingOutlined     | Settings          |
-| ArrowLeftOutlined   | ArrowLeft         |
-| DownOutlined        | ChevronDown       |
-| CheckOutlined       | Check             |
-| CopyOutlined        | Copy              |
-| SyncOutlined        | RefreshCw         |
-| ToolOutlined        | Wrench            |
-| RightOutlined       | ChevronRight      |
-| CheckCircleOutlined | CheckCircle       |
-| UserOutlined        | User              |
-| LinkOutlined        | Link              |

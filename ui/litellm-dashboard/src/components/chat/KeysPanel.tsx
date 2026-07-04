@@ -247,7 +247,7 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
                       {!record.expires ? (
                         <span className="text-muted-foreground text-[13px]">Never</span>
                       ) : (
-                        <Badge variant={expired ? "destructive" : "default"}>
+                        <Badge variant={expired ? "destructive" : "outline"}>
                           {expired ? "Expired" : formatExpiresUtc(record.expires)}
                         </Badge>
                       )}
@@ -279,7 +279,7 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
 
           {regeneratedKey ? (
             <div>
-              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 mb-4">
+              <div className="rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950 px-3 py-2 text-sm text-amber-800 dark:text-amber-300 mb-4">
                 Save this key now; you will not see it again
               </div>
               <div className="text-xs text-muted-foreground mb-1">New Key</div>
@@ -289,13 +289,13 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
             </div>
           ) : (
             <div className="flex flex-col gap-4 mt-1">
-              <div>
-                <Label className="text-sm mb-1.5 block">Key Alias</Label>
+              <div className="flex flex-col gap-1.5">
+                <Label>Key Alias</Label>
                 <Input value={formState.key_alias} disabled />
               </div>
               <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <Label className="text-sm mb-1.5 block">Max Budget (USD)</Label>
+                <div className="flex flex-col gap-1.5">
+                  <Label>Max Budget (USD)</Label>
                   <Input
                     type="number"
                     step="0.01"
@@ -303,16 +303,16 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
                     onChange={(e) => updateField("max_budget", e.target.value)}
                   />
                 </div>
-                <div>
-                  <Label className="text-sm mb-1.5 block">TPM Limit</Label>
+                <div className="flex flex-col gap-1.5">
+                  <Label>TPM Limit</Label>
                   <Input
                     type="number"
                     value={formState.tpm_limit}
                     onChange={(e) => updateField("tpm_limit", e.target.value)}
                   />
                 </div>
-                <div>
-                  <Label className="text-sm mb-1.5 block">RPM Limit</Label>
+                <div className="flex flex-col gap-1.5">
+                  <Label>RPM Limit</Label>
                   <Input
                     type="number"
                     value={formState.rpm_limit}
@@ -321,30 +321,30 @@ const KeysPanel: React.FC<Props> = ({ accessToken, userId, premiumUser }) => {
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label className="text-sm mb-1.5 block">Expire Key</Label>
+                <div className="flex flex-col gap-1.5">
+                  <Label>Expire Key</Label>
                   <Input
                     placeholder="e.g. 30s, 30h, 30d"
                     value={formState.duration}
                     onChange={(e) => updateField("duration", e.target.value)}
                   />
-                  {formErrors.duration && <p className="text-xs text-destructive mt-1">{formErrors.duration}</p>}
-                  <p className={`text-xs mt-1 ${keyIsExpired ? "text-destructive" : "text-muted-foreground"}`}>
+                  {formErrors.duration && <p className="text-xs text-destructive">{formErrors.duration}</p>}
+                  <p className={`text-xs ${keyIsExpired ? "text-destructive" : "text-muted-foreground"}`}>
                     Current: {rotateTarget?.expires ? formatExpiresUtc(rotateTarget.expires) : "Never"}
                     {keyIsExpired && " (expired)"}
                   </p>
-                  {newExpiryTime && <p className="text-xs text-emerald-600 mt-0.5">New: {newExpiryTime}</p>}
+                  {newExpiryTime && (
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400">New: {newExpiryTime}</p>
+                  )}
                 </div>
-                <div>
-                  <Label className="text-sm mb-1.5 block">Grace Period</Label>
+                <div className="flex flex-col gap-1.5">
+                  <Label>Grace Period</Label>
                   <Input
                     placeholder="e.g. 24h, 2d"
                     value={formState.grace_period}
                     onChange={(e) => updateField("grace_period", e.target.value)}
                   />
-                  {formErrors.grace_period && (
-                    <p className="text-xs text-destructive mt-1">{formErrors.grace_period}</p>
-                  )}
+                  {formErrors.grace_period && <p className="text-xs text-destructive">{formErrors.grace_period}</p>}
                 </div>
               </div>
             </div>
