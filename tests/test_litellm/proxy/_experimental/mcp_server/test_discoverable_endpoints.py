@@ -2733,6 +2733,61 @@ async def test_authorize_forwards_short_state_and_round_trips_via_cookie(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_callback_error_path_reads_cookie_and_clears_it(monkeypatch):
+    """LIT-4197: an IdP error routed through /callback must recover the client's
+    original state from the cookie (not the short handle), propagate the error to
+    the client's redirect_uri, and expire the one-time cookie."""
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        _oauth_state_cookie_name,
+        callback,
+        encode_state_with_base_url,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-for-LIT-4197")
+
+    client_state = "client-original-state-abc"
+    client_redirect_uri = "http://127.0.0.1:6274/oauth/callback/debug"
+    handle = "shortRelayHandle123"
+    encoded_state = encode_state_with_base_url(
+        base_url=client_redirect_uri,
+        original_state=client_state,
+        client_redirect_uri=client_redirect_uri,
+    )
+    cookie_name = _oauth_state_cookie_name(handle)
+
+    request = MagicMock(spec=Request)
+    request.base_url = "https://proxy.example.com/"
+    request.headers = {}
+    request.cookies = {cookie_name: encoded_state}
+
+    response = await callback(
+        request=request,
+        error="access_denied",
+        error_description="User declined access",
+        state=handle,
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    assert location.startswith(client_redirect_uri)
+    query = parse_qs(urlparse(location).query)
+    assert query["error"] == ["access_denied"]
+    # The client's own state is echoed back, recovered from the cookie.
+    assert query["state"] == [client_state]
+
+    cleared = SimpleCookie()
+    cleared.load(response.headers["set-cookie"])
+    assert cookie_name in cleared
+    assert cleared[cookie_name].value == ""
+    assert cleared[cookie_name]["max-age"] == "0"
+
+
+@pytest.mark.asyncio
 async def test_oauth_authorize_includes_scopes_from_server_config():
     """Test that authorize endpoint includes scopes from server configuration."""
     try:
