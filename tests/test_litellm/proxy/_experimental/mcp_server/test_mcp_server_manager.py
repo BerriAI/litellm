@@ -1651,6 +1651,47 @@ class TestMCPServerManager:
         assert server.registration_url == "https://discovered.example.com/register"
 
     @pytest.mark.asyncio
+    async def test_load_servers_from_config_filters_blank_scopes(self):
+        """A YAML ``scopes: [""]`` must normalize to None (matching the DB path), so a blank-only
+        list never becomes a ``("",)`` tuple that skips the entra_obo fail-closed scope check."""
+        manager = MCPServerManager()
+        config = {
+            "entra": {
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "token_exchange_profile": "entra_obo",
+                "token_exchange_endpoint": "https://login.microsoftonline.com/t/oauth2/v2.0/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+                "scopes": ["", "  "],
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.scopes is None
+
+        # And the exchange precondition now fails closed before any IdP call.
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import to_server_spec
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+            OboTokenExchanger,
+        )
+
+        spec = to_server_spec(server)
+        assert spec is not None
+        assert spec.config.scopes == ()
+
+        async def _must_not_post(url, form, headers):
+            raise AssertionError("entra_obo with blank scopes must fail closed before POSTing to the IdP")
+
+        result = await OboTokenExchanger(_must_not_post).exchange("subj", spec, spec.config)
+        assert isinstance(result, Error)
+        assert result.error.tag == "misconfigured"
+
+    @pytest.mark.asyncio
     async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
         manager = MCPServerManager()
 

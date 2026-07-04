@@ -756,7 +756,12 @@ class MCPServerManager:
             else:
                 mcp_oauth_metadata = None
 
-            resolved_scopes = server_config.get("scopes") or (mcp_oauth_metadata.scopes if mcp_oauth_metadata else None)
+            # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
+            # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
+            # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
+            resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
+                mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+            )
             resolved_authorization_url = server_config.get("authorization_url") or (
                 mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
             )
