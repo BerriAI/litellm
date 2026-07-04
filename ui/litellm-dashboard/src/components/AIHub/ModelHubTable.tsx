@@ -120,12 +120,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       try {
         setLoading(true);
         const _modelHubData = await modelHubCall(accessToken);
-        console.log("ModelHubData:", _modelHubData);
         setModelHubData(_modelHubData.data);
 
         getConfigFieldSetting(accessToken, "enable_public_model_hub")
           .then((data) => {
-            console.log(`data: ${JSON.stringify(data)}`);
             if (data.field_value == true) {
               setPublicPageAllowed(true);
             }
@@ -145,10 +143,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
         setLoading(true);
         await getUiConfig();
         const _modelHubData = await modelHubPublicModelsCall();
-        console.log("ModelHubData:", _modelHubData);
-        console.log("First model structure:", _modelHubData[0]);
-        console.log("Model has model_group?", _modelHubData[0]?.model_group);
-        console.log("Model has providers?", _modelHubData[0]?.providers);
         setModelHubData(_modelHubData);
         setPublicPageAllowed(true);
       } catch (error) {
@@ -175,7 +169,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       try {
         setAgentLoading(true);
         const response = await getAgentsList(accessToken);
-        console.log("AgentHubData:", response);
         let agents = response.agents;
         let agent_card_list = agents.map((agent: any) => ({
           agent_id: agent.agent_id,
@@ -205,7 +198,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
       try {
         setMcpLoading(true);
         const response = await fetchMCPServers(accessToken);
-        console.log("MCPHubData:", response);
         setMcpHubData(response);
       } catch (error) {
         console.error("There was an error fetching the MCP server data", error);
@@ -383,9 +375,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
   const handleFilteredDataChange = useCallback((newFilteredData: ModelGroupInfo[]) => {
     setFilteredData(newFilteredData);
   }, []);
-
-  console.log("publicPage: ", publicPage);
-  console.log("publicPageAllowed: ", publicPageAllowed);
 
   // If this is a public page, use the dedicated PublicModelHub component
   if (publicPage && publicPageAllowed) {

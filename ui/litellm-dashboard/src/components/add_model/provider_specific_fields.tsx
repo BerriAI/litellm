@@ -70,8 +70,6 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
 export const createCredentialFromModel = (provider: string, modelData: any): CredentialItem => {
-  console.log("provider", provider);
-  console.log("modelData", modelData);
   const enumKey = Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === provider.toLowerCase());
   if (!enumKey) {
     throw new Error(`Provider ${provider} not found in provider_map`);
@@ -80,13 +78,9 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   const providerFields = providerFieldsByDisplayName[providerDisplayName] || [];
   const credentialValues: object = {};
 
-  console.log("providerFields", providerFields);
-
   // Go through each field defined for this provider
   providerFields.forEach((field) => {
     const value = modelData.litellm_params[field.key];
-    console.log("field", field);
-    console.log("value", value);
     if (value !== undefined) {
       (credentialValues as Record<string, string>)[field.key] = value.toString();
     }

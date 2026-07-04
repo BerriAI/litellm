@@ -42,7 +42,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for selector:", uniqueModels);
 
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);

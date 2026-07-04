@@ -90,8 +90,6 @@ interface UserOption {
 const getPredefinedTags = (data: any[] | null) => {
   let allTags = [];
 
-  console.log("data:", JSON.stringify(data));
-
   if (data) {
     for (let key of data) {
       if (key["metadata"] && key["metadata"]["tags"]) {
@@ -106,7 +104,6 @@ const getPredefinedTags = (data: any[] | null) => {
     label: tag,
   }));
 
-  console.log("uniqueTags:", uniqueTags);
   return uniqueTags;
 };
 
@@ -124,7 +121,6 @@ export const fetchTeamModels = async (
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole, true, teamID, true);
       let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-      console.log("available_model_names:", available_model_names);
       return available_model_names;
     }
     return [];
@@ -148,7 +144,6 @@ export const fetchUserModels = async (
     if (accessToken !== null) {
       const model_available = await modelAvailableCall(accessToken, userID, userRole);
       let available_model_names = model_available["data"].map((element: { id: string }) => element.id);
-      console.log("available_model_names:", available_model_names);
       setUserModels(available_model_names);
     }
   } catch (error) {
@@ -554,8 +549,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
         response = await keyCreateCall(accessToken, userID, formValues);
       }
 
-      console.log("key create Response:", response);
-
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
       addKey(response);
@@ -573,7 +566,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       setBudgetFallbacksKey((k) => k + 1);
       localStorage.removeItem("userData" + userID);
     } catch (error) {
-      console.log("error in create key:", error);
       const simplifiedError = simplifyKeyGenerateError(error);
       NotificationsManager.fromBackend(simplifiedError);
     }

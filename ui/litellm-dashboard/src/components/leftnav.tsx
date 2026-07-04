@@ -476,11 +476,6 @@ const Sidebar: React.FC<SidebarProps> = ({
 
     // Debug logging
     if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-      console.log("[LeftNav] Filtering with enabled pages:", {
-        userRole,
-        isAdmin,
-        enabledPagesInternalUsers,
-      });
     }
 
     return items
@@ -497,7 +492,6 @@ const Sidebar: React.FC<SidebarProps> = ({
           // Check enabled pages for internal users (non-admins)
           if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
             const isIncluded = enabledPagesInternalUsers.includes(item.page);
-            console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
             return isIncluded;
           }
           return true;
@@ -535,13 +529,11 @@ const Sidebar: React.FC<SidebarProps> = ({
           if (item.children && item.children.length > 0) {
             const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
             if (hasVisibleChildren) {
-              console.log(`[LeftNav] Parent "${item.page}" (${item.key}): VISIBLE (has visible children)`);
               return true;
             }
           }
 
           const isIncluded = enabledPagesInternalUsers.includes(item.page);
-          console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
           return isIncluded;
         }
 
