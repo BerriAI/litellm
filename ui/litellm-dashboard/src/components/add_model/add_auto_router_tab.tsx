@@ -67,7 +67,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for auto router:", uniqueModels);
         setModelInfo(uniqueModels);
       } catch (error) {
         console.error("Error fetching model info for auto router:", error);
@@ -87,11 +86,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
 
   // Auto router specific form submit handler
   const handleAutoRouterSubmit = () => {
-    console.log("Auto router submit triggered!");
-    console.log("Router type:", routerType);
-
     const currentFormValues = form.getFieldsValue();
-    console.log("Form values:", currentFormValues);
 
     // Check basic required fields first
     if (!currentFormValues.auto_router_name) {
@@ -123,8 +118,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       form
         .validateFields(["auto_router_name"])
         .then((values) => {
-          console.log("Complexity router validation passed");
-
           // Build the complexity router config
           const submitValues = {
             ...values,
@@ -138,7 +131,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
             model_access_group: currentFormValues.model_access_group,
           };
 
-          console.log("Final submit values:", submitValues);
           handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
         })
         .catch((error) => {
@@ -179,13 +171,11 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
       form
         .validateFields()
         .then((values) => {
-          console.log("Form validation passed, submitting with values:", values);
           const submitValues = {
             ...values,
             auto_router_config: routerConfig,
             model_type: "semantic_router",
           };
-          console.log("Final submit values:", submitValues);
           handleAddAutoRouterSubmit(submitValues, accessToken, form, handleOk);
         })
         .catch((error) => {
@@ -404,7 +394,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
               <Button
                 type="primary"
                 onClick={() => {
-                  console.log("Add Auto Router button clicked!");
                   handleAutoRouterSubmit();
                 }}
               >

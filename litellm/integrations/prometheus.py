@@ -2043,6 +2043,43 @@ class PrometheusLogger(CustomLogger):
 
         return False
 
+    @staticmethod
+    def _extract_api_provider_from_request_data(request_data: dict) -> Optional[str]:
+        """
+        Best-effort provider for the client-side failure path.
+
+        A request can fail before a deployment is resolved, so the provider is
+        not always known. Prefer the resolved ``custom_llm_provider`` on
+        ``litellm_params``, then any provider recovered onto a partial
+        ``standard_logging_object`` (e.g. a stream that broke mid-flight), and
+        finally infer it from the requested model name (e.g. ``gpt-4o-mini`` ->
+        ``openai``) since the proxy's failure ``request_data`` usually carries
+        only the client-supplied model. Return ``None`` when it cannot be
+        determined so the label emits empty rather than a guess.
+        """
+        litellm_params = request_data.get("litellm_params") or {}
+        provider = litellm_params.get("custom_llm_provider")
+        if provider:
+            return provider
+        standard_logging_object = request_data.get("standard_logging_object") or {}
+        provider = standard_logging_object.get("custom_llm_provider")
+        if provider:
+            return provider
+        model = litellm_params.get("model") or request_data.get("model")
+        if not model:
+            return None
+        try:
+            return litellm.get_llm_provider(model=model)[1] or None
+        except litellm.exceptions.BadRequestError:
+            return None
+        except Exception as e:  # noqa: BLE001 - metrics labeling must never break request/failure handling
+            verbose_logger.debug(
+                "prometheus: unexpected error inferring api_provider from model=%s: %s",
+                model,
+                e,
+            )
+            return None
+
     async def async_post_call_failure_hook(
         self,
         request_data: dict,
@@ -2078,6 +2115,7 @@ class PrometheusLogger(CustomLogger):
             _metadata = request_data.get("metadata", {}) or {}
             model_id = _metadata.get("model_info", {}).get("id") or request_data.get("model_info", {}).get("id")
             rate_limit_category, rate_limit_type = self._extract_rate_limit_labels(original_exception)
+            api_provider = self._extract_api_provider_from_request_data(request_data)
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -2099,6 +2137,7 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
+                api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
             )
             _label_ctx = PrometheusLabelFactoryContext(enum_values)

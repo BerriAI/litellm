@@ -134,7 +134,6 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
   const renderField = (fieldKey: string, field: ProviderParam) => {
     const fullFieldKey = `${parentFieldKey}.${fieldKey}`;
     const value = values?.[fieldKey];
-    console.log("value", value);
     // Handle dict fields separately since they manage their own Form.Items
     if (field.type === "dict" && field.dict_key_options) {
       return (

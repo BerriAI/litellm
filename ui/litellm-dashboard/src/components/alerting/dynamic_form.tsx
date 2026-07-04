@@ -29,7 +29,6 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
   const [form] = Form.useForm();
 
   const onFinish = () => {
-    console.log(`INSIDE ONFINISH`);
     const formData = form.getFieldsValue();
     const isEmpty = Object.entries(formData).every(([key, value]) => {
       if (typeof value === "boolean") {
@@ -37,11 +36,9 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
       }
       return value === "" || value === null || value === undefined;
     });
-    console.log(`formData: ${JSON.stringify(formData)}, isEmpty: ${isEmpty}`);
     if (!isEmpty) {
       handleSubmit(formData);
     } else {
-      console.log("Some form fields are empty.");
     }
   };
 

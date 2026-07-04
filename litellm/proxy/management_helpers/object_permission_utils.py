@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerNames
+from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -334,6 +334,8 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
+    if SpecialMCPServerName.all_proxy_servers.value in direct_servers:
+        return _get_all_mcp_server_ids()
     access_group_servers: List[str] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
@@ -357,6 +359,62 @@ def _get_allow_all_keys_server_ids() -> Set[str]:
     )
 
     return set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+
+
+def _get_all_mcp_server_ids() -> set[str]:
+    """Return every MCP server id registered on the proxy (config + DB union)."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return set(global_mcp_server_manager.get_registry().keys())
+
+
+async def _existing_object_permission_mcp_servers(
+    object_permission_id: Optional[str],
+    prisma_client: Optional[PrismaClient],
+) -> list[str]:
+    if not object_permission_id or prisma_client is None:
+        return []
+    existing = await ObjectPermissionRepository(prisma_client).table.find_unique(
+        where={"object_permission_id": object_permission_id},
+    )
+    if existing is None:
+        return []
+    return existing.mcp_servers or []
+
+
+async def enforce_all_proxy_mcp_servers_grant_is_admin_only(
+    requested_mcp_servers: Optional[list[str]],
+    existing_object_permission_id: Optional[str],
+    is_proxy_admin: bool,
+    prisma_client: Optional[PrismaClient],
+) -> None:
+    """
+    Only a proxy admin may newly grant the all-proxy MCP sentinel.
+
+    Scoping a team to every MCP server on the proxy is a proxy-wide authorization
+    decision, so a caller who is not a proxy admin (e.g. a team admin managing their
+    own team) cannot add ``all-proxy-mcpservers``. A sentinel a proxy admin already
+    granted is left untouched, so unrelated edits to such a team still succeed.
+
+    Raises HTTPException(403) when a non-admin tries to add the sentinel.
+    """
+    sentinel = SpecialMCPServerName.all_proxy_servers.value
+    if is_proxy_admin or sentinel not in (requested_mcp_servers or []):
+        return
+    existing_mcp_servers = await _existing_object_permission_mcp_servers(
+        object_permission_id=existing_object_permission_id,
+        prisma_client=prisma_client,
+    )
+    if sentinel in existing_mcp_servers:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "error": "Only a proxy admin can grant a team access to all proxy MCP servers ('all-proxy-mcpservers')."
+        },
+    )
 
 
 async def _get_team_allowed_mcp_servers(

@@ -67,7 +67,6 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     if (!accessToken) return;
     try {
       const response = await credentialListCall(accessToken);
-      console.log("List credentials response:", response);
       setCredentials(response.credentials || []);
     } catch (error) {
       console.error("Error fetching credentials:", error);

@@ -94,7 +94,6 @@ const getOrganizationModels = (organization: Organization | null, userModels: st
 
   if (organization) {
     if (organization.models.length > 0) {
-      console.log(`organization.models: ${organization.models}`);
       tempModelsToPick = organization.models;
     } else {
       // show all available models if the team has no models set
@@ -251,9 +250,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
   useEffect(() => {
-    console.log(`currentOrgForCreateTeam: ${currentOrgForCreateTeam}`);
     const models = getOrganizationModels(currentOrgForCreateTeam, userModels);
-    console.log(`models: ${models}`);
     setModelsToPick(models);
     form.setFieldValue("models", []);
   }, [currentOrgForCreateTeam, userModels]);
@@ -431,7 +428,6 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
-      console.log(`formValues: ${JSON.stringify(formValues)}`);
       if (accessToken != null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
@@ -1479,6 +1475,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       value={form.getFieldValue("allowed_mcp_servers_and_groups")}
                       accessToken={accessToken || ""}
                       placeholder="Select MCP servers or access groups (optional)"
+                      allowAllProxyMcpServers={isProxyAdminRole(userRole || "")}
                     />
                   </Form.Item>
 

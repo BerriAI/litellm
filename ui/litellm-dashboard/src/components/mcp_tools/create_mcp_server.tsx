@@ -397,8 +397,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
             args: actualConfig.args,
             env: actualConfig.env,
           };
-
-          console.log("Parsed stdio config:", stdioFields);
         } catch (error) {
           NotificationsManager.fromBackend("Invalid JSON in stdio configuration");
           return;
@@ -455,8 +453,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
       }
-
-      console.log(`Payload: ${JSON.stringify(payload)}`);
 
       if (accessToken != null) {
         const response = isAdmin

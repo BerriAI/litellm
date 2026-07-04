@@ -1,5 +1,5 @@
 import React from "react";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,10 @@ import AddAttachmentForm from "./add_attachment_form";
 import { Policy } from "./types";
 
 vi.mock("../networking");
+
+vi.mock("../molecules/notifications_manager", () => ({
+  default: { success: vi.fn(), fromBackend: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
 
 vi.mock("./impact_preview_alert", () => ({
   default: ({ impactResult }: { impactResult: any }) =>
@@ -36,6 +40,9 @@ const defaultProps = {
   ],
   createAttachment: vi.fn(),
 };
+
+const teamListResult = (aliases: string[]) =>
+  aliases.map((team_alias) => ({ team_alias })) as unknown as Awaited<ReturnType<typeof networking.teamListCall>>;
 
 describe("AddAttachmentForm", () => {
   beforeEach(() => {
@@ -109,5 +116,72 @@ describe("AddAttachmentForm", () => {
   it("should render a 'Create Attachment' submit button", async () => {
     renderWithProviders(<AddAttachmentForm {...defaultProps} />);
     expect(await screen.findByRole("button", { name: /create attachment/i })).toBeInTheDocument();
+  });
+
+  type UserEvent = ReturnType<typeof userEvent.setup>;
+
+  const TEAMS_ERROR = /these teams don't exist/i;
+
+  const openSpecificScope = async (user: UserEvent) => {
+    await screen.findByText("Create Policy Attachment");
+    await waitFor(() => expect(networking.teamListCall).toHaveBeenCalled());
+    await user.click(screen.getByRole("radio", { name: /specific/i }));
+  };
+
+  const enterTeam = async (user: UserEvent, value: string) => {
+    const item = screen.getByText("Teams").closest(".ant-form-item") as HTMLElement;
+    const input = within(item).getByRole("combobox");
+    await user.click(input);
+    await user.type(input, `${value}{Enter}`);
+  };
+
+  // Submits and waits for the validation cycle to settle. No policy is selected, so
+  // the "select at least one policy" required error always appears - we use it as a
+  // synchronization point, then assert whether the teams validator also complained.
+  const submitAndSettle = async (user: UserEvent) => {
+    await user.click(screen.getByRole("button", { name: /create attachment/i }));
+    await screen.findByText(/select at least one policy/i);
+  };
+
+  it("blocks submit with a field error when a concrete team that does not exist is entered", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamListCall).mockResolvedValue(teamListResult(["real-team"]));
+    const createAttachment = vi.fn();
+    renderWithProviders(<AddAttachmentForm {...defaultProps} createAttachment={createAttachment} />);
+    await openSpecificScope(user);
+    await enterTeam(user, "ghost-team");
+    await submitAndSettle(user);
+    expect(screen.getByText(TEAMS_ERROR)).toBeInTheDocument();
+    expect(createAttachment).not.toHaveBeenCalled();
+  });
+
+  it("does not flag a team that exists", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamListCall).mockResolvedValue(teamListResult(["real-team"]));
+    renderWithProviders(<AddAttachmentForm {...defaultProps} />);
+    await openSpecificScope(user);
+    await enterTeam(user, "real-team");
+    await submitAndSettle(user);
+    expect(screen.queryByText(TEAMS_ERROR)).not.toBeInTheDocument();
+  });
+
+  it("does not flag a wildcard pattern even when it matches no existing team", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamListCall).mockResolvedValue(teamListResult([]));
+    renderWithProviders(<AddAttachmentForm {...defaultProps} />);
+    await openSpecificScope(user);
+    await enterTeam(user, "healthcare-*");
+    await submitAndSettle(user);
+    expect(screen.queryByText(TEAMS_ERROR)).not.toBeInTheDocument();
+  });
+
+  it("defers to the backend (does not flag) when the team list failed to load", async () => {
+    const user = userEvent.setup();
+    vi.mocked(networking.teamListCall).mockRejectedValue(new Error("boom"));
+    renderWithProviders(<AddAttachmentForm {...defaultProps} />);
+    await openSpecificScope(user);
+    await enterTeam(user, "ghost-team");
+    await submitAndSettle(user);
+    expect(screen.queryByText(TEAMS_ERROR)).not.toBeInTheDocument();
   });
 });
