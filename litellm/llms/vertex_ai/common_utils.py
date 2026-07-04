@@ -1184,13 +1184,13 @@ class VertexAITokenCounter(BaseTokenCounter):
 
     def _build_gemini_contents_for_counting(
         self,
-        contents: Optional[List[Dict[str, Any]]],
-        messages: Optional[List[Dict[str, Any]]],
+        contents: Optional[list[dict[str, Any]]],
+        messages: Optional[list[dict[str, Any]]],
         system: Optional[Any],
-        tools: Optional[List[Dict[str, Any]]],
+        tools: Optional[list[dict[str, Any]]],
         model_to_use: str,
-        litellm_params: Dict[str, Any],
-    ) -> Optional[List[Dict[str, Any]]]:
+        litellm_params: dict[str, Any],
+    ) -> Optional[list[dict[str, Any]]]:
         """
         Build the Gemini-format `contents` payload sent to Vertex AI's countTokens API.
 
@@ -1222,7 +1222,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     litellm_params=litellm_params,
                     custom_llm_provider="vertex_ai",
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 verbose_logger.exception(
                     "VertexAITokenCounter._build_gemini_contents_for_counting(): "
                     "failed to convert Anthropic-format messages to Gemini contents "
@@ -1241,7 +1241,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     "parts": [{"text": "\n".join(extra_text_parts)}],
                 }
                 contents = [extra_content, *contents] if contents else [extra_content]
-        except Exception:
+        except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "VertexAITokenCounter._build_gemini_contents_for_counting(): "
                 "failed to fold system/tools into contents for token counting; "
