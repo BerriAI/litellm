@@ -16,9 +16,7 @@ export const DeprecationBanner: React.FC<DeprecationBannerProps> = ({ featureNam
     message={`${featureName} is on a draft deprecation list`}
     description={
       <>
-        {featureName} is one of several experimental features we&apos;re considering removing, potentially as early as{" "}
-        {DEPRECATION_TARGET_DATE}. This list is a draft and is not final. If you rely on this feature, please share
-        feedback on the{" "}
+        {`${featureName} is one of several experimental features we're considering removing, potentially as early as ${DEPRECATION_TARGET_DATE}. This list is a draft and is not final. If you rely on this feature, please share feedback on the `}
         <Link href={DEPRECATION_DISCUSSION_URL} target="_blank" rel="noopener noreferrer">
           deprecation discussion
         </Link>
