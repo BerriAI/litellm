@@ -722,7 +722,7 @@ async def create_policy_attachment(
             models=request.models,
         )
         if scope_errors:
-            raise HTTPException(status_code=400, detail=" ".join(e.message for e in scope_errors))
+            raise HTTPException(status_code=400, detail=" | ".join(e.message for e in scope_errors))
 
         created_by = user_api_key_dict.user_id
         result = await get_attachment_registry().add_attachment_to_db(
