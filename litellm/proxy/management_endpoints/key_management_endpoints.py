@@ -3301,7 +3301,10 @@ async def _attach_model_max_budget_usage_to_key_info(
     user_api_key_cache: UserApiKeyCache | None,
 ) -> None:
     from litellm.proxy.auth.auth_checks import get_team_member_default_budget, get_team_membership
-    from litellm.proxy.hooks.model_max_budget_limiter import build_effective_model_max_budget_usage
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        build_effective_model_max_budget_usage,
+        log_key_info_usage_reads,
+    )
     from litellm.proxy.proxy_server import model_max_budget_limiter, prisma_client
 
     if user_api_key_cache is None or model_max_budget_limiter is None or not api_key_hash:
@@ -3362,6 +3365,13 @@ async def _attach_model_max_budget_usage_to_key_info(
     )
     if usage:
         key_info["model_max_budget_usage"] = usage
+        log_key_info_usage_reads(
+            api_key_hash=api_key_hash,
+            usage=usage,
+            limiter=model_max_budget_limiter,
+            team_id=str(team_id) if team_id is not None else None,
+            user_id=str(user_id) if user_id is not None else None,
+        )
 
 
 @router.post(

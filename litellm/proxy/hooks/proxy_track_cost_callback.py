@@ -243,6 +243,52 @@ class _ProxyDBLogger(CustomLogger):
                         request_tags=tags,
                     )
 
+                    from litellm.proxy.hooks.model_max_budget_limiter import (
+                        _budget_map_model_count,
+                        _hash_prefix,
+                        _log_model_max_budget_spend_trace,
+                    )
+
+                    _log_model_max_budget_spend_trace(
+                        "postgres_spend_tracked",
+                        litellm_call_id=kwargs.get("litellm_call_id"),
+                        user_api_key=_hash_prefix(user_api_key if isinstance(user_api_key, str) else None),
+                        response_cost=response_cost,
+                        model=kwargs.get("model"),
+                        call_type=kwargs.get("call_type"),
+                        has_key_budget_metadata=_budget_map_model_count(
+                            metadata.get("user_api_key_model_max_budget")
+                            if isinstance(metadata.get("user_api_key_model_max_budget"), dict)
+                            else None
+                        )
+                        > 0,
+                        has_team_budget_metadata=_budget_map_model_count(
+                            metadata.get("user_api_key_team_model_max_budget")
+                            if isinstance(metadata.get("user_api_key_team_model_max_budget"), dict)
+                            else None
+                        )
+                        > 0,
+                    )
+
+                    from litellm.proxy.proxy_server import model_max_budget_limiter
+
+                    if model_max_budget_limiter is not None and response_cost > 0:
+                        try:
+                            await model_max_budget_limiter.increment_model_max_budget_from_success(
+                                kwargs,
+                                response_cost=float(response_cost),
+                                source="piggyback",
+                            )
+                        except Exception:
+                            verbose_proxy_logger.exception(
+                                "model_max_budget_spend_trace piggyback_increment_failed"
+                            )
+                            _log_model_max_budget_spend_trace(
+                                "piggyback_increment_skipped",
+                                litellm_call_id=kwargs.get("litellm_call_id"),
+                                skip_reason="exception",
+                            )
+
                     # update cache (fire-and-forget for backward compat:
                     # cached object fields, soft budget alerts, etc.)
                     asyncio.create_task(

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UpdateTeamRequest
 from litellm.proxy.hooks.model_max_budget_limiter import (
+    ResolvedModelBudgetMaps,
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
     _to_internal_model_max_budget,
     build_effective_model_max_budget_usage,
@@ -189,12 +190,137 @@ async def test_async_log_success_event_skips_when_budget_metadata_missing_from_b
         budget_limiter,
         "_increment_spend_for_key",
         new_callable=AsyncMock,
-    ) as mock_increment:
+    ) as mock_increment, patch(
+        "litellm.proxy.hooks.model_max_budget_limiter.resolve_budget_maps_for_increment",
+        new_callable=AsyncMock,
+        return_value=ResolvedModelBudgetMaps(None, None, None, "empty"),
+    ):
         await budget_limiter.async_log_success_event(
             kwargs, response_obj=None, start_time=None, end_time=None
         )
 
     mock_increment.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_falls_back_to_user_api_key_auth_budgets(budget_limiter):
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    virtual_key = "auth-key-hash"
+    team_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+    auth = UserAPIKeyAuth(
+        token=virtual_key,
+        auth_team_model_max_budget=team_budget,
+    )
+    kwargs = {
+        "litellm_call_id": "call-auth-fallback",
+        "standard_logging_object": {
+            "response_cost": 0.03,
+            "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+            "model_group": None,
+            "metadata": {"user_api_key_hash": virtual_key},
+            "end_user": "",
+        },
+        "litellm_params": {
+            "litellm_metadata": {
+                "user_api_key_auth": auth,
+            },
+        },
+    }
+
+    with patch(
+        "litellm.proxy.hooks.model_max_budget_limiter.resolve_budget_maps_for_increment",
+        new_callable=AsyncMock,
+        return_value=ResolvedModelBudgetMaps(None, team_budget, None, "user_api_key_auth"),
+    ), patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+
+    mock_increment.assert_awaited_once()
+    assert (
+        mock_increment.call_args.kwargs["spend_key"]
+        == "virtual_key_spend:auth-key-hash:claude-sonnet-4-6:1d"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_emits_callback_skipped_log_when_no_budget_maps(
+    budget_limiter, caplog
+):
+    import logging
+    from unittest.mock import AsyncMock, patch
+
+    caplog.set_level(logging.INFO)
+    kwargs = {
+        "litellm_call_id": "call-skip-log",
+        "standard_logging_object": {
+            "response_cost": 0.02,
+            "model": "claude-sonnet-4-6",
+            "metadata": {"user_api_key_hash": "hash12345678"},
+        },
+        "litellm_params": {"metadata": {}},
+    }
+
+    with patch(
+        "litellm.proxy.hooks.model_max_budget_limiter.resolve_budget_maps_for_increment",
+        new_callable=AsyncMock,
+        return_value=ResolvedModelBudgetMaps(None, None, None, "empty"),
+    ), patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ):
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+
+    assert any(
+        "model_max_budget_spend_trace event=callback_skipped" in record.message
+        and "skip_reason=no_budget_maps" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_emits_increment_done_log(budget_limiter, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
+    virtual_key = "done-key-hash"
+    team_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+    kwargs = {
+        "litellm_call_id": "call-increment-done",
+        "standard_logging_object": {
+            "response_cost": 0.04,
+            "model": "claude-sonnet-4-6",
+            "metadata": {"user_api_key_hash": virtual_key},
+        },
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_team_model_max_budget": team_budget,
+            },
+        },
+    }
+
+    await budget_limiter.async_log_success_event(
+        kwargs, response_obj=None, start_time=None, end_time=None
+    )
+
+    assert any(
+        "model_max_budget_spend_trace event=increment_done" in record.message
+        for record in caplog.records
+    )
 
 
 def test_update_team_request_accepts_model_max_budget() -> None:
