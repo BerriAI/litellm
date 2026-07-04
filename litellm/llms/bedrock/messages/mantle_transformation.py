@@ -111,7 +111,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator:
         return AnthropicMessagesConfig.get_async_streaming_response_iterator(
-            self=self,
+            self,
             model=model,
             httpx_response=httpx_response,
             request_body=request_body,
