@@ -12,6 +12,7 @@ from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.websearch_interception.handler import (
     WebSearchInterceptionLogger,
 )
+from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.utils import LlmProviders
 
 
@@ -56,9 +57,7 @@ def test_initialize_from_proxy_config_honors_dict_callback_specific_params():
     """A valid dict under callback_settings.websearch_interception is applied."""
     logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
         litellm_settings={},
-        callback_specific_params={
-            "websearch_interception": {"search_tool_name": "ws-tool"}
-        },
+        callback_specific_params={"websearch_interception": {"search_tool_name": "ws-tool"}},
     )
 
     assert logger.search_tool_name == "ws-tool"
@@ -119,9 +118,7 @@ async def test_async_build_agentic_loop_plan_returns_request_patch():
         "response_format": "anthropic",
     }
     logging_obj = MagicMock()
-    logging_obj.model_call_details = {
-        "agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}
-    }
+    logging_obj.model_call_details = {"agentic_loop_params": {"model": "bedrock/invoke/claude-3-5-sonnet"}}
     kwargs = {
         "temperature": 0.2,
         "_websearch_interception_converted_stream": True,
@@ -162,8 +159,6 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     to the follow-up LLM request, causing "Extra inputs are not permitted" errors
     from providers like Bedrock that use strict parameter validation.
     """
-    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
-
     # Simulate kwargs that would be passed during agentic loop execution
     kwargs_with_internal_flags = {
         "_websearch_interception_converted_stream": True,
@@ -174,9 +169,7 @@ async def test_internal_flags_filtered_from_followup_kwargs():
 
     # Apply the same filtering logic used in _execute_agentic_loop
     kwargs_for_followup = {
-        k: v
-        for k, v in kwargs_with_internal_flags.items()
-        if not k.startswith("_websearch_interception")
+        k: v for k, v in kwargs_with_internal_flags.items() if not k.startswith("_websearch_interception")
     }
 
     # Verify internal flags are filtered out
@@ -186,6 +179,46 @@ async def test_internal_flags_filtered_from_followup_kwargs():
     # Verify regular kwargs are preserved
     assert kwargs_for_followup["temperature"] == 0.7
     assert kwargs_for_followup["max_tokens"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_execute_search_passes_selected_search_tool_litellm_params(monkeypatch):
+    import litellm
+    from litellm.proxy import proxy_server
+
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"],
+        search_tool_name="ui-tavily",
+    )
+    router = MagicMock()
+    router.search_tools = [
+        {
+            "search_tool_name": "ui-tavily",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "fake-ui-key",
+                "api_base": "https://api.tavily.com",
+                "timeout": 10.0,
+                "max_retries": 2,
+                "country": None,
+            },
+        }
+    ]
+    mock_asearch = AsyncMock(return_value=SearchResponse(object="search", results=[]))
+
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "asearch", mock_asearch)
+
+    await logger._execute_search("what is litellm")
+
+    mock_asearch.assert_awaited_once_with(
+        query="what is litellm",
+        search_provider="tavily",
+        api_key="fake-ui-key",
+        api_base="https://api.tavily.com",
+        timeout=10.0,
+        max_retries=2,
+    )
 
 
 @pytest.mark.asyncio
@@ -216,15 +249,12 @@ async def test_async_pre_call_deployment_hook_provider_from_top_level_kwargs():
     assert result is not None
     # The web_search tool should be converted to litellm_web_search (OpenAI format)
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # The non-web-search tool should be preserved
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "other_tool"
-        for t in result["tools"]
+        t.get("type") == "function" and t.get("function", {}).get("name") == "other_tool" for t in result["tools"]
     )
 
 
@@ -261,8 +291,7 @@ async def test_async_pre_call_deployment_hook_returns_full_kwargs():
     assert result["custom_llm_provider"] == "openai"
     # Tools should be converted
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
 
@@ -323,8 +352,7 @@ async def test_async_pre_call_deployment_hook_nested_litellm_params_fallback():
 
     assert result is not None
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -357,8 +385,7 @@ async def test_async_pre_call_deployment_hook_provider_derived_from_model_name()
     # Should NOT be None — the hook should derive "openai" from "openai/gpt-4o-mini"
     assert result is not None
     assert any(
-        t.get("type") == "function"
-        and t.get("function", {}).get("name") == "litellm_web_search"
+        t.get("type") == "function" and t.get("function", {}).get("name") == "litellm_web_search"
         for t in result["tools"]
     )
     # Full kwargs preserved
@@ -478,9 +505,7 @@ def test_sync_forced_tool_choice_leaves_non_forced_untouched(tool_choice):
     and None pass through unchanged."""
     converted_tools = [{"name": LITELLM_WEB_SEARCH_TOOL_NAME}]
 
-    result = WebSearchInterceptionLogger._sync_forced_tool_choice(
-        tool_choice, converted_tools
-    )
+    result = WebSearchInterceptionLogger._sync_forced_tool_choice(tool_choice, converted_tools)
 
     assert result == tool_choice
 

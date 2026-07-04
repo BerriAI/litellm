@@ -1033,6 +1033,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
             # Determine search provider from router's search_tools
             search_provider: Optional[str] = None
+            search_litellm_params: Dict[str, Any] = {}
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
                     # Find specific search tool by name
@@ -1043,7 +1044,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                     ]
                     if matching_tools:
                         search_tool = matching_tools[0]
-                        search_provider = search_tool.get("litellm_params", {}).get("search_provider")
+                        search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
+                        search_provider = search_litellm_params.get("search_provider")
                         verbose_logger.debug(
                             f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
                             f"with provider '{search_provider}'"
@@ -1057,7 +1059,8 @@ class WebSearchInterceptionLogger(CustomLogger):
                 # If no specific tool or not found, use first available
                 if not search_provider and llm_router.search_tools:
                     first_tool = llm_router.search_tools[0]
-                    search_provider = first_tool.get("litellm_params", {}).get("search_provider")
+                    search_litellm_params = dict(first_tool.get("litellm_params", {}) or {})
+                    search_provider = search_litellm_params.get("search_provider")
                     verbose_logger.debug(
                         f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
                     )
@@ -1073,7 +1076,12 @@ class WebSearchInterceptionLogger(CustomLogger):
             verbose_logger.debug(
                 f"WebSearchInterception: Executing search for '{query}' using provider '{search_provider}'"
             )
-            result = await litellm.asearch(query=query, search_provider=search_provider)
+            search_kwargs = {
+                key: value
+                for key, value in search_litellm_params.items()
+                if key != "search_provider" and value is not None
+            }
+            result = await litellm.asearch(query=query, search_provider=search_provider, **search_kwargs)
 
             # Format using transformation function
             search_result_text = WebSearchTransformation.format_search_response(result)
