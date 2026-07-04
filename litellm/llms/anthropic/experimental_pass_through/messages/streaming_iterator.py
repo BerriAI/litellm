@@ -12,6 +12,29 @@ from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ = PassThroughEndpointLogging()
 
+INCOMPLETE_STREAM_ERROR_MESSAGE = (
+    "Provider stream ended before emitting a message_stop event; "
+    "the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated."
+)
+
+
+def _is_message_stop_chunk(chunk: object) -> bool:
+    if isinstance(chunk, dict):
+        return chunk.get("type") == "message_stop"
+    if isinstance(chunk, (bytes, bytearray)):
+        return b"message_stop" in chunk
+    return False
+
+
+def _incomplete_stream_error_sse_event() -> bytes:
+    payload = json.dumps(
+        {
+            "type": "error",
+            "error": {"type": "api_error", "message": INCOMPLETE_STREAM_ERROR_MESSAGE},
+        }
+    )
+    return f"event: error\ndata: {payload}\n\n".encode()
+
 
 class BaseAnthropicMessagesStreamingIterator:
     """
@@ -102,13 +125,18 @@ class BaseAnthropicMessagesStreamingIterator:
         This method provides the common logic for both Anthropic and Bedrock implementations.
         """
         collected_chunks = []
+        saw_message_stop = False
 
         async for chunk in completion_stream:
             if self.completion_start_time is None:
                 self.completion_start_time = datetime.now()
+            saw_message_stop = saw_message_stop or _is_message_stop_chunk(chunk)
             encoded_chunk = self._convert_chunk_to_sse_format(chunk)
             collected_chunks.append(encoded_chunk)
             yield encoded_chunk
+
+        if not saw_message_stop:
+            yield _incomplete_stream_error_sse_event()
 
         # Handle logging after all chunks are processed
         await self._handle_streaming_logging(collected_chunks)
