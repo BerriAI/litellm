@@ -175,10 +175,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Transform Qwen3 Bedrock response to OpenAI format
         """
         try:
-            if hasattr(raw_response, "json"):
-                response_data = raw_response.json()
-            else:
-                response_data = raw_response
+            response_data = raw_response.json()
 
             # Extract the generated text - Qwen3 uses "generation" field
             generated_text = response_data.get("generation", "")
