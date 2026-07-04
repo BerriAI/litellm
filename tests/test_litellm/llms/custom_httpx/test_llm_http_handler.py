@@ -436,6 +436,68 @@ async def test_async_anthropic_messages_handler_extra_headers():
 
 
 @pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_streaming_forwards_provider_response_headers():
+    """
+    Regression test for LIT-3724 (issue 2): streaming /v1/messages responses
+    dropped the upstream provider's HTTP response headers, so Bedrock's
+    x-amzn-requestid / x-amzn-trace-id never reached clients even with
+    `return_response_headers: true`. The returned stream object must carry
+    them in `_hidden_params["additional_headers"]` (llm_provider-* prefixed),
+    which the proxy merges into the client-facing response headers.
+    """
+    from collections.abc import AsyncIterator as ABCAsyncIterator
+
+    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+        AnthropicMessagesConfig,
+    )
+
+    handler = BaseLLMHTTPHandler()
+
+    sse_body = (
+        b'event: message_start\ndata: {"type": "message_start"}\n\n'
+        b'event: message_stop\ndata: {"type": "message_stop"}\n\n'
+    )
+    upstream_response = httpx.Response(
+        200,
+        headers={
+            "x-amzn-requestid": "amzn-req-123",
+            "x-amzn-trace-id": "Root=1-abc-def",
+        },
+        content=sse_body,
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(return_value=upstream_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.model_call_details = {}
+
+    result = await handler.async_anthropic_messages_handler(
+        model="claude-sonnet-4-20250514",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_provider_config=AnthropicMessagesConfig(),
+        anthropic_messages_optional_request_params={"max_tokens": 32},
+        custom_llm_provider="anthropic",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=mock_logging_obj,
+        client=mock_client,
+        api_key="sk-test",
+        stream=True,
+        kwargs={},
+    )
+
+    assert isinstance(result, ABCAsyncIterator)
+
+    additional_headers = result._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-amzn-requestid"] == "amzn-req-123"
+    assert additional_headers["llm_provider-x-amzn-trace-id"] == "Root=1-abc-def"
+
+    collected = b"".join([chunk async for chunk in result])
+    assert b"message_start" in collected
+    assert b"message_stop" in collected
+
+
+@pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_passes_litellm_metadata():
     """Ensure litellm_metadata from kwargs is forwarded via update_from_kwargs.
 
