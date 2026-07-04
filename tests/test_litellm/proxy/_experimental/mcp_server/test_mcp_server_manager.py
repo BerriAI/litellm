@@ -323,6 +323,28 @@ class TestMCPServerManager:
         assert cost_info["tool_name_to_cost_per_query"]["geocode"] == 1e-3
         assert isinstance(cost_info["tool_name_to_cost_per_query"]["geocode"], float)
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_sets_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method from config is carried onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+        config = {
+            "basic_provider": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "token_endpoint_auth_method": "client_secret_basic",
+            },
+            "default_provider": {
+                "url": "https://example.com/mcp2",
+                "transport": MCPTransport.http,
+            },
+        }
+
+        await manager.load_servers_from_config(config)
+
+        by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
+        assert by_name["basic_provider"].token_endpoint_auth_method == "client_secret_basic"
+        assert by_name["default_provider"].token_endpoint_auth_method is None
+
     def test_normalize_mcp_server_cost_info_preserves_float_values(self):
         mcp_info = {
             "server_name": "maps",
@@ -3292,6 +3314,31 @@ class TestMCPServerTimestamps:
         assert mcp_server.created_at == created
         assert mcp_server.updated_at == updated
 
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_reads_token_endpoint_auth_method(self):
+        """token_endpoint_auth_method stored in the credentials JSON is loaded onto the MCPServer (LIT-4091)."""
+        manager = MCPServerManager()
+
+        basic_record = LiteLLM_MCPServerTable(
+            server_id="basic-db-1",
+            server_name="basic_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={"token_endpoint_auth_method": "client_secret_basic"},
+        )
+        basic_server = await manager.build_mcp_server_from_table(basic_record, credentials_are_encrypted=False)
+        assert basic_server.token_endpoint_auth_method == "client_secret_basic"
+
+        default_record = LiteLLM_MCPServerTable(
+            server_id="default-db-1",
+            server_name="default_db",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            credentials={},
+        )
+        default_server = await manager.build_mcp_server_from_table(default_record, credentials_are_encrypted=False)
+        assert default_server.token_endpoint_auth_method is None
+
     def test_build_mcp_server_table_preserves_timestamps(self):
         """_build_mcp_server_table must use the MCPServer's stored timestamps, not datetime.now()."""
         manager = MCPServerManager()
@@ -4935,6 +4982,140 @@ class TestCreateMcpClientV2Graft:
 
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
+
+
+def _upstream_status_error(status_code: int, challenge: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://upstream.example/mcp")
+    response = httpx.Response(
+        status_code,
+        headers={"WWW-Authenticate": challenge},
+        request=request,
+    )
+    return httpx.HTTPStatusError(
+        "upstream rejected token", request=request, response=response
+    )
+
+
+class TestMCPToolsListAuthSurfacing:
+    """Regression: MCP tools/list 401 auth failures must surface as MCPUpstreamAuthError.
+
+    Previously a missing/expired per-user OAuth token, or an upstream 401 for any
+    non-carveout auth_type, was swallowed to an empty tool list, so a single-server
+    client saw a 200 with no tools instead of a 401 challenge. The listing helpers
+    now raise MCPUpstreamAuthError on a 401 regardless of auth_type; the single-server
+    routes turn it into a 401 + WWW-Authenticate while the aggregator absorbs it to an
+    empty list. Only a 401 challenges; a 403 (forbidden) degrades like any other error.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_surfaces_upstream_401(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        manager = MCPServerManager()
+        challenge = 'Bearer resource_metadata="https://upstream.example/.well-known/oauth-protected-resource"'
+        client = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_status_error(401, challenge))
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._fetch_tools_with_timeout(client, "static-key-server")
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == challenge
+        assert exc_info.value.server_name == "static-key-server"
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_absorbs_upstream_403(self):
+        """Only a 401 drives the re-auth challenge. A 403 (authenticated but
+        forbidden, e.g. insufficient scope) is not a re-auth signal, so even
+        with a WWW-Authenticate header it degrades to an empty list rather than
+        surfacing a challenge."""
+        manager = MCPServerManager()
+        challenge = 'Bearer error="insufficient_scope", scope="read:tools"'
+        client = MagicMock()
+        client.list_tools = AsyncMock(side_effect=_upstream_status_error(403, challenge))
+
+        assert await manager._fetch_tools_with_timeout(client, "forbidden-server") == []
+
+    @pytest.mark.asyncio
+    async def test_fetch_tools_with_timeout_returns_empty_on_non_auth_error(self):
+        manager = MCPServerManager()
+        client = MagicMock()
+        client.list_tools = AsyncMock(side_effect=RuntimeError("upstream 500"))
+
+        assert await manager._fetch_tools_with_timeout(client, "srv") == []
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_surfaces_unusable_user_token(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv", name="oauth-srv", transport=MCPTransport.http
+        )
+        challenge = 'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/oauth-srv"'
+        manager._create_mcp_client = AsyncMock(
+            side_effect=HTTPException(
+                status_code=401,
+                detail="Unauthorized",
+                headers={"WWW-Authenticate": challenge},
+            )
+        )
+
+        with pytest.raises(MCPUpstreamAuthError) as exc_info:
+            await manager._get_tools_from_server(server)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.www_authenticate == challenge
+        assert exc_info.value.server_name == "oauth-srv"
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_absorbs_non_challenge_http_error(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-srv", name="stdio-srv", transport=MCPTransport.http
+        )
+        manager._create_mcp_client = AsyncMock(
+            side_effect=HTTPException(
+                status_code=403,
+                detail="MCP stdio command 'foo' is not in the allowlist",
+            )
+        )
+
+        assert await manager._get_tools_from_server(server) == []
+
+    @pytest.mark.asyncio
+    async def test_aggregate_list_tools_absorbs_unauthenticated_server(self):
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        manager = MCPServerManager()
+        good = MCPServer(server_id="good", name="good", transport=MCPTransport.http)
+        bad = MCPServer(server_id="bad", name="bad", transport=MCPTransport.http)
+        manager.get_allowed_mcp_servers = AsyncMock(return_value=["good", "bad"])
+        manager.get_mcp_server_by_id = MagicMock(
+            side_effect=lambda server_id: {"good": good, "bad": bad}.get(server_id)
+        )
+        good_tool = MCPTool(name="good-do_thing", description="do thing", inputSchema={})
+
+        async def fake_get_tools(server, **kwargs):
+            if server.server_id == "bad":
+                raise MCPUpstreamAuthError(
+                    status_code=401,
+                    www_authenticate='Bearer realm="x"',
+                    server_name="bad",
+                )
+            return [good_tool]
+
+        manager._get_tools_from_server = fake_get_tools
+
+        result = await manager.list_tools()
+
+        assert [t.name for t in result] == ["good-do_thing"]
 
 
 if __name__ == "__main__":

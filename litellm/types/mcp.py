@@ -73,6 +73,10 @@ class MCPPublicServer(BaseModel):
     mcp_info: Optional[Dict[str, Any]] = None
 
 
+# OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
+MCPTokenEndpointAuthMethod = Literal["client_secret_basic", "client_secret_post"]
+
+
 class MCPCredentials(TypedDict, total=False):
     auth_value: Optional[str]
     """
@@ -130,6 +134,12 @@ class MCPCredentials(TypedDict, total=False):
     """
     Subject token type for OAuth 2.0 Token Exchange (RFC 8693).
     Default: urn:ietf:params:oauth:token-type:access_token
+    """
+
+    token_endpoint_auth_method: Optional[MCPTokenEndpointAuthMethod]
+    """
+    How the gateway authenticates to the upstream token endpoint. "client_secret_basic"
+    sends HTTP Basic; defaults to "client_secret_post" when unset.
     """
 
 

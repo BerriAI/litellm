@@ -724,6 +724,7 @@
         "supports_tool_choice": true
     },
     "anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -747,6 +748,7 @@
         "supports_native_structured_output": true
     },
     "anthropic.claude-haiku-4-5@20251001": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -787,8 +789,6 @@
         "output_cost_per_token_above_200k_tokens": 3e-05,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
         "cache_read_input_token_cost_above_200k_tokens": 6e-07,
-        "cache_creation_input_token_cost_above_1hr": 7.5e-06,
-        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.5e-05,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07
     },
@@ -813,9 +813,7 @@
         "input_cost_per_token_above_200k_tokens": 6e-06,
         "output_cost_per_token_above_200k_tokens": 3e-05,
         "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
-        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
-        "cache_creation_input_token_cost_above_1hr": 7.5e-06,
-        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.5e-05
+        "cache_read_input_token_cost_above_200k_tokens": 6e-07
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
@@ -965,6 +963,7 @@
         "supports_vision": true
     },
     "anthropic.claude-opus-4-5-20251101-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -994,6 +993,7 @@
         "bedrock_output_config_effort_ceiling": "high"
     },
     "anthropic.claude-opus-4-6-v1": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1025,6 +1025,7 @@
         "bedrock_output_config_effort_ceiling": "max"
     },
     "global.anthropic.claude-opus-4-6-v1": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1056,6 +1057,7 @@
         "bedrock_output_config_effort_ceiling": "max"
     },
     "us.anthropic.claude-opus-4-6-v1": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1087,6 +1089,7 @@
         "bedrock_output_config_effort_ceiling": "max"
     },
     "eu.anthropic.claude-opus-4-6-v1": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1118,6 +1121,7 @@
         "bedrock_output_config_effort_ceiling": "max"
     },
     "au.anthropic.claude-opus-4-6-v1": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1149,6 +1153,8 @@
         "bedrock_output_config_effort_ceiling": "max"
     },
     "anthropic.claude-opus-4-7": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1197,6 +1203,8 @@
         "supports_output_config": true
     },
     "global.anthropic.claude-opus-4-7": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1230,6 +1238,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "us.anthropic.claude-opus-4-7": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1263,6 +1273,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "eu.anthropic.claude-opus-4-7": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1296,6 +1308,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "au.anthropic.claude-opus-4-7": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1329,6 +1343,7 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "anthropic.claude-fable-5": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1362,6 +1377,7 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "global.anthropic.claude-fable-5": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -1395,6 +1411,7 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "us.anthropic.claude-fable-5": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1428,6 +1445,7 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "eu.anthropic.claude-fable-5": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.375e-05,
         "cache_creation_input_token_cost_above_1hr": 2.2e-05,
         "cache_read_input_token_cost": 1.1e-06,
@@ -1461,6 +1479,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "anthropic.claude-opus-4-8": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1494,6 +1514,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "global.anthropic.claude-opus-4-8": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -1527,6 +1549,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "us.anthropic.claude-opus-4-8": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1560,6 +1584,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "eu.anthropic.claude-opus-4-8": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1593,6 +1619,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "au.anthropic.claude-opus-4-8": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -1626,6 +1654,8 @@
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
     "jp.anthropic.claude-opus-4-7": {
+        "supports_parallel_tool_use_config": true,
+        "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_read_input_token_cost": 5.5e-07,
         "input_cost_per_token": 5.5e-06,
@@ -1657,6 +1687,7 @@
         "supports_minimal_reasoning_effort": true
     },
     "anthropic.claude-sonnet-4-6": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -1687,6 +1718,7 @@
         "supports_output_config": true
     },
     "global.anthropic.claude-sonnet-4-6": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -1717,6 +1749,7 @@
         "supports_output_config": true
     },
     "us.anthropic.claude-sonnet-4-6": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -1747,6 +1780,7 @@
         "supports_output_config": true
     },
     "eu.anthropic.claude-sonnet-4-6": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -1777,6 +1811,7 @@
         "supports_output_config": true
     },
     "au.anthropic.claude-sonnet-4-6": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -1807,6 +1842,7 @@
         "supports_output_config": true
     },
     "jp.anthropic.claude-sonnet-4-6": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -1866,6 +1902,7 @@
         "supports_vision": true
     },
     "anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -2126,6 +2163,7 @@
         "cache_creation_input_token_cost": 3.125e-07
     },
     "apac.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 1.1e-06,
@@ -2205,6 +2243,7 @@
         "output_cost_per_second": 0.0
     },
     "au.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -9327,6 +9366,7 @@
         "cache_creation_input_token_cost": 3.75e-07
     },
     "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -9349,6 +9389,7 @@
         "supports_native_structured_output": true
     },
     "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -9502,6 +9543,7 @@
         "cache_creation_input_token_cost": 3.75e-07
     },
     "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -9524,6 +9566,7 @@
         "supports_native_structured_output": true
     },
     "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -10250,6 +10293,7 @@
         "supports_output_config": true
     },
     "claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -14324,6 +14368,7 @@
         "cache_creation_input_token_cost": 3.125e-07
     },
     "eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -14529,6 +14574,7 @@
         "supports_vision": true
     },
     "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -19886,6 +19932,7 @@
         "mode": "search"
     },
     "global.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -19947,6 +19994,7 @@
         "supports_vision": true
     },
     "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -24007,6 +24055,7 @@
         "output_cost_per_token": 1.8e-08
     },
     "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -24039,6 +24088,7 @@
         "supports_native_structured_output": true
     },
     "jp.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -32671,6 +32721,7 @@
         "supports_tool_choice": true
     },
     "us.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -32821,6 +32872,7 @@
         "supports_vision": true
     },
     "us.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_creation_input_token_cost_above_1hr": 6.6e-06,
         "cache_read_input_token_cost": 3.3e-07,
@@ -32853,6 +32905,7 @@
         "supports_native_structured_output": true
     },
     "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 4.5e-06,
         "cache_creation_input_token_cost_above_1hr": 7.2e-06,
         "cache_read_input_token_cost": 3.6e-07,
@@ -32880,6 +32933,7 @@
         "supports_native_structured_output": true
     },
     "au.anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.375e-06,
         "cache_creation_input_token_cost_above_1hr": 2.2e-06,
         "cache_read_input_token_cost": 1.1e-07,
@@ -32927,6 +32981,7 @@
         "supports_vision": true
     },
     "us.anthropic.claude-opus-4-5-20251101-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.875e-06,
         "cache_creation_input_token_cost_above_1hr": 1.1e-05,
         "cache_read_input_token_cost": 5.5e-07,
@@ -32956,6 +33011,7 @@
         "bedrock_output_config_effort_ceiling": "high"
     },
     "global.anthropic.claude-opus-4-5-20251101-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -32985,6 +33041,7 @@
         "bedrock_output_config_effort_ceiling": "high"
     },
     "eu.anthropic.claude-opus-4-5-20251101-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
@@ -42994,6 +43051,7 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_creation_input_token_cost_above_1hr": 2.4e-06,
         "cache_read_input_token_cost": 1.2e-07,
@@ -43017,6 +43075,7 @@
         "supports_pdf_input": true
     },
     "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": {
+        "supports_parallel_tool_use_config": true,
         "cache_creation_input_token_cost": 1.5e-06,
         "cache_creation_input_token_cost_above_1hr": 2.4e-06,
         "cache_read_input_token_cost": 1.2e-07,
