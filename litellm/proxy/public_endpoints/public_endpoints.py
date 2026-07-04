@@ -156,10 +156,14 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 async def public_model_hub():
     import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
+        _aggregate_health_check_results,
+        _build_model_param_to_info_mapping,
         _convert_health_check_to_dict,
     )
     from litellm.proxy.proxy_server import (
         _get_model_group_info,
+        health_check_results,
+        llm_model_list,
         llm_router,
         prisma_client,
     )
@@ -175,20 +179,48 @@ async def public_model_hub():
             model_group=None,
         )
 
-    # Fetch health check information if available
-    health_checks_map = {}
+    # Fetch health check metadata (response time, last-checked timestamp) from the DB.
+    # get_all_latest_health_checks() returns one row per deployment, so a model
+    # group backed by multiple deployments (load balancing/fallbacks) yields
+    # multiple rows sharing the same model_name here; keep whichever is
+    # unhealthy rather than letting a later, healthy deployment overwrite it.
+    health_checks_map: Dict[str, Dict[str, Any]] = {}
     if prisma_client is not None:
         try:
             latest_checks = await prisma_client.get_all_latest_health_checks()
             for check in latest_checks:
-                key = check.model_id if check.model_id else check.model_name
-                if key:
-                    health_check_dict = _convert_health_check_to_dict(check)
-                    health_checks_map[key] = health_check_dict
-                    if check.model_name:
-                        health_checks_map[check.model_name] = health_check_dict
+                if check.model_id:
+                    health_checks_map[check.model_id] = _convert_health_check_to_dict(check)
+                if check.model_name:
+                    existing = health_checks_map.get(check.model_name)
+                    if existing is None or existing.get("status") != "unhealthy":
+                        health_checks_map[check.model_name] = _convert_health_check_to_dict(check)
         except Exception:
             pass
+
+    # The DB row above only gets refreshed by the background health check loop,
+    # and lags behind the live result by up to one health_check_interval cycle
+    # (or is entirely absent if no DB is configured). Determine the actual
+    # status from the same in-memory cache the authenticated /health endpoint
+    # reads, which is backed by the Redis shared health check cache when
+    # use_shared_health_check is enabled, so the public hub matches the Admin
+    # UI dashboard instead of a stale DB snapshot.
+    live_health_status_map: Dict[str, str] = {}
+    healthy_endpoints = health_check_results.get("healthy_endpoints")
+    unhealthy_endpoints = health_check_results.get("unhealthy_endpoints")
+    if llm_model_list and (healthy_endpoints or unhealthy_endpoints):
+        model_param_to_info = _build_model_param_to_info_mapping(llm_model_list)
+        model_results = _aggregate_health_check_results(
+            model_param_to_info,
+            healthy_endpoints or [],
+            unhealthy_endpoints or [],
+        )
+        for result in model_results.values():
+            model_name = result["model_name"]
+            if result["unhealthy_count"] > 0:
+                live_health_status_map[model_name] = "unhealthy"
+            elif model_name not in live_health_status_map:
+                live_health_status_map[model_name] = "healthy"
 
     for model_group in model_groups:
         health_info = health_checks_map.get(model_group.model_group)
@@ -196,6 +228,10 @@ async def public_model_hub():
             model_group.health_status = health_info.get("status")
             model_group.health_response_time = health_info.get("response_time_ms")
             model_group.health_checked_at = health_info.get("checked_at")
+
+        live_status = live_health_status_map.get(model_group.model_group)
+        if live_status:
+            model_group.health_status = live_status
 
     return model_groups
 
