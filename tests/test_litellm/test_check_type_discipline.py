@@ -86,6 +86,10 @@ def test_type_ignore_with_codes_and_reason_is_still_flagged(tmp_path):
     assert "LIT004" not in codes
 
 
+def test_prose_mentioning_type_ignored_is_not_flagged(tmp_path):
+    assert "LIT009" not in _codes(tmp_path, "x = 1  # type: ignored by the stub refresh, revisit\n")
+
+
 def test_mypy_ignore_shape_is_lit004_not_lit009(tmp_path):
     codes = _codes(tmp_path, "x = 1  # mypy: ignore[assignment]\n")
     assert "LIT004" in codes

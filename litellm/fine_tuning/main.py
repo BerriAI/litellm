@@ -256,8 +256,6 @@ def create_fine_tuning_job(
             extra_body = optional_params.get("extra_body", {})
             if extra_body is not None:
                 extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
             # Prepare Azure-specific parameters for extra_body
             extra_body = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
@@ -457,8 +455,6 @@ def cancel_fine_tuning_job(
             extra_body = optional_params.get("extra_body", {})
             if extra_body is not None:
                 extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
             response = azure_fine_tuning_apis_instance.cancel_fine_tuning_job(
                 api_base=api_base,
@@ -616,8 +612,6 @@ def list_fine_tuning_jobs(
             extra_body = optional_params.get("extra_body", {})
             if extra_body is not None:
                 extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")
 
             response = azure_fine_tuning_apis_instance.list_fine_tuning_jobs(
                 api_base=api_base,
@@ -759,8 +753,6 @@ def retrieve_fine_tuning_job(
             extra_body = optional_params.get("extra_body", {})
             if extra_body is not None:
                 extra_body.pop("azure_ad_token", None)
-            else:
-                get_secret_str("AZURE_AD_TOKEN")  # type: ignore
 
             response = azure_fine_tuning_apis_instance.retrieve_fine_tuning_job(
                 api_base=api_base,

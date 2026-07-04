@@ -99,7 +99,7 @@ NOQA_RE = re.compile(
     r"(?P<rest>.*)",
     re.IGNORECASE,
 )
-TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore")
+TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore\b")
 IGNORE_RE = re.compile(
     r"#\s*(?:pyright|mypy):\s*ignore(?P<codes>\[[^\]]*\])?(?P<rest>.*)"
 )
