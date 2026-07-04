@@ -1607,7 +1607,10 @@ async def _user_api_key_auth_builder(
                 valid_token=_user_api_key_obj, end_user_params=end_user_params
             )
 
-            if RouteChecks.is_llm_api_route(route=route):
+            if (
+                RouteChecks.is_llm_api_route(route=route)
+                and litellm.enforce_end_user_model_max_budget_on_master_key
+            ):
                 await _enforce_end_user_model_max_budget_checks(
                     valid_token=_user_api_key_obj,
                     request_data=request_data,
