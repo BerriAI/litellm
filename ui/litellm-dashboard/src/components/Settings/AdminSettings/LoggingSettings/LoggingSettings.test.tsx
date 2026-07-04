@@ -261,6 +261,48 @@ describe("LoggingSettings", () => {
     expect(retentionInput).toHaveValue("30d");
   });
 
+  it("should reflect persisted values that arrive after the initial loading render", async () => {
+    mockUseProxyConfig.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      refetch: mockRefetch,
+    } as any);
+
+    const { rerender } = renderWithProviders(<LoggingSettings />);
+
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+
+    mockUseProxyConfig.mockReturnValue({
+      data: [
+        {
+          field_name: "store_prompts_in_spend_logs",
+          field_type: "bool",
+          field_description: "Store prompts in spend logs",
+          field_value: true,
+          stored_in_db: true,
+          field_default_value: false,
+        },
+        {
+          field_name: "maximum_spend_logs_retention_period",
+          field_type: "string",
+          field_description: "Maximum retention period",
+          field_value: "30d",
+          stored_in_db: true,
+          field_default_value: undefined,
+        },
+      ],
+      isLoading: false,
+      refetch: mockRefetch,
+    } as any);
+
+    rerender(<LoggingSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("switch")).toBeChecked();
+    });
+    expect(screen.getByPlaceholderText("e.g., 7d, 30d")).toHaveValue("30d");
+  });
+
   it("should show skeleton loaders when config is loading", () => {
     mockUseProxyConfig.mockReturnValue({
       data: undefined,

@@ -14,14 +14,13 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { ClockCircleOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, Skeleton, Space, Switch, Typography } from "antd";
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 
 const LoggingSettings: React.FC = () => {
   const [form] = Form.useForm();
   const { mutate, isPending } = useStoreRequestInSpendLogs();
   const { mutate: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
   const { data: proxyConfigData, isLoading: isLoadingConfig } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
-  const storePromptsValue = Form.useWatch("store_prompts_in_spend_logs", form);
 
   const initialValues = useMemo(() => {
     if (!proxyConfigData) {
@@ -41,6 +40,12 @@ const LoggingSettings: React.FC = () => {
       maximum_spend_logs_retention_period: retentionPeriodField?.field_value ?? undefined,
     };
   }, [proxyConfigData]);
+
+  useEffect(() => {
+    if (proxyConfigData) {
+      form.setFieldsValue(initialValues);
+    }
+  }, [form, proxyConfigData, initialValues]);
 
   const handleFormSubmit = (formValues: StoreRequestInSpendLogsParams) => {
     const retentionPeriodValue = formValues.maximum_spend_logs_retention_period;
@@ -82,13 +87,7 @@ const LoggingSettings: React.FC = () => {
           Proxy-wide settings that control how request and response data are written to spend logs.
         </Typography.Paragraph>
 
-        <Form
-          key={proxyConfigData ? JSON.stringify(initialValues) : "loading"}
-          form={form}
-          layout="vertical"
-          onFinish={handleFormSubmit}
-          initialValues={initialValues}
-        >
+        <Form form={form} layout="vertical" onFinish={handleFormSubmit} initialValues={initialValues}>
           <Form.Item
             label="Store Prompts in Spend Logs"
             name="store_prompts_in_spend_logs"
@@ -98,14 +97,7 @@ const LoggingSettings: React.FC = () => {
             }
             valuePropName="checked"
           >
-            {isLoadingConfig ? (
-              <Skeleton.Input active block />
-            ) : (
-              <Switch
-                checked={storePromptsValue ?? false}
-                onChange={(checked) => form.setFieldValue("store_prompts_in_spend_logs", checked)}
-              />
-            )}
+            {isLoadingConfig ? <Skeleton.Input active block /> : <Switch />}
           </Form.Item>
 
           <Form.Item
