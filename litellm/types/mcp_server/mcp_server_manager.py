@@ -65,10 +65,13 @@ class MCPServer(BaseModel):
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
     aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
     aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
-    # Token Exchange (OBO) fields — RFC 8693
+    # Token Exchange (OBO) fields
     token_exchange_endpoint: Optional[str] = None
     audience: Optional[str] = None
     subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
+    # Wire dialect: "rfc8693" (standard token-exchange grant) or "entra_obo" (Microsoft Entra
+    # On-Behalf-Of, the RFC 7523 jwt-bearer grant + requested_token_use extension)
+    token_exchange_profile: str = "rfc8693"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None

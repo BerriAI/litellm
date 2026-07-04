@@ -718,6 +718,41 @@ class TestMCPServerManager:
             client_secret="csec",
         )
 
+    @pytest.mark.asyncio
+    async def test_entra_obo_profile_survives_db_credentials_round_trip(self):
+        # A credentials blob from the management API / DB carries token_exchange_profile; the DB build
+        # must reconstruct it onto the MCPServer, and the v2 adapter must map it onto the resolver
+        # config. Without threading it through, an entra_obo server persisted via the API silently
+        # falls back to rfc8693 and posts the wrong grant to the IdP.
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import to_server_spec
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import TokenExchangeConfig
+
+        manager = MCPServerManager()
+        row = LiteLLM_MCPServerTable(
+            server_id="entra-db-1",
+            alias="entra_db",
+            description="entra obo from db",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            credentials={
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_exchange_endpoint": "https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+                "scopes": ["api://target/.default"],
+                "token_exchange_profile": "entra_obo",
+            },
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        built = await manager.build_mcp_server_from_table(row, credentials_are_encrypted=False)
+        assert built.token_exchange_profile == "entra_obo"
+
+        spec = to_server_spec(built)
+        assert spec is not None and isinstance(spec.config, TokenExchangeConfig)
+        assert spec.config.profile == "entra_obo"
+
     async def _capture_subject_token(self, call) -> Optional[str]:
         """Run a manager method (via ``call(manager)``) and return the subject_token it threaded
         into ``_create_mcp_client``."""
@@ -1614,6 +1649,47 @@ class TestMCPServerManager:
         assert server.authorization_url == "https://config.example.com/auth"
         assert server.token_url == "https://discovered.example.com/token"
         assert server.registration_url == "https://discovered.example.com/register"
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_filters_blank_scopes(self):
+        """A YAML ``scopes: [""]`` must normalize to None (matching the DB path), so a blank-only
+        list never becomes a ``("",)`` tuple that skips the entra_obo fail-closed scope check."""
+        manager = MCPServerManager()
+        config = {
+            "entra": {
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_token_exchange,
+                "token_exchange_profile": "entra_obo",
+                "token_exchange_endpoint": "https://login.microsoftonline.com/t/oauth2/v2.0/token",
+                "client_id": "cid",
+                "client_secret": "csec",
+                "scopes": ["", "  "],
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.scopes is None
+
+        # And the exchange precondition now fails closed before any IdP call.
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import to_server_spec
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+            OboTokenExchanger,
+        )
+
+        spec = to_server_spec(server)
+        assert spec is not None
+        assert spec.config.scopes == ()
+
+        async def _must_not_post(url, form, headers):
+            raise AssertionError("entra_obo with blank scopes must fail closed before POSTing to the IdP")
+
+        result = await OboTokenExchanger(_must_not_post).exchange("subj", spec, spec.config)
+        assert isinstance(result, Error)
+        assert result.error.tag == "misconfigured"
 
     @pytest.mark.asyncio
     async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
@@ -5913,3 +5989,72 @@ class TestOBOEndpointDiscovery:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_preflight_challenge_carries_step_up_error_and_claims():
+    """An Entra Conditional Access rejection must surface error=insufficient_claims plus the base64
+    claims in the single-server 401 challenge, so an MSAL-family client can drive the step-up and retry."""
+    import base64
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+
+    class _FakeProvider:
+        async def resolve_credentials(self, subject, server):
+            return Error(CredError.of_unauthorized("step-up required", claims=claims))
+
+    manager = MCPServerManager(cred_provider=_FakeProvider())
+    server = MCPServer(
+        server_id="te-ca",
+        name="te-ca-server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret="csec",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": "Bearer subj"},
+            user_api_key_auth=None,
+        )
+    assert exc_info.value.status_code == 401
+    headers = exc_info.value.headers or {}
+    www = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+    assert 'error="insufficient_claims"' in www
+    assert base64.b64encode(claims.encode()).decode() in www
+    assert "resource_metadata" in www
+
+
+@pytest.mark.asyncio
+async def test_aggregate_list_still_absorbs_step_up_challenged_server():
+    """A step-up (claims-bearing) 401 from one server must not change the aggregate contract: the
+    multi-server listing still absorbs it and returns the healthy servers' tools."""
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+
+    manager = MCPServerManager()
+    good = MCPServer(server_id="good", name="good", transport=MCPTransport.http)
+    ca = MCPServer(server_id="ca", name="ca", transport=MCPTransport.http)
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=["good", "ca"])
+    manager.get_mcp_server_by_id = MagicMock(side_effect=lambda server_id: {"good": good, "ca": ca}.get(server_id))
+    good_tool = MCPTool(name="good-do_thing", description="do thing", inputSchema={})
+
+    async def fake_get_tools(server, **kwargs):
+        if server.server_id == "ca":
+            raise MCPUpstreamAuthError(
+                status_code=401,
+                www_authenticate=('Bearer resource_metadata="/x", error="insufficient_claims", claims="eyJhIjoxfQ=="'),
+                server_name="ca",
+            )
+        return [good_tool]
+
+    manager._get_tools_from_server = fake_get_tools
+
+    result = await manager.list_tools()
+
+    assert [t.name for t in result] == ["good-do_thing"]

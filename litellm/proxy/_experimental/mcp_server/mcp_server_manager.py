@@ -756,7 +756,12 @@ class MCPServerManager:
             else:
                 mcp_oauth_metadata = None
 
-            resolved_scopes = server_config.get("scopes") or (mcp_oauth_metadata.scopes if mcp_oauth_metadata else None)
+            # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
+            # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
+            # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
+            resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
+                mcp_oauth_metadata.scopes if mcp_oauth_metadata else None
+            )
             resolved_authorization_url = server_config.get("authorization_url") or (
                 mcp_oauth_metadata.authorization_url if mcp_oauth_metadata else None
             )
@@ -825,6 +830,7 @@ class MCPServerManager:
                     "subject_token_type",
                     "urn:ietf:params:oauth:token-type:access_token",
                 ),
+                token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
                 timeout=server_config.get("timeout", None),
@@ -1212,6 +1218,8 @@ class MCPServerManager:
             audience=(credentials_dict.get("audience") if credentials_dict else None),
             subject_token_type=(credentials_dict.get("subject_token_type") if credentials_dict else None)
             or "urn:ietf:params:oauth:token-type:access_token",
+            token_exchange_profile=(credentials_dict.get("token_exchange_profile") if credentials_dict else None)
+            or "rfc8693",
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
@@ -2000,8 +2008,13 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
                     # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
-                    # 401. No gateway-side browser flow.
-                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                    # 401. No gateway-side browser flow. An IdP step-up rejection (Entra Conditional
+                    # Access) threads its claims blob into the challenge for the client to satisfy.
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        claims=err.unauthorized.claims,
+                    )
                 raise_public(err)
 
     async def preflight_token_exchange(
@@ -2031,7 +2044,11 @@ class MCPServerManager:
                 return
             case Error(err):
                 if err.tag == "unauthorized":
-                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        claims=err.unauthorized.claims,
+                    )
                 raise_public(err)
 
     async def _create_mcp_client(

@@ -148,6 +148,34 @@ def patch_proxy_general_settings(settings: dict):
     )
 
 
+class TestMCPCredentialsTokenExchangeProfile:
+    """token_exchange_profile must be a declared MCPCredentials field so the management API can
+    persist the entra_obo profile. An undeclared key is silently stripped by pydantic when the
+    credentials dict is validated against the TypedDict, so it would never reach the JSON blob."""
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda creds: NewMCPServerRequest(
+                server_name="s", auth_type=MCPAuth.oauth2_token_exchange, credentials=creds
+            ),
+            lambda creds: UpdateMCPServerRequest(server_id="s", credentials=creds),
+        ],
+        ids=["new", "update"],
+    )
+    def test_request_preserves_token_exchange_profile_in_credentials(self, build):
+        creds = {
+            "client_id": "cid",
+            "client_secret": "sec",
+            "token_exchange_endpoint": "https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+            "scopes": ["api://target/.default"],
+            "token_exchange_profile": "entra_obo",
+        }
+        request = build(creds)
+        assert request.credentials is not None
+        assert request.credentials.get("token_exchange_profile") == "entra_obo"
+
+
 class TestListMCPServers:
     """Test suite for list MCP servers functionality"""
 
