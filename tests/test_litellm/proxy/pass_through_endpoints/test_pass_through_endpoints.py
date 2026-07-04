@@ -3691,6 +3691,20 @@ async def test_pass_through_request_non_streaming_upstream_error_returned_unchan
     assert set(body.keys()) != {"error"} or not isinstance(body["error"], dict)
     mock_success_handler.assert_called_once()
 
+    # Regression: post_call_failure_hook (spend-tracking, alerting callbacks)
+    # must still fire for upstream errors even though the client-facing
+    # response is unchanged and no ProxyException is raised.
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
+    failure_call_kwargs = mock_proxy_logging.post_call_failure_hook.call_args.kwargs
+    assert isinstance(failure_call_kwargs["original_exception"], httpx.HTTPStatusError)
+    assert failure_call_kwargs["original_exception"].response.status_code == 403
+
+    # Regression: the log payload's response_body must reflect the upstream
+    # error JSON, not None, so downstream spend-tracking/logging integrations
+    # can see what the upstream actually returned.
+    success_call_kwargs = mock_success_handler.call_args.kwargs
+    assert success_call_kwargs["response_body"] == _UPSTREAM_ERROR_BODY
+
 
 @pytest.mark.asyncio
 async def test_pass_through_request_streaming_upstream_error_returned_unchanged():
@@ -3750,6 +3764,13 @@ async def test_pass_through_request_streaming_upstream_error_returned_unchanged(
     assert streamed_bytes == upstream_content
     assert json.loads(streamed_bytes) == _UPSTREAM_ERROR_BODY
 
+    # Regression: post_call_failure_hook must still fire for streaming
+    # upstream errors, mirroring the non-streaming behavior.
+    mock_proxy_logging.post_call_failure_hook.assert_called_once()
+    failure_call_kwargs = mock_proxy_logging.post_call_failure_hook.call_args.kwargs
+    assert isinstance(failure_call_kwargs["original_exception"], httpx.HTTPStatusError)
+    assert failure_call_kwargs["original_exception"].response.status_code == 403
+
 
 @pytest.mark.asyncio
 async def test_pass_through_request_non_streaming_success_unchanged():
@@ -3802,6 +3823,9 @@ async def test_pass_through_request_non_streaming_success_unchanged():
 
     assert response.status_code == 200
     assert json.loads(response.body) == upstream_success_body
+    # Regression guard: the failure hook must only fire for upstream errors,
+    # never for a successful upstream response.
+    mock_proxy_logging.post_call_failure_hook.assert_not_called()
 
 
 @pytest.mark.asyncio
