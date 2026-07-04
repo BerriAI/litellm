@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Pencil, Trash2, Plus, Search, MessageSquare } from "lucide-react";
+import { Pencil, Trash2, Search, MessageSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -26,22 +26,21 @@ interface Props {
   activeConversationId: string | null;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
-  onNewChat: () => void;
   onRename: (id: string, newTitle: string) => void;
 }
 
-type DateGroup = "Today" | "Yesterday" | "Last 7 Days" | "Older";
+type DateGroup = "Recents" | "Yesterday" | "Last 7 Days" | "Older";
 
 const getDateGroup = (timestamp: number): DateGroup => {
   const now = dayjs();
   const date = dayjs(timestamp);
-  if (date.isSame(now, "day")) return "Today";
+  if (date.isSame(now, "day")) return "Recents";
   if (date.isSame(now.subtract(1, "day"), "day")) return "Yesterday";
   if (date.isAfter(now.subtract(7, "day"))) return "Last 7 Days";
   return "Older";
 };
 
-const DATE_GROUP_ORDER: DateGroup[] = ["Today", "Yesterday", "Last 7 Days", "Older"];
+const DATE_GROUP_ORDER: DateGroup[] = ["Recents", "Yesterday", "Last 7 Days", "Older"];
 
 interface GroupedConversations {
   group: DateGroup;
@@ -147,13 +146,9 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
             <TooltipProvider delayDuration={300}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <button
-                    onClick={startEditing}
-                    className="w-[22px] h-[22px] p-0 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground transition-colors"
-                    style={{ background: "none", border: "none" }}
-                  >
+                  <Button onClick={startEditing} variant="ghost" size="icon-xs" className="text-muted-foreground">
                     <Pencil className="h-3 w-3" />
-                  </button>
+                  </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
                   <p>Rename</p>
@@ -166,12 +161,9 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <AlertDialogTrigger asChild>
-                      <button
-                        className="w-[22px] h-[22px] p-0 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive transition-colors"
-                        style={{ background: "none", border: "none" }}
-                      >
+                      <Button variant="ghost" size="icon-xs" className="text-muted-foreground hover:text-destructive">
                         <Trash2 className="h-3 w-3" />
-                      </button>
+                      </Button>
                     </AlertDialogTrigger>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
@@ -268,14 +260,7 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
   );
 };
 
-const ConversationList: React.FC<Props> = ({
-  conversations,
-  activeConversationId,
-  onSelect,
-  onDelete,
-  onNewChat,
-  onRename,
-}) => {
+const ConversationList: React.FC<Props> = ({ conversations, activeConversationId, onSelect, onDelete, onRename }) => {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
 
   const handleGlobalKeyDown = useCallback((e: KeyboardEvent) => {
@@ -295,23 +280,7 @@ const ConversationList: React.FC<Props> = ({
   return (
     <>
       <div className="flex flex-col h-full w-full overflow-hidden">
-        <div className="px-2.5 pt-3 pb-2">
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button onClick={onNewChat} className="w-full" size="sm">
-                  <Plus className="h-4 w-4 mr-1.5" />
-                  New Chat
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                <p>Chats are saved locally in this browser. All requests are logged in Spend -&gt; Logs</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-
-        <ScrollArea className="flex-1 px-1.5">
+        <ScrollArea className="flex-1 h-0 px-1.5 pt-2">
           {grouped.length === 0 ? (
             <div className="text-center text-muted-foreground/60 text-xs mt-8 px-3">
               No conversations yet
