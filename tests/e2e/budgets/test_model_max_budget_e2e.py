@@ -40,6 +40,13 @@ def _call(client: BudgetClient, key: str, model: str):
     return result
 
 
+def _call_v1_messages(client: BudgetClient, key: str, model: str):
+    result = client.anthropic_messages(key, model, f"hi {unique_marker()}", max_tokens=16)
+    if not result.ok and not is_budget_block(result):
+        require_successful_call(result)
+    return result
+
+
 def _exhaust_model_budget(client: BudgetClient, key: str, model: str) -> None:
     blocked = False
     deadline = time.monotonic() + 60
@@ -258,3 +265,36 @@ def test_team_model_max_budget_human_shared_and_sa_isolated(
     require_successful_call(sibling_sa)
 
     assert_model_usage(client.key_info(sa_key_b), CAPPED_MODEL, min_spend=1e-9, scope="key")
+
+
+def test_team_model_max_budget_increments_via_v1_messages(
+    client: BudgetClient,
+    resources: ResourceManager,
+) -> None:
+    marker = unique_marker()
+    team_id = client.create_team(alias=f"e2e-team-v1-messages-budget-{marker}", max_budget=TEAM_BUDGET)
+    resources.defer(lambda: client.delete_team(team_id))
+    user_id = client.create_user(max_budget=TEAM_BUDGET)
+    resources.defer(lambda: client.delete_user(user_id))
+    client.add_team_member(team_id, user_id)
+    client.update_team(
+        team_id,
+        model_max_budget={
+            **model_budget(CAPPED_MODEL, SHARED_TEAM_MODEL_BUDGET, period="1d"),
+            **model_budget(FREE_MODEL, 1000.0),
+        },
+    )
+
+    key = client.generate_key(team_id=team_id, user_id=user_id)
+    resources.defer(lambda: client.delete_key(key))
+
+    result = _call_v1_messages(client, key, CAPPED_MODEL)
+    require_successful_call(result)
+
+    usage = _wait_for_model_spend(client, key, CAPPED_MODEL)
+    assert usage.scope == "team", (
+        f"human user on /v1/messages should share team pool; got scope {usage.scope!r}"
+    )
+    assert usage.current_spend > 0, (
+        "/key/info should show per-model spend after /v1/messages (claude-cli path)"
+    )

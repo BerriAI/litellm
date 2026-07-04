@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pydantic import AliasPath, BaseModel, Field, RootModel
 
 from e2e_gateway import Gateway, build_gateway
-from e2e_http import NoBody, StreamingResponse, Success, unwrap
+from e2e_http import AuthHeaders, NoBody, StreamingResponse, Success, unwrap
 from models import (
     BudgetWindow,
     ChatBody,
@@ -160,6 +160,16 @@ class BudgetInfoResponse(RootModel[list[BudgetRow]]):
     pass
 
 
+class AnthropicV1Headers(AuthHeaders):
+    anthropic_version: str = Field(default="2023-06-01", alias="anthropic-version")
+
+
+class AnthropicV1MessageBody(BaseModel):
+    model: str
+    max_tokens: int
+    messages: list[ChatMessage]
+
+
 def is_budget_block(result: StreamingResponse) -> bool:
     """True if the call was rejected for being over budget (vs a provider error)."""
     return not result.ok and "budget_exceeded" in result.body
@@ -260,6 +270,24 @@ class BudgetClient:
                 max_tokens=max_tokens,
                 user=user,
                 metadata=ChatMetadata(tags=tags) if tags else None,
+            ),
+        )
+
+    def anthropic_messages(
+        self,
+        key: str,
+        model: str,
+        content: str,
+        *,
+        max_tokens: int = 16,
+    ) -> StreamingResponse:
+        return self.gateway.transport.send(
+            "/v1/messages",
+            headers=AnthropicV1Headers(authorization=f"Bearer {key}"),
+            json=AnthropicV1MessageBody(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[ChatMessage(role="user", content=content)],
             ),
         )
 

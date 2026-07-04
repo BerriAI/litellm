@@ -3,6 +3,7 @@ from typing import List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
 from litellm.proxy._types import UserAPIKeyAuth
@@ -481,8 +482,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             )
             return
 
-        _litellm_params: dict = kwargs.get("litellm_params", {}) or {}
-        _metadata: dict = _litellm_params.get("metadata", {}) or {}
+        _metadata: dict = get_litellm_metadata_from_kwargs(kwargs)
         user_api_key_model_max_budget: Optional[dict] = _metadata.get("user_api_key_model_max_budget", None)
         user_api_key_team_model_max_budget: Optional[dict] = _metadata.get("user_api_key_team_model_max_budget", None)
         user_api_key_team_member_model_max_budget: Optional[dict] = _metadata.get(

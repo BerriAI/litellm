@@ -128,6 +128,75 @@ async def test_async_log_success_event_team_default_increments_bedrock_model_ali
     )
 
 
+@pytest.mark.asyncio
+async def test_async_log_success_event_reads_team_budget_from_litellm_metadata(budget_limiter):
+    from unittest.mock import AsyncMock, patch
+
+    virtual_key = "sa-key-hash"
+    team_budget = {
+        "claude-sonnet-4-6": {"budget_limit": 20.0, "time_period": "1d"},
+    }
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.0201767,
+            "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+            "model_group": None,
+            "metadata": {"user_api_key_hash": virtual_key},
+            "end_user": "",
+        },
+        "litellm_params": {
+            "litellm_metadata": {
+                "user_api_key_model_max_budget": {},
+                "user_api_key_team_model_max_budget": team_budget,
+                "user_api_key_team_id": "team-systems",
+            },
+        },
+    }
+
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+
+    mock_increment.assert_awaited_once()
+    assert (
+        mock_increment.call_args.kwargs["spend_key"]
+        == "virtual_key_spend:sa-key-hash:claude-sonnet-4-6:1d"
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_skips_when_budget_metadata_missing_from_both_bags(budget_limiter):
+    from unittest.mock import AsyncMock, patch
+
+    kwargs = {
+        "standard_logging_object": {
+            "response_cost": 0.02,
+            "model": "bedrock/us.anthropic.claude-sonnet-4-6",
+            "metadata": {"user_api_key_hash": "sa-key-hash"},
+        },
+        "litellm_params": {
+            "litellm_metadata": {},
+            "metadata": {},
+        },
+    }
+
+    with patch.object(
+        budget_limiter,
+        "_increment_spend_for_key",
+        new_callable=AsyncMock,
+    ) as mock_increment:
+        await budget_limiter.async_log_success_event(
+            kwargs, response_obj=None, start_time=None, end_time=None
+        )
+
+    mock_increment.assert_not_awaited()
+
+
 def test_update_team_request_accepts_model_max_budget() -> None:
     request = UpdateTeamRequest(
         team_id="team-1",
