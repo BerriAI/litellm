@@ -5,7 +5,6 @@ Handles search tool selection, load balancing, and fallback logic for search req
 """
 
 import asyncio
-import random
 import traceback
 from functools import partial
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -43,6 +42,29 @@ class SearchAPIRouter:
         return resolved_api_key, resolved_api_base
 
     @staticmethod
+    def _expand_search_tools(search_tools: list) -> list:
+        expanded_tools = []
+        for tool in search_tools:
+            litellm_params = tool.get("litellm_params", {})
+            api_keys = litellm_params.get("api_keys")
+            if api_keys and isinstance(api_keys, list):
+                for idx, api_key in enumerate(api_keys):
+                    new_tool = dict(tool)
+                    new_params = dict(litellm_params)
+                    new_params["api_key"] = api_key
+                    new_params.pop("api_keys", None)
+                    
+                    new_tool["search_tool_id"] = f"{tool.get('search_tool_id') or tool.get('search_tool_name')}_key_{idx}"
+                    new_tool["litellm_params"] = new_params
+                    expanded_tools.append(new_tool)
+            else:
+                new_tool = dict(tool)
+                new_tool["litellm_params"] = dict(litellm_params)
+                new_tool.setdefault("search_tool_id", tool.get("search_tool_name"))
+                expanded_tools.append(new_tool)
+        return expanded_tools
+
+    @staticmethod
     async def update_router_search_tools(router_instance: Any, search_tools: list):
         """
         Update the router with search tools from the database.
@@ -71,9 +93,9 @@ class SearchAPIRouter:
                 router_search_tools.append(router_search_tool)
 
             # Update the router's search_tools list
-            router_instance.search_tools = router_search_tools
+            router_instance.search_tools = SearchAPIRouter._expand_search_tools(router_search_tools)
 
-            verbose_router_logger.info(f"Successfully updated router with {len(router_search_tools)} search tool(s)")
+            verbose_router_logger.info(f"Successfully updated router with {len(router_instance.search_tools)} search tool(s) ({len(router_search_tools)} configured)")
 
         except Exception as e:
             verbose_router_logger.exception(f"Error updating router with search tools: {str(e)}")
@@ -197,12 +219,64 @@ class SearchAPIRouter:
                 search_tool_name=search_tool_name,
             )
 
-            # Simple random selection for load balancing across multiple providers with same name
-            # For search tools, we use simple random choice since they don't have TPM/RPM constraints
-            selected_tool = random.choice(matching_tools)
+            from litellm.router_utils.cooldown_cache import _async_get_cooldown_deployments
+            from litellm.router_strategy.simple_shuffle import simple_shuffle
+            from litellm.types.router import RouterRateLimitError
+
+            cooldown_deployments = await _async_get_cooldown_deployments(
+                litellm_router_instance=router_instance,
+                parent_otel_span=None
+            )
+
+            
+            deployments = [{
+                "model_name": search_tool_name,
+                "litellm_params": {"model": search_tool_name, **tool.get("litellm_params", {})},
+                "model_info": {"id": tool.get("search_tool_id") or tool.get("search_tool_name")}
+            } for tool in matching_tools]
+
+            healthy_deployments = router_instance._filter_cooldown_deployments(
+                healthy_deployments=deployments,
+                cooldown_deployments=cooldown_deployments
+            )
+
+            if not healthy_deployments:
+                raise RouterRateLimitError(
+                    model=search_tool_name,
+                    cooldown_time=0,
+                    enable_pre_call_checks=False,
+                    cooldown_list=cooldown_deployments,
+                )
+
+            # Use router strategy for load balancing
+            strategy, strategy_selector = router_instance._get_routing_context(search_tool_name)
+            
+            if strategy == "simple-shuffle":
+                selected_deployment = simple_shuffle(
+                    llm_router_instance=router_instance,
+                    healthy_deployments=healthy_deployments,
+                    model=search_tool_name
+                )
+            else:
+                selected_deployment = await router_instance._select_deployment_async(
+                    strategy=strategy,
+                    selector=strategy_selector,
+                    model=search_tool_name,
+                    healthy_deployments=healthy_deployments,
+                    messages=kwargs.get("messages", []),
+                    input=kwargs.get("input"),
+                    request_kwargs=kwargs,
+                )
+                if selected_deployment is None:
+                    # Fallback to simple shuffle if strategy selection fails
+                    selected_deployment = simple_shuffle(
+                        llm_router_instance=router_instance,
+                        healthy_deployments=healthy_deployments,
+                        model=search_tool_name
+                    )
 
             # Extract search provider and other params from litellm_params
-            litellm_params = selected_tool.get("litellm_params", {})
+            litellm_params = selected_deployment.get("litellm_params", {})
             search_provider = litellm_params.get("search_provider")
             if not search_provider:
                 raise ValueError(f"search_provider not found in litellm_params for search tool '{search_tool_name}'")
@@ -211,7 +285,14 @@ class SearchAPIRouter:
                 tool_litellm_params=litellm_params,
             )
 
-            verbose_router_logger.debug(f"Selected search tool with provider: {search_provider}")
+            verbose_router_logger.debug(f"Selected search tool with provider: {search_provider}, id: {selected_deployment['model_info']['id']}")
+
+            # Update kwargs so the router's error handler knows which deployment failed (for cooldown)
+            router_instance._update_kwargs_with_deployment(
+                deployment=selected_deployment, 
+                kwargs=kwargs, 
+                function_name="_asearch_with_fallbacks_helper"
+            )
 
             # Call the original search function with the provider config
             response = await original_generic_function(
