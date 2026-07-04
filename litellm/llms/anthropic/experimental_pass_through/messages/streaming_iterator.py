@@ -56,6 +56,11 @@ class AnthropicMessagesStreamingResponse:
     async def __anext__(self) -> bytes:
         return await self.completion_stream.__anext__()
 
+    async def aclose(self) -> None:
+        inner_aclose = getattr(self.completion_stream, "aclose", None)
+        if inner_aclose is not None:
+            await inner_aclose()
+
 
 class BaseAnthropicMessagesStreamingIterator:
     """
