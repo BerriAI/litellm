@@ -897,7 +897,7 @@ class TestStreamingTransform:
         synthetic = UnifiedLLMGuardrails()._build_transform_chunk(
             reference_chunk=reference_chunk,
             mutated_text_per_choice={0: "A", 1: "B"},
-            emitted_char_count={},
+            emitted_text_per_choice={},
             holdback_per_choice={},
             is_final=True,
         )
@@ -907,3 +907,58 @@ class TestStreamingTransform:
         assert by_index[1].finish_reason == "length"
         assert by_index[0].delta.content == "A"
         assert by_index[1].delta.content == "B"
+
+    def test_synthetic_chunk_drops_raw_tool_calls(self):
+        """v1 does not transform streamed tool calls; the synthetic chunk must not
+        pass raw upstream tool_calls through (they would bypass the guardrail)."""
+        reference_chunk = ModelResponseStream(
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content="hi",
+                        tool_calls=[
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "leak", "arguments": '{"ssn": "123-45-6789"}'},
+                            }
+                        ],
+                    ),
+                    finish_reason=None,
+                ),
+            ],
+        )
+
+        synthetic = UnifiedLLMGuardrails()._build_transform_chunk(
+            reference_chunk=reference_chunk,
+            mutated_text_per_choice={0: "HI"},
+            emitted_text_per_choice={},
+            holdback_per_choice={},
+            is_final=False,
+        )
+
+        assert synthetic.choices[0].delta.tool_calls is None
+        assert synthetic.choices[0].delta.content == "HI"
+
+    def test_rewriting_already_emitted_prefix_raises(self):
+        """If a later transform rewrites bytes already streamed (not a forward
+        extension), the framework fails closed rather than leaking the original."""
+        reference_chunk = ModelResponseStream(
+            choices=[StreamingChoices(index=0, delta=Delta(content="x"), finish_reason=None)],
+        )
+
+        with pytest.raises(unified_module.HTTPException) as exc_info:
+            UnifiedLLMGuardrails()._build_transform_chunk(
+                reference_chunk=reference_chunk,
+                # already streamed "My SSN is 123"; the guardrail now wants to
+                # redact those already-sent chars -> not a forward extension.
+                mutated_text_per_choice={0: "My SSN is [REDACTED]"},
+                emitted_text_per_choice={0: "My SSN is 123"},
+                holdback_per_choice={},
+                is_final=False,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["error"] == "stream_transform_underflow"

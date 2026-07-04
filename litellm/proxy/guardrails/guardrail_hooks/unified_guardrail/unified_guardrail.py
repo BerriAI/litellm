@@ -372,7 +372,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         *,
         reference_chunk: Any,
         mutated_text_per_choice: dict[int, str],
-        emitted_char_count: dict[int, int],
+        emitted_text_per_choice: dict[int, str],
         holdback_per_choice: dict[int, int],
         is_final: bool,
     ) -> Optional[ModelResponseStream]:
@@ -380,58 +380,61 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         For each choice, the new delta is the mutated accumulated text past what
         has already been emitted, minus a trailing holdback (forced to 0 on the
-        final flush). Updates ``emitted_char_count`` in place. Returns None when
-        there is nothing to emit and this is not the final chunk.
+        final flush). ``emitted_text_per_choice`` holds the exact bytes already
+        sent per choice and is extended in place. Returns None when there is
+        nothing to emit and this is not the final chunk.
 
         Raises HTTPException(400, stream_transform_underflow) when the guardrail's
-        transformation is shorter than what has already been streamed, since
-        emitted bytes cannot be retracted.
+        transform is not a forward extension of what has already been streamed
+        (shorter than, or rewriting, the already-sent prefix), since emitted bytes
+        cannot be retracted. This makes the framework fail closed rather than
+        silently leave un-transformed text on the wire; a guardrail that needs to
+        rewrite recent output must withhold it first via ``stream_holdback_chars``.
         """
         deltas: dict[int, str] = {}
         for choice_idx, text in mutated_text_per_choice.items():
-            already = emitted_char_count.get(choice_idx, 0)
-            if len(text) < already:
+            already = emitted_text_per_choice.get(choice_idx, "")
+            if not text.startswith(already):
                 raise HTTPException(
                     status_code=400,
                     detail={
                         "error": "stream_transform_underflow",
                         "message": (
-                            f"Guardrail streaming transform for choice {choice_idx} produced text of "
-                            f"length {len(text)}, shorter than the {already} chars already streamed to "
-                            "the client; emitted bytes cannot be retracted."
+                            f"Guardrail streaming transform for choice {choice_idx} is not a forward "
+                            f"extension of the {len(already)} chars already streamed to the client "
+                            "(it is shorter than, or rewrites, the emitted prefix); emitted bytes "
+                            "cannot be retracted. Withhold recent output via stream_holdback_chars "
+                            "before rewriting it."
                         ),
                     },
                 )
             holdback = 0 if is_final else max(0, holdback_per_choice.get(choice_idx, 0))
-            end = max(already, len(text) - holdback)
-            deltas[choice_idx] = text[already:end]
+            end = max(len(already), len(text) - holdback)
+            deltas[choice_idx] = text[len(already) : end]
 
         if not is_final and not any(deltas.values()):
             return None
 
-        role = "assistant" if not any(emitted_char_count.values()) else None
+        role = "assistant" if not any(emitted_text_per_choice.values()) else None
 
         synthetic_choices: list[StreamingChoices] = []
         for choice in getattr(reference_chunk, "choices", []) or []:
             idx = getattr(choice, "index", 0) or 0
-            reference_delta = getattr(choice, "delta", None)
             # Preserve each choice's own finish_reason on the flush (n > 1 can
-            # finish choices independently, e.g. "stop" vs "length").
+            # finish choices independently, e.g. "stop" vs "length"). tool_calls
+            # are intentionally dropped: v1 does not transform streamed tool calls,
+            # and passing the raw upstream ones through would bypass the guardrail.
             finish_reason = getattr(choice, "finish_reason", None) if is_final else None
             synthetic_choices.append(
                 StreamingChoices(
                     index=idx,
-                    delta=Delta(
-                        content=deltas.get(idx, ""),
-                        role=role,
-                        tool_calls=getattr(reference_delta, "tool_calls", None),
-                    ),
+                    delta=Delta(content=deltas.get(idx, ""), role=role, tool_calls=None),
                     finish_reason=finish_reason,
                 )
             )
 
-        for choice_idx in mutated_text_per_choice:
-            emitted_char_count[choice_idx] = emitted_char_count.get(choice_idx, 0) + len(deltas[choice_idx])
+        for choice_idx, delta in deltas.items():
+            emitted_text_per_choice[choice_idx] = emitted_text_per_choice.get(choice_idx, "") + delta
 
         return ModelResponseStream(
             id=getattr(reference_chunk, "id", None),
@@ -451,7 +454,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         reference_chunk: Any,
         responses_so_far: list[Any],
         responses_yielded: list[Any],
-        emitted_char_count: dict[int, int],
+        emitted_text_per_choice: dict[int, str],
         is_final: bool,
     ) -> AsyncGenerator[Any, None]:
         """Run one guardrail processing round and emit the resulting diff chunk.
@@ -478,7 +481,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             synthetic = self._build_transform_chunk(
                 reference_chunk=reference_chunk,
                 mutated_text_per_choice=mutated,
-                emitted_char_count=emitted_char_count,
+                emitted_text_per_choice=emitted_text_per_choice,
                 holdback_per_choice=sink.holdback_per_choice,
                 is_final=is_final,
             )
@@ -525,7 +528,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         endpoint_translation = mappings[CallTypes(call_type)]()
         responses_so_far: list[Any] = []
         responses_yielded: list[Any] = []
-        emitted_char_count: dict[int, int] = {}
+        emitted_text_per_choice: dict[int, str] = {}
         chunk_counter = 0
         last_chunk: Optional[Any] = None
 
@@ -539,7 +542,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 reference_chunk=reference_chunk,
                 responses_so_far=responses_so_far,
                 responses_yielded=responses_yielded,
-                emitted_char_count=emitted_char_count,
+                emitted_text_per_choice=emitted_text_per_choice,
                 is_final=is_final,
             )
 
