@@ -1,0 +1,34 @@
+# LiteLLM Proxy configuration
+# Docs: https://docs.litellm.ai/docs/proxy/configs
+
+model_list:
+  # OpenAI example (set OPENAI_API_KEY env var)
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic example (set ANTHROPIC_API_KEY env var)
+  # - model_name: claude-3-5-sonnet
+  #   litellm_params:
+  #     model: anthropic/claude-3-5-sonnet-20241022
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+
+  # Ollama local model example (no API key needed)
+  # - model_name: ollama-llama3
+  #   litellm_params:
+  #     model: ollama/llama3
+  #     api_base: http://localhost:11434
+
+litellm_settings:
+  drop_params: True
+  set_verbose: True
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true
+
+# Default port is 4000, override with --port
