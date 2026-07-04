@@ -1031,39 +1031,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
                 llm_router = None
 
-            # Determine search provider from router's search_tools
+            search_tool = self._select_search_tool_from_router(llm_router=llm_router)
+            if search_tool is None:
+                search_tool = await self._select_search_tool_from_db(llm_router=llm_router)
+
             search_provider: Optional[str] = None
             search_litellm_params: Dict[str, Any] = {}
-            if llm_router is not None and hasattr(llm_router, "search_tools"):
-                if self.search_tool_name:
-                    # Find specific search tool by name
-                    matching_tools = [
-                        tool
-                        for tool in llm_router.search_tools
-                        if tool.get("search_tool_name") == self.search_tool_name
-                    ]
-                    if matching_tools:
-                        search_tool = matching_tools[0]
-                        search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
-                        search_provider = search_litellm_params.get("search_provider")
-                        verbose_logger.debug(
-                            f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
-                            f"with provider '{search_provider}'"
-                        )
-                    else:
-                        verbose_logger.debug(
-                            f"WebSearchInterception: Search tool '{self.search_tool_name}' not found in router, "
-                            "falling back to first available or perplexity"
-                        )
-
-                # If no specific tool or not found, use first available
-                if not search_provider and llm_router.search_tools:
-                    first_tool = llm_router.search_tools[0]
-                    search_litellm_params = dict(first_tool.get("litellm_params", {}) or {})
-                    search_provider = search_litellm_params.get("search_provider")
-                    verbose_logger.debug(
-                        f"WebSearchInterception: Using first available search tool with provider '{search_provider}'"
-                    )
+            if search_tool is not None:
+                search_litellm_params = dict(search_tool.get("litellm_params", {}) or {})
+                search_provider = search_litellm_params.get("search_provider")
 
             # Fallback to perplexity if no router or no search tools configured
             if not search_provider:
@@ -1093,6 +1069,73 @@ class WebSearchInterceptionLogger(CustomLogger):
         except Exception as e:
             verbose_logger.error(f"WebSearchInterception: Search failed for '{query}': {str(e)}")
             raise
+
+    def _select_search_tool_from_router(self, llm_router: Any) -> Optional[Dict[str, Any]]:
+        if llm_router is None or not hasattr(llm_router, "search_tools"):
+            return None
+        search_tools = list(getattr(llm_router, "search_tools") or [])
+        return self._select_search_tool_from_list(search_tools=search_tools, source="router")
+
+    async def _select_search_tool_from_db(self, llm_router: Any) -> Optional[Dict[str, Any]]:
+        try:
+            from litellm.proxy.proxy_server import prisma_client
+            from litellm.proxy.search_endpoints.search_tool_registry import (
+                SearchToolRegistry,
+            )
+            from litellm.router_utils.search_api_router import SearchAPIRouter
+        except ImportError:
+            return None
+
+        if prisma_client is None:
+            return None
+
+        try:
+            db_search_tools = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+        except Exception as e:
+            verbose_logger.debug(f"WebSearchInterception: Could not load search tools from database: {str(e)}")
+            return None
+
+        search_tools = [dict(tool) for tool in db_search_tools]
+        search_tool = self._select_search_tool_from_list(search_tools=search_tools, source="database")
+        if search_tool is not None and llm_router is not None:
+            try:
+                await SearchAPIRouter.update_router_search_tools(
+                    router_instance=llm_router,
+                    search_tools=search_tools,
+                )
+            except Exception as e:
+                verbose_logger.debug(f"WebSearchInterception: Could not update router search tools: {str(e)}")
+        return search_tool
+
+    def _select_search_tool_from_list(
+        self,
+        search_tools: List[Dict[str, Any]],
+        source: str,
+    ) -> Optional[Dict[str, Any]]:
+        if self.search_tool_name:
+            matching_tools = [tool for tool in search_tools if tool.get("search_tool_name") == self.search_tool_name]
+            if matching_tools:
+                search_provider = (matching_tools[0].get("litellm_params", {}) or {}).get("search_provider")
+                verbose_logger.debug(
+                    f"WebSearchInterception: Found search tool '{self.search_tool_name}' "
+                    f"from {source} with provider '{search_provider}'"
+                )
+                return matching_tools[0]
+            verbose_logger.debug(
+                f"WebSearchInterception: Search tool '{self.search_tool_name}' not found in {source}, "
+                "falling back to first available or perplexity"
+            )
+
+        if search_tools:
+            first_tool = search_tools[0]
+            search_provider = (first_tool.get("litellm_params", {}) or {}).get("search_provider")
+            verbose_logger.debug(
+                f"WebSearchInterception: Using first available search tool from {source} "
+                f"with provider '{search_provider}'"
+            )
+            return first_tool
+
+        return None
 
     async def _execute_chat_completion_agentic_loop(
         self,
