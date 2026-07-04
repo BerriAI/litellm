@@ -203,12 +203,7 @@ async def convert_to_streaming_response_async(
                     t["index"] = index
                 pydantic_tool_calls.append(ChatCompletionDeltaToolCall(**t))
             choice["message"]["tool_calls"] = pydantic_tool_calls
-        delta = Delta(
-            content=choice["message"].get("content", None),
-            role=choice["message"]["role"],
-            function_call=choice["message"].get("function_call", None),
-            tool_calls=choice["message"].get("tool_calls", None),
-        )
+        delta = Delta(**choice["message"])
         finish_reason = choice.get("finish_reason", None)
 
         if finish_reason is None:
