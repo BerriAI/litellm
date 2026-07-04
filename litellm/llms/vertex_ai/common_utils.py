@@ -1209,8 +1209,16 @@ class VertexAITokenCounter(BaseTokenCounter):
         conversion isn't required for a token *count* and risks a 400 on
         Anthropic/OpenAI-shaped JSON Schema that Vertex's function-declaration
         validation doesn't accept as-is.
+
+        A caller that already sends Gemini-native `contents` directly is left
+        completely untouched -- this only kicks in when `contents` is falsy, so it
+        can't silently mutate a native caller's payload just because they also
+        happen to pass `system`/`tools`.
         """
-        if not contents and messages:
+        if contents:
+            return contents
+
+        if messages:
             try:
                 from litellm.llms.vertex_ai.gemini.transformation import (
                     _gemini_convert_messages_with_history,
@@ -1240,7 +1248,12 @@ class VertexAITokenCounter(BaseTokenCounter):
                     "role": "user",
                     "parts": [{"text": "\n".join(extra_text_parts)}],
                 }
-                contents = [extra_content, *contents] if contents else [extra_content]
+                # Appended (not prepended): the converted `contents` above typically
+                # starts with a "user" turn, so prepending another "user" turn here
+                # would create two consecutive same-role turns. countTokens appears
+                # lenient about alternation in practice, but appending avoids relying
+                # on that.
+                contents = [*contents, extra_content] if contents else [extra_content]
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "VertexAITokenCounter._build_gemini_contents_for_counting(): "
