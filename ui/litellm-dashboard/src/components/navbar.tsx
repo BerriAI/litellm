@@ -75,7 +75,7 @@ const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-5">
               <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
@@ -86,7 +86,7 @@ const Navbar: React.FC<NavbarProps> = ({
                         className="h-auto max-h-full w-auto max-w-full object-contain"
                       />
                     ) : (
-                      <span className="text-2xl font-bold text-slate-800 whitespace-nowrap tracking-wider">
+                      <span className="text-3xl font-extrabold text-slate-800 whitespace-nowrap tracking-normal">
                         {BRAND_NAME}
                       </span>
                     )}
