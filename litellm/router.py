@@ -8152,6 +8152,9 @@ class Router:
                         self._invalidate_model_group_info_cache()
                         self._invalidate_access_groups_cache()
                         self._update_deployment_indices_after_removal(model_id=deployment_id, removal_idx=removal_idx)
+                        self.pattern_router.remove_deployment(model_id=deployment_id)
+                        for _team_router in self.team_pattern_routers.values():
+                            _team_router.remove_deployment(model_id=deployment_id)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -8188,6 +8191,9 @@ class Router:
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
+                self.pattern_router.remove_deployment(model_id=id)
+                for _team_router in self.team_pattern_routers.values():
+                    _team_router.remove_deployment(model_id=id)
                 return item
             else:
                 return None

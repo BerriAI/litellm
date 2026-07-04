@@ -838,6 +838,40 @@ def test_delete_deployment(model_list):
     assert len(router.model_list) == len(model_list) - 1
 
 
+def test_delete_deployment_cleans_up_pattern_router():
+    """Wildcard deployments must be removed from pattern_router when deleted,
+    otherwise the stale deployment (with old API key) keeps being returned
+    for wildcard-matched requests."""
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    pattern_router = PatternMatchRouter()
+    pattern_router.add_pattern(
+        "anthropic/*",
+        {
+            "model_name": "anthropic/*",
+            "litellm_params": {"model": "anthropic/*"},
+            "model_info": {"id": "deployment-wildcard-123"},
+        },
+    )
+    assert pattern_router.route("anthropic/claude-opus-4-7") is not None
+    pattern_router.remove_deployment(model_id="deployment-wildcard-123")
+    assert pattern_router.route("anthropic/claude-opus-4-7") is None
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "anthropic/*",
+                "litellm_params": {"model": "anthropic/*", "api_key": "sk-old-key"},
+                "model_info": {"id": "deployment-wildcard-456"},
+            }
+        ]
+    )
+    assert router.pattern_router.route("anthropic/claude-opus-4-7") is not None
+    router.delete_deployment(id="deployment-wildcard-456")
+    assert len(router.model_list) == 0
+    assert router.pattern_router.route("anthropic/claude-opus-4-7") is None
+
+
 def test_get_model_info(model_list):
     """Test if the 'get_model_info' function is working correctly"""
     router = Router(model_list=model_list)

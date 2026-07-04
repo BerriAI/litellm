@@ -2229,3 +2229,88 @@ def test_get_logging_payload_cache_hit_keeps_raw_litellm_call_id():
     assert json.loads(payload["metadata"])["litellm_call_id"] == trace_call_id
     assert "_cache_hit" in payload["request_id"]
     assert json.loads(payload["metadata"])["litellm_call_id"] != payload["request_id"]
+
+
+def test_get_logging_payload_failure_uses_standard_logging_object_for_model_id():
+    """When a request fails, the proxy's failure hook passes request_data to
+    get_logging_payload without model_info in metadata (since litellm_params
+    is freshly built). The standard_logging_object lifted from the logging obj
+    must be used as a fallback for model_id, model_group, api_base, call_type,
+    and custom_llm_provider.
+    """
+    slo: StandardLoggingPayload = StandardLoggingPayload(
+        id="test-id",
+        model="anthropic/claude-opus-4-7",
+        model_id="deployment-abc-123",
+        model_group="anthropic/claude-opus-4-7",
+        model_map_key="anthropic/claude-opus-4-7",
+        model_map_value=None,
+        api_base="https://api.anthropic.com/v1/messages",
+        custom_llm_provider="anthropic",
+        call_type="anthropic_messages",
+        cache_hit=None,
+        stream=False,
+        status="failure",
+        error_str="credit balance too low",
+        error_information=None,
+        start_time=0.0,
+        end_time=0.0,
+        completionStartTime=0.0,
+        response_time=0.0,
+        spend=0.0,
+        total_tokens=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        request_tags=[],
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="hashed-key",
+            user_api_key_alias="test-alias",
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_id=None,
+            user_api_key_team_alias=None,
+            user_api_key_end_user_id=None,
+            user_api_key_project_id=None,
+            user_api_key_project_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+        ),
+        messages=[{"role": "user", "content": "hello"}],
+        response={},
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="deployment-abc-123",
+            cache_key=None,
+            api_base="https://api.anthropic.com/v1/messages",
+            response_cost="0",
+            additional_headers=None,
+            litellm_overhead_time_ms=None,
+            batch_models=None,
+        ),
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="anthropic/claude-opus-4-7", model_map_value=None
+        ),
+        litellm_call_id="test-call-id",
+        guardrail_information=None,
+        response_cost_failure_debug_info=None,
+        standard_built_in_tools_params=None,
+    )
+
+    kwargs = {
+        "model": "anthropic/claude-opus-4-7",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
+        "standard_logging_object": slo,
+    }
+    response_obj = Exception("credit balance too low")
+    now = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=now, end_time=now
+    )
+
+    assert payload["model_id"] == "deployment-abc-123"
+    assert payload["model_group"] == "anthropic/claude-opus-4-7"
+    assert payload["api_base"] == "https://api.anthropic.com/v1/messages"
+    assert payload["custom_llm_provider"] == "anthropic"
+    assert payload["call_type"] == "anthropic_messages"

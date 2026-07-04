@@ -224,6 +224,20 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
         return {}
 
 
+def _extract_standard_logging_payload_fields(
+    slp: Optional[StandardLoggingPayload],
+) -> tuple[str, str, str, str, str]:
+    if slp is None:
+        return ("", "", "", "", "")
+    return (
+        slp.get("call_type", "") or "",
+        slp.get("model_id", "") or "",
+        slp.get("model_group", "") or "",
+        slp.get("api_base", "") or "",
+        slp.get("custom_llm_provider", "") or "",
+    )
+
+
 def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
@@ -266,8 +280,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     if not usage and isinstance(_combined_usage, litellm.Usage):
         usage = _combined_usage.model_dump()
 
-    id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
     standard_logging_payload = cast(Optional[StandardLoggingPayload], kwargs.get("standard_logging_object", None))
+    _slp_call_type, _slp_model_id, _slp_model_group, _slp_api_base, _slp_custom_llm_provider = (
+        _extract_standard_logging_payload_fields(standard_logging_payload)
+    )
+    call_type = call_type or _slp_call_type
+
+    id = get_spend_logs_id(call_type or "acompletion", response_obj_dict, kwargs)
 
     end_user_id = get_end_user_id_for_cost_tracking(litellm_params)
 
@@ -298,8 +317,8 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
     ):  # use 'tags' from standard logging payload instead
         request_tags = safe_dumps(standard_logging_payload["request_tags"])
 
-    _model_id = metadata.get("model_info", {}).get("id", "")
-    _model_group = metadata.get("model_group", "")
+    _model_id = metadata.get("model_info", {}).get("id", "") or _slp_model_id
+    _model_group = metadata.get("model_group", "") or _slp_model_group
 
     # Extract overhead from hidden_params if available
     litellm_overhead_time_ms = None
@@ -383,7 +402,7 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Optional[str] = kwargs.get("agent_id") or metadata.get("agent_id")
-    custom_llm_provider = kwargs.get("custom_llm_provider")
+    custom_llm_provider = kwargs.get("custom_llm_provider") or _slp_custom_llm_provider
     raw_model = cast(str, kwargs.get("model") or "")
     model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
@@ -408,13 +427,13 @@ def get_logging_payload(kwargs, response_obj, start_time, end_time) -> SpendLogs
             completion_tokens=usage.get("completion_tokens", standard_logging_completion_tokens),
             request_tags=request_tags,
             end_user=end_user_id or "",
-            api_base=litellm_params.get("api_base", ""),
+            api_base=litellm_params.get("api_base", "") or _slp_api_base,
             model_group=_model_group,
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
-            custom_llm_provider=kwargs.get("custom_llm_provider", ""),
+            custom_llm_provider=custom_llm_provider or "",
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),

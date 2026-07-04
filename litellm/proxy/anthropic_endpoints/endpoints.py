@@ -193,7 +193,6 @@ async def anthropic_response(
             "litellm.proxy.proxy_server.anthropic_response(): Exception occured - {}".format(str(e))
         )
 
-        # Extract model_id from request metadata (same as success path)
         litellm_metadata = data.get("litellm_metadata", {}) or {}
         model_info = litellm_metadata.get("model_info", {}) or {}
         model_id = model_info.get("id", "") or ""
