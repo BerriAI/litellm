@@ -68,14 +68,14 @@ const Navbar: React.FC<NavbarProps> = ({
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
-                className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+                className="mr-3 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
                 <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
               </button>
             )}
 
-            <div className="flex items-center gap-5">
+            <div className="flex items-center gap-4">
               <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
