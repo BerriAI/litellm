@@ -333,8 +333,10 @@ async def test_can_key_call_model_all_team_models_empty_team_models_is_unrestric
 
 
 @pytest.mark.asyncio
-async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
-    """Key with all-team-models but no team_id cannot resolve the sentinel; access must be denied."""
+async def test_can_key_call_model_all_team_models_no_team_id_is_unrestricted():
+    """A teamless key with all-team-models inherits the full proxy model list
+    (empty resolved list = unrestricted access), the same as leaving the models
+    field empty. This test will fail if someone re-introduces a teamless denial."""
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import can_key_call_model
 
@@ -344,67 +346,86 @@ async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
         team_models=[],
     )
 
-    with pytest.raises(ProxyException) as exc_info:
+    assert (
         await can_key_call_model(
             model="gpt-4o",
             llm_model_list=None,
             valid_token=valid_token,
             llm_router=None,
         )
-
-    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
-
-
-@pytest.mark.asyncio
-async def test_enforce_key_access_teamless_all_team_models_denied():
-    """_enforce_key_and_fallback_model_access must not skip key-level
-    model checks for a teamless key that carries all-team-models."""
-    from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.auth.user_api_key_auth import (
-        _enforce_key_and_fallback_model_access,
+        is True
     )
 
+
+def test_resolve_key_models_teamless_all_team_models_returns_empty():
+    """_resolve_key_models_for_auth_check must return [] for a teamless key
+    with all-team-models, making it equivalent to an unscoped key (unrestricted
+    access). Fails if someone returns the sentinel list for teamless keys."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import _resolve_key_models_for_auth_check
+
     valid_token = UserAPIKeyAuth(
-        api_key="sk-orphan-key",
+        api_key="sk-orphan",
         models=[SpecialModelNames.all_team_models.value],
         team_models=[],
     )
 
-    with pytest.raises(ProxyException) as exc_info:
-        await _enforce_key_and_fallback_model_access(
-            valid_token=valid_token,
-            request_data={"model": "gpt-4o"},
-            route="/v1/chat/completions",
-            request=None,
-            llm_model_list=None,
-            llm_router=None,
-        )
-
-    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    result = _resolve_key_models_for_auth_check(valid_token)
+    assert result == [], "teamless all-team-models must resolve to [] (unrestricted)"
 
 
 @pytest.mark.asyncio
-async def test_can_key_call_resolved_model_teamless_all_team_models_denied():
-    """can_key_call_resolved_model must not skip key-level model checks
-    for a teamless key that carries all-team-models."""
+async def test_enforce_key_access_teamless_all_team_models_passes():
+    """_enforce_key_and_fallback_model_access must not deny a teamless key with
+    all-team-models. The inference path skips the key-level model check when
+    the sentinel is present, regardless of team_id. Fails if someone adds a
+    team_id guard to the pass branch."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.user_api_key_auth import _enforce_key_and_fallback_model_access
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    await _enforce_key_and_fallback_model_access(
+        valid_token=valid_token,
+        request_data={"model": "gpt-4o"},
+        route="/chat/completions",
+        request=None,
+        llm_model_list=None,
+        llm_router=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_resolved_model_teamless_all_team_models_passes():
+    """can_key_call_resolved_model must skip the key model check for a teamless
+    key with all-team-models. Fails if someone adds a team_id guard to the
+    skip_key_model_check condition."""
+    from unittest.mock import AsyncMock, patch
+
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 
     valid_token = UserAPIKeyAuth(
-        api_key="sk-orphan-key",
+        api_key="sk-orphan",
         models=[SpecialModelNames.all_team_models.value],
         team_models=[],
     )
 
-    with pytest.raises(ProxyException) as exc_info:
-        await can_key_call_resolved_model(
-            model="gpt-4o",
-            llm_model_list=None,
-            valid_token=valid_token,
-            llm_router=None,
-        )
-
-    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    with patch("litellm.proxy.auth.auth_checks.can_key_call_model", new_callable=AsyncMock) as mock_call:
+        with patch("litellm.proxy.proxy_server.prisma_client", None):
+            with patch("litellm.proxy.proxy_server.proxy_logging_obj", None):
+                with patch("litellm.proxy.proxy_server.user_api_key_cache", None):
+                    await can_key_call_resolved_model(
+                        model="gpt-4o",
+                        llm_model_list=None,
+                        valid_token=valid_token,
+                        llm_router=None,
+                    )
+        mock_call.assert_not_awaited()
 
 
 @pytest.mark.asyncio
