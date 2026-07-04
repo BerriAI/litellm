@@ -16,6 +16,7 @@ export const MIGRATED_PAGES: Record<string, string> = {
   "api-reference": "api-reference",
   "llm-playground": "playground",
   projects: "projects",
+  chat: "chat",
   "access-groups": "access-groups",
   budgets: "budgets",
   workflows: "workflows",

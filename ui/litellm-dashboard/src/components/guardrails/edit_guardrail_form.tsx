@@ -8,6 +8,7 @@ import {
   type SkipSystemMessageChoice,
   type SkipToolMessageChoice,
 } from "./guardrail_info_helpers";
+import { resolveLogoSrc } from "@/lib/assetPaths";
 import { getGuardrailUISettings, getGlobalLitellmHeaderName } from "../networking";
 import PiiConfiguration from "./pii_configuration";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -204,8 +205,6 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         throw new Error("No access token available");
       }
 
-      console.log("Sending guardrail update data:", JSON.stringify(guardrailData));
-
       // Call the update endpoint
       const url = `/guardrails/${guardrailId}`;
       const response = await fetch(url, {
@@ -392,7 +391,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
                 <div style={{ display: "flex", alignItems: "center" }}>
                   {guardrailLogoMap[value] && (
                     <img
-                      src={guardrailLogoMap[value]}
+                      src={resolveLogoSrc(guardrailLogoMap[value])}
                       alt=""
                       style={{
                         height: "20px",
