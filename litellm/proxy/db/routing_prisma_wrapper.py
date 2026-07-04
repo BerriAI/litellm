@@ -42,8 +42,8 @@ class _RoutedActions:
 
     def __init__(
         self,
-        writer_actions: Any,
-        reader_actions: Any,
+        writer_actions: object,
+        reader_actions: object,
         should_use_reader: Callable[[], bool],
     ):
         self._writer_actions = writer_actions
@@ -97,11 +97,11 @@ class RoutingPrismaWrapper:
     def _should_use_reader(self) -> bool:
         return not self._reader_unavailable
 
-    async def connect(self, *args: Any, **kwargs: Any) -> None:
-        await self._writer.connect(*args, **kwargs)
+    async def connect(self) -> None:
+        await self._writer.connect()
         verbose_proxy_logger.info("[writer] DB connected")
         try:
-            await self._reader.connect(*args, **kwargs)
+            await self._reader.connect()
             self._reader_unavailable = False
             verbose_proxy_logger.info("[reader] DB connected")
         except Exception as e:
@@ -116,11 +116,11 @@ class RoutingPrismaWrapper:
                 e,
             )
 
-    async def disconnect(self, *args: Any, **kwargs: Any) -> None:
+    async def disconnect(self) -> None:
         first_error: BaseException | None = None
         for client in (self._writer, self._reader):
             try:
-                await client.disconnect(*args, **kwargs)
+                await client.disconnect()
             except Exception as e:
                 if first_error is None:
                     first_error = e
