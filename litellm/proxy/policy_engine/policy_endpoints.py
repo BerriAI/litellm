@@ -695,7 +695,8 @@ async def create_policy_attachment(
     }
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.policy_engine.policy_validator import PolicyValidator
+    from litellm.proxy.proxy_server import llm_router, prisma_client
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -709,6 +710,19 @@ async def create_policy_attachment(
                 status_code=404,
                 detail=f"Policy '{request.policy_name}' not found. Create the policy first.",
             )
+
+        # Reject concrete team/key/model scope entries that don't resolve to a real
+        # entity. Wildcard patterns are allowed through (they may match zero today).
+        scope_errors = await PolicyValidator(
+            prisma_client=prisma_client, llm_router=llm_router
+        ).find_invalid_scope_entries(
+            policy_name=request.policy_name,
+            teams=request.teams,
+            keys=request.keys,
+            models=request.models,
+        )
+        if scope_errors:
+            raise HTTPException(status_code=400, detail=" | ".join(e.message for e in scope_errors))
 
         created_by = user_api_key_dict.user_id
         result = await get_attachment_registry().add_attachment_to_db(
