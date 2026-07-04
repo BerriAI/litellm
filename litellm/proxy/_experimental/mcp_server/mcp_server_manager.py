@@ -2004,11 +2004,10 @@ class MCPServerManager:
                     # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
                     # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
                     # 401. No gateway-side browser flow. An IdP step-up rejection (Entra Conditional
-                    # Access) threads its error code and claims blob into the challenge.
+                    # Access) threads its claims blob into the challenge for the client to satisfy.
                     raise_token_exchange_challenge(
                         server,
                         root_path=get_server_root_path(),
-                        oauth_error=err.unauthorized.oauth_error,
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)
@@ -2043,7 +2042,6 @@ class MCPServerManager:
                     raise_token_exchange_challenge(
                         server,
                         root_path=get_server_root_path(),
-                        oauth_error=err.unauthorized.oauth_error,
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)

@@ -390,38 +390,19 @@ def test_raise_token_exchange_challenge_static_form_is_unchanged_without_step_up
     )
 
 
-def test_raise_token_exchange_challenge_folds_step_up_error_and_claims():
+def test_raise_token_exchange_challenge_uses_insufficient_claims_with_claims_present():
+    # Per the Microsoft claims-challenge format, a claims challenge MUST use error=insufficient_claims
+    # (the value MSAL-family clients key on), and the claims ride base64-encoded, never raw.
     from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
         raise_token_exchange_challenge,
     )
 
     claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
     with pytest.raises(HTTPException) as exc_info:
-        raise_token_exchange_challenge(
-            _server(alias="obo-srv"),
-            root_path="",
-            oauth_error="interaction_required",
-            claims=claims,
-        )
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="", claims=claims)
     www = exc_info.value.headers["WWW-Authenticate"]
     assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
-    assert 'error="interaction_required"' in www
+    assert 'error="insufficient_claims"' in www
+    assert 'error="invalid_token"' not in www
     assert f'claims="{base64.b64encode(claims.encode()).decode()}"' in www
-    assert claims not in www
-
-
-@pytest.mark.parametrize(
-    "hostile",
-    ['x" y', "a\r\nSet-Cookie: p=1", "with space", "x" * 65],
-    ids=["quote", "crlf", "space", "overlong"],
-)
-def test_raise_token_exchange_challenge_rejects_non_token_error_codes(hostile):
-    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
-        raise_token_exchange_challenge,
-    )
-
-    with pytest.raises(HTTPException) as exc_info:
-        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="", oauth_error=hostile)
-    www = exc_info.value.headers["WWW-Authenticate"]
-    assert 'error="invalid_token"' in www
-    assert hostile not in www
+    assert claims not in www  # raw JSON never appears; only the base64 form

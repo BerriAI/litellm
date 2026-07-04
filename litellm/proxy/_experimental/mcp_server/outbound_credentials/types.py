@@ -67,16 +67,14 @@ class Unauthorized:
 
     ``detail`` is the human message; ``www_authenticate`` and ``body`` carry a scheme-specific
     challenge (e.g. BYOK's provisioning prompt) so the edge can reproduce it verbatim.
-    ``oauth_error`` and ``claims`` carry an IdP step-up challenge (e.g. Entra Conditional Access
-    ``interaction_required`` with its claims blob) so the edge can fold them into the
-    ``WWW-Authenticate`` it builds; the client replays the claims to the IdP to satisfy the
-    step-up, then retries with the fresh token.
+    ``claims`` carries an IdP step-up challenge (e.g. Entra Conditional Access) so the edge can
+    fold it into the ``WWW-Authenticate`` it builds; the client replays the claims to the IdP to
+    satisfy the step-up, then retries with the fresh token.
     """
 
     detail: str
     www_authenticate: str | None = None
     body: Mapping[str, str] | None = None
-    oauth_error: str | None = None
     claims: str | None = None
 
 
@@ -110,7 +108,6 @@ class CredError:
         *,
         www_authenticate: str | None = None,
         body: Mapping[str, str] | None = None,
-        oauth_error: str | None = None,
         claims: str | None = None,
     ) -> CredError:
         return CredError(
@@ -118,7 +115,6 @@ class CredError:
                 detail=detail,
                 www_authenticate=www_authenticate,
                 body=body,
-                oauth_error=oauth_error,
                 claims=claims,
             )
         )

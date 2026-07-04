@@ -89,7 +89,6 @@ async def _post_exchange_endpoint(
                 raise TokenExchangeClientError(oauth_error) from status_err
             raise SubjectTokenRejected(
                 f"IdP rejected the subject token (HTTP {status_code})",
-                oauth_error=oauth_error,
                 claims=claims,
             ) from status_err
         verbose_logger.warning("MCP token exchange request failed: %s", status_err)

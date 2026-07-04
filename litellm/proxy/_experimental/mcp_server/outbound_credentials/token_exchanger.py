@@ -86,14 +86,13 @@ class SubjectTokenRejected(Exception):
     Distinct from a transport / IdP-availability failure, which the post adapter maps to ``None`` ->
     ``upstream_unavailable`` -> 503 (retryable). A rejected subject is the caller's problem, not the
     gateway's, so the arm surfaces it as a non-retryable 401 (the OBO challenge) instead.
-    ``oauth_error`` is the RFC 6749 machine code from the rejection body and ``claims`` the IdP's
-    step-up challenge blob (Entra Conditional Access / CAE); both thread into the 401 challenge so
-    the client can satisfy the step-up. The ``error_description`` is never carried (IdP internals).
+    ``claims`` is the IdP's step-up challenge blob (Entra Conditional Access / CAE) from the
+    rejection body; it threads into the 401 challenge so the client can satisfy the step-up and
+    retry. The ``error_description`` is never carried (it can leak IdP internals).
     """
 
-    def __init__(self, detail: str, *, oauth_error: str | None = None, claims: str | None = None) -> None:
+    def __init__(self, detail: str, *, claims: str | None = None) -> None:
         super().__init__(detail)
-        self.oauth_error = oauth_error
         self.claims = claims
 
 
@@ -319,12 +318,11 @@ class OboTokenExchanger:
         except SubjectTokenRejected as rejected:
             # The IdP rejected the subject token (4xx). This is non-retryable: the caller must
             # re-authenticate with the IdP, so it surfaces as a 401 (the OBO challenge), not a 503.
-            # A step-up rejection (Entra Conditional Access) carries the machine code and claims
-            # blob through so the edge's challenge tells the client how to satisfy it.
+            # A step-up rejection (Entra Conditional Access) carries the claims blob through so the
+            # edge's challenge tells the client how to satisfy it.
             return Error(
                 CredError.of_unauthorized(
                     str(rejected) or "subject token rejected by the IdP",
-                    oauth_error=rejected.oauth_error,
                     claims=rejected.claims,
                 )
             )

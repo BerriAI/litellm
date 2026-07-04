@@ -131,17 +131,15 @@ async def test_post_threads_step_up_error_and_claims_into_subject_rejected():
     with patch(_HTTP_CLIENT, return_value=_client_raising_4xx(body)):
         with pytest.raises(SubjectTokenRejected) as exc_info:
             await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
-    assert exc_info.value.oauth_error == "interaction_required"
     assert exc_info.value.claims == claims
     assert "AADSTS50079" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_post_subject_rejection_without_claims_carries_none_fields():
+async def test_post_subject_rejection_without_claims_carries_none_claims():
     with patch(_HTTP_CLIENT, return_value=_client_raising_4xx({"error": "invalid_grant"})):
         with pytest.raises(SubjectTokenRejected) as exc_info:
             await _post_exchange_endpoint("https://idp/token", {"grant_type": "x"}, {})
-    assert exc_info.value.oauth_error == "invalid_grant"
     assert exc_info.value.claims is None
 
 

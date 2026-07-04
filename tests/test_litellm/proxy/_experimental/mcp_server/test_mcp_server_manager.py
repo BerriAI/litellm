@@ -5952,8 +5952,8 @@ if __name__ == "__main__":
 
 @pytest.mark.asyncio
 async def test_preflight_challenge_carries_step_up_error_and_claims():
-    """An Entra Conditional Access rejection must surface its machine code and base64 claims in the
-    single-server 401 challenge, so an MSAL-family client can drive the step-up and retry."""
+    """An Entra Conditional Access rejection must surface error=insufficient_claims plus the base64
+    claims in the single-server 401 challenge, so an MSAL-family client can drive the step-up and retry."""
     import base64
 
     from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
@@ -5963,13 +5963,7 @@ async def test_preflight_challenge_carries_step_up_error_and_claims():
 
     class _FakeProvider:
         async def resolve_credentials(self, subject, server):
-            return Error(
-                CredError.of_unauthorized(
-                    "step-up required",
-                    oauth_error="interaction_required",
-                    claims=claims,
-                )
-            )
+            return Error(CredError.of_unauthorized("step-up required", claims=claims))
 
     manager = MCPServerManager(cred_provider=_FakeProvider())
     server = MCPServer(
@@ -5991,7 +5985,7 @@ async def test_preflight_challenge_carries_step_up_error_and_claims():
     assert exc_info.value.status_code == 401
     headers = exc_info.value.headers or {}
     www = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
-    assert 'error="interaction_required"' in www
+    assert 'error="insufficient_claims"' in www
     assert base64.b64encode(claims.encode()).decode() in www
     assert "resource_metadata" in www
 
@@ -6013,7 +6007,7 @@ async def test_aggregate_list_still_absorbs_step_up_challenged_server():
         if server.server_id == "ca":
             raise MCPUpstreamAuthError(
                 status_code=401,
-                www_authenticate=('Bearer resource_metadata="/x", error="interaction_required", claims="eyJhIjoxfQ=="'),
+                www_authenticate=('Bearer resource_metadata="/x", error="insufficient_claims", claims="eyJhIjoxfQ=="'),
                 server_name="ca",
             )
         return [good_tool]
