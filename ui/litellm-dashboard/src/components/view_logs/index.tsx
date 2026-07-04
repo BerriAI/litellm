@@ -12,7 +12,7 @@ import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
-import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
+import { useLogFilterLogic, defaultFilters, type LogFilterState, FILTER_KEYS } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
@@ -112,8 +112,16 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     currentPage,
   });
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      handleFilterChange({ [FILTER_KEYS.REQUEST_ID]: searchTerm.trim() });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm, handleFilterChange]);
+
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
+    setSearchTerm("");
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
     setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
@@ -133,16 +141,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   );
 
   const filteredData = useMemo(() => {
-    const searchedLogs = filteredLogs.data.filter((log) => {
-      const matchesSearch =
-        !searchTerm ||
-        log.request_id.includes(searchTerm) ||
-        log.model.includes(searchTerm) ||
-        (log.user && log.user.includes(searchTerm));
-
-      // No need for additional filtering since we're now handling this in the API call
-      return matchesSearch;
-    });
+    const searchedLogs = filteredLogs.data;
 
     const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>(
       (acc, log) => {
@@ -200,7 +199,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
         })
     );
-  }, [filteredLogs.data, searchTerm]);
+  }, [filteredLogs.data]);
 
   // Keep the Fetch button busy until the table has actually committed the new
   // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
