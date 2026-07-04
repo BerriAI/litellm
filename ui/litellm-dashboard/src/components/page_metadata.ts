@@ -41,6 +41,7 @@ export const pageDescriptions: Record<string, string> = {
   "router-settings": "Configure routing and load balancing settings",
   "logging-and-alerts": "Set up logging and alert configurations",
   "admin-panel": "Access admin panel and settings",
+  "admin-observability": "View all users' request logs and usage",
 };
 
 export interface PageMetadata {

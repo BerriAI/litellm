@@ -330,6 +330,19 @@ const menuGroups: MenuGroup[] = [
     ],
   },
   {
+    groupLabel: "ADMIN",
+    roles: all_admin_roles,
+    items: [
+      {
+        key: "admin-observability",
+        page: "admin-observability",
+        label: "Observability",
+        icon: <LineChartOutlined />,
+        roles: all_admin_roles,
+      },
+    ],
+  },
+  {
     groupLabel: "SETTINGS",
     roles: all_admin_roles,
     items: [

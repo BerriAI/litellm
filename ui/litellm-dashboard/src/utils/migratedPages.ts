@@ -48,6 +48,7 @@ export const MIGRATED_PAGES: Record<string, string> = {
   users: "users",
   teams: "teams",
   organizations: "organizations",
+  "admin-observability": "admin-observability",
 };
 
 function uiBase(): string {
