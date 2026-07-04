@@ -112,6 +112,47 @@ async def test_client_secret_post_keeps_creds_in_body_with_no_auth_header():
 
 
 @pytest.mark.asyncio
+async def test_exchange_maps_idp_rejection_to_unauthorized():
+    """An IdP 4xx (surfaced as SubjectTokenRejected by the post adapter) is non-retryable: it maps
+    to ``unauthorized`` (the 401 OBO challenge), not the retryable ``upstream_unavailable`` (503)."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+        SubjectTokenRejected,
+    )
+
+    async def _rejecting_post(url, form, headers):
+        raise SubjectTokenRejected("IdP rejected the token exchange (HTTP 400)")
+
+    result = await Rfc8693TokenExchanger(_rejecting_post, clock=_Clock()).exchange("bad-jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_exchange_maps_gateway_fault_to_misconfigured():
+    """A gateway-fault RFC 6749 code (invalid_client / invalid_target / ..., surfaced as
+    TokenExchangeClientError) is the gateway's problem, not the caller's, so it maps to misconfigured
+    (500) rather than the retryable 503 or the 401 OBO challenge the caller can't act on."""
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+        TokenExchangeClientError,
+    )
+
+    async def _client_error_post(url, form, headers):
+        raise TokenExchangeClientError("invalid_client")
+
+    result = await Rfc8693TokenExchanger(_client_error_post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "misconfigured"
+
+
+@pytest.mark.asyncio
+async def test_exchange_maps_transport_failure_to_upstream_unavailable():
+    """A post returning None (5xx / network / timeout / malformed body) stays retryable: 503."""
+    result = await Rfc8693TokenExchanger(_RecordingPost(None), clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "upstream_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_exchange_caches_per_caller_token():
     post = _RecordingPost({"access_token": "x", "expires_in": 3600})
     exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
@@ -128,6 +169,43 @@ async def test_rotated_caller_token_re_exchanges():
     await exchanger.exchange("jwt-1", _SERVER, _CONFIG)
     await exchanger.exchange("jwt-2", _SERVER, _CONFIG)
     assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_same_token_different_tenant_does_not_share_cache():
+    # Two tenants presenting the same opaque token (e.g. a shared/service token) must not collide on
+    # one cache entry: tenant_id is part of the key, so each tenant gets its own exchange.
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
+    assert len(post.calls) == 2
+    # Same tenant + token still hits the cache.
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_forces_re_exchange():
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.invalidate("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_invalidate_targets_only_the_matching_tenant():
+    post = _RecordingPost({"access_token": "x", "expires_in": 3600})
+    exchanger = Rfc8693TokenExchanger(post, clock=_Clock())
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
+    await exchanger.invalidate("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    # globex's entry survives; only acme re-exchanges.
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="globex")
+    await exchanger.exchange("jwt", _SERVER, _CONFIG, tenant_id="acme")
+    assert len(post.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -210,6 +288,19 @@ async def test_non_bearer_token_type_is_refused(token_type):
 
 
 @pytest.mark.asyncio
+async def test_non_bearer_token_type_is_logged():
+    from unittest.mock import patch
+
+    post = _RecordingPost({"access_token": "x", "token_type": "N_A", "expires_in": 3600})
+    with patch(
+        "litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger.verbose_logger"
+    ) as mock_logger:
+        await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert mock_logger.warning.called
+    assert "N_A" in repr(mock_logger.warning.call_args)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("token_type", ["Bearer", "bearer", "BEARER"])
 async def test_bearer_token_type_is_accepted_case_insensitively(token_type):
     post = _RecordingPost({"access_token": "x", "token_type": token_type, "expires_in": 3600})
@@ -264,7 +355,6 @@ async def test_access_or_unknown_issued_token_type_is_accepted(issued_token_type
 @pytest.mark.parametrize(
     "config",
     [
-        TokenExchangeConfig(client_id="c", client_secret=SecretStr("s")),
         TokenExchangeConfig(token_exchange_endpoint="https://idp/token", client_secret=SecretStr("s")),
         TokenExchangeConfig(token_exchange_endpoint="https://idp/token", client_id="c"),
     ],
@@ -274,6 +364,18 @@ async def test_incomplete_config_is_misconfigured_without_hitting_idp(config):
     result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
     assert isinstance(result, Error)
     assert result.error.tag == "misconfigured"
+    assert post.calls == []
+
+
+@pytest.mark.asyncio
+async def test_missing_endpoint_is_precondition_required_without_hitting_idp():
+    # No endpoint configured (and none discoverable): fail closed with a 412-mapped precondition
+    # rather than guessing an IdP or falling back. The subject token is never POSTed anywhere.
+    config = TokenExchangeConfig(client_id="c", client_secret=SecretStr("s"))
+    post = _RecordingPost({"access_token": "x"})
+    result = await Rfc8693TokenExchanger(post, clock=_Clock()).exchange("jwt", _spec(config), config)
+    assert isinstance(result, Error)
+    assert result.error.tag == "precondition_required"
     assert post.calls == []
 
 
@@ -307,13 +409,29 @@ async def test_audience_and_scope_omitted_when_unset():
 
 
 @pytest.mark.asyncio
-async def test_string_expires_in_is_honored():
+@pytest.mark.parametrize("expires_in", ["120", 120.0, "120.0"], ids=["str", "float", "str_float"])
+async def test_numeric_expires_in_is_honored(expires_in):
+    # A JSON int/float/numeric-string expires_in must drive the TTL, not fall back to the default.
     clock = _Clock(1000.0)
-    # "120" parsed as int -> ttl max(120-60, 10) = 60 -> cached until 1060.
-    post = _RecordingPost({"access_token": "x", "expires_in": "120"})
-    exchanger = Rfc8693TokenExchanger(post, clock=clock)
+    post = _RecordingPost({"access_token": "x", "expires_in": expires_in})
+    exchanger = Rfc8693TokenExchanger(post, clock=clock)  # ttl = max(120-60, 10) = 60 -> until 1060
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     clock.now = 1061.0
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    assert len(post.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_short_lived_token_is_not_cached_past_its_expiry():
+    # expires_in (5s) below the buffer/min floor must NOT be served stale: cache only until expiry.
+    clock = _Clock(1000.0)
+    post = _RecordingPost({"access_token": "x", "expires_in": 5})
+    exchanger = Rfc8693TokenExchanger(post, clock=clock)
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    clock.now = 1004.0  # within the 5s lifetime -> still cached
+    await exchanger.exchange("jwt", _SERVER, _CONFIG)
+    assert len(post.calls) == 1
+    clock.now = 1006.0  # past expiry -> re-exchange, not a stale bearer
     await exchanger.exchange("jwt", _SERVER, _CONFIG)
     assert len(post.calls) == 2
 

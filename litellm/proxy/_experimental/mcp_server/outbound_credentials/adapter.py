@@ -102,21 +102,23 @@ def to_server_spec(server: MCPServer) -> Optional[ServerSpec]:
 
 
 def _token_exchange_spec(server: MCPServer, resource: str) -> Optional[ServerSpec]:
-    """Build a token_exchange (RFC 8693 OBO) spec, or defer (None) if the exchange config is absent.
+    """Build a token_exchange (RFC 8693 OBO) spec, or defer (None) when it is not OBO-configured.
 
-    Mirrors v1's ``has_token_exchange_config`` precondition: an endpoint (``token_exchange_endpoint``
-    or ``token_url``) plus ``client_id``/``client_secret`` must all be present, else there is nothing
-    to exchange against and the server stays on v1 (parity-safe). ``audience`` is forwarded only when
-    the operator set it; a missing one is omitted, not derived.
+    An OBO server with ``client_id``/``client_secret`` is owned by the v2 arm even if the
+    ``token_exchange_endpoint``/``token_url`` is absent: a missing endpoint then fails closed (412) at
+    the exchanger rather than silently deferring to v1 and connecting unauthenticated, since the
+    gateway must not guess the IdP or fall back to a weaker source. Without client credentials there is
+    nothing to own, so the server stays on v1 (parity-safe). ``audience`` is forwarded only when the
+    operator set it; a missing one is omitted, not derived.
     """
     endpoint = server.token_exchange_endpoint or server.token_url
-    if not endpoint or not server.client_id or not server.client_secret:
+    if not server.client_id or not server.client_secret:
         return None
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
         config=TokenExchangeConfig(
-            subject_token_type=server.subject_token_type,
+            subject_token_type=server.subject_token_type or "urn:ietf:params:oauth:token-type:access_token",
             token_exchange_endpoint=endpoint,
             audience=server.audience,
             client_id=server.client_id,
@@ -178,23 +180,52 @@ def raise_public(error: CredError) -> NoReturn:
     assert_never(error.tag)
 
 
-def raise_user_oauth_challenge(server: MCPServer) -> NoReturn:
+def oauth_protected_resource_path(root_path: str, server: MCPServer) -> str:
+    """The server's RFC 9728 Protected Resource Metadata path, the shared anchor of both challenges.
+
+    ``root_path`` is the proxy's ``SERVER_ROOT_PATH``, resolved by the caller (the imperative shell)
+    so this stays a pure function of its inputs; ``"/"`` and ``""`` both mean no prefix. The path is
+    relative, so it resolves against the caller's own host (correct even behind a reverse proxy).
+    """
+    prefix = "" if root_path == "/" else root_path
+    name = server.alias or server.server_name or server.name or server.server_id
+    return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+
+
+def raise_user_oauth_challenge(server: MCPServer, *, root_path: str) -> NoReturn:
     """Raise the 401 an ``authorization_code`` server returns at egress when the user has no token.
 
-    Points at the server's RFC 9728 Protected Resource Metadata (``resource_metadata``), which names
-    the upstream authorization server the client must complete OAuth with. The URL is per-server and
-    relative, so it resolves against the caller's own host (correct even behind a reverse proxy)
-    without needing request context. The listing-phase 401 still emits the RFC 8414 ``authorization_uri``
-    form pending the format unification; both target the same server, so the difference is cosmetic.
+    Points at the server's RFC 9728 Protected Resource Metadata, which names the upstream
+    authorization server the client must complete OAuth with. The listing-phase 401 still emits the
+    RFC 8414 ``authorization_uri`` form pending the format unification; both target the same server,
+    so the difference is cosmetic.
     """
-    from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
-
-    root = get_server_root_path()
-    prefix = "" if root == "/" else root
-    name = server.alias or server.server_name or server.name or server.server_id
-    resource_metadata = f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    resource_metadata = oauth_protected_resource_path(root_path, server)
     raise HTTPException(
         status_code=401,
         detail="Unauthorized",
         headers={"WWW-Authenticate": f'Bearer resource_metadata="{resource_metadata}"'},
+    )
+
+
+def raise_token_exchange_challenge(server: MCPServer, *, root_path: str) -> NoReturn:
+    """Raise the RFC 9728 / RFC 6750 challenge an OBO (``token_exchange``) server returns when the
+    caller's subject token is missing or the IdP rejected it.
+
+    Points at the server's Protected Resource Metadata, whose ``authorization_servers`` names the IdP
+    the client must SSO with to obtain a subject token; ``error="invalid_token"`` tells a
+    spec-compliant MCP client to discover that AS and retry with a fresh bearer. Mirrors
+    ``raise_user_oauth_challenge`` but for the exchange flow: there is no gateway-side browser OAuth —
+    the client re-authenticates directly with the IdP, and LiteLLM then exchanges the resulting token.
+    """
+    resource_metadata = oauth_protected_resource_path(root_path, server)
+    www_authenticate = (
+        f'Bearer resource_metadata="{resource_metadata}", '
+        'error="invalid_token", '
+        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    )
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": www_authenticate},
     )
