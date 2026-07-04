@@ -695,6 +695,18 @@ def test_realtime_transcription_duration_cost(monkeypatch):
     assert logging_obj.cost_breakdown is not None
     assert abs(logging_obj.cost_breakdown["total_cost"] - cost) < 1e-9
 
+    # The transcription cost must be attributed in the breakdown, not just folded
+    # into total_cost, or input_cost + output_cost + additional_costs won't sum to total_cost.
+    additional_costs = logging_obj.cost_breakdown.get("additional_costs")
+    assert additional_costs is not None
+    assert abs(additional_costs["transcription_cost"] - expected) < 1e-9
+    attributed_total = (
+        logging_obj.cost_breakdown["input_cost"]
+        + logging_obj.cost_breakdown["output_cost"]
+        + additional_costs["transcription_cost"]
+    )
+    assert abs(attributed_total - logging_obj.cost_breakdown["total_cost"]) < 1e-9
+
 
 def test_realtime_transcription_duration_cost_resolves_model_from_litellm_name(
     monkeypatch,
