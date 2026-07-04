@@ -540,6 +540,18 @@ class MCPServerManager:
             return "client_credentials"
         return None
 
+    @staticmethod
+    def _obo_needs_endpoint_discovery(
+        auth_type: Optional[MCPAuthType],
+        token_exchange_endpoint: Optional[str],
+        token_url: Optional[str],
+    ) -> bool:
+        """An ``oauth2_token_exchange`` server with no configured token endpoint can have it
+        discovered (RFC 9728 -> RFC 8414) the same way the ``oauth2`` flow already does; an explicitly
+        configured ``token_exchange_endpoint``/``token_url`` wins and skips the discovery round-trip.
+        """
+        return auth_type == MCPAuth.oauth2_token_exchange and not (token_exchange_endpoint or token_url)
+
     def __init__(self, cred_provider: Optional[UpstreamCredentialProvider] = None):
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=LazyPerUserOAuthTokenStore(self.get_mcp_server_by_id),
@@ -729,9 +741,17 @@ class MCPServerManager:
             )
 
             auth_type = server_config.get("auth_type", None)
-            if server_url and auth_type is not None and auth_type == MCPAuth.oauth2:
+            if server_url and (
+                auth_type == MCPAuth.oauth2
+                or self._obo_needs_endpoint_discovery(
+                    auth_type,
+                    server_config.get("token_exchange_endpoint"),
+                    server_config.get("token_url"),
+                )
+            ):
                 mcp_oauth_metadata = await self._descovery_metadata(
                     server_url=server_url,
+                    allow_origin_fallback=auth_type == MCPAuth.oauth2,
                 )
             else:
                 mcp_oauth_metadata = None
@@ -1109,9 +1129,19 @@ class MCPServerManager:
 
         auth_type = cast(MCPAuthType, mcp_server.auth_type)
         server_url = mcp_server.url
-        needs_discovery = bool(server_url) and auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url
+        needs_discovery = bool(server_url) and (
+            (auth_type == MCPAuth.oauth2 and not mcp_server.authorization_url)
+            or self._obo_needs_endpoint_discovery(
+                auth_type,
+                credentials_dict.get("token_exchange_endpoint") if credentials_dict else None,
+                mcp_server.token_url,
+            )
+        )
         mcp_oauth_metadata = (
-            await self._descovery_metadata(server_url=server_url)  # type: ignore[arg-type]
+            await self._descovery_metadata(
+                server_url=server_url,  # type: ignore[arg-type]
+                allow_origin_fallback=auth_type == MCPAuth.oauth2,
+            )
             if needs_discovery
             else None
         )
@@ -1186,7 +1216,48 @@ class MCPServerManager:
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
+        await self._persist_discovered_obo_token_url(
+            server_id=mcp_server.server_id,
+            auth_type=auth_type,
+            existing_token_url=mcp_server.token_url,
+            discovered_token_url=new_server.token_url,
+        )
         return new_server
+
+    async def _persist_discovered_obo_token_url(
+        self,
+        *,
+        server_id: str,
+        auth_type: Optional[MCPAuthType],
+        existing_token_url: Optional[str],
+        discovered_token_url: Optional[str],
+    ) -> None:
+        """Write a freshly discovered OBO token endpoint back onto the DB row.
+
+        ``build_mcp_server_from_table`` resolves ``token_url`` via RFC 9728 -> RFC 8414 for an
+        ``oauth2_token_exchange`` server that has none configured, but that resolved value otherwise
+        lives only on the returned in-memory object; the row keeps ``token_url=None`` so every rebuild
+        re-runs discovery, and a transient upstream outage during a rebuild leaves the server with no
+        endpoint until discovery next succeeds. Persisting it makes ``_obo_needs_endpoint_discovery``
+        return False on the next build. Fires at most once per server (skipped once the row has a
+        value), and is best-effort: a write failure just means discovery runs again next time.
+        """
+        if auth_type != MCPAuth.oauth2_token_exchange:
+            return
+        if existing_token_url or not discovered_token_url:
+            return
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+
+        if prisma_client is None:
+            return
+        try:
+            await MCPServerRepository(prisma_client).table.update(
+                where={"server_id": server_id},
+                data={"token_url": discovered_token_url},
+            )
+            verbose_logger.debug("Persisted discovered OBO token_url for MCP server %s", server_id)
+        except Exception as exc:  # noqa: BLE001 - best-effort; a failed write re-discovers next build
+            verbose_logger.warning("Failed to persist discovered OBO token_url for MCP server %s: %s", server_id, exc)
 
     async def _maybe_register_openapi_tools(self, server: MCPServer, *, initialize_mapping: bool = True):
         """Register OpenAPI tools if the server has a spec_path configured."""
@@ -1933,6 +2004,36 @@ class MCPServerManager:
                     raise_token_exchange_challenge(server, root_path=get_server_root_path())
                 raise_public(err)
 
+    async def preflight_token_exchange(
+        self,
+        server: MCPServer,
+        oauth2_headers: Optional[dict[str, str]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> None:
+        """Run the OBO exchange for a caller-supplied subject at the transport edge.
+
+        Single-server routes call this before the MCP session opens, where an HTTP status and
+        ``WWW-Authenticate`` still reach the client. A rejected subject raises the RFC 9728
+        challenge and any other ``CredError`` maps onto its public HTTP status, so an exchange
+        failure surfaces as a failure instead of the session continuing into an empty tool list.
+        A successful exchange is cached by the exchanger, so the session's list/call reuses it.
+        """
+        if server.auth_type != MCPAuth.oauth2_token_exchange:
+            return
+        subject_token = self._extract_bearer_token(oauth2_headers, None)
+        if not subject_token:
+            return
+        spec = to_server_spec(server)
+        if spec is None or not isinstance(spec.config, TokenExchangeConfig):
+            return
+        match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
+            case Ok(_):
+                return
+            case Error(err):
+                if err.tag == "unauthorized":
+                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                raise_public(err)
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -2489,8 +2590,17 @@ class MCPServerManager:
     async def _descovery_metadata(
         self,
         server_url: str,
+        *,
+        allow_origin_fallback: bool = True,
     ) -> Optional[MCPOAuthMetadata]:
-        """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery)."""
+        """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery).
+
+        ``allow_origin_fallback`` controls the last-resort guess that treats the resource server's own
+        origin as its authorization server when nothing is advertised. The browser ``oauth2`` flow keeps
+        it (a human sees the redirect), but token_exchange (OBO) sets it False so the gateway never
+        exchanges a subject token against an endpoint it inferred rather than one explicitly configured
+        or authoritatively advertised via RFC 9728 / RFC 8414.
+        """
 
         try:
             client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
@@ -2540,7 +2650,7 @@ class MCPServerManager:
                 ) = await self._attempt_well_known_discovery(server_url)
 
             metadata = None
-            if not authorization_servers:
+            if allow_origin_fallback and not authorization_servers:
                 try:
                     parsed_url = urlparse(server_url)
                     if parsed_url.scheme and parsed_url.netloc:
@@ -2702,6 +2812,14 @@ class MCPServerManager:
                 continue
 
             scopes = self._extract_scopes(data.get("scopes_supported"))
+            verbose_logger.debug(
+                "Authorization server metadata from %s: issuer=%s grant_types_supported=%s "
+                "token_endpoint_auth_methods_supported=%s",
+                url,
+                data.get("issuer"),
+                data.get("grant_types_supported"),
+                data.get("token_endpoint_auth_methods_supported"),
+            )
             metadata = MCPOAuthMetadata(
                 scopes=scopes,
                 authorization_url=data.get("authorization_endpoint"),
