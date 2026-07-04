@@ -1112,3 +1112,18 @@ class TestReadRequestBodyUnexpectedError:
 
         result = await _read_request_body(mock_request)
         assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_type_error_returns_empty_dict(self):
+        """``TypeError`` from ``request.body()`` returns ``{}`` instead of
+        raising.  This occurs when ``request.body`` is a non-async mock
+        (common in unit tests).  In production every request has a proper
+        async ``body()`` method.
+        """
+        mock_request = MagicMock()
+        mock_request.body = MagicMock(return_value=b"{}")
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+        assert result == {}

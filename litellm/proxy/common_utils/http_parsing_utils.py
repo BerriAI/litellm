@@ -142,15 +142,17 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         # Re-raise ProxyException as-is
         verbose_proxy_logger.error(f"Invalid JSON payload received: {str(e)}")
         raise
-    except RuntimeError:
+    except (RuntimeError, TypeError):
         # Starlette raises RuntimeError("Receive channel has not been made
         # available") when a Request was constructed without a real ASGI
-        # receive channel (common in unit tests with mock Request objects).
-        # In production every request has a receive channel, so this path
-        # is effectively test-only.  Return ``{}`` to preserve backward
-        # compatibility for callers that rely on the empty-dict fallback.
+        # receive channel, and TypeError("object MagicMock can't be used
+        # in 'await' expression") when ``request.body`` is a non-async mock.
+        # Both occur in unit tests with mock Request objects; in production
+        # every request has a real ASGI receive channel.  Return ``{}`` to
+        # preserve backward compatibility for callers that rely on the
+        # empty-dict fallback.
         verbose_proxy_logger.debug(
-            "RuntimeError reading request body (likely mock request without ASGI receive channel), returning empty dict"
+            "RuntimeError/TypeError reading request body (likely mock request without ASGI receive channel), returning empty dict"
         )
         return {}
     except Exception as e:
