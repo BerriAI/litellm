@@ -294,62 +294,94 @@ class HeadroomGuardrail(CustomGuardrail):
                 headers=self._request_headers(),
             )
         except httpx.HTTPStatusError as e:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned an error",
-                {"status_code": e.response.status_code, "body": e.response.text},
-            ), False, {}
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service unreachable",
-                {"detail": str(e)},
-            ), False, {}
-        if raw_response is None:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned no response",
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned an error",
+                    {"status_code": e.response.status_code, "body": e.response.text},
+                ),
+                False,
                 {},
-            ), False, {}
+            )
+        except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service unreachable",
+                    {"detail": str(e)},
+                ),
+                False,
+                {},
+            )
+        if raw_response is None:
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned no response",
+                    {},
+                ),
+                False,
+                {},
+            )
         response: HttpxResponse = raw_response
 
         if response.status_code != 200:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned an error",
-                {"status_code": response.status_code, "body": response.text},
-            ), False, {}
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned an error",
+                    {"status_code": response.status_code, "body": response.text},
+                ),
+                False,
+                {},
+            )
 
         try:
             body: object = response.json()
         except ValueError:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned non-JSON response",
-                {"body": response.text[:500]},
-            ), False, {}
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned non-JSON response",
+                    {"body": response.text[:500]},
+                ),
+                False,
+                {},
+            )
         if not _is_str_object_dict(body):
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned unexpected response shape",
-                {"body": response.text[:500]},
-            ), False, {}
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned unexpected response shape",
+                    {"body": response.text[:500]},
+                ),
+                False,
+                {},
+            )
 
         compressed_messages = body.get("messages")
         if not _is_object_list(compressed_messages):
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service response missing 'messages'",
-                {"body": response.text},
-            ), False, {}
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service response missing 'messages'",
+                    {"body": response.text},
+                ),
+                False,
+                {},
+            )
 
         filtered = [item for item in compressed_messages if _is_str_object_dict(item)]
         if not filtered:
-            return self._handle_compress_failure(
-                messages,
-                "Headroom compression service returned empty message list",
-                {"body": response.text},
-            ), False, {}
+            return (
+                self._handle_compress_failure(
+                    messages,
+                    "Headroom compression service returned empty message list",
+                    {"body": response.text},
+                ),
+                False,
+                {},
+            )
 
         verbose_proxy_logger.debug(
             "Headroom: compressed %s tokens -> %s tokens (ratio %.2f)",
