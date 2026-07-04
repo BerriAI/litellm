@@ -303,7 +303,6 @@ export const handleError = async (errorData: string | any) => {
       }
     }
     lastErrorTime = currentTime;
-  } else {
   }
 };
 

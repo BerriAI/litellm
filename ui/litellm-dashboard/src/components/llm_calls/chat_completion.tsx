@@ -144,7 +144,6 @@ export async function makeOpenAIChatCompletionRequest(
         timeToFirstToken = Date.now() - startTime;
         if (onTimingData) {
           onTimingData(timeToFirstToken);
-        } else {
         }
       }
 
@@ -207,9 +206,6 @@ export async function makeOpenAIChatCompletionRequest(
 
         if (providerFields.mcp_call_results) {
           mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
-        }
-
-        if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
         }
       }
 
@@ -277,8 +273,6 @@ export async function makeOpenAIChatCompletionRequest(
       onTotalLatency(totalLatency);
     }
   } catch (error) {
-    if (signal?.aborted) {
-    }
     throw error; // Re-throw to allow the caller to handle the error
   }
 }
