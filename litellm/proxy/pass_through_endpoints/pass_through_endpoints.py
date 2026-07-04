@@ -1053,11 +1053,6 @@ async def pass_through_request(
 
                 response = await async_client.send(req, stream=stream)
 
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=await e.response.aread())
-
             # Call response headers hook for streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=response.headers,
@@ -1112,11 +1107,6 @@ async def pass_through_request(
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=await e.response.aread())
-
             # Call response headers hook for detected streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=response.headers,
@@ -1145,19 +1135,13 @@ async def pass_through_request(
                 status_code=response.status_code,
             )
 
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
-
-        if response.status_code >= 300:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-
         content = await response.aread()
 
         ## POST-CALL GUARDRAILS ##
+        # Upstream errors (4xx/5xx) must reach the client unchanged; guardrails
+        # and managed-id rewriting only apply to successful upstream responses.
         _content_modified = False
-        response_body: Optional[dict] = get_response_body(response)
+        response_body: Optional[dict] = get_response_body(response) if response.status_code < 400 else None
         if response_body is not None and guardrails_to_run:
             # Build an enriched data dict: _parsed_body has been stripped of
             # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
@@ -1187,7 +1171,7 @@ async def pass_through_request(
                 )
         elif response_body is None:
             verbose_proxy_logger.debug(
-                "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
+                "pass_through_endpoint: response not JSON-parseable or upstream error, skipping post-call guardrails"
             )
 
         ## PASSTHROUGH MANAGED ID MINTING (OUTPUT) ##
