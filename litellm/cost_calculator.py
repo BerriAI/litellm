@@ -2356,6 +2356,7 @@ def handle_realtime_stream_cost_calculation(
         completion_tokens_cost_usd_dollar=output_cost_per_token,
         cost_for_built_in_tools_cost_usd_dollar=0.0,
         total_cost_usd_dollar=total_cost,
+        additional_costs={"transcription_cost": transcription_cost} if transcription_cost > 0 else None,
     )
 
     return total_cost
