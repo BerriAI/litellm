@@ -676,6 +676,64 @@ def _carry_guardrail_logging_info(request_data: dict, guardrail_data: Optional[d
     metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
+def _build_passthrough_failure_request_payload(
+    parsed_body: Optional[dict],
+    kwargs: Optional[dict],
+    logging_obj: Optional[LiteLLMLoggingObj],
+    custom_llm_provider: Optional[str],
+) -> dict:
+    """Build the ``request_data`` dict passed to ``post_call_failure_hook``.
+
+    Shared by the outer exception handler (LiteLLM-internal failures) and
+    upstream HTTP error logging, so both failure paths report the same shape
+    of request data (model, custom_llm_provider, litellm_logging_obj, ...).
+    """
+    request_payload: dict = dict(parsed_body or {})
+    if kwargs:
+        request_payload.update(kwargs)
+    if logging_obj is not None:
+        request_payload["litellm_logging_obj"] = logging_obj
+    if "model" not in request_payload and parsed_body and isinstance(parsed_body, dict):
+        request_payload["model"] = parsed_body.get("model", "")
+    if "custom_llm_provider" not in request_payload and custom_llm_provider:
+        request_payload["custom_llm_provider"] = custom_llm_provider
+    return request_payload
+
+
+async def _log_passthrough_upstream_failure(
+    response: httpx.Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_payload: dict,
+) -> None:
+    """Fire LiteLLM-side failure hooks (spend tracking, alerting callbacks) for
+    an upstream 4xx/5xx passthrough response.
+
+    Passthrough must return the upstream status/body/headers to the client
+    unchanged, so this never raises or transforms the response - it only
+    mirrors the monitoring side effect that ``post_call_failure_hook`` would
+    have received had the error originated inside LiteLLM.
+    """
+    if response.status_code < 400:
+        return
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=request_payload,
+                traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+            )
+        except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
+            verbose_proxy_logger.warning(
+                "pass_through_endpoint: post_call_failure_hook raised for upstream error",
+                exc_info=True,
+            )
+
+
 from litellm.passthrough.timeout_utils import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,  # noqa: F401 - re-exported for backward compat
     resolve_llm_passthrough_timeout,  # noqa: F401 - re-exported for backward compat
@@ -1053,6 +1111,17 @@ async def pass_through_request(
 
                 response = await async_client.send(req, stream=stream)
 
+            await _log_passthrough_upstream_failure(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_payload=_build_passthrough_failure_request_payload(
+                    parsed_body=_parsed_body,
+                    kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                ),
+            )
+
             # Call response headers hook for streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=response.headers,
@@ -1107,6 +1176,17 @@ async def pass_through_request(
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
+            await _log_passthrough_upstream_failure(
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                request_payload=_build_passthrough_failure_request_payload(
+                    parsed_body=_parsed_body,
+                    kwargs=kwargs,
+                    logging_obj=logging_obj,
+                    custom_llm_provider=custom_llm_provider,
+                ),
+            )
+
             # Call response headers hook for detected streaming pass-through
             _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
                 headers=response.headers,
@@ -1135,14 +1215,26 @@ async def pass_through_request(
                 status_code=response.status_code,
             )
 
+        await _log_passthrough_upstream_failure(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            request_payload=_build_passthrough_failure_request_payload(
+                parsed_body=_parsed_body,
+                kwargs=kwargs,
+                logging_obj=logging_obj,
+                custom_llm_provider=custom_llm_provider,
+            ),
+        )
+
         content = await response.aread()
 
         ## POST-CALL GUARDRAILS ##
-        # Upstream errors (4xx/5xx) must reach the client unchanged; guardrails
-        # and managed-id rewriting only apply to successful upstream responses.
+        # Guardrails and managed-id rewriting only apply to successful upstream
+        # responses; response_body itself is parsed unconditionally so the
+        # success-handler log payload still reflects upstream error bodies.
         _content_modified = False
-        response_body: Optional[dict] = get_response_body(response) if response.status_code < 400 else None
-        if response_body is not None and guardrails_to_run:
+        response_body: Optional[dict] = get_response_body(response)
+        if response.status_code < 400 and response_body is not None and guardrails_to_run:
             # Build an enriched data dict: _parsed_body has been stripped of
             # `metadata` by both pre_call_hook and _init_kwargs_for_pass_through_endpoint,
             # so we re-attach the configured guardrails here so should_run_guardrail
@@ -1171,7 +1263,7 @@ async def pass_through_request(
                 )
         elif response_body is None:
             verbose_proxy_logger.debug(
-                "pass_through_endpoint: response not JSON-parseable or upstream error, skipping post-call guardrails"
+                "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
             )
 
         ## PASSTHROUGH MANAGED ID MINTING (OUTPUT) ##
