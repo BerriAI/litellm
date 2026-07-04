@@ -95,6 +95,49 @@ async def test_list_keys():
 
 
 @pytest.mark.asyncio
+def _find_or_conditions(where):
+    """Locate the visibility OR-branch list anywhere in a (possibly nested)
+    AND/OR where clause. Global AND filters (key_alias, team_id, ...) wrap the
+    OR structure, so the OR can live several levels deep. The session-token
+    filter is also an OR, so match only the OR that carries visibility branches
+    (own keys / created_by / admin-team keys)."""
+
+    def _is_visibility_or(candidate):
+        return isinstance(candidate, list) and any(
+            isinstance(branch, dict)
+            and (
+                "user_id" in branch
+                or "created_by" in branch
+                or (isinstance(branch.get("team_id"), dict) and "in" in branch["team_id"])
+                or "AND" in branch
+            )
+            for branch in candidate
+        )
+
+    if not isinstance(where, dict):
+        return None
+    if "OR" in where and _is_visibility_or(where["OR"]):
+        return where["OR"]
+    if "AND" in where:
+        for part in where["AND"]:
+            found = _find_or_conditions(part)
+            if found is not None:
+                return found
+    return None
+
+
+def _and_filter_dicts(where):
+    """Flatten every leaf condition reachable through nested AND wrappers.
+    A global AND filter (e.g. {"user_id": x}) appears here as a leaf; the
+    visibility OR is a leaf too (it has no "AND" key)."""
+    if not isinstance(where, dict):
+        return []
+    if "AND" in where:
+        return [leaf for part in where["AND"] for leaf in _and_filter_dicts(part)]
+    return [where]
+
+
+@pytest.mark.asyncio
 async def test_list_keys_include_created_by_keys():
     """
     Test that include_created_by_keys parameter correctly includes keys created by the user
@@ -138,11 +181,12 @@ async def test_list_keys_include_created_by_keys():
     where_condition = mock_find_many.call_args.kwargs["where"]
     print(f"where_condition with include_created_by_keys=True: {where_condition}")
 
-    # Verify the structure contains AND with OR conditions
-    assert "AND" in where_condition
-    assert "OR" in where_condition["AND"][1]
+    # key_alias is now a global AND filter (not part of the own-keys branch),
+    # so it wraps the visibility OR structure one level deeper.
+    assert {"key_alias": test_key_alias} in where_condition["AND"]
 
-    or_conditions = where_condition["AND"][1]["OR"]
+    or_conditions = _find_or_conditions(where_condition)
+    assert or_conditions is not None
 
     # Should have 2 OR conditions: user's own keys and created_by keys
     assert len(or_conditions) == 2
@@ -160,10 +204,11 @@ async def test_list_keys_include_created_by_keys():
     assert user_condition is not None, "User condition should be present"
     assert created_by_condition is not None, "Created by condition should be present"
 
-    # Verify user condition has all the filters
+    # Verify user condition has all the filters (key_alias is now applied as a
+    # global AND, not embedded in the own-keys branch)
     assert user_condition["user_id"] == test_user_id
     assert user_condition["organization_id"] == test_org_id
-    assert user_condition["key_alias"] == test_key_alias
+    assert "key_alias" not in user_condition
     assert user_condition["token"] == test_key_hash
 
     # Verify created_by condition only has the created_by filter (no other filters applied)
@@ -215,7 +260,8 @@ async def test_list_keys_include_created_by_keys():
     where_condition_with_exclude = mock_find_many.call_args.kwargs["where"]
     print(f"where_condition with exclude_team_id: {where_condition_with_exclude}")
 
-    or_conditions_with_exclude = where_condition_with_exclude["AND"][1]["OR"]
+    or_conditions_with_exclude = _find_or_conditions(where_condition_with_exclude)
+    assert or_conditions_with_exclude is not None
 
     # Find the user condition and created_by condition
     user_condition_with_exclude = None
@@ -6047,6 +6093,240 @@ def test_build_key_filter_conditions_agent_id_narrows_visibility():
     assert "agent_id" not in json.dumps(where_without)
 
 
+def test_build_key_filter_explicit_user_id_narrows_admin_team_visibility():
+    """
+    Core of the /key/list filter-ignored bug: with team-wide visibility
+    (admin_team_ids populated) AND an explicit user_id filter, user_id must be
+    applied as a top-level AND so it intersects (narrows) the team branch. The
+    bug embedded user_id inside the own-keys OR branch, where the unfiltered
+    {"team_id": {"in": admin_team_ids}} branch OR'd it away and the query
+    degenerated to "all team keys".
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="me",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+        user_id_is_filter=True,
+    )
+
+    assert {"user_id": "me"} in where["AND"], f"explicit user_id not ANDed: {where}"
+
+
+def test_build_key_filter_auto_scoped_user_id_preserves_admin_team_visibility():
+    """
+    Guard against over-fixing: when user_id was auto-scoped to self (not an
+    explicit filter), it must NOT be ANDed globally. Otherwise a team admin
+    calling include_team_keys with no user_id (auto-filled to their own id)
+    would have every team key AND'd away and see only their own keys.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="me",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+        user_id_is_filter=False,
+    )
+
+    assert {"user_id": "me"} not in _and_filter_dicts(where), (
+        f"auto-scoped user_id must not be a global AND: {where}"
+    )
+    or_conditions = _find_or_conditions(where)
+    assert or_conditions is not None
+    assert {"user_id": "me"} in or_conditions
+    assert {"team_id": {"in": ["team-a"]}} in or_conditions
+
+
+def test_build_key_filter_key_alias_narrows_admin_team_visibility():
+    """
+    key_alias is a pure filter and must narrow across all visibility branches.
+    With admin_team_ids populated it must be a global AND, never buried inside
+    the own-keys OR branch (where the team branch would OR it away).
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    where = _build_key_filter_conditions(
+        user_id="me",
+        team_id=None,
+        organization_id=None,
+        key_alias="prod-key",
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=["team-a"],
+        member_team_ids=None,
+        include_created_by_keys=False,
+    )
+
+    assert {"key_alias": "prod-key"} in where["AND"], f"key_alias not ANDed: {where}"
+    or_conditions = _find_or_conditions(where)
+    assert or_conditions is not None
+    assert all("key_alias" not in branch for branch in or_conditions), (
+        f"key_alias must not sit inside a visibility OR branch: {where}"
+    )
+
+
+async def _capture_list_keys_where(
+    user_api_key_dict,
+    team_objects,
+    *,
+    user_id=None,
+    key_alias=None,
+    include_team_keys=True,
+):
+    """
+    Run list_keys end-to-end (real _list_key_helper, mocked prisma) and return
+    the WHERE clause passed to the DB. Unlike
+    _invoke_list_keys_and_capture_helper_kwargs this exercises WHERE-building,
+    so it captures how user_id/key_alias filters combine with team visibility.
+    """
+    from unittest.mock import Mock, patch
+
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    mock_prisma_client = AsyncMock()
+    mock_find_many = AsyncMock(return_value=[])
+    mock_count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
+    mock_prisma_client.db.litellm_verificationtoken.count = mock_count
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_api_key_dict.user_id,
+        user_email="member@example.com",
+        teams=[t.team_id for t in team_objects],
+        organization_memberships=[],
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._fetch_user_team_objects",
+            AsyncMock(return_value=team_objects),
+        ),
+    ):
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=user_api_key_dict,
+            page=1,
+            size=10,
+            user_id=user_id,
+            team_id=None,
+            organization_id=None,
+            key_hash=None,
+            key_alias=key_alias,
+            return_full_object=True,
+            include_team_keys=include_team_keys,
+            include_created_by_keys=False,
+            sort_by=None,
+            sort_order="desc",
+            expand=None,
+            status=None,
+            project_id=None,
+            access_group_id=None,
+            agent_id=None,
+            substring_matching=False,
+        )
+    mock_find_many.assert_called_once()
+    return mock_find_many.call_args.kwargs["where"]
+
+
+@pytest.mark.asyncio
+async def test_list_keys_user_id_filter_narrows_team_visibility_regression():
+    """
+    Regression (issue: /key/list user_id filter ignored with team visibility):
+    a regular member of a team that grants /key/list filters by their own
+    user_id with include_team_keys (exactly what the UI sends). The explicit
+    user_id filter must AND-narrow, not be OR'd away by the team branch.
+    Before the fix this returned every team key regardless of user_id.
+    """
+    member_user_id = "member-user-regression"
+    team_id = "shared-team"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=member_user_id,
+    )
+    team_objects = [
+        _make_member_team_table(
+            team_id=team_id,
+            member_user_id=member_user_id,
+            member_role="user",
+            team_member_permissions=["/key/list"],
+        )
+    ]
+
+    where = await _capture_list_keys_where(
+        user_api_key_dict=user_api_key_dict,
+        team_objects=team_objects,
+        user_id=member_user_id,
+        include_team_keys=True,
+    )
+
+    assert {"user_id": member_user_id} in _and_filter_dicts(where), (
+        "explicit user_id filter must narrow the team-visibility branch, "
+        f"got where={where}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_keys_key_alias_filter_narrows_team_visibility_regression():
+    """
+    Regression: same team-visibility scenario, filtering by key_alias. The
+    key_alias filter must AND-narrow. user_id is auto-scoped here (no explicit
+    user_id), so it must remain a visibility branch and NOT be ANDed globally
+    (which would drop the team keys the member is allowed to see).
+    """
+    member_user_id = "member-user-alias"
+    team_id = "shared-team-alias"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=member_user_id,
+    )
+    team_objects = [
+        _make_member_team_table(
+            team_id=team_id,
+            member_user_id=member_user_id,
+            member_role="user",
+            team_member_permissions=["/key/list"],
+        )
+    ]
+
+    where = await _capture_list_keys_where(
+        user_api_key_dict=user_api_key_dict,
+        team_objects=team_objects,
+        key_alias="some-alias",
+        include_team_keys=True,
+    )
+
+    and_filters = _and_filter_dicts(where)
+    assert {"key_alias": "some-alias"} in and_filters, (
+        f"key_alias filter must narrow the team-visibility branch, got where={where}"
+    )
+    assert {"user_id": member_user_id} not in and_filters, (
+        f"auto-scoped user_id must stay a visibility branch, got where={where}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """
@@ -8556,9 +8836,10 @@ async def test_build_key_filter_admin_substring_matching():
         use_substring_matching=True,
     )
 
-    # Single OR condition is flattened into the top-level where dict
-    assert where["user_id"] == {"contains": user_id, "mode": "insensitive"}
-    assert where["key_alias"] == {"contains": key_alias, "mode": "insensitive"}
+    # key_alias is applied as a global AND filter; user_id remains the
+    # (single) own-keys visibility branch flattened into the inner where.
+    assert where["AND"][1] == {"key_alias": {"contains": key_alias, "mode": "insensitive"}}
+    assert where["AND"][0]["user_id"] == {"contains": user_id, "mode": "insensitive"}
 
 
 @pytest.mark.asyncio
@@ -8588,10 +8869,10 @@ async def test_build_key_filter_non_admin_exact_matching():
         use_substring_matching=False,
     )
 
-    # Single OR condition is flattened into the top-level where dict
-    # Exact match — no contains/insensitive wrapping
-    assert where["user_id"] == user_id
-    assert where["key_alias"] == key_alias
+    # key_alias is applied as a global AND filter (exact match — no
+    # contains/insensitive wrapping); user_id remains the own-keys branch.
+    assert where["AND"][1] == {"key_alias": key_alias}
+    assert where["AND"][0]["user_id"] == user_id
 
 
 @pytest.mark.asyncio
