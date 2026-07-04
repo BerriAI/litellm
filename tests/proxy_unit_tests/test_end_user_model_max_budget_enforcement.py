@@ -425,3 +425,147 @@ async def test_master_key_auth_enforces_end_user_model_budget_when_flag_enabled(
         litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
         for k, v in originals.items():
             setattr(proxy_server, k, v)
+
+
+@pytest.mark.asyncio
+async def test_cached_master_key_auth_enforces_end_user_model_budget_when_flag_enabled():
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    cached_master = UserAPIKeyAuth(
+        api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+        token=LITELLM_PROXY_MASTER_KEY_ALIAS,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    async def mock_resolve_key(self, hashed_token: str):
+        from litellm.proxy.auth.resolvers.store import KeyNotInCacheError
+
+        if self._check_cache_only:
+            return cached_master
+        raise KeyNotInCacheError(hashed_token)
+
+    attrs, limiter = _proxy_server_attrs_for_master_key_auth()
+    originals = {k: getattr(proxy_server, k, None) for k in attrs}
+    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
+    litellm.enforce_end_user_model_max_budget_on_master_key = True
+
+    try:
+        for k, v in attrs.items():
+            setattr(proxy_server, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/v1/chat/completions")
+
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new=mock_resolve_key,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
+                new_callable=AsyncMock,
+                return_value="customer-1",
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=_end_user_with_model_budget(),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._get_model_from_request_context",
+                return_value=MODEL,
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {attrs['master_key']}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"user": "customer-1", "model": MODEL},
+            )
+
+        assert result.end_user_model_max_budget == {MODEL: MODEL_BUDGET}
+        limiter.is_end_user_within_model_budget.assert_awaited()
+    finally:
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        for k, v in originals.items():
+            setattr(proxy_server, k, v)
+
+
+@pytest.mark.asyncio
+async def test_cached_proxy_admin_virtual_key_skips_master_key_budget_enforcement():
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    cached_admin_key = UserAPIKeyAuth(
+        api_key="sk-admin-virtual",
+        token="hashed-admin-virtual",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    async def mock_resolve_key(self, hashed_token: str):
+        from litellm.proxy.auth.resolvers.store import KeyNotInCacheError
+
+        if self._check_cache_only:
+            return cached_admin_key
+        raise KeyNotInCacheError(hashed_token)
+
+    attrs, limiter = _proxy_server_attrs_for_master_key_auth()
+    limiter.is_end_user_within_model_budget.side_effect = litellm.BudgetExceededError(
+        message="Exceeded budget", current_cost=0.0002, max_budget=1e-05
+    )
+    originals = {k: getattr(proxy_server, k, None) for k in attrs}
+    flag_original = litellm.enforce_end_user_model_max_budget_on_master_key
+    litellm.enforce_end_user_model_max_budget_on_master_key = True
+
+    try:
+        for k, v in attrs.items():
+            setattr(proxy_server, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/v1/chat/completions")
+
+        with (
+            patch(
+                "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
+                new=mock_resolve_key,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
+                new_callable=AsyncMock,
+                return_value="customer-1",
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=_end_user_with_model_budget(),
+            ),
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key="Bearer sk-admin-virtual",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"user": "customer-1", "model": MODEL},
+            )
+
+        assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+        limiter.is_end_user_within_model_budget.assert_not_awaited()
+    finally:
+        litellm.enforce_end_user_model_max_budget_on_master_key = flag_original
+        for k, v in originals.items():
+            setattr(proxy_server, k, v)

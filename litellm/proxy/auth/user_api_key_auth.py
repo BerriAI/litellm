@@ -1537,6 +1537,13 @@ async def _user_api_key_auth_builder(
             if _end_user_object is not None:
                 valid_token.end_user_object_permission = _end_user_object.object_permission
 
+            await _maybe_enforce_master_key_end_user_model_max_budget(
+                valid_token=valid_token,
+                request_data=request_data,
+                route=route,
+                request=request,
+            )
+
             return valid_token
 
         if valid_token is not None and isinstance(valid_token, UserAPIKeyAuth) and valid_token.team_id is not None:
@@ -1594,6 +1601,18 @@ async def _user_api_key_auth_builder(
                 route=route,
                 start_time=start_time,
             )
+
+            _user_api_key_obj = update_valid_token_with_end_user_params(
+                valid_token=_user_api_key_obj, end_user_params=end_user_params
+            )
+
+            await _maybe_enforce_master_key_end_user_model_max_budget(
+                valid_token=_user_api_key_obj,
+                request_data=request_data,
+                route=route,
+                request=request,
+            )
+
             asyncio.create_task(
                 _cache_key_object(
                     hashed_token=hash_token(master_key),
@@ -1602,18 +1621,6 @@ async def _user_api_key_auth_builder(
                     proxy_logging_obj=proxy_logging_obj,
                 )
             )
-
-            _user_api_key_obj = update_valid_token_with_end_user_params(
-                valid_token=_user_api_key_obj, end_user_params=end_user_params
-            )
-
-            if RouteChecks.is_llm_api_route(route=route) and litellm.enforce_end_user_model_max_budget_on_master_key:
-                await _enforce_end_user_model_max_budget_checks(
-                    valid_token=_user_api_key_obj,
-                    request_data=request_data,
-                    route=route,
-                    request=request,
-                )
 
             return _user_api_key_obj
 
@@ -2851,6 +2858,31 @@ def iter_router_fallback_model_names(fallbacks: Any) -> Iterator[str]:
                         yield m
                     elif isinstance(m, dict) and isinstance(m.get("model"), str):
                         yield m["model"]
+
+
+def _is_master_key_auth_token(valid_token: UserAPIKeyAuth) -> bool:
+    return valid_token.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS or valid_token.token == LITELLM_PROXY_MASTER_KEY_ALIAS
+
+
+async def _maybe_enforce_master_key_end_user_model_max_budget(
+    valid_token: UserAPIKeyAuth,
+    request_data: dict,
+    route: str,
+    request: Request,
+) -> None:
+    if not litellm.enforce_end_user_model_max_budget_on_master_key:
+        return
+    if not RouteChecks.is_llm_api_route(route=route):
+        return
+    if not _is_master_key_auth_token(valid_token):
+        return
+
+    await _enforce_end_user_model_max_budget_checks(
+        valid_token=valid_token,
+        request_data=request_data,
+        route=route,
+        request=request,
+    )
 
 
 async def _enforce_end_user_model_max_budget_checks(
