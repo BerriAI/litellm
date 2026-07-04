@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -3619,3 +3620,219 @@ async def test_non_guardrail_exception_still_logs_with_traceback():
     assert (
         logger.warning.call_count == 0
     ), "a genuine failure must not be downgraded to WARNING"
+
+
+# Regression: generic config-based passthrough (`pass_through_request`) used to
+# call `response.raise_for_status()` on upstream errors and re-raise as an
+# `HTTPException`, which the outer `except` block then reshaped into a
+# `ProxyException` (`{"error": {"message": "<stringified upstream body>", ...}}`).
+# Upstream error responses must reach the client byte-for-byte, with the
+# original status code, exactly like success responses already do.
+_UPSTREAM_ERROR_BODY = {
+    "error": "Permission denied",
+    "error_code": "ACCESS_DENIED",
+    "request_id": "req_mock_403",
+    "trace_id": "trace_mock_403",
+}
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_non_streaming_upstream_error_returned_unchanged():
+    upstream_content = json.dumps(_UPSTREAM_ERROR_BODY).encode("utf-8")
+    upstream_response = httpx.Response(
+        status_code=403,
+        headers={"content-type": "application/json"},
+        content=upstream_content,
+        request=httpx.Request("POST", "http://target-api.com/api/denied"),
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+            ) as mock_processing:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                        return_value=None
+                    )
+                    mock_processing.get_custom_headers.return_value = {}
+                    mock_success_handler.return_value = None
+
+                    async_client = MagicMock()
+                    async_client.request = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    mock_request = MagicMock(spec=Request)
+                    mock_request.method = "POST"
+                    mock_request.url = "http://test-proxy.com/mock-upstream/api/denied"
+                    mock_request.body = AsyncMock(return_value=b'{"action": "read"}')
+                    mock_request.headers = Headers({"content-type": "application/json"})
+                    mock_request.query_params = QueryParams({})
+
+                    response = await pass_through_request(
+                        request=mock_request,
+                        target="http://target-api.com/api/denied",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                    )
+                    await asyncio.sleep(0)
+
+    assert response.status_code == 403
+    body = json.loads(response.body)
+    # Exact dict equality proves the upstream body was forwarded verbatim,
+    # not stringified into a ProxyException's `error.message` field.
+    assert body == _UPSTREAM_ERROR_BODY
+    assert set(body.keys()) != {"error"} or not isinstance(body["error"], dict)
+    mock_success_handler.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_streaming_upstream_error_returned_unchanged():
+    from fastapi.responses import StreamingResponse
+
+    upstream_content = json.dumps(_UPSTREAM_ERROR_BODY).encode("utf-8")
+    upstream_response = httpx.Response(
+        status_code=403,
+        headers={"content-type": "application/json"},
+        content=upstream_content,
+        request=httpx.Request("GET", "http://target-api.com/api/stream-denied"),
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                    return_value=None
+                )
+                mock_success_handler.return_value = None
+
+                async_client = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "GET"
+                mock_request.url = "http://test-proxy.com/mock-upstream/api/stream-denied"
+                mock_request.body = AsyncMock(return_value=b"")
+                mock_request.headers = Headers({})
+                mock_request.query_params = QueryParams({})
+
+                response = await pass_through_request(
+                    request=mock_request,
+                    target="http://target-api.com/api/stream-denied",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
+
+    assert isinstance(response, StreamingResponse)
+    assert response.status_code == 403
+
+    streamed_chunks = [chunk async for chunk in response.body_iterator]
+    await asyncio.sleep(0)
+    streamed_bytes = b"".join(
+        chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+        for chunk in streamed_chunks
+    )
+    assert streamed_bytes == upstream_content
+    assert json.loads(streamed_bytes) == _UPSTREAM_ERROR_BODY
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_non_streaming_success_unchanged():
+    """Success (2xx) passthrough behavior must remain unchanged by the error fix."""
+    upstream_success_body = {"status": "ok", "message": "mock upstream success"}
+    upstream_content = json.dumps(upstream_success_body).encode("utf-8")
+    upstream_response = httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        content=upstream_content,
+        request=httpx.Request("GET", "http://target-api.com/api/success"),
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.ProxyBaseLLMRequestProcessing"
+            ) as mock_processing:
+                with patch(
+                    "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+                ) as mock_success_handler:
+                    mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                        return_value=None
+                    )
+                    mock_processing.get_custom_headers.return_value = {}
+                    mock_success_handler.return_value = None
+
+                    async_client = MagicMock()
+                    async_client.request = AsyncMock(return_value=upstream_response)
+                    mock_get_client.return_value = MagicMock(client=async_client)
+
+                    mock_request = MagicMock(spec=Request)
+                    mock_request.method = "GET"
+                    mock_request.url = "http://test-proxy.com/mock-upstream/api/success"
+                    mock_request.body = AsyncMock(return_value=b"")
+                    mock_request.headers = Headers({})
+                    mock_request.query_params = QueryParams({})
+
+                    response = await pass_through_request(
+                        request=mock_request,
+                        target="http://target-api.com/api/success",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                    )
+                    await asyncio.sleep(0)
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == upstream_success_body
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_internal_failure_still_raises_proxy_exception():
+    """
+    Internal proxy failures (e.g. a hook raising before any upstream request is
+    made) must still surface as ProxyException, distinct from upstream
+    passthrough errors which are now returned unchanged.
+    """
+    from litellm.proxy._types import ProxyException
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        mock_proxy_logging.pre_call_hook = AsyncMock(
+            side_effect=RuntimeError("auth backend unavailable")
+        )
+        mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.url = "http://test-proxy.com/mock-upstream/api/success"
+        mock_request.body = AsyncMock(return_value=b"")
+        mock_request.headers = Headers({})
+        mock_request.query_params = QueryParams({})
+
+        with pytest.raises(ProxyException) as exc_info:
+            await pass_through_request(
+                request=mock_request,
+                target="http://target-api.com/api/success",
+                custom_headers={},
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert int(exc_info.value.code) == 500
+    assert "auth backend unavailable" in exc_info.value.message
