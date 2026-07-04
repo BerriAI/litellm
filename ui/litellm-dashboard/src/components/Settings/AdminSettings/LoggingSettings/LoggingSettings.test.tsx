@@ -266,7 +266,7 @@ describe("LoggingSettings", () => {
       data: undefined,
       isLoading: true,
       refetch: mockRefetch,
-    } as any);
+    } as unknown as ReturnType<typeof useProxyConfig>);
 
     const { rerender } = renderWithProviders(<LoggingSettings />);
 
@@ -293,7 +293,7 @@ describe("LoggingSettings", () => {
       ],
       isLoading: false,
       refetch: mockRefetch,
-    } as any);
+    } as unknown as ReturnType<typeof useProxyConfig>);
 
     rerender(<LoggingSettings />);
 
