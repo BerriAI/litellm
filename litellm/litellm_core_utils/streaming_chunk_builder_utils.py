@@ -601,10 +601,11 @@ class ChunkProcessor:
                         "web_search_requests",
                     )
 
-                prompt_tokens_details = cast(
-                    Optional[PromptTokensDetailsWrapper],
-                    usage_chunk_dict["prompt_tokens_details"],
-                )
+                if usage_chunk_dict["prompt_tokens_details"] is not None:
+                    prompt_tokens_details = cast(
+                        PromptTokensDetailsWrapper,
+                        usage_chunk_dict["prompt_tokens_details"],
+                    )
 
                 cache_creation_token_details = self._capture_cache_creation_token_details(
                     prompt_tokens_details, cache_creation_token_details

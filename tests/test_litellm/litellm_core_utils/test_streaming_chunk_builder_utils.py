@@ -956,3 +956,43 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
     assert response.model_dump()["vertex_ai_grounding_metadata"] == [
         {"webSearchQueries": ["test query"]}
     ]
+
+
+def test_stream_chunk_builder_preserves_prompt_tokens_details_from_earlier_chunk():
+    base = {
+        "id": "chatcmpl-123",
+        "object": "chat.completion.chunk",
+        "created": 1751600000,
+        "model": "gpt-4o",
+    }
+    chunk_with_details = {
+        **base,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"role": "assistant", "content": "Hello"},
+                "finish_reason": None,
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 0,
+            "total_tokens": 100,
+            "prompt_tokens_details": {"cached_tokens": 80},
+        },
+    }
+    final_chunk_without_details = {
+        **base,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 5,
+            "total_tokens": 105,
+        },
+    }
+
+    response = stream_chunk_builder(chunks=[chunk_with_details, final_chunk_without_details])
+
+    assert response.usage.prompt_tokens_details is not None
+    assert response.usage.prompt_tokens_details.cached_tokens == 80
+    assert response.usage.completion_tokens == 5
