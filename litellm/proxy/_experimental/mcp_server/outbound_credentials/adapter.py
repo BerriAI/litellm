@@ -12,6 +12,7 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
+import re
 from typing import TYPE_CHECKING, Literal, NoReturn, Optional
 
 from fastapi import HTTPException
@@ -214,7 +215,16 @@ def raise_user_oauth_challenge(server: MCPServer, *, root_path: str) -> NoReturn
     )
 
 
-def raise_token_exchange_challenge(server: MCPServer, *, root_path: str) -> NoReturn:
+_OAUTH_ERROR_TOKEN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+
+
+def raise_token_exchange_challenge(
+    server: MCPServer,
+    *,
+    root_path: str,
+    oauth_error: str | None = None,
+    claims: str | None = None,
+) -> NoReturn:
     """Raise the RFC 9728 / RFC 6750 challenge an OBO (``token_exchange``) server returns when the
     caller's subject token is missing or the IdP rejected it.
 
@@ -223,12 +233,26 @@ def raise_token_exchange_challenge(server: MCPServer, *, root_path: str) -> NoRe
     spec-compliant MCP client to discover that AS and retry with a fresh bearer. Mirrors
     ``raise_user_oauth_challenge`` but for the exchange flow: there is no gateway-side browser OAuth —
     the client re-authenticates directly with the IdP, and LiteLLM then exchanges the resulting token.
+
+    An IdP step-up rejection (Entra Conditional Access / CAE) passes its machine ``oauth_error``
+    (e.g. ``interaction_required``) and ``claims`` blob; the claims travel base64-encoded in a
+    ``claims`` parameter, the convention MSAL-family clients decode to drive the step-up. The
+    error code is embedded only when it is a plain OAuth token (defense against header injection
+    from a hostile IdP body); otherwise the challenge keeps ``invalid_token``. With neither field
+    the header is byte-identical to the static challenge.
     """
     resource_metadata = oauth_protected_resource_path(root_path, server)
-    www_authenticate = (
-        f'Bearer resource_metadata="{resource_metadata}", '
-        'error="invalid_token", '
-        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    safe_error = (
+        oauth_error if oauth_error is not None and _OAUTH_ERROR_TOKEN.fullmatch(oauth_error) else "invalid_token"
+    )
+    encoded_claims = base64.b64encode(claims.encode()).decode() if claims else None
+    www_authenticate = ", ".join(
+        (
+            f'Bearer resource_metadata="{resource_metadata}"',
+            f'error="{safe_error}"',
+            'error_description="Missing or invalid subject token; authenticate with the IdP and retry"',
+            *((f'claims="{encoded_claims}"',) if encoded_claims else ()),
+        )
     )
     raise HTTPException(
         status_code=401,

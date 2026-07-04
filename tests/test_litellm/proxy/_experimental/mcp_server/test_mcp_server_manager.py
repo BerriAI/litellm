@@ -5948,3 +5948,78 @@ class TestOBOEndpointDiscovery:
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+@pytest.mark.asyncio
+async def test_preflight_challenge_carries_step_up_error_and_claims():
+    """An Entra Conditional Access rejection must surface its machine code and base64 claims in the
+    single-server 401 challenge, so an MSAL-family client can drive the step-up and retry."""
+    import base64
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import CredError
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+
+    class _FakeProvider:
+        async def resolve_credentials(self, subject, server):
+            return Error(
+                CredError.of_unauthorized(
+                    "step-up required",
+                    oauth_error="interaction_required",
+                    claims=claims,
+                )
+            )
+
+    manager = MCPServerManager(cred_provider=_FakeProvider())
+    server = MCPServer(
+        server_id="te-ca",
+        name="te-ca-server",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        token_exchange_endpoint="https://idp.example.com/token",
+        client_id="cid",
+        client_secret="csec",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await manager.preflight_token_exchange(
+            server=server,
+            oauth2_headers={"Authorization": "Bearer subj"},
+            user_api_key_auth=None,
+        )
+    assert exc_info.value.status_code == 401
+    headers = exc_info.value.headers or {}
+    www = headers.get("WWW-Authenticate") or headers.get("www-authenticate") or ""
+    assert 'error="interaction_required"' in www
+    assert base64.b64encode(claims.encode()).decode() in www
+    assert "resource_metadata" in www
+
+
+@pytest.mark.asyncio
+async def test_aggregate_list_still_absorbs_step_up_challenged_server():
+    """A step-up (claims-bearing) 401 from one server must not change the aggregate contract: the
+    multi-server listing still absorbs it and returns the healthy servers' tools."""
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+
+    manager = MCPServerManager()
+    good = MCPServer(server_id="good", name="good", transport=MCPTransport.http)
+    ca = MCPServer(server_id="ca", name="ca", transport=MCPTransport.http)
+    manager.get_allowed_mcp_servers = AsyncMock(return_value=["good", "ca"])
+    manager.get_mcp_server_by_id = MagicMock(side_effect=lambda server_id: {"good": good, "ca": ca}.get(server_id))
+    good_tool = MCPTool(name="good-do_thing", description="do thing", inputSchema={})
+
+    async def fake_get_tools(server, **kwargs):
+        if server.server_id == "ca":
+            raise MCPUpstreamAuthError(
+                status_code=401,
+                www_authenticate=('Bearer resource_metadata="/x", error="interaction_required", claims="eyJhIjoxfQ=="'),
+                server_name="ca",
+            )
+        return [good_tool]
+
+    manager._get_tools_from_server = fake_get_tools
+
+    result = await manager.list_tools()
+
+    assert [t.name for t in result] == ["good-do_thing"]

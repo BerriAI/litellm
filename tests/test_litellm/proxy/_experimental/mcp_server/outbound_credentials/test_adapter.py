@@ -374,3 +374,54 @@ def test_raise_token_exchange_challenge_includes_server_root_path():
         raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="/api/v1")
     www = exc_info.value.headers["WWW-Authenticate"]
     assert 'resource_metadata="/.well-known/oauth-protected-resource/api/v1/mcp/obo-srv"' in www
+
+
+def test_raise_token_exchange_challenge_static_form_is_unchanged_without_step_up():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="")
+    assert exc_info.value.headers["WWW-Authenticate"] == (
+        'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv", '
+        'error="invalid_token", '
+        'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
+    )
+
+
+def test_raise_token_exchange_challenge_folds_step_up_error_and_claims():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(
+            _server(alias="obo-srv"),
+            root_path="",
+            oauth_error="interaction_required",
+            claims=claims,
+        )
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/obo-srv"' in www
+    assert 'error="interaction_required"' in www
+    assert f'claims="{base64.b64encode(claims.encode()).decode()}"' in www
+    assert claims not in www
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    ['x" y', "a\r\nSet-Cookie: p=1", "with space", "x" * 65],
+    ids=["quote", "crlf", "space", "overlong"],
+)
+def test_raise_token_exchange_challenge_rejects_non_token_error_codes(hostile):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+        raise_token_exchange_challenge,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        raise_token_exchange_challenge(_server(alias="obo-srv"), root_path="", oauth_error=hostile)
+    www = exc_info.value.headers["WWW-Authenticate"]
+    assert 'error="invalid_token"' in www
+    assert hostile not in www

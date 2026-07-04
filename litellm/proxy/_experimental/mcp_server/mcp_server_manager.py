@@ -2003,8 +2003,14 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
                     # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
-                    # 401. No gateway-side browser flow.
-                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                    # 401. No gateway-side browser flow. An IdP step-up rejection (Entra Conditional
+                    # Access) threads its error code and claims blob into the challenge.
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        oauth_error=err.unauthorized.oauth_error,
+                        claims=err.unauthorized.claims,
+                    )
                 raise_public(err)
 
     async def preflight_token_exchange(
@@ -2034,7 +2040,12 @@ class MCPServerManager:
                 return
             case Error(err):
                 if err.tag == "unauthorized":
-                    raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                    raise_token_exchange_challenge(
+                        server,
+                        root_path=get_server_root_path(),
+                        oauth_error=err.unauthorized.oauth_error,
+                        claims=err.unauthorized.claims,
+                    )
                 raise_public(err)
 
     async def _create_mcp_client(

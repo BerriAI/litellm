@@ -545,3 +545,25 @@ async def test_distributed_coordinator_refresh_and_reread_use_the_cache():
     result = await exchanger.exchange("jwt", _SERVER, _CONFIG)
     assert isinstance(result, Ok) and result.ok.access_token == "x"
     assert len(post.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_step_up_rejection_threads_error_and_claims_into_unauthorized():
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import (
+        SubjectTokenRejected,
+    )
+
+    claims = '{"access_token":{"acrs":{"essential":true,"value":"c1"}}}'
+
+    async def _step_up_post(url, form, headers):
+        raise SubjectTokenRejected(
+            "IdP rejected the subject token (HTTP 400)",
+            oauth_error="interaction_required",
+            claims=claims,
+        )
+
+    result = await OboTokenExchanger(_step_up_post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+    assert result.error.unauthorized.oauth_error == "interaction_required"
+    assert result.error.unauthorized.claims == claims
