@@ -86,7 +86,9 @@ const Navbar: React.FC<NavbarProps> = ({
                         className="h-auto max-h-full w-auto max-w-full object-contain"
                       />
                     ) : (
-                      <span className="text-2xl font-semibold text-slate-800 whitespace-nowrap">{BRAND_NAME}</span>
+                      <span className="text-2xl font-bold text-slate-800 whitespace-nowrap tracking-wider">
+                        {BRAND_NAME}
+                      </span>
                     )}
                   </div>
                 </div>
