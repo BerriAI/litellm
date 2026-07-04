@@ -31,4 +31,3 @@ export const DeprecationBanner: React.FC<DeprecationBannerProps> = ({ featureNam
   />
 );
 
-export default DeprecationBanner;
