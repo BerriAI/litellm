@@ -27,7 +27,6 @@ interface SpendLogsTableProps {
 }
 
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
-  const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize] = useState(50);
 
@@ -112,16 +111,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     currentPage,
   });
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      handleFilterChange({ [FILTER_KEYS.REQUEST_ID]: searchTerm.trim() });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchTerm, handleFilterChange]);
-
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
-    setSearchTerm("");
     setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
     setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
     setIsCustomDate(false);
@@ -263,8 +254,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                 />
                 <div className="bg-white rounded-lg shadow-sm w-full max-w-full box-border">
                   <LogsTableToolbar
-                    searchTerm={searchTerm}
-                    onSearchChange={setSearchTerm}
+                    searchTerm={filters[FILTER_KEYS.REQUEST_ID]}
+                    onSearchChange={(value) => handleFilterChange({ [FILTER_KEYS.REQUEST_ID]: value })}
                     startTime={startTime}
                     onStartTimeChange={setStartTime}
                     endTime={endTime}
