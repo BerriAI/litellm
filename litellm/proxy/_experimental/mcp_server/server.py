@@ -1861,7 +1861,8 @@ if MCP_AVAILABLE:
                     # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
                     # intentionally not done here: raising from this list handler cannot produce a
                     # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
-                    # error), so that belongs in a request-scope preemptive check, tracked separately.
+                    # error). Single-server routes surface it via the request-scope preemptive
+                    # check in _raise_preemptive_401_for_unauthenticated_servers instead.
                     verbose_logger.debug(f"MCP list_tools: omitting {server.name}; it needs upstream auth")
                     return []
                 except Exception as e:
@@ -3485,6 +3486,23 @@ if MCP_AVAILABLE:
                 from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
 
                 raise_token_exchange_challenge(server, root_path=get_server_root_path())
+
+            # token_exchange (OBO) with a subject present: run the exchange here at the transport
+            # edge, so a rejected subject raises the RFC 9728 challenge (and a gateway fault its
+            # public status) instead of the session opening and list_tools masking the failure as
+            # an empty tool list. Gated to single-server routes; the multi-server aggregate keeps
+            # absorbing per-server auth failures so one bad server cannot 401 the whole connect.
+            if (
+                server
+                and server.auth_type == MCPAuth.oauth2_token_exchange
+                and oauth2_headers
+                and len(mcp_servers or []) == 1
+            ):
+                await global_mcp_server_manager.preflight_token_exchange(
+                    server=server,
+                    oauth2_headers=oauth2_headers,
+                    user_api_key_auth=user_api_key_auth,
+                )
 
             # Pass-through OAuth: when the admin has opted a server into
             # forwarding the client's bearer token (is_oauth_passthrough) and
