@@ -409,6 +409,61 @@ def test_hashicorp_custom_mount_and_prefix(hashicorp_secret_manager):
         hashicorp_secret_manager.vault_namespace = original_namespace
 
 
+@pytest.mark.parametrize(
+    "malicious_secret_name",
+    [
+        "../../../other-app/creds",
+        "litellm/../../secret",
+        "foo\nbar",
+        "foo bar",  # YAML LINE SEPARATOR: same class of break as "\n"
+        "foo bar",  # YAML PARAGRAPH SEPARATOR
+        "foo\x85bar",  # YAML NEL
+    ],
+)
+def test_hashicorp_get_url_rejects_path_traversal(monkeypatch, malicious_secret_name):
+    """
+    Regression test: secret_name (derived from user-controlled key_alias) is
+    concatenated directly into the Vault request URL with no sanitization. get_url
+    must reject '..' sequences and control characters (including the Unicode line
+    breaks YAML treats the same as "\\n") instead of building a URL that could
+    escape the configured mount/path_prefix.
+
+    Uses monkeypatch + a directly-constructed manager (not the shared
+    hashicorp_secret_manager fixture) so this runs in CI without real Vault
+    credentials configured; get_url performs no I/O.
+    """
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "test-token-for-get-url-only")
+    manager = HashicorpSecretManager()
+
+    with pytest.raises(ValueError):
+        manager.get_url(malicious_secret_name)
+
+
+def test_hashicorp_get_url_encodes_reserved_url_characters(monkeypatch):
+    """
+    Regression test: secret_name used to be concatenated raw into the URL, so a
+    '#' or '?' would be interpreted as a URL fragment/query separator by the HTTP
+    client instead of a literal character in the Vault KV path. get_url must
+    percent-encode them while still preserving '/' (hierarchical paths) and '@'
+    (e.g. emails in aliases) unencoded, matching existing usage.
+    """
+    monkeypatch.setenv("HCP_VAULT_TOKEN", "test-token-for-get-url-only")
+    manager = HashicorpSecretManager()
+    manager.vault_namespace = None
+    manager.vault_path_prefix = None
+
+    url = manager.get_url("foo#bar")
+    assert "#" not in url
+    assert url.endswith("foo%23bar")
+
+    url = manager.get_url("foo?evil=1")
+    assert "?" not in url.split("/data/", 1)[1]
+    assert url.endswith("foo%3Fevil%3D1")
+
+    url = manager.get_url("team/user@example.com")
+    assert url.endswith("team/user@example.com")
+
+
 mock_old_vault_response = {
     "request_id": "80fafb6a-e96a-4c5b-29fa-ff505ac72201",
     "lease_id": "",

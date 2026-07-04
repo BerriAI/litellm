@@ -1,5 +1,6 @@
 import os
 from typing import Any, Dict, Optional, Union
+from urllib.parse import quote
 
 import httpx
 
@@ -14,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import KeyManagementSystem
 
-from .base_secret_manager import BaseSecretManager
+from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 
 
 class HashicorpSecretManager(BaseSecretManager):
@@ -220,6 +221,7 @@ class HashicorpSecretManager(BaseSecretManager):
         - With custom mount: http://127.0.0.1:8200/v1/kv/data/mykey
         - With path prefix: http://127.0.0.1:8200/v1/secret/data/myapp/mykey
         """
+        raise_if_unsafe_secret_name(secret_name)
         resolved_namespace = self._sanitize_path_component(namespace if namespace is not None else self.vault_namespace)
         resolved_mount = self._sanitize_path_component(mount_name if mount_name is not None else self.vault_mount_name)
         if resolved_mount is None:
@@ -234,7 +236,10 @@ class HashicorpSecretManager(BaseSecretManager):
         _url += f"{resolved_mount}/data/"
         if resolved_path_prefix:
             _url += f"{resolved_path_prefix}/"
-        _url += secret_name
+        # Preserve "/" (hierarchical secret paths) and "@" (e.g. emails in aliases)
+        # unencoded; percent-encode everything else so a secret_name containing "#"
+        # or "?" can't turn into a URL fragment/query string instead of a path segment.
+        _url += quote(secret_name, safe="/@")
         return _url
 
     def _sanitize_plain_value(self, value: Optional[Union[str, int]]) -> Optional[str]:
