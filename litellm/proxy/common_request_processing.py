@@ -1448,6 +1448,8 @@ class ProxyBaseLLMRequestProcessing:
                 _overhead_hidden_params["litellm_overhead_time_ms"] = overhead_ms
                 if hasattr(response, "_hidden_params"):
                     response._hidden_params = _overhead_hidden_params
+                elif isinstance(response, dict):
+                    response["_hidden_params"] = _overhead_hidden_params
 
         _exception_raised = False
         try:
