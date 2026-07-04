@@ -513,3 +513,177 @@ async def test_engine_confirmed_dead_persists_across_failed_heavy_reconnect(
     # The flag must STILL be True so the next attempt re-enters the heavy
     # branch instead of silently demoting to the lightweight path.
     assert client._engine_confirmed_dead is True
+
+
+# ---------------------------------------------------------------------------
+# Windows: _poll_engine_proc must not use os.kill(pid, 0) (regression)
+#
+# On Windows, Python's os.kill(pid, 0) calls TerminateProcess(pid, 0) rather
+# than performing a no-op existence check as it does on POSIX. This caused the
+# engine-watchdog poll loop to kill the Prisma query-engine sidecar on the
+# very first tick, immediately after start_db_health_watchdog_task() yielded
+# control back to the asyncio event loop.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_poll_engine_proc_keeps_alive_engine_running(mock_proxy_logging):
+    """_poll_engine_proc must not terminate a living engine process.
+
+    Regression: before the fix, _poll_engine_proc called os.kill(pid, 0) which
+    on Windows routes to TerminateProcess and kills the sidecar on the first
+    poll tick. The fix delegates to _is_engine_alive(), which on Windows uses
+    Popen.poll() instead.
+    """
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 12345
+    client._watching_engine = True
+    client.attempt_db_reconnect = AsyncMock()
+
+    with (
+        patch.object(client, "_is_engine_alive", return_value=True) as mock_alive,
+        patch(
+            "litellm.proxy.utils.asyncio.sleep",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+    ):
+        try:
+            await client._poll_engine_proc()
+        except asyncio.CancelledError:
+            pass
+
+    mock_alive.assert_called_once()
+    client.attempt_db_reconnect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_poll_engine_proc_triggers_reconnect_when_engine_dead(mock_proxy_logging):
+    """_poll_engine_proc must trigger reconnect when the engine is no longer alive."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 12345
+    client._watching_engine = True
+    client._engine_confirmed_dead = False
+    client._reap_all_zombies = MagicMock(return_value=set())
+    client._cleanup_engine_watcher = MagicMock()
+    client.attempt_db_reconnect = AsyncMock(return_value=True)
+
+    with patch.object(client, "_is_engine_alive", return_value=False):
+        await client._poll_engine_proc()
+
+    client.attempt_db_reconnect.assert_awaited_once_with(
+        reason="engine_process_death",
+        force=True,
+    )
+    assert client._engine_confirmed_dead is True
+
+
+def test_is_engine_alive_windows_living_process(mock_proxy_logging):
+    """_is_engine_alive_windows returns True when Popen.poll() is None."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 99999
+
+    alive_process = MagicMock()
+    alive_process.pid = 99999
+    alive_process.poll.return_value = None
+
+    engine_mock = MagicMock()
+    engine_mock.process = alive_process
+    client.writer_db._original_prisma._engine = engine_mock
+
+    assert client._is_engine_alive_windows() is True
+    alive_process.poll.assert_called_once()
+
+
+def test_is_engine_alive_windows_dead_process(mock_proxy_logging):
+    """_is_engine_alive_windows returns False when Popen.poll() returns an exit code."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 99999
+
+    dead_process = MagicMock()
+    dead_process.pid = 99999
+    dead_process.poll.return_value = 0
+
+    engine_mock = MagicMock()
+    engine_mock.process = dead_process
+    client.writer_db._original_prisma._engine = engine_mock
+
+    assert client._is_engine_alive_windows() is False
+    dead_process.poll.assert_called_once()
+
+
+def test_is_engine_alive_windows_pid_mismatch_returns_true(mock_proxy_logging):
+    """_is_engine_alive_windows falls back to True when the process object's PID
+    doesn't match _engine_pid, guarding against a stale internal process reference."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 99999
+
+    stale_process = MagicMock()
+    stale_process.pid = 11111  # different PID
+    stale_process.poll.return_value = 0  # would signal dead if we trusted it
+
+    engine_mock = MagicMock()
+    engine_mock.process = stale_process
+    client.writer_db._original_prisma._engine = engine_mock
+
+    assert client._is_engine_alive_windows() is True
+    stale_process.poll.assert_not_called()
+
+
+def test_is_engine_alive_windows_no_process_returns_true(mock_proxy_logging):
+    """_is_engine_alive_windows falls back to True when engine has no process attribute."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 99999
+
+    engine_mock = MagicMock()
+    engine_mock.process = None
+    client.writer_db._original_prisma._engine = engine_mock
+
+    assert client._is_engine_alive_windows() is True
+
+
+def test_is_engine_alive_windows_attribute_error_returns_true(mock_proxy_logging):
+    """_is_engine_alive_windows falls back to True when internal attribute access raises."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 99999
+
+    class _BrokenPrisma:
+        @property
+        def _engine(self):
+            raise AttributeError("internal engine attribute changed")
+
+    client.writer_db._original_prisma = _BrokenPrisma()
+
+    assert client._is_engine_alive_windows() is True
+
+
+def test_is_engine_alive_dispatches_to_windows_method_on_win32(mock_proxy_logging):
+    """_is_engine_alive must call _is_engine_alive_windows() on win32, never os.kill."""
+    client = PrismaClient(
+        database_url="mock://test", proxy_logging_obj=mock_proxy_logging
+    )
+    client._engine_pid = 12345
+
+    with (
+        patch("sys.platform", "win32"),
+        patch.object(client, "_is_engine_alive_windows", return_value=True) as mock_win,
+        patch("os.kill") as mock_kill,
+    ):
+        result = client._is_engine_alive()
+
+    assert result is True
+    mock_win.assert_called_once()
+    mock_kill.assert_not_called()
